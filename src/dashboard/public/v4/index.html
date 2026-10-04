@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Uncle Carl · v4</title>
+<meta name="color-scheme" content="dark light">
+<link rel="icon" href="data:image/svg+xml,&lt;svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%234c9cff%22 stroke-width=%222.5%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22&gt;&lt;path d=%22M3 17l6-6 4 4 8-8%22/&gt;&lt;path d=%22M14 7h7v7%22/&gt;&lt;/svg&gt;">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="/v4/css/tokens.css">
+<link rel="stylesheet" href="/v4/css/app.css">
+</head>
+<body>
+  <div class="app">
+    <div class="sticky">
+      <div class="wrap">
+        <div class="topbar">
+          <header class="hdr" id="hdr"></header>
+          <div class="kpis" id="kpis"></div>
+          <div class="hdr-actions" id="hdrActions"></div>
+        </div>
+      </div>
+    </div>
+    <main class="content">
+      <div class="wrap">
+        <div class="grid cols-2 profiles-grid" id="profiles"></div>
+        <div class="main-area" id="mainArea">
+          <div class="ops-wrap" id="opsWrap"></div>
+          <div class="an-col" id="analyticsCol"></div>
+        </div>
+        <div id="newsBar"></div>
+      </div>
+    </main>
+    <div class="ticker" id="ticker" hidden><div class="ticker-in" id="tickerIn"></div></div>
+    <div class="disclaimer">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+      <span>Trading involves substantial risk of loss and is not suitable for all investors. Past performance is not indicative of future results. Do your own research (DYOR). This software is for educational and informational purposes only — not financial advice.</span>
+    </div>
+  </div>
+  <script type="module" src="/v4/js/main.js"></script>
+</body>
+</html>

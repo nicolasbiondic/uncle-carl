@@ -1,0 +1,84 @@
+{
+  "name": "momentum-crypto-shorts-v1",
+  "sleeve": "crypto",
+  "description": "Long/short axis for the TSM crypto sleeve, pre-registered 2026-08-25 BEFORE any run, in response to the owner's request for a shorts book ('backup de shorts/longs'). Prior evidence being re-tested (NOT assumed): the hypothesis ledger records tsm-shorts (commit 60c1f9a) as 'validated negative and left unwired' — but that validation predates the nested/purged protocol and has no hypothesis inventory, so it blocks nothing under the current rules. Motivation FOR the re-test: the frozen v1 incumbent is long/flat and its worst outer fold is the 2022 crash (-32.05% vs BTC bench -53.3%) where a long/flat book can only stand aside; a shorts book is the one structural change that could turn that fold positive. Motivation AGAINST (declared so the sweep is honest): crypto's secular drift is up, shorts pay away the up-trend, and squeeze risk on 2x perps is asymmetric — the ledger's prior negative points this way. EVERYTHING except the maxShorts axis is FROZEN to experiments/momentum-crypto-v1.json: same 8-symbol universe, window 2021-01-01..2026-07-15 with asOf pinned 2026-07-15 (comparability with v1 and thresholds-v1), same 3x3 purged folds, same costs, real settled funding (shorts receive credit-side funding exactly as scripts/walk-forward.ts wires shortFunding='credit'), same BTC buy-and-hold benchmark, same acceptance gates INCLUDING minExcessReturnVsBench 0. Declared scope cut (before running): shortEntryThresholdPct/shortExitThresholdPct are NOT swept — candidates inherit the engine defaults (-5/+2), the hysteresis mirror of the incumbent's long thresholds (+5/-2); a threshold sweep for shorts is a separate future manifest if and only if this axis survives. 3 candidates declared up front, none trimmed after results: incumbent-long-only (e5x2, maxShorts 0 — execution-identity rerun, adds 0 new hypotheses), long-short-2 (maxShorts 2, book can be 4L+2S), long-short-4 (maxShorts 4, symmetric book). priorUniqueTrials=257: the 252 declared by momentum-crypto-thresholds-v1 plus its 5 new threshold variants. The 2 long/short variants here are new hypotheses. Inventory incomplete, so complete=false and approval stays blocked by protocol regardless of gates.",
+  "trialAccounting": { "priorUniqueTrials": 257, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": { "slippageBps": 5, "commissionBps": 4 },
+    "stress": { "slippageBps": 10, "commissionBps": 8 }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent-long-only",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "long-short-2",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 2,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "long-short-4",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 4,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3
+  }
+}

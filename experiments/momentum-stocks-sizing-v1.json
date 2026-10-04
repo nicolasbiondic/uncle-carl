@@ -1,0 +1,145 @@
+{
+  "name": "momentum-stocks-sizing-v1",
+  "sleeve": "stocks",
+  "description": "Eje de exposicion bruta de momentum_stocks (4 slots x notionalPctPerSlot: 0.5=2.0x, 0.375=1.5x, 0.25=1.0x), con slotHysteresis:true (override vivo desde 2026-09-10) en TODOS los candidatos, pre-registrado 2026-09-21 ANTES de correr. El 2x vivo procede de un sweep pre-protocolo que src/index.ts llama discredited (28 rechazos Reg-T en replay) y este eje NUNCA paso por el protocolo; el quorum del 2026-09-20 (3 jueces) voto 3/3 por 1x como cautela declarada, pero 2/3 advirtieron que instalar 1x sin artefacto es sustituir una cifra no evidenciada por otra. Este manifest lo convierte en evidencia el mismo dia. Prediccion falsable: si el DD y los rechazos de margen escalan con el gross sin que el Sharpe mejore, gana 1x y el cambio vivo queda respaldado; si 2x tiene mejor Sharpe/DD outer con 0 marginRejects, el 2x se queda y se documenta. Nota del Juez Opus: la firma de las 3 mayores perdidas vivas (trail disparado a ~1.7%, pegado a tsmTrail.minPct=2) apunta al TRAIL y no al tamano; ese es el eje siguiente (tsmTrail), no este. 2 hipotesis nuevas. priorUniqueTrials=262: 260 + 2 (profit-lock stocks). complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 262,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_split",
+    "timeframe": "5m",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": true,
+    "funding": false,
+    "barMinutes": 5,
+    "barMinutesEq": 18.4615384615
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2024-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 60
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "gross-2x",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "tsmTrail": {
+        "kSigma": 3,
+        "lookbackBars": 78,
+        "minPct": 2,
+        "maxPct": 8
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "gross-1.5x",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "tsmTrail": {
+        "kSigma": 3,
+        "lookbackBars": 78,
+        "minPct": 2,
+        "maxPct": 8
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "gross-1x",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.25,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "tsmTrail": {
+        "kSigma": 3,
+        "lookbackBars": 78,
+        "minPct": 2,
+        "maxPct": 8
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "name": "momentum-stop-sizing-v1",
+  "sleeve": "stocks",
+  "description": "Stop-sizing sweep for the TSM stocks sleeve (OPEN.md P2: the same entry-anchored 4% is ~0.8 sigma of a p90 263h hold — 3 of 6 live closes were STOP_LOSS at avg -$660). Everything except the hard-stop axis is FROZEN to experiments/momentum-stocks-v1.json: same universe/costs/window/folds and the same acceptance gates including minExcessReturnVsBench 0 (full-exposure sleeve; NOT relaxed — note that gate now BINDS here, unlike the pre-gate momentum-stocks-v1 artifact). All 4 candidates carry the production incumbent knobs (cadence 60, slot 0.5, entry 5/exit -2, maxLongs 4, tsmTrail k3/78/2-8, sharpeGate 30d/0, peakHalfLifeDays 30) and differ ONLY in the hard stop: incumbent (ABSENT hardStop = ledger fixed 4%), no-stop (the live vol TRAIL remains active on every candidate, so this tests whether the entry-anchored 4% adds protection or only amputates trends ON TOP of the trail), and two vol-scaled entry-anchored variants (kSigma 3 clamp 2..8 = entry-anchored twin of the live trail; kSigma 4 clamp 3..12 = wider, sized for the sleeve's multi-week horizon) — EXACT production trailPctFromVol formula, sigma over 78 5m RTH bars = 1 trading day. priorUniqueTrials=252: the 251 inventoried legacy v7 hypotheses plus momentum-stocks-v1's single incumbent trial. Inventory incomplete, so complete=false and approval stays blocked by protocol regardless of gates. SCOPE NOTE (honest cost cap): 5m-bar replays are expensive; this manifest carries 4 candidates instead of the meanrev sweep's 5 (vol-k2 dropped, its 2..8% span is mostly covered between the trail and vol-k3) — the smaller sweep is declared here BEFORE running, not trimmed after seeing results.",
+  "trialAccounting": { "priorUniqueTrials": 252, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_split",
+    "timeframe": "5m",
+    "universe": ["SPY", "QQQ", "IWM", "GLD", "AAPL", "MSFT", "NVDA", "META", "GOOGL", "AMZN"],
+    "refSymbol": "SPY",
+    "rthOnly": true,
+    "funding": false,
+    "barMinutes": 5,
+    "barMinutesEq": 18.4615384615
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2024-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 60
+  },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0 },
+    "stress": { "slippageBps": 5, "commissionBps": 2 }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent-fixed4",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "tsmTrail": { "kSigma": 3, "lookbackBars": 78, "minPct": 2, "maxPct": 8 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "no-stop",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "hardStop": { "mode": "none" },
+      "tsmTrail": { "kSigma": 3, "lookbackBars": 78, "minPct": 2, "maxPct": 8 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "vol-k3",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "hardStop": { "mode": "volScaled", "kSigma": 3, "lookbackBars": 78, "minPct": 2, "maxPct": 8 },
+      "tsmTrail": { "kSigma": 3, "lookbackBars": 78, "minPct": 2, "maxPct": 8 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "vol-k4",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "hardStop": { "mode": "volScaled", "kSigma": 4, "lookbackBars": 78, "minPct": 3, "maxPct": 12 },
+      "tsmTrail": { "kSigma": 3, "lookbackBars": 78, "minPct": 2, "maxPct": 8 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3
+  }
+}

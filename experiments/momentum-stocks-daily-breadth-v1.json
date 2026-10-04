@@ -1,0 +1,176 @@
+{
+  "name": "momentum-stocks-daily-breadth-v1",
+  "sleeve": "stocks",
+  "description": "R4 eje B — AMPLITUD a igual bruto 1.0x (maxLongs x notionalPctPerSlot constante) sobre el kernel diario h126-ma200 EXACTO que hoy corre en vivo (control = experiments/momentum-stocks-horizon-h126-pure-v1.json, artefacto 77372b9c...: +306.3%/Sharpe 1.07/DD 24.1%/PSR 0.997/17-17 gates, LOO peor 0.92 sin NVDA). Pre-registrado 2026-09-25 ANTES de correr, junto al eje A (momentum-stocks-daily-exits-v1); cascada de trial accounting: priorUniqueTrials=270 (268 del cierre stocks-horizon-daily-2026-09-24 + 2 nuevas de daily-exits-v1 k5/k8). Misma data/ventana/costes/gates que el control, copiados verbatim; SOLO varian maxLongs y notionalPctPerSlot, con notionalPctPerSlot=1/maxLongs para mantener el bruto en 1.0x. 3 candidatos declarados: s4 = control identico (4 slots x 0.25 — identidad de ejecucion, 0 hipotesis nuevas), s6 (6 x 0.166667), s8 (8 x 0.125). HIPOTESIS: con horizonte 126 sesiones califican mas nombres validos simultaneamente que con el TSM corto legado; mas slots diversifican la concentracion de P&L (NVDA aporto 39-51% del P&L en los folds 0-1 del control) sin cambiar el bruto. CASO EN CONTRA (declarado antes de mirar resultados): los slots 5-8 (los que entrarian solo bajo mas amplitud) son por definicion tendencias mas debiles que las 4 primeras por el ranking del TSM; el universo de 11 simbolos limita la amplitud real disponible (con 4 slots ya se usa mas de un tercio del universo, con 8 casi tres cuartos, lo que fuerza el sistema a sostener nombres de baja convicción o repetir slots vacios); mas operaciones de apertura/cierre suben turnover y coste de friccion sin subir el bruto. Criterio de ganador robusto (declarado antes de correr, identico al eje A): la cadena PURA del alternativo mejora al control en Sharpe Y maxDD, no falla ningun gate que el control pase, foldPSR no peor, y LOO peor no inferior a 0.92. Si AMBOS ejes (A y B) tienen ganador robusto, se corre la cadena PURA de la combinacion (+1 trial adicional sobre el total acumulado del batch). s6 y s8 son 2 hipotesis nuevas; s4 es identidad (+0). complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 270,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-24",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "s4-control",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.25,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "lookbackDays": 126,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "tsmTrail": {
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "s6-breadth",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.16666666666666666,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 6,
+      "maxShorts": 0,
+      "lookbackDays": 126,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "tsmTrail": {
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "s8-breadth",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.125,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 0,
+      "lookbackDays": 126,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "tsmTrail": {
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

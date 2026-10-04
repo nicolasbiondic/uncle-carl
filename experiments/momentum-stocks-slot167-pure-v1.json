@@ -1,0 +1,117 @@
+{
+  "name": "momentum-stocks-slot167-pure-v1",
+  "sleeve": "stocks",
+  "description": "EJE TAMANO DE SLOT a tope bruto IDENTICO (R6, pre-registrado 2026-09-27 ANTES de correr, junto a slot125-pure-v2 y slot20-pure-v1). Contexto: el kernel diario validado que corre en vivo desde hoy (blend 63/126/252 sobre MA200, slotHysteresis, stops volScaled k8, 8 slots x 0.125, tope 1.0x; experiments/momentum-stocks-daily-blend3-pure-v1.json, artefacto cc2f5d69..., +351.8%/Sharpe 1.19/maxDD 21.2%) tiene exposicion media OOS de solo ~0.53-0.78x porque rara vez califican los 8 nombres del universo de 11 simbolos (la mayoria de sesiones el ranking devuelve 4-6 senales 'long' validas, no 8) — la parte ociosa del capital del sleeve no rinde nada mientras el gross real se queda por debajo del tope autorizado. HIPOTESIS: agrandar notionalPctPerSlot a 1/6 (16.67%, de 0.125) MANTENIENDO maxLongs=8 y el MISMO tope maxGrossExposureMult=1.0x sube el retorno sin pedir mas margen: cuando califican pocos nombres, cada uno pesa mas (el capital ocioso se despliega); cuando califican 6+ nombres, el tope de 1.0x (8*0.1667=1.333x nominal > 1.0x real) recorta las entradas de menor ranking en el ORDEN en que MomentumEngine.tick() las procesa (ordered = closes primero, luego opens en el orden de planRebalance/rank() — los nombres de menor momentum del blend pierden el slot cuando el gross acumulado ya toco el cap). CASO EN CONTRA (declarado antes de correr, no se relativiza post-hoc si ocurre): (a) MAS CONCENTRACION — con pocos nombres calificando cada stop volScaled (5-30%) pesa mas del equity total; una sola mecha profunda en un solo nombre puede costar hasta ~5pp de equity con un slot de 16.67% al maxPct 30% de stop, vs ~3.75pp con el slot de 12.5% actual; (b) en mercados debiles califican POCOS nombres (justo donde el slot es mas grande), asi que la concentracion es maxima exactamente cuando el regimen es peor — lo opuesto de lo deseable; (c) LOO sin NVDA: NVDA aporto una fraccion desproporcionada del P&L OOS en corridas previas del kernel diario (39-51% en horizon-daily-breadth-v1); con slots mas grandes la ausencia de NVDA puede penalizar MAS que con 0.125 porque cada slot restante intenta compensar con mayor notional por nombre, sin diversificar el hueco. Todo lo demas FROZEN al control (mismo universo 11 simbolos, misma ventana/asOf latest/window.to 2026-12-31, mismos folds/costes/gates, mismo blend/MA/hysteresis/stops/sharpeGate/risk). Unico eje: notionalPctPerSlot 0.125 -> 1/6 (0.1666...7) y maxGrossExposureMult AGREGADO explicitamente en 1.0 (necesario aqui porque 8*1/6=1.333x nominal > 1.0x, a diferencia del control donde 8*0.125=1.0x exacto no necesita el guard explicito). Sin margen: maxGrossExposureMult sigue en <=1.0x como en produccion. TRIAL ACCOUNTING: +1 hipotesis nueva (slot 1/6 con tope 1.0x nunca corrido). priorUniqueTrials=307 (base = ultimo manifest del ledger, momentum-crypto-usdc-daily-s8-pure-v1) -> 308 tras este manifest.",
+  "trialAccounting": {
+    "priorUniqueTrials": 307,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "slot167",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.16666666666666666,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 0,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "maxGrossExposureMult": 1.0,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "lookbackDaysList": [
+        63,
+        126,
+        252
+      ]
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

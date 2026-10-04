@@ -1,0 +1,21 @@
+services:
+  uncle-carl:
+    build: .
+    image: uncle-carl-trading-bot:local
+    container_name: uncle-carl-trading-bot
+    env_file:
+      - .env
+    ports:
+      # Published on the host's loopback only: reach it through a reverse
+      # proxy or tunnel (docs/platform/self-hosting.md). Drop "127.0.0.1:"
+      # only on a trusted LAN.
+      - "127.0.0.1:${DASHBOARD_PORT:-3789}:${DASHBOARD_PORT:-3789}"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:' + (process.env.DASHBOARD_PORT || 3789) + '/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3

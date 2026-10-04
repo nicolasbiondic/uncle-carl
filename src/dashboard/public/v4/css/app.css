@@ -1,0 +1,393 @@
+/* ── app.css — base + layout + components ───────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg); color: var(--text);
+  font-family: var(--sans); font-size: var(--t-sm); line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; text-decoration: none; }
+button { font-family: inherit; cursor: pointer; }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.num { font-variant-numeric: tabular-nums; }
+.up { color: var(--up); } .down { color: var(--down); } .muted { color: var(--muted); }
+.hide { display: none !important; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
+
+/* layout shell */
+.app { min-height: 100%; display: flex; flex-direction: column; }
+.sticky { position: sticky; top: 0; z-index: 40; background: var(--bg); }
+.wrap { width: 100%; max-width: 1720px; margin: 0 auto; padding: 0 var(--s4); }
+.content { flex: 1; padding-bottom: var(--s6); }
+
+/* header */
+/* merged top bar: broker header (left) + KPI strip (grows) + icon actions (right) on ONE row */
+/* var(--s2) vertical padding: without it the brand row sits flush against the
+   viewport top whenever the KPI strip wraps to a second row (≤~1500px). */
+.topbar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s3) var(--s5); min-height: 56px; padding: var(--s2) 0; border-bottom: 1px solid var(--border); }
+/* left cluster is a 2-line stack: brand+clock on top, broker totals beneath —
+   fits inside the KPI-defined bar height, so it costs no extra vertical space */
+.hdr { display: flex; flex-direction: column; justify-content: center; align-items: flex-start; gap: 3px; flex-shrink: 0; }
+.hdr-brokers { display: flex; align-items: center; gap: var(--s2); }
+.hdr-actions { display: flex; align-items: center; gap: var(--s2); flex-shrink: 0; }
+.hdr .brand { display: flex; align-items: center; gap: var(--s2); font-weight: 700; font-size: var(--t-md); }
+.hdr .brand .ic { color: var(--accent); }
+.hdr .ver { font-size: var(--t-xs); color: var(--muted); font-family: var(--mono); border: 1px solid var(--border); border-radius: var(--r1); padding: 1px 6px; }
+.hdr .clock { color: var(--muted); font-family: var(--mono); font-size: var(--t-xs); }
+.hdr .pill { display: inline-flex; align-items: center; gap: 6px; font-size: var(--t-xs); border: 1px solid var(--border); border-radius: var(--r-pill); padding: 3px 10px; color: var(--text-2); text-decoration: none; }
+.hdr a.pill:hover { border-color: var(--text-2); color: var(--text-1); }
+.hdr .pill-balance { color: var(--text-1); font-variant-numeric: tabular-nums; }
+/* Binance total + wallet breakdown (USDT Futures / USDC / BTC) — the parts are
+   informational only, never re-summed elsewhere, so they're de-emphasized and
+   drop on narrower headers where the Total figure alone still fits. */
+.hdr .pill-sub { color: var(--muted); margin-left: 4px; }
+.hdr .pill-sub { display: none; } /* full 4-way breakdown rides in the pill's title tooltip — it doesn't fit the merged single-row top bar */
+.hdr .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.hdr .dot.on { background: var(--up); } .hdr .dot.off { background: var(--down); }
+.icn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: var(--r1); border: 1px solid var(--border); background: var(--bg-1); color: var(--text-2); }
+.icn:hover { color: var(--text); border-color: var(--border-2); }
+.icn.danger:hover { color: var(--down); border-color: var(--down); }
+/* version switch removed — v4 is the only dashboard, served at / and /v4 */
+
+/* KPI bar */
+.kpis { display: flex; align-items: center; gap: 0; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; border-left: 1px solid var(--border); padding-left: var(--s5); }
+.kpis::-webkit-scrollbar { display: none; }
+.kpi { padding: var(--s3) var(--s5) var(--s3) 0; flex-shrink: 0; }
+.kpi + .kpi { padding-left: var(--s5); border-left: 1px solid var(--border); }
+.kpi .kl { color: var(--muted); font-size: var(--t-xs); text-transform: uppercase; letter-spacing: .05em; display: block; margin-bottom: 3px; }
+.kpi .kv { font-size: var(--t-xl); font-weight: 800; }
+.kpi.sm .kv { font-size: var(--t-lg); }
+.kpi .kv.sub { font-size: var(--t-xs); color: var(--muted); font-weight: 500; }
+/* Realized-in-window line under the P&L KPIs + its "breakdown" link (pnl-breakdown.js). */
+.kpi .ks { display: block; margin-top: 3px; font-size: var(--t-xs); color: var(--muted); font-weight: 500; white-space: nowrap; }
+.kpi .ks b { font-weight: 700; }
+.lnk { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.lnk:hover { filter: brightness(1.2); }
+.spark-plot { position: relative; height: 36px; cursor: crosshair; }
+.spark-plot svg { width: 100%; height: 36px; display: block; }
+/* TradingView Lightweight Charts™ containers (equity tab, candle modal) —
+   the library's `autoSize: true` owns a ResizeObserver on this box and keeps
+   its <canvas> matched to it; we only need to give it a starting height. */
+.lwchart { position: relative; width: 100%; }
+@media (max-width: 480px) { .lwchart { height: 220px !important; } }
+.spark-cur { position: absolute; top: 0; height: 100%; width: 1px; background: var(--border-2); opacity: 0; pointer-events: none; transition: opacity var(--dur); }
+/* top/left 0: without them the dot's STATIC position lands after the svg and
+   translate(-50%,-50%) pokes 3px past the plot — a phantom scrollHeight bump
+   that gave #anBody a hairline scrollbar. JS sets real coords on hover. */
+.spark-dot { position: absolute; top: 0; left: 0; width: 6px; height: 6px; border-radius: 50%; transform: translate(-50%,-50%); box-shadow: 0 0 0 2px var(--card); opacity: 0; pointer-events: none; }
+/* tooltip: appended to <body> so position:fixed is truly viewport-relative
+   (v3 bug: a transformed ancestor made fixed relative to the KPI bar + clipped). */
+.tip { position: fixed; z-index: 9999; background: var(--bg-1); border: 1px solid var(--border-2); border-radius: var(--r1); padding: 4px 8px; font-size: var(--t-xs); line-height: 1.35; white-space: nowrap; opacity: 0; pointer-events: none; box-shadow: var(--shadow-2); font-variant-numeric: tabular-nums; transition: opacity var(--dur); }
+.tip b { font-size: var(--t-sm); } .tip .tt { color: var(--muted); font-size: 10px; }
+
+/* grid + cards */
+.grid { display: grid; gap: var(--s4); padding-top: var(--s4); }
+.grid.cols-2 { grid-template-columns: 1fr 1fr; }
+.grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: var(--r3); padding: var(--s4); }
+.card h3 { margin: 0 0 var(--s3); font-size: var(--t-md); font-weight: 700; display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }
+.card-note { color: var(--muted); font-size: var(--t-xs); text-transform: uppercase; letter-spacing: .05em; }
+.empty { padding: var(--s6) var(--s4); text-align: center; color: var(--muted); }
+.empty .big { color: var(--text-2); font-size: var(--t-md); margin-bottom: var(--s1); }
+
+/* profile cards */
+.pcard { display: flex; align-items: stretch; gap: var(--s4); background: var(--card); border: 1px solid var(--border); border-radius: var(--r3); padding: var(--s4); transition: border-color var(--dur), transform var(--dur); }
+/* left summary · centre equity sparkline (fills the gutter) · right meta */
+.pcard .pcol { display: flex; flex-direction: column; justify-content: center; gap: 3px; min-width: 0; flex-shrink: 0; }
+.pcard .pcol-r { align-items: flex-end; text-align: right; gap: 4px; }
+.pcard .psub { font-size: var(--t-xs); color: var(--muted); white-space: nowrap; }
+.pcard .psub b { color: var(--text); font-weight: 600; }
+.pcard .pdet { font-size: var(--t-xs); }
+.pspark { flex: 1; min-width: 40px; align-self: stretch; position: relative; cursor: crosshair; }
+.pspark svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.pspark .spark-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: var(--t-xs); color: var(--muted); }
+.pcard:hover { border-color: var(--border-2); transform: translateY(-1px); }
+.pcard.on { border-color: var(--accent); }
+.pcard .broker { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border: 1px solid var(--border); border-radius: var(--r1); padding: 1px 6px; }
+.pcard .peq { font-size: var(--t-lg); font-weight: 800; }
+.pcard .pall { font-size: var(--t-sm); font-weight: 600; white-space: nowrap; }
+.chip { font-size: 10px; border: 1px solid var(--border); border-radius: var(--r1); padding: 1px 6px; color: var(--text-2); font-family: var(--mono); }
+.live { display: inline-flex; align-items: center; gap: 5px; font-size: var(--t-xs); color: var(--up); }
+.live .d { width: 6px; height: 6px; border-radius: 50%; background: var(--up); }
+
+/* tables */
+table { width: 100%; border-collapse: collapse; }
+th { text-align: right; color: var(--muted); font-weight: 600; font-size: var(--t-xs); text-transform: uppercase; letter-spacing: .05em; padding: var(--s1) var(--s2); border-bottom: 1px solid var(--border); white-space: nowrap; }
+td { text-align: right; padding: var(--s2); border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+th:first-child, td:first-child { text-align: left; }
+tr:last-child td { border-bottom: none; }
+/* Totals row: separated from the body by a rule and slightly heavier, so it
+   reads as a summary rather than as one more position. Sticks to the bottom
+   of the scroll container so it stays visible with many open positions. */
+tfoot tr.totals td { border-top: 1px solid var(--border); border-bottom: none; font-weight: 700; background: var(--bg); position: sticky; bottom: 0; }
+tfoot tr.totals .muted { font-weight: 500; }
+.scroll { overflow: auto; }
+.badge { display: inline-flex; padding: 1px 6px; border-radius: var(--r1); font-size: 10px; font-weight: 700; }
+.badge.l { background: var(--up-soft); color: var(--up); } .badge.s { background: var(--down-soft); color: var(--down); }
+/* Positions table: per-row sleeve badge (which sleeve owns this row — e.g. a
+   LINK/USD momentum_crypto row vs. a LINK/USDC momentum_crypto_usdc row look
+   identical otherwise) + opt-out columns for narrow layouts. SL/TP go first
+   (defense-in-depth values, still one click away via the symbol) so QTY and
+   NOTIONAL — the columns this table exists for — never hide. */
+.sbadge { display: inline-flex; align-items: center; gap: 3px; margin-left: 5px; padding: 1px 5px; border: 1px solid var(--border); border-radius: var(--r1); font-size: 9px; font-weight: 700; color: var(--text-2); white-space: nowrap; }
+.sbadge .d { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+@media (max-width: 1500px) { .postbl .opt1 { display: none; } }
+@media (max-width: 640px) { .postbl .opt2 { display: none; } }
+/* Mobile (2026-09-24 audit fix): at 640px SL/TP/Time are already hidden, but
+   SYM/S/QTY/ENTRY/NOTIONAL/NOW/P&L still don't fit — P&L (the number that
+   matters most) got clipped off-screen with no way back to it without losing
+   the symbol. QTY/ENTRY (recoverable from the symbol's own detail view) go
+   next so SYM, NOTIONAL, NOW and P&L stay; the symbol column itself sticks
+   to the left edge of the horizontal scroller so it's never scrolled away
+   while reaching P&L. */
+@media (max-width: 480px) { .postbl .opt3 { display: none; } }
+.postbl th:first-child, .postbl td:first-child {
+  position: sticky; left: 0; z-index: 1; background: var(--card);
+  box-shadow: 1px 0 0 var(--border);
+}
+.postbl tfoot tr.totals td:first-child { background: var(--bg); }
+
+/* tabs */
+.tabs { display: flex; gap: var(--s4); flex-wrap: wrap; border-bottom: 1px solid var(--border); margin-bottom: var(--s3); }
+.tab { appearance: none; background: none; border: none; color: var(--muted); font-weight: 600; font-size: var(--t-sm); padding: var(--s2) 0; position: relative; }
+.tab:hover { color: var(--text-2); }
+.tab.on { color: var(--text); }
+.tab.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--accent); }
+
+/* chips row (risk metrics etc.) */
+.chips { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.mchip { border: 1px solid var(--border); border-radius: var(--r1); padding: var(--s1) var(--s2); background: var(--bg-1); }
+.mchip .l { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; display: block; }
+.mchip b { font-variant-numeric: tabular-nums; }
+
+/* segmented control (period selector) */
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r1); overflow: hidden; }
+.seg button { appearance: none; background: none; border: none; color: var(--muted); padding: 4px 10px; font-size: var(--t-xs); font-weight: 700; font-family: inherit; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button:hover { color: var(--text); }
+.seg button.on { background: var(--accent); color: #fff; }
+
+/* analytics card header: tabs + window selector on one row */
+.an-head { display:flex; align-items:center; justify-content:space-between; gap:var(--s3); border-bottom:1px solid var(--border); margin-bottom:var(--s3); flex-wrap:wrap; }
+.an-head .tabs { border-bottom:none; margin-bottom:0; }
+.an-window { display:inline-flex; align-items:center; gap:var(--s2); }
+.an-window-l { color:var(--muted); font-size:var(--t-xs); text-transform:uppercase; letter-spacing:.05em; }
+
+/* command palette */
+.pal-backdrop { position: fixed; inset: 0; z-index: 10000; background: rgba(0,0,0,.55); display: flex; justify-content: center; align-items: flex-start; padding-top: 14vh; animation: fadeIn 120ms var(--ease); }
+.pal { width: min(560px, 92vw); background: var(--bg-1); border: 1px solid var(--border-2); border-radius: var(--r3); box-shadow: var(--shadow-2); overflow: hidden; animation: fadeUp 140ms var(--ease); }
+.pal-in { width: 100%; box-sizing: border-box; background: transparent; border: none; outline: none; color: var(--text); font: 600 var(--t-md) var(--sans); padding: var(--s4); border-bottom: 1px solid var(--border); }
+.pal-list { max-height: 320px; overflow-y: auto; padding: var(--s2); }
+.pal-item { display: flex; justify-content: space-between; align-items: center; gap: var(--s3); padding: var(--s2) var(--s3); border-radius: var(--r1); font-size: var(--t-sm); cursor: pointer; color: var(--text-2); }
+.pal-item.on, .pal-item:hover { background: var(--accent-soft); color: var(--text); }
+.pal-tag { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+
+/* candle modal */
+.cm-backdrop { position: fixed; inset: 0; z-index: 9000; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; padding: var(--s4); animation: fadeIn 120ms var(--ease); }
+.cm { width: min(1060px, 96vw); max-height: 92vh; overflow: auto; background: var(--bg-1); border: 1px solid var(--border-2); border-radius: var(--r3); box-shadow: var(--shadow-2); animation: fadeUp 160ms var(--ease); }
+.cm-head { display: flex; align-items: center; gap: var(--s3); padding: var(--s3) var(--s4); border-bottom: 1px solid var(--border); font-size: var(--t-md); }
+.cm-body { display: grid; grid-template-columns: 1fr 240px; gap: var(--s4); padding: var(--s4); }
+.cm-side:empty { display: none; }
+.cm-body:has(.cm-side:empty) { grid-template-columns: 1fr; }
+@media (max-width: 860px) { .cm-body { grid-template-columns: 1fr; } }
+
+/* broker modal — sleeve list */
+.bm-list { display: flex; flex-direction: column; gap: var(--s2); padding: var(--s4); }
+.bm-row { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; padding: var(--s3); border: 1px solid var(--border); border-radius: var(--r2); background: var(--bg-1); cursor: pointer; transition: border-color var(--dur), transform var(--dur); }
+.bm-row:hover, .bm-row:focus-visible { border-color: var(--accent); transform: translateY(-1px); outline: none; }
+.bm-row .bm-name { display: flex; align-items: center; gap: var(--s2); font-weight: 600; min-width: 140px; }
+.bm-row .bm-metrics { display: flex; align-items: center; gap: var(--s4); margin-left: auto; font-variant-numeric: tabular-nums; font-size: var(--t-sm); }
+.bm-modal { width: min(640px, 94vw); }
+.pb-modal { width: min(720px, 94vw); }
+.pb-body { padding: var(--s4); display: grid; gap: var(--s4); }
+.pb-top { font-size: var(--t-md); }
+.pb-intro { margin: 0; color: var(--muted); font-size: var(--t-sm); line-height: 1.55; }
+.pb-bridge, .pb-closes { width: 100%; border-collapse: collapse; }
+.pb-bridge td { padding: 7px 0; border-bottom: 1px solid var(--border); font-size: var(--t-sm); }
+.pb-bridge td.r, .pb-closes .r { text-align: right; font-family: var(--mono); white-space: nowrap; padding-left: var(--s4); }
+.pb-bridge tr.sum td { font-weight: 600; }
+.pb-bridge tr.total td { font-weight: 800; font-size: var(--t-md); border-bottom: 0; border-top: 2px solid var(--border-2); padding-top: 9px; }
+.pb-h { font-size: var(--t-xs); color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: var(--s2); }
+.pb-more { font-size: var(--t-xs); margin-top: var(--s2); } /* narrower than the 1060px candle modal — it's a short sleeve list */
+.ob-row { position: relative; display: flex; justify-content: space-between; gap: var(--s2); font-size: var(--t-xs); font-variant-numeric: tabular-nums; padding: 1px 4px; }
+.ob-row .ob-bar { position: absolute; right: 0; top: 0; bottom: 0; z-index: 0; }
+.ob-row span { position: relative; z-index: 1; }
+.ob-mid { border-top: 1px dashed var(--border-2); margin: 3px 0; }
+.symlink { cursor: pointer; border-bottom: 1px dotted var(--border-2); }
+.symlink:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* settings slideover */
+.so-backdrop { position: fixed; inset: 0; z-index: 9500; background: rgba(0,0,0,.45); animation: fadeIn 120ms var(--ease); }
+.so { position: absolute; top: 0; right: 0; bottom: 0; width: min(340px, 92vw); background: var(--bg-1); border-left: 1px solid var(--border-2); box-shadow: var(--shadow-2); display: flex; flex-direction: column; animation: soIn 200ms var(--ease); }
+@keyframes soIn { from { transform: translateX(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+.so-head { display: flex; align-items: center; justify-content: space-between; padding: var(--s4); border-bottom: 1px solid var(--border); font-size: var(--t-md); }
+.so-body { padding: var(--s4); overflow-y: auto; }
+.so-body label { display: block; color: var(--muted); font-size: var(--t-xs); text-transform: uppercase; letter-spacing: .05em; margin: var(--s4) 0 var(--s2); }
+.so-body label:first-child { margin-top: 0; }
+
+/* news */
+.news-scroll { display: flex; gap: var(--s3); overflow-x: auto; padding-bottom: var(--s2); scrollbar-width: thin; }
+.news-card { flex: 0 0 260px; background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r2); padding: var(--s3); transition: border-color var(--dur), transform var(--dur); }
+.news-card:hover { border-color: var(--border-2); transform: translateY(-1px); }
+.news-card .n-src { font-size: var(--t-xs); color: var(--accent); font-weight: 600; margin-bottom: var(--s1); display: flex; gap: var(--s2); align-items: center; }
+.news-card .n-lang { font-size: 9px; color: var(--muted); border: 1px solid var(--border); border-radius: var(--r1); padding: 0 4px; }
+.news-card .n-title { font-size: var(--t-sm); line-height: 1.35; margin-bottom: var(--s2); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.news-card .n-time { font-size: var(--t-xs); color: var(--muted); }
+.news-card[data-src="cointelegraph"] { border-left: 2px solid #4c9cff; }
+.news-card[data-src="coindesk"] { border-left: 2px solid #f7931a; }
+.news-card[data-src="bloomberg"] { border-left: 2px solid #ff5c5c; }
+.news-card[data-src="beincrypto"] { border-left: 2px solid #2dd4a0; }
+code { font-family: var(--mono); background: var(--bg-2); padding: 1px 5px; border-radius: 4px; font-size: .9em; }
+
+/* footer ticker + disclaimer.
+   Seamless marquee (2026-07-05): the -50% loop is only seam-perfect when the
+   animated element is EXACTLY two identical halves. Horizontal padding or a
+   flex gap on .ticker-in shifts the joint by (padding − gap)/2 px — it was
+   eating the first characters at the seam ("LINK" → "INK") and rendering an
+   inconsistent gap there. Halves own their spacing: gap between items +
+   padding-right equal to the same gap → seam spacing ≡ item spacing. */
+/* flex-shrink 0: overflow:hidden zeroes the automatic min-height, so any
+   .app column deficit squeezed the carousel first (to ~9px at 1720×900).
+   Deficits must crush .content (min-height 0 by design), never the ticker. */
+.ticker { border-top: 1px solid var(--border); background: var(--bg-1); overflow: hidden; flex-shrink: 0; }
+.ticker-in { display: flex; padding: var(--s2) 0; white-space: nowrap; animation: tick 80s linear infinite; }
+.ticker-half { display: flex; gap: var(--s5); padding-right: var(--s5); flex-shrink: 0; }
+.ticker .t { font-size: var(--t-xs); color: var(--text-2); }
+@keyframes tick { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+.disclaimer { display: flex; align-items: center; justify-content: center; gap: var(--s2); color: var(--muted); font-size: 10px; padding: var(--s2) var(--s4); border-top: 1px solid var(--border); }
+.disclaimer svg { flex-shrink: 0; }
+.disclaimer span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 640px) { .disclaimer span { white-space: normal; } }
+
+/* profile dot + chips */
+.pcard .pname { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
+.pcard .pname b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+
+/* main area: profiles in ONE full-width row of 4, then Operations | Analytics */
+/* 1fr 1fr (not 1.2fr) so the Positions|Equity divider lines up with the
+   Alpaca|Binance divider in #profiles above (both are .wrap children, same gap) */
+.main-area { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s4); padding-top: var(--s4); }
+.ops-wrap, .an-col { min-width: 0; min-height: 0; }
+/* gap matches .main-area / .wrap (s4) — mixed 12/16px gaps read as misalignment */
+.profiles-grid { padding-top: var(--s4); gap: var(--s4); }
+.profiles-grid .pcard { padding: var(--s2) var(--s3); }
+@media (max-width: 980px) { .main-area { grid-template-columns: 1fr; } }
+
+/* animations / polish */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes breath { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+@keyframes flashUp { 0% { background: var(--up-soft); } 100% { background: transparent; } }
+@keyframes flashDown { 0% { background: var(--down-soft); } 100% { background: transparent; } }
+@keyframes shimmer { 0% { background-position: -200px 0; } 100% { background-position: 200px 0; } }
+.fade-up { animation: fadeUp var(--dur) var(--ease) both; }
+.kpis, #profiles, #newsBar { animation: fadeIn 260ms var(--ease) both; }
+.live .d { animation: breath 2.4s ease-in-out infinite; }
+.flash-up { animation: flashUp 720ms var(--ease); border-radius: var(--r1); }
+.flash-down { animation: flashDown 720ms var(--ease); border-radius: var(--r1); }
+.card, .pcard, .icn, .tab, .news-card { transition: border-color var(--dur) var(--ease), transform var(--dur) var(--ease), color var(--dur), background var(--dur); }
+.kv, .peq { transition: color var(--dur); }
+.skel { position: relative; overflow: hidden; background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r3); }
+.skel::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--bg-2), transparent); background-size: 200px 100%; animation: shimmer 1.2s infinite; }
+
+/* 100dvh viewport lock (desktop, tall enough): fill the screen, cards scroll
+   internally, no page scroll. Narrow / short / portrait opt OUT to normal
+   scroll (v3 learned this). */
+@media (min-width: 981px) and (min-height: 660px) {
+  html, body { height: 100dvh; overflow: hidden; }
+  .app { height: 100dvh; }
+  .content { flex: 1 1 auto; min-height: 0; overflow: hidden; padding-bottom: 0; }
+  .content > .wrap { height: 100%; display: flex; flex-direction: column; min-height: 0; gap: var(--s4); padding: var(--s4) var(--s4) 0; }
+  .main-area { padding-top: 0; flex: 1 1 auto; min-height: 0; align-items: stretch; }
+  #profiles { flex-shrink: 0; padding-top: 0; }
+  #opsWrap > .card, #analyticsCol > .card { height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  #opsWrap > .card > .tabs, #analyticsCol > .card > .an-head { flex-shrink: 0; }
+  /* flex-basis 0 (not auto!): with the inner max-height caps gone, `auto`
+     made each card contribute its FULL table height (~1500px) to .content's
+     intrinsic size — the .app column went into deficit at 100dvh and crushed
+     the ticker (its overflow:hidden ⇒ min-height 0) down to ~9px/invisible.
+     Basis 0 keeps the card's intrinsic height at tabs-only; the body still
+     grows to fill and scrolls internally. */
+  .cardbody { flex: 1 1 0; min-height: 0; overflow-y: auto; }
+  /* 2026-07-05: .cardbody is the ONE scroller in lock mode. Inner .scroll
+     wrappers (positions/trades tables, incl. the inline max-height:420px in
+     trades.js) were nesting a second scrollbar inside it — double scroll. */
+  .cardbody .scroll { max-height: none !important; overflow: visible; }
+  /* Equity tab: the plot was a fixed 160px, so on viewports where content ran
+     a few px past the card the whole tab scrolled pointlessly. Let the plot
+     absorb the remaining card height instead (chart scales, no scrollbar).
+     Other tabs keep natural heights (flex-shrink:0) and scroll when long. */
+  #anBody { display: flex; flex-direction: column; }
+  #anBody > * { flex-shrink: 0; }
+  #anBody .lwchart { flex: 1 1 auto; height: auto !important; min-height: 140px; }
+  #newsBar { flex-shrink: 0; }
+  #newsBar .card { padding: var(--s3); }
+  .news-scroll { padding-bottom: 0; }
+}
+
+/* responsive */
+/* Below ~1360px the merged top row can't fit brand + 7 KPIs + actions without
+   clipping/overlapping — drop the KPI strip to its own full-width second line
+   (brand + icon actions stay on the top line). Wide screens keep ONE row. */
+@media (max-width: 1360px) {
+  .hdr { order: 1; }
+  .hdr-actions { order: 2; margin-left: auto; }
+  .kpis { order: 3; flex-basis: 100%; border-left: none; padding-left: 0; }
+}
+@media (max-width: 1100px) { .grid.cols-4 { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 980px) { .grid.cols-2 { grid-template-columns: 1fr; } .kpi .kv { font-size: var(--t-lg); } }
+@media (max-width: 560px) { .grid.cols-4 { grid-template-columns: 1fr; } .wrap { padding: 0 var(--s3); } .hdr { gap: var(--s2); } .hdr .clock, .hdr .pill { display: none; } }
+
+/* ── Broker accounts panel (components/accounts.js) ───────────────────── */
+.acc-list { display: flex; flex-direction: column; gap: var(--s3); }
+.acc-row { border: 1px solid var(--border); border-radius: var(--r2); padding: var(--s3); background: var(--bg-1); }
+.acc-main { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.acc-sub { font-size: var(--t-xs); margin-top: var(--s2); }
+.acc-sub code { font-family: var(--mono); }
+.acc-err { color: var(--down); margin-top: 2px; word-break: break-word; }
+.acc-actions { display: flex; gap: var(--s2); margin-top: var(--s3); }
+.acc-status { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: var(--r1); }
+.acc-status.ok { background: var(--up-soft); color: var(--up); }
+.acc-status.err { background: var(--down-soft); color: var(--down); }
+.acc-status.warn { background: var(--bg-2); color: var(--text-2); }
+.acc-btn { font: inherit; font-size: var(--t-sm); padding: var(--s2) var(--s3); border-radius: var(--r1); border: 1px solid var(--border); background: var(--bg-2); color: var(--text); cursor: pointer; }
+.acc-btn:hover { border-color: var(--accent); }
+.acc-btn:disabled { opacity: .5; cursor: not-allowed; }
+.acc-btn.primary { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.acc-btn.danger { color: var(--down); }
+.acc-btn.on { border-color: var(--accent); background: var(--bg-1); }
+.acc-input { font: inherit; font-size: var(--t-sm); width: 100%; padding: var(--s2) var(--s3); border-radius: var(--r1); border: 1px solid var(--border); background: var(--bg-2); color: var(--text); }
+.acc-input:focus { outline: none; border-color: var(--accent); }
+.acc-modal { width: min(440px, 94vw); }
+.acc-mbody { padding: var(--s4); }
+.acc-mbody label { display: block; color: var(--muted); font-size: var(--t-xs); text-transform: uppercase; letter-spacing: .05em; margin: var(--s3) 0 var(--s1); }
+.acc-choose { display: flex; gap: var(--s2); margin-bottom: var(--s3); }
+.acc-form .acc-btn.primary { margin-top: var(--s3); }
+.acc-sep { color: var(--muted); font-size: var(--t-xs); text-transform: uppercase; letter-spacing: .05em; margin: var(--s3) 0; text-align: center; }
+.acc-tips { margin: var(--s2) 0; padding-left: 18px; font-size: var(--t-xs); color: var(--text-2); }
+.acc-tips li { margin-bottom: 2px; }
+.acc-note { font-size: var(--t-xs); margin-top: var(--s3); }
+.acc-setup { border: 1px solid var(--down); border-radius: var(--r2); padding: var(--s3); color: var(--down); font-size: var(--t-sm); }
+.acc-msg { font-size: var(--t-sm); margin-top: var(--s3); min-height: 1em; }
+.acc-msg.ok { color: var(--up); }
+.acc-msg.err { color: var(--down); }
+
+/* ── Portfolios panel (components/portfolios.js) — create/edit on top of the
+   accounts panel's acc-*/cm-* primitives ───────────────────────────────── */
+.pf-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); margin-bottom: var(--s2); }
+.pf-note { margin: var(--s2) 0 var(--s3); }
+.pf-actions { display: flex; gap: var(--s2); white-space: nowrap; }
+.postbl .pf-actions .acc-btn { padding: 2px 8px; font-size: var(--t-xs); }
+.pf-row-archived { opacity: .6; }
+.pf-warn { color: var(--down); font-size: var(--t-xs); margin: var(--s2) 0; }
+.pf-json { font-family: var(--mono); font-size: var(--t-xs); resize: vertical; }
+.pf-check { display: flex !important; align-items: center; gap: var(--s2); text-transform: none !important; letter-spacing: normal !important; }
+.pf-check input { width: auto; }
+.pf-errlist { margin: 0; padding-left: 18px; }
+.pf-errlist li { margin-bottom: 2px; }
+/* The create/edit modals open ON TOP of the already-open Portfolios
+   slideover (.so-backdrop, z-index 9500) — .cm-backdrop alone (9000) would
+   render BEHIND it, visible nowhere and unclickable. */
+.pf-modal-backdrop { z-index: 9600; }

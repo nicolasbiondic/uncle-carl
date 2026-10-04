@@ -1,0 +1,86 @@
+{
+  "name": "meanrev-selectivity-v1",
+  "sleeve": "meanrev",
+  "description": "Selectivity/turnover axis for meanrev_stocks — the sleeve's protocol failure mode is not the edge (live 30d: +$2,080, WR 72%, expectancy +$71.74) but TURNOVER (2,550 trades over the long window; Sharpe 0.49 vs SPY 0.79; costs kill it under stress). Pre-registered question: does any point on the SELECTIVITY axis — stricter entryRsi (5 -> 3 -> 2, i.e. rarer/deeper panics) x fewer concurrent slots (maxPositions 5 -> 3) — produce fewer trades with better net-of-costs expectancy, measured by the SAME gates as meanrev-stocks-v1 including minExcessSharpeVsBench (the fair vara for a low-exposure sleeve; NOT relaxed)? The Connors thesis is intact: only the entry threshold and slot count move; smaLong 200, smaExit 5, timeStopDays 10, slotPct 0.1 and the ledger 4% stop are FROZEN to the incumbent (the stop axis is a separate, already-run sweep — mixing axes here would multiply the trial surface). Ranking under scarcity is the engine's own (real MeanRevEngine ranks entries; entryRsi doubles as the quality threshold). A minimum-rank-quality axis beyond entryRsi does NOT exist in the frozen sim params and was deliberately NOT added mid-investigation. 6 candidates = full 3x2 grid, declared BEFORE running; the incumbent (5,5) is meanrev-stocks-v1's incumbent config (0 new hypotheses); the other 5 are new. priorUniqueTrials=18: 9 inventoried pre-manifest experiments + meanrev-stocks-v1's 4 candidates + meanrev-stop-sizing-v1's 5 stop-axis candidates (meanrev-stop-sizing-v2 re-runs those same configs on a longer window and adds 0, per the ledger identity rule). Inventory incomplete, so complete=false and approval stays blocked by protocol regardless of gates. If NO candidate passes, that is the finding — do NOT trim or re-run.",
+  "trialAccounting": { "priorUniqueTrials": 18, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "ABBV", "AVGO", "BAC", "CAT", "COST", "CVX", "DIS", "GE", "HD", "HON",
+      "JNJ", "JPM", "KO", "LLY", "MA", "MCD", "MRK", "NFLX", "NKE", "ORCL",
+      "PG", "QCOM", "UNH", "V", "WMT", "XLE", "XLF", "XLI", "XLP", "XLV",
+      "XOM", "SLV"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2018-01-01",
+    "to": "2026-08-06",
+    "outerFoldCount": 6,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 365
+  },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0 },
+    "stress": { "slippageBps": 5, "commissionBps": 2 }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 1,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent-rsi5-slots5",
+      "cadenceMin": 1440,
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    },
+    {
+      "name": "rsi3-slots5",
+      "cadenceMin": 1440,
+      "meanrev": { "entryRsi": 3, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    },
+    {
+      "name": "rsi2-slots5",
+      "cadenceMin": 1440,
+      "meanrev": { "entryRsi": 2, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    },
+    {
+      "name": "rsi5-slots3",
+      "cadenceMin": 1440,
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 3, "slotPct": 0.1 }
+    },
+    {
+      "name": "rsi3-slots3",
+      "cadenceMin": 1440,
+      "meanrev": { "entryRsi": 3, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 3, "slotPct": 0.1 }
+    },
+    {
+      "name": "rsi2-slots3",
+      "cadenceMin": 1440,
+      "meanrev": { "entryRsi": 2, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 3, "slotPct": 0.1 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0.5,
+    "maxDrawdown": 0.25,
+    "minTotalReturn": 0,
+    "minExcessSharpeVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 100,
+    "stressMinSharpe": 0,
+    "stressMaxDrawdown": 0.3,
+    "stressMinTotalReturn": -0.1,
+    "looMinSharpe": 0,
+    "looMaxDrawdown": 0.3,
+    "looMinTotalReturn": -0.1
+  }
+}

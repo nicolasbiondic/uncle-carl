@@ -1,0 +1,94 @@
+{
+  "name": "momentum-crypto-usdc-vtcap-pure-v1",
+  "sleeve": "crypto",
+  "description": "Cadena PURA de usdc-vtcap, el mejor alternativo de la ronda 2 (momentum-crypto-usdc-redesign-v2, artefacto 7143d84e, cadena MEZCLADA: vtcap gano la seleccion inner de folds 0 y 2, control la del 1). Regla estandar: 1 candidato, +0 trials (identidad de ejecucion del usdc-vtcap ya declarado y corrido en redesign-v2). Cierra formalmente la evaluacion del criterio de ganador robusto de la ronda 2 contra el control puro 4b403501. Observacion previa declarada: en los folds internos vtcap produjo numeros IDENTICOS a vt35 hasta el decimal (la vol realizada 720h de estos perps casi nunca baja del target 35% anual, asi que el clamp maxScale 1.0 vs 1.5 casi nunca activa y el candidato colapsa casi por completo a vt35, cuya cadena pura 65500e1e ya fallo el criterio con Sharpe 0.26 vs 0.60); sus folds outer 0 y 2 ya corridos en la mezcla dan 26.3% y -29.7% vs 60.6% y -9.2% del control. Se corre igualmente la cadena completa para que el veredicto quede sobre un artefacto puro y no sobre una inferencia. priorUniqueTrials=301 (299 + 2 nuevas de redesign-v2). complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 301,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "ADA/USD",
+      "AVAX/USD",
+      "BCH/USD",
+      "BNB/USD",
+      "BTC/USD",
+      "DOGE/USD",
+      "ETH/USD",
+      "LINK/USD",
+      "LTC/USD",
+      "NEAR/USD",
+      "SOL/USD",
+      "UNI/USD",
+      "XRP/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-09-26T16:00:00.001Z",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-09-27",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 17,
+      "commissionBps": 3
+    },
+    "stress": {
+      "slippageBps": 60,
+      "commissionBps": 5
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "usdc-vtcap",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.3333333333333333,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 3,
+      "maxShorts": 0,
+      "volTarget": { "annualizedPct": 35, "lookbackBars": 720, "minScale": 0.33, "maxScale": 1.0 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

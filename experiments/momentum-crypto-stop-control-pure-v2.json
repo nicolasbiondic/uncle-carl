@@ -1,0 +1,99 @@
+{
+  "name": "momentum-crypto-stop-control-pure-v2",
+  "sleeve": "crypto",
+  "description": "CONTROL del eje hardStop en momentum_crypto (batch crypto-stop-axis-2026-09-28, pre-registrado ANTES de correr ningun trial). Contexto (dueno, puntos 1 y 3 de la mision): el vivo usa un stop duro FIJO del 4% desde la entrada (RISK_PROFILES.momentum_crypto.stopLossPct, modelado por el replay como hardStopPct ausente en el candidato = fallback fijo) y ese eje NUNCA se barrio en crypto pese a que en vivo los stops son la mayor fuga medida del sistema (todas las clases de stop suman -$6.5k vs +$10.1k de salidas planificadas; en momentum_crypto 9 BROKER_STOP_LOSS = -$722; ejemplo del 28-sep: ADA stop 4% a las 06:00 UTC -$36.56, recomprada 07:00 casi al mismo precio) y en stocks el 4% fijo fue el PEOR punto de su propio eje (artefacto ff70c47e, experiments/momentum-stop-sizing-v1.json), reemplazado por un stop volScaled. Este manifest re-corre el incumbent vivo EXACTO (vt-35, 8 majors USDT-perp, kernel horario, hardStop ausente = fijo 4% via ledger.hardStopPct) IDENTICO a experiments/momentum-crypto-2026w-control-pure-v1.json (artefacto a5101316..., +353.6%/Sharpe 1.13/maxDD 37.3%) — misma ventana 2021-01-01..asOf latest, mismos folds/costes/gates/universo — SOLO para fijar el mismo asOf 'latest' que los 3 candidatos del eje hardStop (fixed8/vol/none), de forma que los 4 corran sobre EXACTAMENTE la misma resolucion de datos el mismo dia. TRIAL ACCOUNTING: identidad de ejecucion del candidato vt-35 ya contado (sizing-v1/v2/v3/vt35-pure-v1/2026w-control-pure-v1); una re-ejecucion en la misma ventana/asOf que otros candidatos del mismo batch no multiplica hipotesis. +0 trials. Base = 309 (ultimo total del ledger tras el batch meanrev-slot-size-2026-09-27, manifest meanrev-slot14-pure-v1: 308+1). priorUniqueTrials=309. complete=false. CRITERIO DE GANADOR (identico para fixed8/vol/none, declarado ANTES de correr): mejor Sharpe entre los que cumplan CAGR >= control, maxDD <= control + 5pp, PSR >= 0.95, sin fallar ningun gate que el control pase, y los 3 folds outer con Sharpe >= control - 0.15. 'none' solo cuenta si ademas un stop ancho cableable (fixed8 o vol) queda dentro de 0.05 de Sharpe de el (none no es cableable tal cual: si ganara se cablearia como un stop muy ancho, hay que declararlo). Si nadie gana, se documenta por que.",
+  "trialAccounting": {
+    "priorUniqueTrials": 309,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt-35",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

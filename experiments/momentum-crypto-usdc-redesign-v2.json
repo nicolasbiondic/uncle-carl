@@ -1,0 +1,117 @@
+{
+  "name": "momentum-crypto-usdc-redesign-v2",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTRO 2026-09-26 (U1 paso 3, SEGUNDA ronda), escrito ANTES de correr, DESPUES de que la ronda 1 (momentum-crypto-usdc-redesign-v1, artefacto 6ae8182d; cadena pura del mejor alternativo usdc-vt35 en momentum-crypto-usdc-vt35-pure-v1, artefacto 65500e1e) NO produjera ganador robusto: vt35 puro hizo 15.1% / Sharpe 0.26 / DD 70.9% vs control 117.1% / 0.60 / 71.2% — falla 'mejora Sharpe Y maxDD'. DIAGNOSTICO fold a fold que motiva esta ronda (declarado como observacion, las hipotesis abajo se juzgan solo con los gates y el criterio pre-declarado): vt35 MEJORA el DD del control donde la vol es alta (fold 0: DD 26.9 vs 32.4; fold 1: 32.2 vs 53.9) pero DESTRUYE el fold 2 reciente (-34.7% vs -9.2%): el clamp maxScale 1.5 UPSIZEA el libro en el chop de vol baja de 2025-2026 exactamente donde la senal TSM ya pierde. La mejora parcial de vt35 es el DOWNSIZING en vol alta; la del control es no apalancarse nunca por encima de 1.0x. Esta ronda combina mejoras parciales conforme a lo pre-declarado en redesign-v1. 2 candidatos, cada uno una COMBINACION declarada: (1) usdc-vtcap — control + volTarget {annualizedPct 35, lookbackBars 720, minScale 0.33, maxScale 1.0}: downsize-only; en vol baja se comporta EXACTAMENTE como el control (scale clavado en 1.0) y en vol alta hereda la proteccion medida de vt35; CASE-AGAINST: si el retorno del control viene precisamente de los tramos de vol alta que vtcap recorta (como paso en USDT: vt35 recorto 386->233pp de retorno), vtcap puede quedarse con el DD del control y menos retorno, fallando Sharpe; ademas el rescaling anade churn a 20 bps/lado (vt35 duplico trades 871->1860). (2) usdc-vt35-s4 — vt35 + 4 slots x 0.25 (la combinacion ejemplo pre-declarada en redesign-v1): volTarget normaliza riesgo-$ y el 4o slot diversifica el libro que LOO mostro fragil (sin BTC: -69%); CASE-AGAINST: ambos ejes por separado rindieron PEOR que el control en Sharpe (vt35 0.26, s4 medDSR inner 0.0078) y sumar dos recortes de exposicion puede dejar el exceso vs BTC aun mas negativo. FORMA: 2 manifests de 1 candidato NO — este manifest lleva los 2 candidatos y el ancla usdc-control (identidad, +0) para seleccion inner honesta; si la cadena outer sale mezclada se corre la cadena pura del mejor alternativo (+0 trials, regla estandar). CRITERIO DE GANADOR ROBUSTO (identico al pre-declarado en v1): cadena PURA mejora al control puro (4b403501) en Sharpe Y maxDD, sin fallar ningun gate que el control pase, >= 2/3 folds PSR > 0.5. SI NINGUNO GANA: se concluye la investigacion con el veredicto honesto NO VALIDADO SIN MEJORA ROBUSTA — la config viva actual (el control) queda como config autoritativa del sleeve con su artefacto 4b403501 como banda de expectativa (el sleeve SIGUE OPERANDO, regla del dueno; la banda y el candado vivo=manifest protegen contra drift mientras se investigan ejes nuevos en futuros pre-registros). TRIAL ACCOUNTING: +2 hipotesis nuevas (vtcap-usdc13, vt35s4-usdc13); usdc-control es identidad (+0). priorUniqueTrials=299 (296 + 3 de redesign-v1; la cadena pura vt35 fue identidad +0); el total pasa a 301. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 299,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "ADA/USD",
+      "AVAX/USD",
+      "BCH/USD",
+      "BNB/USD",
+      "BTC/USD",
+      "DOGE/USD",
+      "ETH/USD",
+      "LINK/USD",
+      "LTC/USD",
+      "NEAR/USD",
+      "SOL/USD",
+      "UNI/USD",
+      "XRP/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-09-26T16:00:00.001Z",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-09-27",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 17,
+      "commissionBps": 3
+    },
+    "stress": {
+      "slippageBps": 60,
+      "commissionBps": 5
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "usdc-control",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.3333333333333333,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 3,
+      "maxShorts": 0,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "usdc-vtcap",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.3333333333333333,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 3,
+      "maxShorts": 0,
+      "volTarget": { "annualizedPct": 35, "lookbackBars": 720, "minScale": 0.33, "maxScale": 1.0 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "usdc-vt35-s4",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.25,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": { "annualizedPct": 35, "lookbackBars": 720, "minScale": 0.33, "maxScale": 1.5 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

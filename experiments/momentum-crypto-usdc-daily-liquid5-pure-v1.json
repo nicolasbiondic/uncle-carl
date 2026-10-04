@@ -1,0 +1,110 @@
+{
+  "name": "momentum-crypto-usdc-daily-liquid5-pure-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTRO 2026-09-26 (U1 ronda 4a), escrito ANTES de correr, DESPUES de que la ronda 3 no produjera ganador dominante: blend63 diario puro (37092597) recorta el maxDD del control-w2 en 14pp (56.9 vs 70.8) con curva de costes plana (SR 0.62-0.76 en 0-30 bps vs el control cayendo a ~0 en 5/30 bps) pero pierde Sharpe stitched (0.61 vs 0.76). REPLANTEO EN LA MISMA LINEA (menos rotacion Y menos coste): UNIVERSO LIQUIDO — las 5 bases USDC de mayor liquidez/menor spread (BTC, ETH, SOL, XRP, DOGE; P2-costs midio ademas que UNI/LTC/BNB/BCH/NEAR ni siquiera tenian historia mainnet en el snapshot de prod para calibrar su coste) con el MEJOR kernel diario de la ronda 3 (blend 63-126-252, MA200, slotHysteresis, stops k8 {8,20,5,30}, 3x1/3). HIPOTESIS: gran parte del DD y del drag del kernel diario viene de cabalgar alts de cola (NEAR/UNI/BCH) cuyos trends diarios son mas ruidosos y cuyos costes reales son PEORES que los 17 bps medios; en las 5 mayores el TSM diario es la version mas literatura-pura del edge y el coste real esta por DEBAJO de los 17+3 asumidos (se mantienen 17+3/60+5 igualmente: sesgo conservador declarado). CASE-AGAINST (declarado): (1) 5 nombres correlacionados ~0.85 con BTC = libro casi mono-activo; batir a BTC B&H con 3 slots sobre 5 nombres es estructuralmente mas dificil (menos seleccion transversal); (2) XRP/DOGE son event-driven (noticias/memes), no trend-followers limpios; (3) maxConcentration 0.6 y LOO con 5 nombres son fragiles por construccion. VENTANA/folds/costes/gates identicos a daily-v1 (2021-08-01, asOf 2026-09-26T00:00Z, 3x3, 17+3/60+5); DOGE (1d desde 2020-07-10) cumple las 263 barras de warmup del kernel 252/MA200 antes de 2021-08-01. Cadena pura por construccion (1 candidato). CRITERIO: el de la ronda 3 (validado = PSR>=0.95, exceso>0 vs BTC, maxDD<=45, >=2/3 folds PSR>0.5, BE>20; si no valida, compite por el cableado como el diseno que MAS mejore al control-w2 en Sharpe Y maxDD con BE mas alto). TRIAL ACCOUNTING: +1 hipotesis nueva (universo liquido-5 diario nunca corrido). priorUniqueTrials=303 (total tras daily-v1); pasa a 304. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 303,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1d",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "DOGE/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-26T00:00:00Z",
+  "window": {
+    "from": "2021-08-01",
+    "to": "2026-09-27",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 17,
+      "commissionBps": 3
+    },
+    "stress": {
+      "slippageBps": 60,
+      "commissionBps": 5
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "dl5-blend-63-126-252",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.3333333333333333,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 3,
+      "maxShorts": 0,
+      "lookbackDaysList": [
+        63,
+        126,
+        252
+      ],
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

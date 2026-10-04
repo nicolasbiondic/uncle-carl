@@ -1,0 +1,113 @@
+{
+  "name": "momentum-stocks-sp500pit-all-pure-v1",
+  "sleeve": "stocks",
+  "description": "PRE-REGISTERED (2026-10-02), point-in-time S&P 500 universe para momentum_stocks, candidato M2 de 2 (ver momentum-stocks-sp500pit-top20dv-pure-v1 para la hipotesis completa, el criterio y la mecanica PIT — identicos aqui). UNICO cambio vs M1: SIN screen de liquidez — el kernel vivo corre sobre los 5 ETFs del universo vivo + TODOS los miembros PIT del S&P 500 en cada fecha de decision (data.membership sp500, sin data.liquidityRank). Mismo kernel vivo/control (blend 63/126/252 sobre MA200, slotHysteresis, stops volScaled {8,20,5,30}, sharpeGate {30,0}, 8x0.125), mismos window/folds/costes/gates que el control momentum-stocks-slot125-pure-v2 re-corrido en ESTA base, asOf pinneado 2026-10-02T04:00Z. CRITERIO PRE-REGISTRADO identico a M1: VALIDADO si outer PSR >= 0.95, no falla ningun gate que el control pase, y maxDD <= max(DD control + 5pp, 25%); se reporta dCAGR/dSharpe vs control. TRIAL ACCOUNTING: M1 declaro 313 y sumo +1 -> base 314. Este candidato es NUEVO: +1, total 315.",
+  "trialAccounting": {
+    "priorUniqueTrials": 314,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440,
+    "membership": {
+      "index": "sp500"
+    }
+  },
+  "asOf": "2026-10-02T04:00:00Z",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "sp500pit-all",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.125,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 0,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "lookbackDaysList": [
+        63,
+        126,
+        252
+      ]
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

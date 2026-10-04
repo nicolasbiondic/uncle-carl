@@ -1,0 +1,77 @@
+{
+  "name": "meanrev-rsi-wilder-v1",
+  "sleeve": "meanrev",
+  "description": "RSI-method and determinism axis for the meanrev_stocks sleeve (Connors RSI2+SMA200 daily), pre-registered 2026-09-07 BEFORE any run, everything FROZEN to experiments/meanrev-stocks-v1.json: same 32-symbol MEANREV_UNIVERSE (disjoint from momentum_stocks — shared Alpaca wallet), SPY benchmark-only refSymbol, window 2018-01-01..2026-07-15 with asOf=latest (window.to caps the folds, so boundaries match v1's resolution), 6x3 purged folds, costs base 2/0 stress 5/2, leverage 1, minExcessSharpeVsBench (NOT excess return — low-exposure sleeve). What is under test (from the 2026-09 RSI2 audit): (1) the incumbent RSI(2) is Cutler's SMA variant while the Connors literature the strategy cites uses Wilder smoothing — wilder-tiebreak measures whether the published edge survives its OWN canonical indicator; (2) candidate ordering on equal-RSI days depends on engine iteration order — deterministicTieBreak makes the ranking reproducible, and its P&L impact must be MEASURED, not assumed zero (a 'pure refactor' that moves P&L is a finding about hidden nondeterminism). Declared case AGAINST the wilder switch, stated up front: if the edge exists under one RSI variant and not the other, that divergence is evidence the edge is an artifact of indicator arithmetic rather than of mean reversion — the honest conclusion would be fragility, NOT 'pick the better variant' (that would be one more researcher degree of freedom, which is why all 3 candidates are declared now and none may be trimmed or re-run after results). 3 candidates: cutler-incumbent (execution-identity rerun of the v1 incumbent), cutler-tiebreak (determinism fix only), wilder-tiebreak (Wilder RSI + determinism fix). Evidence gates added on top of the frozen v1 acceptance: minOuterPsr 0.95 and minFoldsPsrAbove {0.5, 3} of 6 outer folds — declared knowing they are BRUTAL for this sleeve (v1 stitched Sharpe was ~0.49; the power line in the new summary will state exactly what Sharpe ~1840 OOS trading days can certify, roughly 0.6 annualized at PSR95) — the 2026-09 audit's point is precisely that weaker evidence must not certify, and the axis can still resolve DIRECTIONALLY in the artifact even when nobody passes; minBreakEvenSlippageBps 10 (5x the 2 bps base): a daily-close strategy on megacap US names that cannot survive 10 bps of slippage has no live margin — 20 (the crypto twin threshold) was deliberately NOT copied because meanrev's per-trade edge is structurally thinner (~2400 trades vs ~250) and a threshold that no strategy of this class could meet measures nothing. trialAccounting arithmetic, documented in full: 23 = 9 (inventoried pre-manifest meanrev experiments, see meanrev-stocks-v1) + 4 (meanrev-stocks-v1's candidates) + 5 (meanrev-stop-sizing-v1's stop-axis candidates) + 5 (meanrev-selectivity-v1's new variants; its incumbent-rsi5-slots5 re-ran the incumbent) + 0 (meanrev-stop-sizing-v2 re-ran v1's configs on a longer window, adds 0 per the ledger identity rule). This manifest introduces 2 new hypotheses (cutler-tiebreak, wilder-tiebreak); cutler-incumbent is an execution-identity rerun. Inventory incomplete, so complete=false and approval stays blocked by protocol regardless of gates.",
+  "trialAccounting": { "priorUniqueTrials": 23, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "ABBV", "AVGO", "BAC", "CAT", "COST", "CVX", "DIS", "GE", "HD", "HON",
+      "JNJ", "JPM", "KO", "LLY", "MA", "MCD", "MRK", "NFLX", "NKE", "ORCL",
+      "PG", "QCOM", "UNH", "V", "WMT", "XLE", "XLF", "XLI", "XLP", "XLV",
+      "XOM", "SLV"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2018-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 6,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 365
+  },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0 },
+    "stress": { "slippageBps": 5, "commissionBps": 2 }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 1,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "cutler-incumbent",
+      "cadenceMin": 1440,
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    },
+    {
+      "name": "cutler-tiebreak",
+      "cadenceMin": 1440,
+      "deterministicTieBreak": true,
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    },
+    {
+      "name": "wilder-tiebreak",
+      "cadenceMin": 1440,
+      "rsiMethod": "wilder",
+      "deterministicTieBreak": true,
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0.5,
+    "maxDrawdown": 0.25,
+    "minTotalReturn": 0,
+    "minExcessSharpeVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 100,
+    "stressMinSharpe": 0,
+    "stressMaxDrawdown": 0.3,
+    "stressMinTotalReturn": -0.1,
+    "looMinSharpe": 0,
+    "looMaxDrawdown": 0.3,
+    "looMinTotalReturn": -0.1,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": { "threshold": 0.5, "count": 3 },
+    "minBreakEvenSlippageBps": 10
+  }
+}

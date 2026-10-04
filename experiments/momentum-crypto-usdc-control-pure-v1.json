@@ -1,0 +1,98 @@
+{
+  "name": "momentum-crypto-usdc-control-pure-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTRO 2026-09-26 (U1), escrito ANTES de correr ningun trial. CONTROL PURO de la config viva EXACTA de momentum_crypto_usdc — el unico sleeve vivo sin backtest validado (OPEN.md 'USDC sin artefacto'). 1 candidato = espejo byte-a-byte del bloque momentum_crypto_usdc de src/index.ts: universo = las 13 bases de USDC_SYMBOL_MAP (src/executor/binance/quoteAsset.ts), cadencia 60min, TSM long/flat con defaults del engine (lookback 14d / MA 30d / entry +5 / exit -2), maxLongs 3 x notionalPctPerSlot 1/3 (bruto 1.0x), sharpeGate {30d, 0}, regimen ACTIVO (clave regime ausente = filtro ON, el legacy), SIN volTarget, SIN tsmTrail, risk peakHalfLifeDays 30 (default, soft/hard-DD por defecto), leverage 2 y hard stop fijo 4% del perfil. PROXY DECLARADO: los perps USDC de Binance tienen historia corta (lanzados 2023+) — el universo usa las barras 1h y el funding de los perps USDT de MAINNET de las MISMAS 13 bases como proxy de senal y ejecucion; la base USDC/USDT a 1h es despreciable frente a los costes medidos (~20 bps/lado) y se declara como supuesto, no se modela. COSTES = COSTE REAL MEDIDO del propio sleeve (P2-costs, fills reales vs open mainnet 1h): base slippage 17 bps (post-09-10 media 16.6, n=3; pre-09-10 mediana 15.3, n=65) + comision 3 bps/lado (medida 3.0-3.5); stress = p90 medido: slippage 60 (p90 pre ~91, post ~24 — 60 es un p90 honesto intermedio con la muestra grande dominando) + comision 5. HIPOTESIS: la config viva tiene edge OOS certificable neto de sus costes reales medidos en 2021-01-01..hoy con funding real liquidado. CASE-AGAINST (declarado antes de correr, no se argumenta en contra post-hoc si ocurre): (1) el +52.6% vivo desde el 20-jul son DOS MESES y esta concentrado en dos nombres casi todo sin realizar (UNI +118%, NEAR +126%) — suerte de secuencia, no evidencia; (2) el coste real ~20 bps/lado es >2x el del sleeve USDT (9 bps) y el break-even del incumbent USDT a 8 simbolos era ~34 bps totales — la friccion puede comerse el margen entero, sobre todo con el churn de desplazamiento estructural del kernel (~61% de los cierres en vt35-pure); (3) el universo de 13 bases es de SUPERVIVIENTES (majors que siguen listados y liquidos en 2026 — el sesgo infla el B&H equiponderado y el edge medido); (4) 3 slots concentra mas el libro que los 4 del sleeve USDT (maxConcentration y LOO mas fragiles). CRITERIO DE 'VALIDADO' DECLARADO DE ANTEMANO: outer PSR >= 0.95, exceso positivo vs BTC B&H, maxDD <= 45%, >= 2 de 3 folds con PSR > 0.5, y sin fallar ningun gate que vt35-pure (artefacto 8b673e8a, 16/17) pasa — maxDisplacementShare se declara EXCEPCION CONOCIDA estructural del kernel (vt35-pure tambien lo falla, 0.614 > 0.35; no invalida por si solo). Si NO valida, el paso siguiente pre-declarado es un manifest de REDISENO con 2-4 candidatos sobre este control dentro de las mismas 13 bases (regla del dueno: el sleeve se redisena, nunca se apaga). TRIAL ACCOUNTING: +1 hipotesis nueva (universo-13 USDC-proxy con 3x1/3 sin volTarget: config efectiva nunca corrida — no es identidad de ejecucion de ningun artefacto previo; el mas cercano, a04c88d3/e5c5c63e, es 8 simbolos 4x0.375 a costes 5/4). priorUniqueTrials=295 (total corriente del ledger tras meanrev-crypto-2026-09-26: 292+3); el total pasa a 296. Ventana 2021-01-01 -> ultimo cierre comun (asOf latest; window.to 2026-09-27 es solo el techo, generateFolds toma min(to, asOf)), 3x3 folds purgados 0.25y, warmup 45d, initialEquity 5000 — geometria identica a vt35-pure-v1 salvo el asOf mas largo (los 13 simbolos tienen barras y funding mainnet completos 2020-10..2026-09-26). complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 295,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "ADA/USD",
+      "AVAX/USD",
+      "BCH/USD",
+      "BNB/USD",
+      "BTC/USD",
+      "DOGE/USD",
+      "ETH/USD",
+      "LINK/USD",
+      "LTC/USD",
+      "NEAR/USD",
+      "SOL/USD",
+      "UNI/USD",
+      "XRP/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-09-27",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 17,
+      "commissionBps": 3
+    },
+    "stress": {
+      "slippageBps": 60,
+      "commissionBps": 5
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "usdc-control",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.3333333333333333,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 3,
+      "maxShorts": 0,
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

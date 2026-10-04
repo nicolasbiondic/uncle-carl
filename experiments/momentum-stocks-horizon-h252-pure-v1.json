@@ -1,0 +1,112 @@
+{
+  "name": "momentum-stocks-horizon-h252-pure-v1",
+  "sleeve": "stocks",
+  "description": "Cadena PURA de h252-ma200 (1 candidato, registrado 2026-09-24 tras el run mixto de momentum-stocks-horizon-v1, artefacto ee89bbca: outerSelection 0=h252,1=h126,2=h252 — el stitched +258.8%/0.96/PSR .992 pertenece a esa MEZCLA, no a un candidato). Este manifest re-corre el ganador (2/3 folds) como candidato unico: con 1 candidato la cadena outer es pura por construccion. Candidato IDENTICO al h252-ma200 de horizon-v1 (identidad de ejecucion, 0 hipotesis nuevas por la regla del ledger). Todo lo demas congelado a horizon-v1: misma ventana/asOf/folds/costes/gates/universo de 11. priorUniqueTrials=268: 265 + 3 (los tres candidatos de horizon-v1). complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 268,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-24",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "h252-ma200",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.25,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "lookbackDays": 252,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "tsmTrail": {
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

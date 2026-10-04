@@ -1,0 +1,100 @@
+{
+  "name": "momentum-crypto-stop-none-pure-v1",
+  "sleeve": "crypto",
+  "description": "EJE hardStop en momentum_crypto, candidato #4 de 4, INFORMATIVO (batch crypto-stop-axis-2026-09-28; ver momentum-crypto-stop-control-pure-v2 para contexto/motivo/criterio de ganador completo, identicos aqui). TODO congelado al control salvo el UNICO eje: hardStop {mode:'none'} — sin stop duro alguno; las UNICAS salidas activas son las propias del kernel (signal flip via exitPct/entryPct, sharpeGate, fold_end, y el propio volTarget/rebalance; vt-35 NO lleva tsmTrail, asi que sin hardStop una posicion solo cierra por señal o por el borde del fold). PROPOSITO: medir cuanto retorno/Sharpe/DD aporta (o cuesta) el stop duro en si mismo, aislado de cualquier distancia concreta — el limite superior del eje. DECLARACION OBLIGATORIA (dueno, mision punto 1): este candidato NO es cableable en vivo tal cual — un sleeve 2x sin ningun stop de perdida viola el principio de proteccion de capital del sistema (AccountManager.checkAllStopLoss/ensureAlpacaNativeStops existen precisamente para esto) y no se propone como configuracion de produccion bajo ninguna circunstancia. Si 'none' resultara el candidato con mejor Sharpe, la ÚNICA lectura valida es que se cablearia como un stop MUY ANCHO (fixed8 o volScaled con maxPct alto), nunca como ausencia de stop; y por el criterio de ganador pre-declarado, 'none' SOLO cuenta como evidencia utilizable si ademas fixed8 o vol-pure quedan dentro de 0.05 de Sharpe de el (si no, 'none' se reporta pero no gana nada porque no es cableable y no hay proxy cableable cerca). CASO EN CONTRA (declarado ANTES de correr): en un book 2x con 8 nombres correlacionados, sin ningun stop de perdida un solo crash correlacionado (todo cripto cae junto) puede arrastrar maxDD muy por encima del +5pp tolerado frente al control, o incluso mas alla del gate maxDrawdown 0.45 — la ausencia total de proteccion de cola es precisamente el escenario que el stop existe para cortar; si maxDD se dispara, 'none' documenta el PISO de proteccion que cualquier stop cableable (fixed8/vol) debe superar para justificarse, no una direccion a adoptar. TRIAL ACCOUNTING: hardStop none en momentum_crypto NUNCA se corrio en este ledger (existe probado solo en stocks: momentum-stop-sizing-v1/v2 'no-stop', que ahi SI mantiene el trail vol activo — aqui vt-35 no lleva trail, asi que none es una hipotesis distinta: cero salidas por precio, no 'solo el trail'). +1 hipotesis nueva. Base = 311 (momentum-crypto-stop-vol-pure-v1 arriba, +1 desde 310) -> 312 tras este manifest. Batch total del eje hardStop crypto (control-pure-v2 + fixed8-pure-v1 + vol-pure-v1 + none-pure-v1): +3 hipotesis nuevas sobre los 309 previos del ledger.",
+  "trialAccounting": {
+    "priorUniqueTrials": 311,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt-35-nostop",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "hardStop": { "mode": "none" },
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

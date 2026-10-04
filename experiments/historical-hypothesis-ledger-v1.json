@@ -1,0 +1,1956 @@
+{
+  "schema": "historical-hypothesis-ledger",
+  "version": 1,
+  "scope": {
+    "strategy": "v7 momentum",
+    "cutoff": "2026-07-17",
+    "lowerBoundUniqueHypotheses": 251,
+    "complete": false
+  },
+  "authoritativeArtifact": {
+    "path": "data/backtests/e5c5c63e6bdfcb16c98cf68c1d9c958b489f2be97f852811d7102981ef9d1945/",
+    "crypto": {
+      "outerFoldReturnsPct": [
+        9.4,
+        554.29,
+        -32.05
+      ],
+      "stitchedReturnPct": 386.37,
+      "sharpe": 0.979,
+      "maxDrawdownPct": 49.18,
+      "stressMaxDrawdownPct": 59.41,
+      "looMaxDrawdownPct": 63.55,
+      "trades": 648
+    }
+  },
+  "authoritativeArtifactMeanrevStopSizing": {
+    "path": "data/backtests/9dcd978174475af30b2b368b99ca1799b54a0630eee8dff602b71f37786f01aa/",
+    "manifest": "experiments/meanrev-stop-sizing-v1.json",
+    "verdict": "FAILED the pre-registered protocol: minSharpe 0.496<0.5 and excess Sharpe vs SPY B&H -0.296<0 (stress now passes, unlike meanrev-stocks-v1). The stop AXIS itself resolved cleanly: the incumbent fixed-4% won ZERO of 6 inner selections and has the WORST inner median Sharpe of the 5 candidates (-0.172 vs no-stop +0.215, vol-k3 +0.188); in the per-candidate diagnostic over the same outer folds (no selection, all 5 reported) fixed-4% stitched 30.09%/0.561 vs no-stop 41.89%/0.667 and vol-k3 42.33%/0.725 — but fixed-4% has the LOWEST maxDD (9.13% vs 13.49% no-stop), so the 4% buys ~4pp of drawdown for ~12pp of return. Tighter-than-4% (vol-k2) is strictly worst (21.80%/0.426). NO stop configuration lifts the sleeve past SPY's 0.79 Sharpe on the same windows, so the stop question stays subordinate to the sleeve-survival question and no production change was gate-approved.",
+    "meanrevStopSizing": {
+      "outerFoldReturnsPct": [
+        2.19,
+        13.71,
+        -2.96,
+        2.46,
+        -1.76,
+        12.32
+      ],
+      "stitchedReturnPct": 27.64,
+      "sharpe": 0.496,
+      "maxDrawdownPct": 13.49,
+      "benchReturnPct": 165.51,
+      "benchSharpe": 0.792,
+      "excessSharpeVsBench": -0.296,
+      "trades": 2416,
+      "gatesFailed": [
+        "minExcessSharpeVsBench",
+        "minSharpe"
+      ]
+    }
+  },
+  "authoritativeArtifactStocksStopSizing": {
+    "path": "data/backtests/ff70c47ec34a9350ee89391756d6d7bb7e99e0b64e82aa9b4c774974e1e2e983/",
+    "manifest": "experiments/momentum-stop-sizing-v1.json",
+    "verdict": "FAILED the pre-registered protocol on exactly one gate: minExcessReturnVsBench -14.67pp<0 (stitched +16.48% vs SPY B&H +31.15% on the same folds; every absolute/stress/LOO gate passes). On the stop axis the evidence is stark: in the per-candidate diagnostic over the same outer folds (all 4 reported, no selection) the incumbent fixed-4% stitched +7.55%/Sharpe 0.257 with 27 STOP_LOSS closes, versus no-stop +32.04%/0.642, vol-k3 +30.12%/0.618, vol-k4 +26.41%/0.563 — and fixed-4% does NOT even buy drawdown protection (maxDD 25.80% vs 24.44% for no-stop; the vol trail active on every candidate already does that job). The entry-anchored 4% amputates trends and re-buys higher: ~24.5pp of stitched return and 0.385 Sharpe of pure cost. Yet even no-stop (+32.04%) only matches SPY B&H (+31.15%) at half the Sharpe, so removing the stop does not gate-approve the sleeve either.",
+    "stocksStopSizing": {
+      "outerFoldReturnsPct": [
+        -22.82,
+        41.13,
+        6.94
+      ],
+      "stitchedReturnPct": 16.48,
+      "sharpe": 0.409,
+      "maxDrawdownPct": 25.8,
+      "benchReturnPct": 31.15,
+      "benchSharpe": 0.923,
+      "excessReturnVsBenchPct": -14.67,
+      "trades": 244,
+      "gatesFailed": [
+        "minExcessReturnVsBench"
+      ]
+    }
+  },
+  "authoritativeArtifactMeanrev": {
+    "path": "data/backtests/7fd05325c6a2bfa3fba72864c7f685dfd36f8a2a7f72ea38a0d3efb19c16d08e/",
+    "manifest": "experiments/meanrev-stocks-v1.json",
+    "verdict": "FAILED the pre-registered protocol: minSharpe 0.494<0.5, excess Sharpe vs SPY B&H -0.298<0, stress Sharpe -0.011<0. Candidate selection was unstable (incumbent won 0 of 6 inner selections; three different alternates won). The informal '6/6 windows positive' claim degrades to 5/6 outer OOS folds positive (fold 2: -7.38%), and the sleeve is strictly worse risk-adjusted than holding SPY over the same stitched window.",
+    "meanrevStocks": {
+      "outerFoldReturnsPct": [
+        1.94,
+        12.25,
+        -7.38,
+        1.12,
+        2.3,
+        14.91
+      ],
+      "stitchedReturnPct": 26.06,
+      "sharpe": 0.494,
+      "maxDrawdownPct": 13.55,
+      "benchReturnPct": 165.51,
+      "benchSharpe": 0.792,
+      "excessSharpeVsBench": -0.298,
+      "trades": 2550,
+      "gatesFailed": [
+        "minExcessSharpeVsBench",
+        "minSharpe",
+        "stressMinSharpe"
+      ]
+    }
+  },
+  "authoritativeArtifactStopSizingV2Reruns": {
+    "note": "2026-08-07 re-validation of both stop-sizing sweeps on the UPDATED data window (v1 asOf: meanrev 2026-07-11, stocks 2026-07-15), after repairing a data-integrity bug found en route: Alpaca's adjustment=split feed carries a bogus/unapplied 2:1 factor for HON at 2026-06-29, which had (a) planted a fake -51% one-day crash inside outer fold 5 of every prior meanrev artifact (the 9dcd9781 selected candidate carried -$750.85 of HON gross pnl in that fold — its minSharpe gate failed 0.496<0.5), and (b) frozen HON at 2026-07-10, clamping the meanrev latest-common asOf. Repair: scripts/repair-hon-history.ts (fail-closed: single-discontinuity + near-boundary factor-2 verification against the raw feed, validateAdjustedDailyBars, atomic replace).",
+    "meanrevStopSizingV2": {
+      "path": "data/backtests/ad634c7bd78a158ab296a0bc75d6d9ec9a6dec564be3c5fc938001269add4666/",
+      "manifest": "experiments/meanrev-stop-sizing-v2.json",
+      "verdict": "FAILED the pre-registered protocol on exactly one gate: minExcessSharpeVsBench -0.180<0 (stitched Sharpe 0.592 vs SPY B&H 0.772 on the same folds; every absolute/stress/LOO gate now passes, unlike v1 which also failed minSharpe on HON-contaminated data). The stop AXIS conclusion HOLDS on updated+repaired data (per-candidate outer-fold diagnostic 0a15b0e2, all 5 reported, no selection): incumbent fixed-4% 30.88%/Sharpe 0.570 (461 stops) vs no-stop 43.09%/0.677 and vol-k3 40.55%/0.696 — fixed-4% still buys its lowest-DD seat (9.53% vs 13.85% no-stop) at ~12pp return and ~0.11 Sharpe; vol-k2 remains strictly worst (24.70%/0.475). Inner selection remains unstable (no-stop won 3 of 6 folds, vol-scaled 2, incumbent 1). No stop configuration lifts the sleeve past SPY, so the stop question stays subordinate to sleeve survival and no production change is gate-approved.",
+      "gatesFailed": [
+        "minExcessSharpeVsBench"
+      ]
+    },
+    "stocksStopSizingV2": {
+      "path": "data/backtests/6ed17af310bf4bdba565a4d73fa04e04f541ae2485590765dad4dad18af1c6b9/",
+      "manifest": "experiments/momentum-stop-sizing-v2.json",
+      "verdict": "FAILED the pre-registered protocol on exactly one gate, same as v1 but wider: minExcessReturnVsBench -36.8pp<0 (stitched +1.4% vs SPY B&H +38.2% on the same folds; every absolute/stress/LOO gate passes). The stop AXIS conclusion HOLDS and strengthens on the updated window (per-candidate outer-fold diagnostic 622a343b, all 4 reported, no selection): incumbent fixed-4% +8.59%/Sharpe 0.292/DD 26.79% (28 stops) vs no-stop +30.62%/0.640/DD 24.90% — the entry-anchored 4% amputates ~22pp of stitched return and ~0.35 Sharpe while buying NO drawdown reduction over the always-active vol trail (its DD is HIGHER than no-stop's).",
+      "gatesFailed": [
+        "minExcessReturnVsBench"
+      ]
+    }
+  },
+  "authoritativeArtifactCryptoThresholds": {
+    "path": "data/backtests/9476341435d0ae66a5392d25aa82425746f91ce9678ecdaefb185c678a4d66ad/",
+    "manifest": "experiments/momentum-crypto-thresholds-v1.json",
+    "diagnosticArtifact": "data/backtests/4085760d2dbb2dbdcbd2c4d01dd84b076c01fe97f47a93217e5f1dc8468b64e5",
+    "verdict": "FAILED the pre-registered protocol on exactly two gates, both robustness: looMaxDrawdown 71.48%>55% and looMinTotalReturn -33.42%<-30% — BOTH from the leave-XRP-out chain (excl-XRP: -33.4%/Sharpe 0.004/DD 71.5% vs full-universe +126.7%/0.636/42.2%), i.e. the selected configuration's entire stitched edge depends on ONE symbol. Every other gate passes, including the first-ever binding minExcessReturnVsBench for crypto (+4.0pp over BTC B&H +122.74%, excess Sharpe 0.000 — parity with buy-and-hold, not alpha). The THRESHOLD AXIS itself resolved AGAINST the whipsaw hypothesis: nested selection picked the ANTI-hypothesis control slow-entry-e8x2 in 2 of 3 outer folds (incumbent e5x2 won the third; no hypothesis-direction candidate ever won), and in the per-candidate outer-fold diagnostic (4085760d, all 6 reported, no selection) the direct hypothesis point combined-e3x4 is the WORST candidate (64.16%/Sharpe 0.485 vs incumbent 226.84%/0.821); faster entries alone are strictly worse than incumbent (e3x2 180.11%/0.743, e2x2 300.3%/0.900 but +5.8pp DD); tolerant-exit-e5x4 posts the best multi-year line (555.91%/1.126) BUT its DD 48.08% exceeds the 45% gate, its edge is concentrated in the single 2023-10..2025-02 bull fold (+732.13%), and in the CURRENT-regime fold 2 (2025-02..2026-07) it loses -26.11% where the incumbent is the LEAST-BAD of all six candidates (-7.01%, vs bench -30.93%); e8x2 is the worst fold-2 candidate (-36.07%). Fold 2 is negative for ALL SIX candidates: the sleeve's recent live losses are regime, not parametrization, and no point on this axis fixes them. NO production change is supported; the incumbent +5/-2 is the only candidate inside the DD cap and the best in the current regime.",
+    "cryptoThresholds": {
+      "outerFoldReturnsPct": [
+        7.25,
+        174.52,
+        -22.99
+      ],
+      "stitchedReturnPct": 126.74,
+      "sharpe": 0.636,
+      "maxDrawdownPct": 42.2,
+      "benchReturnPct": 122.74,
+      "benchSharpe": 0.636,
+      "excessReturnVsBenchPct": 4,
+      "trades": 522,
+      "gatesFailed": [
+        "looMaxDrawdown",
+        "looMinTotalReturn"
+      ]
+    }
+  },
+  "authoritativeArtifactMeanrevSelectivity": {
+    "path": "data/backtests/b7c8f176ba08ce1d4f6844a8d246b53b74bff8a07d701fd250697474498bf916/",
+    "manifest": "experiments/meanrev-selectivity-v1.json",
+    "verdict": "FAILED the pre-registered protocol on exactly one gate: minExcessSharpeVsBench -0.167<0 (stitched Sharpe 0.605 vs SPY 0.772; all absolute/stress/LOO gates pass). The SELECTIVITY AXIS is a clean negative: stricter entryRsi barely reduces turnover (5->3->2 cuts trades only 2543->2521->2501 — RSI2<5 entries are already almost all <3) while monotonically REDUCING return and Sharpe (30.88%/0.570 -> 30.36%/0.561 -> 28.71%/0.537, diagnostic aa24ae34, all 6 candidates reported); fewer slots (maxPositions 3) does cut trades ~34% but collapses return to ~13% and Sharpe to ~0.35 with no meaningful DD benefit — the removed marginal trades were net POSITIVE expectancy, i.e. the Connors edge here is breadth-dependent and cannot be concentrated by rank. No point on the axis beats the benchmark gate; turnover reduction via selectivity does not rescue the sleeve.",
+    "gatesFailed": [
+      "minExcessSharpeVsBench"
+    ]
+  },
+  "identity": {
+    "hypothesis": "effective strategy configuration",
+    "execution": "candidate × fold path × cost tier × data/code snapshot × initialRiskState",
+    "note": "A replay or fold is an execution identity, not a new hypothesis. Current nested WFO reruns therefore do not increase this count."
+  },
+  "batches": [
+    {
+      "id": "legacy-v7-grid",
+      "sourceCommit": "8fe3748",
+      "sourcePaths": [
+        "scripts/optimize-momentum.ts",
+        "src/strategies/momentum/MomentumScorer.ts",
+        "src/strategies/momentum/TimeSeriesMomentum.ts"
+      ],
+      "inventoryComplete": true,
+      "executionReported": true,
+      "resultsComplete": false,
+      "expectedUniqueConfigs": 251,
+      "grids": {
+        "crossSectional": {
+          "vary": {
+            "topLongs": [
+              2,
+              3
+            ],
+            "minLongScore": [
+              0.005,
+              0.02
+            ],
+            "rebalanceMinutes": [
+              240,
+              1440
+            ]
+          },
+          "fixed": {
+            "mode": "cross-sectional",
+            "notionalPctPerSlot": 0.25,
+            "weight24h": 0.2,
+            "weight7d": 0.5,
+            "tsmEntry": 5,
+            "tsmExit": -2,
+            "tsmLookback": 14
+          },
+          "expectedCount": 8
+        },
+        "timeSeries": {
+          "vary": {
+            "maxLongs": [
+              2,
+              3,
+              4
+            ],
+            "tsmEntry": [
+              3,
+              5,
+              8
+            ],
+            "tsmExit": [
+              -1,
+              -2,
+              -4
+            ],
+            "tsmLookback": [
+              7,
+              14,
+              21
+            ],
+            "rebalanceMinutes": [
+              240,
+              720,
+              1440
+            ]
+          },
+          "fixed": {
+            "mode": "time-series",
+            "minLongScore": 0.005,
+            "notionalPctPerSlot": 0.25,
+            "weight24h": 0.2,
+            "weight7d": 0.5
+          },
+          "expectedCount": 243
+        }
+      },
+      "aggregateResultsActuallyDocumented": {
+        "positiveReturnConfigsPct": 41.8,
+        "sharpeAboveOneConfigsPct": 29.9,
+        "bestTimeSeries": {
+          "sharpe": 2.62,
+          "returnPct": 3.78,
+          "maxDrawdownPct": 2.23,
+          "trades": 1
+        },
+        "bestCrossSectional": {
+          "sharpe": 1.72,
+          "returnPct": 7.43,
+          "maxDrawdownPct": 8.2,
+          "trades": 1
+        },
+        "buyAndHoldBtc": {
+          "sharpe": 1,
+          "returnPct": 9.74,
+          "maxDrawdownPct": 12,
+          "trades": 0
+        }
+      }
+    },
+    {
+      "id": "riskguard-replay",
+      "sourceCommit": "69583e2",
+      "sourcePaths": [
+        "scripts/backtest-momentum-wf.ts",
+        "src/strategies/momentum/RiskGuard.ts"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 2,
+      "evidence": "Peak-decay fix and walk-forward harness; historical windows and directional percentages are reported in the commit, but no auditable unique-hypothesis inventory is available. INVENTARIO IMPOSIBLE DE COMPLETAR (2026-09-04): el barrido se lanzaba por flags de CLI y las invocaciones exactas nunca se versionaron; solo sobrevive la prosa del commit. El número de abajo es una COTA INFERIOR derivable de esa prosa, no una enumeración auditable, por eso inventoryComplete sigue en false. Derivación: el commit 69583e2 compara dos ajustes del mismo eje — peakHalfLifeDays=0 (ratchet legacy, el que mató el walk-forward 2024 el 17-ene) y =30 (decaimiento exponencial), ambos replayados en crypto 60min. Cota inferior: 2.",
+      "hypothesisCountIsLowerBound": true
+    },
+    {
+      "id": "tsm-shorts",
+      "sourceCommit": "60c1f9a",
+      "sourcePaths": [
+        "scripts/backtest-momentum-wf.ts",
+        "src/strategies/momentum/TimeSeriesMomentum.ts"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 2,
+      "evidence": "Short capability was validated negative and left unwired; no complete hypothesis inventory is recorded. INVENTARIO IMPOSIBLE DE COMPLETAR (2026-09-04): el barrido se lanzaba por flags de CLI y las invocaciones exactas nunca se versionaron; solo sobrevive la prosa del commit. El número de abajo es una COTA INFERIOR derivable de esa prosa, no una enumeración auditable, por eso inventoryComplete sigue en false. Derivación: 60c1f9a reporta long+short con crédito de funding asumido (media +134% vs +194% long-only) y la MISMA config con funding de short a cero (2022 pasa a -33.8%, 2025 se da la vuelta) — 2 configuraciones de short distintas sobre 6 ventanas. El long-only es el incumbent (identidad de ejecución, suma 0). Cota inferior: 2. NOTA: re-validado bajo protocolo el 2026-08-25 (momentum-crypto-shorts-v1, artefacto a04c88d3): long-only gana los 9 folds inner (Sharpe mediano 0.88 vs 0.60/0.53). El negativo pre-protocolo quedó confirmado con rigor.",
+      "hypothesisCountIsLowerBound": true
+    },
+    {
+      "id": "volatility-targeting",
+      "sourceCommit": "c0178d8",
+      "sourcePaths": [
+        "scripts/backtest-momentum-wf.ts",
+        "src/strategies/momentum/MomentumEngine.ts"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 2,
+      "evidence": "Volatility-targeted sizing was gated and left unwired; no complete hypothesis inventory is recorded. INVENTARIO IMPOSIBLE DE COMPLETAR (2026-09-04): el barrido se lanzaba por flags de CLI y las invocaciones exactas nunca se versionaron; solo sobrevive la prosa del commit. El número de abajo es una COTA INFERIOR derivable de esa prosa, no una enumeración auditable, por eso inventoryComplete sigue en false. Derivación: c0178d8 nombra VT40 y VT60 con resultados propios (VT40 recorta DD media 34%, VT60 21%, Sharpe 0.79→0.95) y dice \"all variants\" para el punto de 2026ytd, lo que implica ≥2. La flag es --voltarget A,LB,MIN,MAX (una config por invocación), así que el conjunto real es irrecuperable. Cota inferior: 2. NOTA CRÍTICA: este es el MISMO EJE que momentum-crypto-sizing-v1 (vt-35/vt-50, 2026-09-02). Aquel manifest declaró priorUniqueTrials=259 sin contar estas 2, así que su conteo real es ≥261 — ver trialSensitivityFinding para por qué eso no cambia su selección.",
+      "hypothesisCountIsLowerBound": true
+    },
+    {
+      "id": "kelly-exposure",
+      "sourceCommit": "9c55bc0",
+      "sourcePaths": [
+        "scripts/backtest-momentum-wf.ts",
+        "src/index.ts"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 2,
+      "evidence": "Exposure sweep changed live slot sizing; no complete hypothesis inventory is recorded. INVENTARIO IMPOSIBLE DE COMPLETAR (2026-09-04): el barrido se lanzaba por flags de CLI y las invocaciones exactas nunca se versionaron; solo sobrevive la prosa del commit. El número de abajo es una COTA INFERIOR derivable de esa prosa, no una enumeración auditable, por eso inventoryComplete sigue en false. Derivación: 9c55bc0 reporta resultados para x1 (incumbent), x1.5 y x2 en crypto 60min sobre 6 ventanas → 2 configuraciones nuevas. El comentario de uso de la flag (--exposure 1,1.5,2,3,4) sugiere que pudieron correrse hasta 5, pero solo 3 tienen resultado publicado; el x5.8 del veredicto de 1%/día es una extrapolación aritmética, no una corrida. Cota inferior: 2 (lectura pesimista razonable: 4).",
+      "hypothesisCountIsLowerBound": true
+    },
+    {
+      "id": "meanrev-prior-experiments",
+      "sourceCommit": null,
+      "sourcePaths": [
+        "scripts/backtest-meanrev.ts",
+        "scripts/backtest-meanrev-wide.ts"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 9,
+      "evidence": "Documentable LOWER BOUND behind experiments/meanrev-stocks-v1.json trialAccounting.priorUniqueTrials=9: incumbent production replay (1, backtest-meanrev.ts), wide-universe sizing variants (2, backtest-meanrev-wide.ts), MR short (1) and crypto-1h MR (1) from the breadth program, slotPct sweep 0.10/0.20/0.30/0.40 (4) — all per the AUDITS 2026-07-27 narrative. No complete auditable inventory exists, so complete=false and protocol approval stays blocked."
+    },
+    {
+      "id": "stop-sizing-sweeps",
+      "sourceCommit": null,
+      "sourcePaths": [
+        "experiments/meanrev-stop-sizing-v1.json",
+        "experiments/momentum-stop-sizing-v1.json",
+        "scripts/meanrev-replay.ts",
+        "scripts/backtest-momentum-wf.ts"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 9,
+      "evidence": "Stop-axis sweeps (OPEN.md P2 stopLossPct evidence pass, AUDITS 2026-08-02/03): 5 meanrev candidates (incumbent fixed-4, no-stop, vol-k2/k3/k4) + 4 stocks candidates (incumbent fixed-4, no-stop, vol-k3/k4), all pre-registered before running and all reported. Documents the prior-trial arithmetic the two manifests carry: meanrev-stop-sizing-v1 priorUniqueTrials=13 (9 inventoried behind meanrev-stocks-v1 + that manifest's own 4 candidates); momentum-stop-sizing-v1 priorUniqueTrials=252 (251 legacy v7 grid + momentum-stocks-v1's single incumbent). Inventory of everything before the legacy grid remains incomplete, so complete=false everywhere and approval stays blocked."
+    },
+    {
+      "id": "meanrev-selectivity-and-stop-reruns",
+      "sourceCommit": null,
+      "sourcePaths": [
+        "experiments/meanrev-selectivity-v1.json",
+        "experiments/meanrev-stop-sizing-v2.json",
+        "experiments/momentum-stop-sizing-v2.json",
+        "scripts/repair-hon-history.ts",
+        "scripts/research-stop-axis-diagnostic.ts"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 5,
+      "evidence": "2026-08-07 batch. New unique hypotheses: 5 — meanrev-selectivity-v1's non-incumbent candidates (rsi3/rsi2 x slots5/slots3 grid; its incumbent is meanrev-stocks-v1's incumbent config). The stop-sizing v2 manifests re-run v1's exact candidate configs on the updated/repaired window and add 0 per the identity rule (execution identity, not new hypotheses); their manifests carry priorUniqueTrials 18 (meanrev: 9 inventoried + 4 meanrev-stocks-v1 + 5 stop-axis) and 256 (stocks: 251 legacy + 1 incumbent + 4 stop-axis). meanrev-selectivity-v1 also carries 18 (declared before its run; the v2 rerun contributed nothing new). Verdicts in authoritativeArtifactStopSizingV2Reruns / authoritativeArtifactMeanrevSelectivity. Inventory before the legacy grid remains incomplete, so complete=false everywhere and approval stays blocked."
+    },
+    {
+      "id": "crypto-threshold-sweep",
+      "sourceCommit": null,
+      "sourcePaths": [
+        "experiments/momentum-crypto-thresholds-v1.json",
+        "scripts/backtest-momentum-wf.ts",
+        "scripts/walk-forward.ts",
+        "scripts/research-stop-axis-diagnostic.ts"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 5,
+      "evidence": "2026-08-08 batch, declared BEFORE running (owner re-promoted momentum_crypto to live on 2026-08-08 without protocol evidence; this sweep answers whether any entry/exit parametrization has support). New unique hypotheses: 5 — momentum-crypto-thresholds-v1's non-incumbent candidates (e3x2, e2x2, e5x4, e3x4, e8x2 at production cadence 60min; its incumbent e5x2 is momentum-crypto-v1's incumbent config, an execution identity adding 0). The manifest carries priorUniqueTrials=252 (251 legacy v7 grid + momentum-crypto-v1's incumbent). Note the legacy grid already swept tsmEntry 3/5/8 x tsmExit -1/-2/-4 at cadences 240/720/1440min — same axis, different effective configs. Declared scope cut before running: no exit -6, no full grid (3-5-variant cap). Inventory before the legacy grid remains incomplete, so complete=false everywhere and approval stays blocked.",
+      "verdict": "Executed 2026-08-08, all 6 candidates run and reported. Result in authoritativeArtifactCryptoThresholds: FAILED (looMaxDrawdown + looMinTotalReturn, both XRP-dependence); the whipsaw hypothesis was REFUTED (its direct candidate e3x4 is the diagnostic's worst; the anti-hypothesis control e8x2 won 2 of 3 inner selections) and no threshold change is supported for the live sleeve."
+    },
+    {
+      "id": "enhanced-tsm-and-shadows",
+      "sourceCommit": "a919045",
+      "sourcePaths": [
+        "scripts/backtest-momentum-wf.ts",
+        "src/strategies/momentum/MomentumEngine.ts",
+        "scripts/backtest-pairs.ts",
+        "scripts/backtest-funding-overlay.ts"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 4,
+      "evidence": "Enhanced TSM, funding monitor/carry shadow, and pairs shadow were delivered; no complete shared hypothesis inventory is recorded. INVENTARIO IMPOSIBLE DE COMPLETAR (2026-09-04): el barrido se lanzaba por flags de CLI y las invocaciones exactas nunca se versionaron; solo sobrevive la prosa del commit. El número de abajo es una COTA INFERIOR derivable de esa prosa, no una enumeración auditable, por eso inventoryComplete sigue en false. Derivación (solo el linaje TSM-crypto; los shadows son otras familias): sharpeGate{30d,0} en crypto (1), barrido de k del tsmTrail en crypto — \"GEO collapse to 84 at best k\" implica ≥2 valores probados (2), y el overlay de filtro de entrada por funding P90 que falló su gate (1). Cota inferior: 4. FUERA de este conteo por ser otra familia de estrategia: el barrido de pairs (71/72 combinaciones negativas) y el carry shadow. Bajo la lectura MÁS pesimista (todo lo probado sobre datos de crypto cuenta contra el mismo presupuesto) habría que sumar ~72 más — ver trialSensitivityFinding.",
+      "hypothesisCountIsLowerBound": true
+    },
+    {
+      "id": "displacement-and-cooldown-turnover-axes",
+      "sourceCommit": null,
+      "sourcePaths": [
+        "experiments/momentum-crypto-cooldown-v1.json",
+        "experiments/momentum-crypto-displacement-v1.json",
+        "src/strategies/momentum/TimeSeriesMomentum.ts",
+        "experiments/momentum-stocks-displacement-v1.json"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 4,
+      "evidence": "Eje de TURNOVER, dos manifests pre-registrados y ejecutados: cooldown-v1 (2026-09-02: cooldown-4, cooldown-12 → 2 hipótesis, REFUTADO) y displacement-v1 (2026-09-10: no-displacement/slotHysteresis → 1 hipótesis, REFUTADO). Total 3 nuevas. Ambos incumbents son identidad de ejecución (+0). Los veredictos en authoritativeArtifactCryptoCooldown / authoritativeArtifactCryptoDisplacement. Lección acumulada: la rotación del kernel TSM es medible (SLOT_DISPLACED) y cara, pero las dos formas de suprimirla probadas (no re-entrar tras stop; no desplazar helds válidos) pierden contra el incumbent en nested/purged. Inventario pre-protocolo sigue incompleto (ver trialSensitivityFinding). ACTUALIZACIÓN 2026-09-10: momentum-stocks-displacement-v1 (+1 hipótesis, total 4): en STOCKS no-displacement GANA (ver authoritativeArtifactStocksDisplacement) — el eje resuelve con signo opuesto por sleeve."
+    },
+    {
+      "id": "crypto-gates-sizing-breakers-2026-09-13",
+      "sourceCommit": null,
+      "sourcePaths": [
+        "experiments/momentum-crypto-gates-v1.json",
+        "experiments/momentum-crypto-sizing-v2.json",
+        "experiments/momentum-crypto-breakers-v1.json",
+        "experiments/meanrev-rsi-wilder-v1.json"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 8,
+      "evidence": "2026-09-13, tres manifests pre-registrados y ejecutados en cadena. Nuevas hipotesis: gates-v1 3 (regime-off, sharpe-off, both-off), sizing-v2 0 (identidad de v1), breakers-v1 3 (0.15/0.30, 0.20/0.40, no-soft). Total 6. Veredictos en authoritativeArtifactCryptoGatesAblation / CryptoSizingV2 / CryptoBreakers. Balance de la semana: de 6 ejes probados (cooldown, displacement×2, gates, sizing, breakers) sobrevive UNO en crypto (vt-35, sizing) y uno en stocks (no-displacement); las cuatro ideas de relajar/quitar protecciones fueron refutadas en OOS. Inventario pre-protocolo sigue incompleto. + meanrev-rsi-wilder-v1 (2 hipotesis: cutler-tiebreak, wilder-tiebreak; REFUTADO — authoritativeArtifactMeanrevRsiWilder). Total del batch: 8."
+    },
+    {
+      "id": "profit-lock-axis-2026-09-15",
+      "sourceCommit": "25f53ad",
+      "sourcePaths": [
+        "experiments/momentum-crypto-profitlock-v1.json",
+        "experiments/momentum-stocks-profitlock-v1.json",
+        "scripts/backtest-momentum-wf.ts"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 4,
+      "evidence": "Eje profit-lock, 2 manifests (crypto 2 hipotesis, stocks 2), ambos REFUTADOS — ver authoritativeArtifactProfitLock. Balance de la quincena: 8 ejes, 2 supervivientes (vt-35 sizing crypto; no-displacement stocks), 6 refutados; TODA idea de anadir/relajar/quitar una regla de salida o proteccion ha perdido en OOS."
+    },
+    {
+      "id": "sharpe-gate-axis-2026-09-21",
+      "sourceCommit": "cf5900e",
+      "sourcePaths": [
+        "experiments/momentum-crypto-sharpegate-v1.json"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 1,
+      "evidence": "Eje gate de Sharpe rolling, 1 manifest crypto, 1 hipotesis (sharpe-off), REFUTADA — ver authoritativeArtifactCryptoSharpeGate. Mismo dia: corrections_2026_09_20 en ProfitLock y CryptoSizingV2 (cadenas mezcladas leidas como puras; deriva de paridad inexistente)."
+    },
+    {
+      "id": "sizing-axes-2026-09-21",
+      "sourceCommit": "9aaf6d9",
+      "sourcePaths": [
+        "experiments/momentum-crypto-sizing-v3.json",
+        "experiments/momentum-crypto-vt35-pure-v1.json",
+        "experiments/momentum-stocks-sizing-v1.json"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 2,
+      "evidence": "Tres manifests: sizing-v3 (2 candidatos, cadena mezclada — fold 1 incumbent; hallazgo: vt-35 gana inner solo 2/9), vt35-pure-v1 (1 candidato, cadena pura — ver authoritativeArtifactCryptoVt35Pure) y stocks-sizing-v1 (3 candidatos, gross-1x 3/3 — ver authoritativeArtifactStocksGross). 2 hipotesis nuevas (gross-1.5x, gross-1x); vt-35 e incumbent ya contados. Ambos resultados cableados 2026-09-23 como decisiones delegadas."
+    },
+    {
+      "id": "market-regime-gate-2026-09-24",
+      "sourceCommit": "d1daab6",
+      "sourcePaths": [
+        "experiments/momentum-crypto-marketgate-v1.json",
+        "experiments/momentum-crypto-marketgate-nosoftdd-pure-v1.json"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 2,
+      "evidence": "Eje gate de regimen de MERCADO (BTC cierre diario UTC < SMA200 bloquea entradas nuevas): 2 hipotesis nuevas (vt35-btc200, vt35-btc200-nosoftdd) sobre el incumbente vivo vt-35; motivado por el lockout soft-DD de sept-2026 (372/388 ticks bloqueados). marketgate-v1 salio cadena MEZCLADA (folds 0/1 vt-35, fold 2 nosoftdd); la cadena pura de nosoftdd es marketgate-nosoftdd-pure-v1 (0 trials nuevos) — ver authoritativeArtifactCryptoMarketGate. NO cableado."
+    },
+    {
+      "id": "stocks-horizon-daily-2026-09-24",
+      "sourceCommit": "HEAD (rama research/stocks-horizon)",
+      "sourcePaths": [
+        "experiments/momentum-stocks-live-control-v1.json",
+        "experiments/momentum-stocks-horizon-v1.json",
+        "experiments/momentum-stocks-horizon-h252-pure-v1.json",
+        "experiments/momentum-stocks-horizon-h126-pure-v1.json",
+        "experiments/momentum-stocks-horizon-h14-pure-v1.json",
+        "experiments/momentum-stocks-horizon-2024w-v1.json",
+        "experiments/momentum-stocks-horizon-2024w-h126-pure-v1.json",
+        "experiments/momentum-stocks-horizon-2024w-h252-pure-v1.json"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 4,
+      "evidence": "2026-09-24 R2. 4 hipotesis nuevas: la combinacion viva exacta (live-control-v1, con SMH) + los 3 candidatos diarios de horizon-v1 (h14-ma30 diario, h126-ma200, h252-ma200). Los 5 manifests pure/2024w restantes re-corren esos mismos candidatos (identidad de ejecucion, +0). Cadena stocks tras este batch: 264 + 4 = 268 hipotesis unicas. Soporte sim (lookbackDays/maLengthDays + barras diarias, hashes legacy intactos) en commit cad8278; cableado vivo opt-in (default null) en ec12828. Verdictos en authoritativeArtifactStocksLiveControl / authoritativeArtifactStocksHorizon."
+    },
+    {
+      "id": "meanrev-control-and-breadth-2026-09-24",
+      "sourceCommit": null,
+      "sourcePaths": [
+        "experiments/meanrev-control-pure-v1.json",
+        "experiments/meanrev-breadth-v1.json",
+        "experiments/meanrev-breadth7-pure-v1.json"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 2,
+      "evidence": "Hipotesis #0 (control puro obligatorio) y #2 (breadth) de D-research-map.md seccion 6, ejecutadas en cadena. meanrev-control-pure-v1: 1 candidato = config viva exacta (Cutler RSI2<5/SMA200/exitSMA5/timeStop10/5x.10/hardStop volScaled k3-20-2-12), identidad de ejecucion del candidato vol-k3 ya contado en meanrev-stop-sizing-v1/v2 — +0. PRIMERA cadena PURA (outerSelection uniforme, 6/6 folds) del sleeve meanrev con los gates de evidencia 2026-09 activos: ver authoritativeArtifactMeanrevControlPure. meanrev-breadth-v1: {control 5x.10, breadth 7x.10, breadth 10x.10} — cadena MEZCLADA (control gana folds 0/1/3, breadth-7x10 gana 2/5, breadth-10x10 gana 4; ver authoritativeArtifactMeanrevBreadthMixed); inner-selection sobre los 18 folds internos favorece a control 10/18 vs 6/18 breadth-7x10 vs 2/18 breadth-10x10 (mediana Sharpe inner: control -0.009 > breadth7 -0.064 > breadth10 -0.490) — breadth-10x10 es claramente el peor soportado de los tres. +2 hipotesis nuevas (7x.10, 10x.10); priorUniqueTrials pasa de 25 a 27. Siguiendo el protocolo (ganador en cadena mezclada -> correr la cadena pura del mejor alternativo, 1 candidato, 0 trials nuevos): meanrev-breadth7-pure-v1 aisla breadth-7x10 (el alternativo con mas victorias inner y mejor DSR mediana de los dos puntos de breadth) — ver authoritativeArtifactMeanrevBreadth7Pure. Total del batch: 2."
+    },
+    {
+      "id": "stocks-universe-2026-09-25",
+      "sourceCommit": "HEAD (rama research/stocks-daily-universe)",
+      "sourcePaths": [
+        "experiments/momentum-stocks-daily-etf15-v1.json",
+        "experiments/momentum-stocks-daily-live11plus4-v1.json"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 2,
+      "evidence": "R5, eje UNIVERSO: el control vivo (h126-ma200, 11 simbolos elegidos en 2026 sabiendo cuales ganaron) hace +306.3%/Sharpe 1.07/DD 24.1% en la ventana larga, pero el B&H equiponderado de esos MISMOS 11 hace +507.4%/Sharpe 1.15/DD 40.1% — supervivencia. 2 hipotesis nuevas, cada una un manifest de 1 candidato = kernel identico al control, solo cambia data.universe (cadena pura por construccion): etf15 (15 ETFs de clases de activos amplias, sin megacaps individuales, casi sin sesgo de supervivencia) y live11plus4 (los 11 del control + TLT/HYG/EFA/EEM, aislando el efecto de anadir clases de activos sin soltar las megacaps). Cobertura alpaca_wide/1d verificada 2016-01-04..2026-09-24 (2697 barras) para los 21 simbolos union; disjuncion con MEANREV_UNIVERSE verificada (XLE/XLF/XLI/XLP/XLV/SLV son de meanrev, ninguno se toco). Resultado (ambos REFUTADOS por el criterio pre-declarado): etf15 +85.2%/Sharpe 0.66/DD 24.0% (gap de Sharpe vs control 0.41, muy por encima del umbral 0.10 declarado) — pierde tambien contra su PROPIO B&H equiponderado (+113.8%/Sharpe 0.72/DD 28.7%), confirmando que el universo diversificado en si mismo tiene menos momentum explotable, no solo menos supervivencia. live11plus4 +236.3%/Sharpe 0.92/DD 25.9% — no mejora Sharpe NI DD frente al control (ambos peor: 0.92<1.07, 25.9%>24.1%), y tambien pierde contra su propio B&H equiponderado (+283.3%/Sharpe 1.04/DD 35.9%). Lectura: el B&H equiponderado SI baja al diversificar (507%/1.15 -> 283%/1.04 -> 114%/0.72), confirmando que el nivel del control estaba inflado por supervivencia como se sospechaba — pero el EDGE de la estrategia (TSM sobre esos universos) tambien baja, y baja MAS rapido que el benchmark: la ventaja de la estrategia sobre su propio B&H (en Sharpe) se erosiona al diversificar, no se preserva. Consistente con el caso-en-contra pre-registrado (b): menos nombres de alto momentum da menos retorno/Sharpe explotable; TLT en 2022 no fue el problema dominante (LOO excluyendo TLT en live11plus4: Sharpe 1.005 vs 0.924 con TLT, confirma que TLT SI resto ~0.08 Sharpe, pero no explica toda la caida frente al control). Ningun universo alternativo sustituye al control por protocolo. Ver authoritativeArtifactStocksUniverse. priorUniqueTrials 268 -> 270 (etf15 consume 268->269, live11plus4 269->270, ambas declaradas ANTES de correr)."
+    },
+    {
+      "id": "stocks-daily-exits-breadth-2026-09-25",
+      "sourceCommit": "HEAD (rama research/stocks-daily-exits-breadth)",
+      "sourcePaths": [
+        "experiments/momentum-stocks-daily-exits-v1.json",
+        "experiments/momentum-stocks-daily-breadth-v1.json",
+        "experiments/momentum-stocks-daily-breadth8-pure-v1.json"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 4,
+      "evidence": "R4, dos ejes baratos sobre el kernel diario h126-ma200 EXACTO que corre en vivo (control = momentum-stocks-horizon-h126-pure-v1.json, artefacto 77372b9c...: +306.3%/Sharpe 1.07/DD 24.1%/PSR 0.997/17-17 gates, LOO peor 0.92 sin NVDA, turnover 15-23x/ano), ambos pre-registrados ANTES de correr. Eje A (ancho de salida, tsmTrail+hardStop volScaled iguales): k3=control identidad (+0), k5 {5,20,3,20}, k8 {8,20,5,30} — 2 hipotesis nuevas. Eje B (amplitud a bruto 1.0x): s4=control identidad (+0), s6 (6x1/6), s8 (8x0.125) — 2 hipotesis nuevas. Total del batch: 4. priorUniqueTrials pasa de 268 a 272 (268 + 2 exits + 2 breadth, cascada declarada en los manifests). daily-breadth-v1 salio MEZCLADA (fold0/2=s8, fold1=s4-control); por protocolo se corrio la cadena pura del mejor alternativo (s8-breadth, 4/9 victorias inner vs 2/9 de s6 — mas victorias que s6 aunque su DSR mediana pooled sea menor, 0.0272 vs 0.0384 — 0 hipotesis nuevas, momentum-stocks-daily-breadth8-pure-v1.json). daily-exits-v1 salio con outerSelection UNIFORME (k8-widest gano los 3 folds outer) — ya es una cadena pura, sin necesidad de rerun. NINGUN eje produjo un ganador robusto bajo el criterio pre-registrado (Sharpe Y maxDD deben mejorar sobre el control simultaneamente): k8-widest mejora Sharpe (1.18 vs 1.07), PSR (0.998 vs 0.997) y LOO peor (1.047 vs 0.92) pero EMPEORA maxDD (28.6% vs 24.1%) — el caso-en-contra (\"cada stop pierde mas al ensancharse\") se confirma en el DD stitched aunque las medianas inner favorecen monotonamente al stop mas ancho en Sharpe Y DD (0.963/17.2% -> 1.086/17.0% -> 1.205/16.0%), una divergencia inner/outer real, no un error. s8-breadth-pure mejora maxDD (17.4% vs 24.1%) pero EMPEORA Sharpe (1.00 vs 1.07) — el caso-en-contra (\"slots 5-8 son tendencias mas debiles\") se confirma en la DSR mediana pooled de los 9 folds internos (control 0.0549 > s6 0.0384 > s8 0.0272). Como ningun eje tiene ganador robusto, NO se corrio la combinacion (0 trials adicionales sobre los 4 declarados). Veredictos en authoritativeArtifactStocksDailyExits / authoritativeArtifactStocksDailyBreadth. Reporte: /tmp/opencode/uc/reports/R4-stocks-daily-axes.md."
+    },
+    {
+      "id": "stocks-daily-exits-x-breadth-2026-09-25",
+      "sourceCommit": "66d6617",
+      "sourcePaths": [
+        "experiments/momentum-stocks-daily-k8s8-pure-v1.json",
+        "experiments/momentum-stocks-daily-k8s6-pure-v1.json"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 2,
+      "evidence": "Combinacion post-hoc DECLARADA de exits-v1 (k8) x breadth-v1 (s8/s6), pre-registrada antes de correr (commit 66d6617), 2 manifests de 1 candidato (cadenas puras por construccion). +2 hipotesis (272->274). Ver authoritativeArtifactStocksExitsBreadth."
+    },
+    {
+      "id": "ddscale-continuous-2026-09-25",
+      "sourceCommit": "HEAD (rama research/crypto-ddscale)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-ddscale-v1.json",
+        "experiments/momentum-crypto-ddscale-dd520-pure-v1.json"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 2,
+      "evidence": "Eje ESCALADO CONTINUO POR DRAWDOWN de entradas nuevas (risk.ddScale, Grossman-Zhou 1993: scale = clamp(1-(DD-start)/(end-start), minScale, 1) multiplicando vt-35; soft-DD ignorado, hard/daily/streak intactos): 2 hipotesis nuevas (vt35-dd5-20, vt35-dd10-20) sobre el incumbente vivo vt-35; motivado por la mecanica binaria del lockout soft-DD (47 pausas, p50 2d/p90 13d/max 34d; plano desde 10-sep-2026). ddscale-v1 salio cadena MEZCLADA (folds 0/2 dd5-20, fold 1 vt-35); la cadena pura de dd5-20 es ddscale-dd520-pure-v1 (0 trials nuevos) — ver authoritativeArtifactCryptoDdScale. REFUTADO en los 4 criterios de robustez pre-declarados. NO cableado. Cadena crypto tras este batch: 286 + 2 = 288 hipotesis unicas."
+    },
+    {
+      "id": "stocks-smarter-sizing-2026-09-25",
+      "sourceCommit": "827ec83",
+      "sourcePaths": [
+        "experiments/momentum-stocks-daily-volsizing-v1.json",
+        "experiments/momentum-stocks-daily-multihorizon-v1.json",
+        "experiments/momentum-stocks-daily-blend3-pure-v1.json"
+      ],
+      "hypothesisCount": 4,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "Dos ejes pre-registrados ANTES de correr sobre el control vivo k8-s8 (misma data/ventana/costes/gates): volSizing {iv60, iv20} (+2, 288->290) y multi-horizonte {blend-63-126-252, blend-126-252} (+2, 290->292); blend3-pure es identidad de ejecucion (+0). volSizing REFUTADO (seleccion uniforme al control); multi-horizonte blend-63-126-252 GANA en cadena pura el criterio robusto pre-declarado (5/5 condiciones). La combinacion NO se corrio (regla: solo si AMBOS ejes ganan). Ver authoritativeArtifactStocksVolSizing / authoritativeArtifactStocksMultiHorizon. Cadena tras este batch: 288 + 4 = 292 hipotesis unicas."
+    },
+    {
+      "id": "meanrev-breadth7-pure-rerun-2026-09-25",
+      "sourceCommit": "762727e",
+      "sourcePaths": [
+        "experiments/meanrev-breadth7-pure-v1.json"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 0,
+      "evidence": "Rerun de identidad de ejecucion de meanrev-breadth7-pure-v1 (1 candidato ya contado en meanrev-breadth-v1; +0 hipotesis, total meanrev sigue en 27) con el simulador corregido (stops gap-through al open pre-pasada + instrumentacion entryAt/entryPrice/qty; scripts/meanrev-replay.ts, commit 762727e). Artefacto 03382972... vs 9bfaa6a9...: la evidencia se sostiene (57.5%/0.76/14.5% vs 57.9%/0.77/14.2%, PSR 0.978 identico) y el gate minBreakEvenSlippageBps pasa ahora (10.19>=10). Ver authoritativeArtifactMeanrevBreadth7Pure."
+    },
+    {
+      "id": "meanrev-crypto-2026-09-26",
+      "sourceCommit": "4789677",
+      "sourcePaths": [
+        "experiments/meanrev-crypto-v1.json",
+        "experiments/meanrev-crypto-rsi10sma200-pure-v1.json"
+      ],
+      "hypothesisCount": 3,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "Primer meanrev sobre binance_futures (W6): Connors diario long-only (RSI<umbral sobre SMA larga, salida SMA5/time-stop 10d, hard stop volScaled k3-20-2-12, funding real) en los 8 perps de momentum_crypto, misma ventana/folds/costes que vt35-pure-v1, 4 slots x 0.25 a 1.0x. 3 hipotesis nuevas pre-registradas ANTES de correr ({rsi5-sma200, rsi10-sma200, rsi10-sma100}; 292->295); la cadena pura de rsi10-sma200 es identidad de ejecucion (+0, regla de cadena mezclada). REFUTADO en los 6 criterios pre-declarados — ver authoritativeArtifactMeanrevCrypto. Cadena tras este batch: 292 + 3 = 295 hipotesis unicas."
+    },
+    {
+      "id": "crypto-redesign-2026-09-26",
+      "sourceCommit": "4cf9b49 + e2b5a42 (research/crypto-redesign)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-2026w-control-pure-v1.json",
+        "experiments/momentum-crypto-2026w-universe16-pure-v1.json",
+        "experiments/momentum-crypto-2026w-multihorizon-pure-v1.json",
+        "experiments/momentum-crypto-2026w-resume-pure-v1.json"
+      ],
+      "hypothesisCount": 3,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "Rediseno de momentum_crypto (puntos 2-3 del dueno, 2026-09-26): el vivo va mal (+14.1% desde 18-jul vs BTC +29.7%; -11.2% ult. 30d vs +6.4%; sin abrir desde ~10-sep por lockout soft-DD) y la orden es redisenar, nunca apagar. 4 cadenas PURAS de 1 candidato sobre ventana nueva 2021-01-01..asOf latest (incluye jul-sep 2026), mismos costes/gates que vt35-pure: C0 control vt-35 (identidad de ejecucion en ventana mas larga, +0), C1 universo16 = los 16 perps del SYMBOL_MAP del ejecutor (majors liquidos configurados desde jul-2026, no elegidos por rendimiento posterior; +1), C2 multi-horizonte lookbackDaysList [7,14,28] MA30 (+1), C3 shadow-equity resume recoverPct 3% costBps 9 (nuevo eje risk.shadowResume del engine, +1). Criterio de ganador robusto pre-declarado en C0: Sharpe > C0, maxDD <= C0+2pp, >=2/3 folds PSR>0.5, fold 0 (2022-23) no peor, sin fallar gates que C0 pase; se reportan dias en pausa por fold y duracion maxima de episodio. Si >=2 ganadores parciales: segunda ronda obligatoria con la combinacion como cadena pura (+1). Total del ledger: 295 + 3 = 298. RESULTADOS (2026-09-26, ver authoritativeArtifactCryptoRedesign): NINGUN candidato gana: C0 control +353.6%/SR 1.13/DD 37.3%/PSR 0.991; C1 universo16 +42.5%/0.41/DD 67.5% (los alts extra anaden ruido y coste); C2 multi-horizonte +177.4%/0.83/DD 50.0%; C3 shadow-resume +264.4%/0.97/DD 41.0%. Segunda ronda no aplica (0 ganadores parciales). Hallazgo que resuelve el punto 2: el replay vt-35 sobre las MISMAS fechas del vivo NO esta pausado (DD 5.8% vs pico propio desde 1-jul; +32.3% desde 18-jul vs vivo +14.1%; 30 trades en septiembre): el lockout vivo heredaba el pico ($6,165) del modelo ANTERIOR (tamano fijo, pre-23-sep). Cableado: modelVersion 'vt35-2026-09-23' en momentum_crypto -> re-anclaje one-shot del pico; kernel y reglas de riesgo sin cambios."
+    },
+    {
+      "id": "usdc-control-and-redesign-2026-09-26",
+      "sourceCommit": "688ee4c",
+      "sourcePaths": [
+        "experiments/momentum-crypto-usdc-control-pure-v1.json",
+        "experiments/momentum-crypto-usdc-redesign-v1.json",
+        "experiments/momentum-crypto-usdc-vt35-pure-v1.json",
+        "experiments/momentum-crypto-usdc-redesign-v2.json",
+        "experiments/momentum-crypto-usdc-vtcap-pure-v1.json"
+      ],
+      "hypothesisCount": 6,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "U1 (2026-09-26): primer artefacto del sleeve momentum_crypto_usdc, el unico vivo sin backtest. Cascada declarada en los manifests: control-pure (+1, config efectiva nueva: universo-13 proxy USDT, 3x1/3, sin volTarget, costes reales medidos 17+3/60+5; 295->296) -> redesign-v1 (+3: vt35-usdc13, s4-usdc13, mh7-14-28-usdc13; 296->299; cadena pura del mejor vt35 = identidad +0) -> redesign-v2 (+2: vtcap-usdc13, vt35s4-usdc13; 299->301; pura de vtcap = identidad +0). Total del batch: 6; cadena tras el batch: 295 + 6 = 301 hipotesis unicas. Veredicto en authoritativeArtifactUsdcControl: control NO VALIDADO (10/17 gates fallan), ninguna de las 5 alternativas gana el criterio robusto pre-declarado (Sharpe Y maxDD sobre la cadena pura del control); el sleeve sigue operando con el control como config autoritativa (regla del dueno) con banda de expectativa y candado vivo=manifest cableados."
+    },
+    {
+      "id": "usdc-daily-replant-2026-09-26",
+      "sourceCommit": "2e9bb40",
+      "sourcePaths": [
+        "experiments/momentum-crypto-usdc-daily-v1.json",
+        "experiments/momentum-crypto-usdc-control-w2-pure-v1.json",
+        "experiments/momentum-crypto-usdc-daily-blend63-pure-v1.json",
+        "experiments/momentum-crypto-usdc-daily-blend28-pure-v1.json",
+        "experiments/momentum-crypto-usdc-daily-liquid5-pure-v1.json",
+        "experiments/momentum-crypto-usdc-daily-s5-pure-v1.json",
+        "experiments/momentum-crypto-usdc-daily-s6-pure-v1.json",
+        "experiments/momentum-crypto-usdc-daily-s8-pure-v1.json"
+      ],
+      "hypothesisCount": 6,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "U1 rondas 3-5 (replanteo ordenado por el dueno: el kernel horario USDC rota demasiado para su coste real). Cascada declarada en los manifests: daily-v1 +2 (blend28/MA100, blend63/MA200; 301->303), control-w2 +0 (identidad del control horario en la ventana diaria), cadenas puras blend63/blend28 +0 (identidades de daily-v1), liquid5 +1 (303->304), d13-s5 +1 (304->305), s6 +1 (305->306), s8 +1 (306->307). Total del batch: 6; cadena tras el batch: 301 + 6 = 307 hipotesis unicas. Veredicto y cableado en authoritativeArtifactUsdcDaily (ganador d13-s5-blend-63-126-252, artefacto 752767ae, 15/17 gates, domina al baseline en Sharpe Y maxDD Y break-even)."
+    },
+    {
+      "id": "stocks-slot-size-2026-09-27",
+      "sourceCommit": "f385ab5",
+      "sourcePaths": [
+        "experiments/momentum-stocks-slot125-pure-v2.json",
+        "experiments/momentum-stocks-slot167-pure-v1.json",
+        "experiments/momentum-stocks-slot20-pure-v1.json"
+      ],
+      "hypothesisCount": 2,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "R6 (2026-09-27): eje TAMANO DE SLOT del kernel diario recien cableado (blend-63-126-252/MA200/slotHysteresis/stops volScaled k8, artefacto vivo cc2f5d69, +351.8%/Sharpe 1.19/maxDD 21.2%), a IGUAL tope bruto 1.0x. Motivacion del dueno: la exposicion media OOS del kernel vivo es solo ~0.53-0.78x porque rara vez califican los 8 nombres del universo de 11 simbolos; hipotesis PRE-REGISTRADA (no confirmada): un slot mas grande con el mismo maxGrossExposureMult=1.0 despliega mejor el capital ocioso cuando califican pocos nombres, y el tope se queda con los de mayor ranking cuando califican muchos. 3 manifests de 1 candidato cada uno, copia byte-a-byte de momentum-stocks-daily-blend3-pure-v1 salvo el eje (misma ventana/asOf latest/folds/costes/gates): slot125-pure-v2 (control, identidad de ejecucion en la base historica nueva del 2026-09-28, +0), slot167-pure-v1 (notionalPctPerSlot 1/6, maxGrossExposureMult 1.0 agregado explicitamente, +1), slot20-pure-v1 (notionalPctPerSlot 0.20, maxGrossExposureMult 1.0 agregado explicitamente, +1). Total del batch: 2; cadena tras el batch: 307 + 2 = 309 hipotesis unicas. RESULTADO (ver authoritativeArtifactStocksSlotSize): la hipotesis queda REFUTADA en ambos puntos del eje — slot167 y slot20 pierden en CAGR, Sharpe Y maxDD frente al control (los tres gates comparativos fallan a la vez, no solo el bruto), y la exposicion media realizada NO sube (0.668 control vs 0.619/0.616 en los alternativos) porque menos nombres califican simultaneamente y el motor rota menos (trades/ano 17.4 -> 12.6 -> 10.7), el efecto contrario al hipotetizado. Ningun cambio de wiring: MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT/MAX_LONGS/MAX_GROSS_EXPOSURE_MULT en src/index.ts se quedan como estan (0.125/8/1.0)."
+    },
+    {
+      "id": "meanrev-slot-size-2026-09-27",
+      "sourceCommit": "7de4a5e",
+      "sourcePaths": [
+        "experiments/meanrev-slot10-pure-v2.json",
+        "experiments/meanrev-slot12-pure-v1.json",
+        "experiments/meanrev-slot14-pure-v1.json"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 2,
+      "evidence": "Eje de tamano de slot en meanrev_stocks sobre la base adjustment=all (hasta 2026-09-25), pre-registrado antes de correr (7de4a5e): 7x0.10 control re-corrido (+0, identidad de ejecucion), 7x0.12 y 7x0.14 (+2). Cadenas puras de 1 candidato. Ver authoritativeArtifactMeanrevSlot."
+    },
+    {
+      "id": "crypto-stop-axis-2026-09-28",
+      "sourceCommit": "5e63f57",
+      "sourcePaths": [
+        "experiments/momentum-crypto-stop-control-pure-v2.json",
+        "experiments/momentum-crypto-stop-fixed8-pure-v1.json",
+        "experiments/momentum-crypto-stop-vol-pure-v1.json",
+        "experiments/momentum-crypto-stop-none-pure-v1.json"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 3,
+      "evidence": "S4 (mision del dueno, 2026-09-28): momentum_crypto (vt-35, 8 majors USDT-perp, kernel horario, artefacto vivo a5101316, +353.6%/Sharpe 1.13/maxDD 37.3%) usa un stop duro FIJO 4% desde la entrada (RISK_PROFILES.momentum_crypto.stopLossPct) que NUNCA se habia barrido en crypto pese a ser la mayor fuga medida en vivo (todas las clases de stop -$6.5k vs +$10.1k de salidas planificadas; 9 BROKER_STOP_LOSS momentum_crypto -$722; ADA 28-sep stop 4% 06:00 UTC -$36.56, recomprada 07:00 casi al mismo precio) y en stocks el 4% fijo fue el PEOR punto de su propio eje (artefacto ff70c47e). Pre-registrado ANTES de correr: control (vt-35 re-run identico, +0), fixed8 (hardStop fixed 0.08, +1), vol (hardStop volScaled kSigma3/lookbackBars24/6-20%, parametrizacion razonada desde la vol horaria realizada de los 8 majors, +1), none (hardStop none, informativo, NO cableable tal cual, +1). Total del batch: 3; cadena tras el batch: 309 + 3 = 312 hipotesis unicas. RESULTADO: el control (4% fijo) GANA en TODOS los ejes frente a los 3 candidatos — Sharpe 1.14 (fixed8 0.92, vol 1.08, none 1.09), maxDD 37.3% (fixed8 44.2%, vol 44.3%, none 44.5%, los 3 exceden control+5pp=42.3%), CAGR stitched 42.7%/ano (fixed8 31.7%, vol 40.8%, none 41.0%), y el fold outer 2 (2025-04..2026-09, el tramo bajista reciente) es donde la diferencia es mas dura: Sharpe control 0.42 vs fixed8 0.03, vol -0.03, none -0.02 — los 3 candidatos incumplen el criterio '3 folds outer con Sharpe >= control-0.15' en ESE fold. fixed8 ademas falla looMaxDrawdown (0.60 > 0.55, gate que el control SI pasa). Ningun candidato cumple el criterio de ganador pre-declarado; 'none' no aplica la clausula de proxy cableable porque ni fixed8 ni vol quedan a <=0.05 Sharpe de el. VEREDICTO: eje CERRADO, NO se cambia el stop de momentum_crypto — el caso-en-contra pre-registrado se confirma (book 2x de 8 nombres correlacionados: ensanchar o quitar el stop deja correr la MISMA mecha en los 8 nombres a la vez en el fold de crash, y vt-35 no lleva trail propio — el hard stop es el UNICO mecanismo de corte de perdidas del kernel, a diferencia de stocks donde el trail ya protege y el hard stop era redundante). La fuga en vivo (-$722 en 9 BROKER_STOP_LOSS, el patron ADA in-and-out) no es un problema de DISTANCIA del stop sino de RE-ENTRADA inmediata al mismo precio tras un stop — eje distinto (cooldown post-stop, ya soportado por el replay via cooldownBarsAfterStop pero nunca barrido en crypto), fuera del alcance de esta mision. Ningun cambio de wiring: RISK_PROFILES.momentum_crypto.stopLossPct se queda en 4. Ver authoritativeArtifactCryptoStop."
+    },
+    {
+      "id": "meanrev-core-2026-09-29",
+      "sourceCommit": "96c18a7",
+      "sourcePaths": [
+        "experiments/meanrev-slot12-core-pure-v1.json"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 1,
+      "evidence": "Rediseno aprobado por el dueno (2026-09-28): nucleo S&P en meanrev_stocks — la caja ociosa del satelite 7x0.12 en lotes de 0.10x del S&P (SPY como proxy declarado de IVV) mientras SPY cierra sobre su SMA200, colchon 5%, stop persistido 25%, rebalanceo LIFO en el pase diario. Pre-registrado en 96c18a7 (rama research/meanrev-core, NO integrada: el motor solo existe ahi). +1 trial (base 312). Ver authoritativeArtifactMeanrevCore."
+    },
+    {
+      "id": "sp500-pit-universe-2026-10-02",
+      "sourceCommit": "89b33f0",
+      "sourcePaths": [
+        "experiments/momentum-stocks-sp500pit-top20dv-pure-v1.json",
+        "experiments/momentum-stocks-sp500pit-all-pure-v1.json",
+        "experiments/meanrev-sp500pit-pure-v1.json"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 3,
+      "evidence": "Mision aprobada por el dueno (2026-10-02): los dos sleeves de acciones se disenaron con universos elegidos hoy sabiendo quien gano (momentum 11 simbolos a mano, meanrev 32); medir el sesgo de seleccion re-corriendo el MISMO kernel vivo sobre el S&P 500 tal como era cada dia (fja05680/sp500 @ a2430f2, MIT, tabla index_membership; barras SIP adjustment=all de los 745 miembros desde 2016, cobertura 742/753 tramos). Controles = los dos manifests vivos re-corridos en esta base (+0, identidad de ejecucion): momentum-stocks-slot125-pure-v2 y meanrev-slot12-pure-v1. Candidatos: M1 sp500pit-top20dv (5 ETFs vivos + top-20 PIT por dollar volume mediano 60 sesiones, +1, base 313), M2 sp500pit-all (5 ETFs + todos los miembros PIT, +1), M3 meanrev-sp500pit (miembros PIT menos los 11 de momentum + 6 ETFs vivos de meanrev, +1) -> total 316. Criterio pre-registrado en cada manifest ANTES de correr: VALIDADO si outer PSR >= 0.95, ningun gate fallado que su control pase, y maxDD <= max(DD control + 5pp, 25%); se reporta dCAGR/dSharpe vs control. Nada se cablea en vivo en esta rama. Ejecutado 2026-10-02: los 3 REFUTADOS, ver authoritativeArtifactSp500Pit."
+    },
+    {
+      "id": "crypto-fixedsim-2026-10-04",
+      "sourceCommit": "50865e9 (rama research/crypto-corrected-sim)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-fixedsim-stop-fixed8-pure-v1.json",
+        "experiments/momentum-crypto-fixedsim-stop-vol-pure-v1.json",
+        "experiments/momentum-crypto-fixedsim-cooldown4-pure-v1.json",
+        "experiments/momentum-crypto-fixedsim-cooldown12-pure-v1.json",
+        "experiments/momentum-crypto-fixedsim-hysteresis-pure-v1.json",
+        "scripts/research-crypto-live-vs-sim-20261004.ts"
+      ],
+      "inventoryComplete": false,
+      "executionReported": true,
+      "resultsComplete": false,
+      "hypothesisCount": 3,
+      "evidence": "Re-adjudicacion post-fix del replay (f0c08c9, 2026-10-03: los cierres del motor se estampaban en el ancla exacta del P&L realizado de RiskGuard y getRealisedPnlSince los filtraba — la racha de perdidas del sim solo veia stops, nunca se reiniciaba, y pausaba tras cada 5 stops; el control vt-35 en la misma base paso de +363.6%/1.155/35.6% viejo d6c0cdbe a +509.8%/1.313/32.6% corregido 06e1a160). Batch pre-registrado en 50865e9 ANTES de correr, 5 cadenas puras de 1 candidato sobre el kernel vt-35 vivo, misma base (dataHash 50ad44f0, prod 2026-10-02 + S&P500), misma ventana/folds/costes/gates que momentum-crypto-2026w-control-pure-v1; control reutilizado 06e1a160 (+0, mismo configHash/dataHash/codeHash). Cascada: stop-fixed8 +0 y stop-vol +0 (identidades de los candidatos S4 2026-09-28, corridos entonces con el replay viejo), cooldown4 +1 (316->317), cooldown12 +1 (317->318), hysteresis +1 (318->319) — cooldown y hysteresis solo se habian probado sobre el incumbent pre-volTarget. Total del ledger: 316 + 3 = 319. RESULTADO (ver authoritativeArtifactCryptoFixedSim): REFUTADO — ningun candidato cumple el criterio pre-declarado (Sharpe >= control+0.05, maxDD <= control+3pp, PSR >= 0.95, sin gates nuevos fallados, peor LOO >= 1.0); el mas cercano, cooldown12 (+578.5%/Sharpe 1.371/DD 33.1%/PSR 0.998), cumple 4 de 5 pero su peor LOO 0.909 (sin XRP) queda bajo el liston 1.0. Los veredictos viejos del eje stop (S4) y de displacement quedan CONFIRMADOS con el sim corregido: el 4% fijo sigue dominando a fixed8/vol en Sharpe Y DD (y el margen del control CRECE al corregir, como predecia el mecanismo del bug), y la hysteresis sigue costando Sharpe (1.135 vs 1.313) aunque produce el primer artefacto crypto con 0 gates fallados (displacementShare 0.62 -> 0.000). El diseno vivo vt-35 queda como el mejor conocido, ahora validado con el simulador corregido. Diagnostico acompanante (no-trial, artefacto b195dd8d): sobre la ventana viva con la base prod del 10-04, anclado en el epoch de paridad 2026-09-26T19Z el sim corregido hace -4.14% vs vivo -3.33% (el vivo DENTRO del camino del modelo; la ejecucion testnet no es la fuga), y el -8.48% desde MODEL_START se descompone en ~-4.0pp del dia de transicion 09-23 (stops de posiciones heredadas del modelo anterior) + drawdown de regimen que el sim reproduce."
+    }
+  ],
+  "trialSensitivityFinding": {
+    "date": "2026-09-04",
+    "problem": "trialAccounting.complete no puede volverse true honestamente para nada aguas abajo de la era pre-protocolo: los barridos de 2026-07 se lanzaban por CLI (--voltarget, --exposure, --shorts) y las invocaciones nunca entraron a git. No es una tarea pendiente, es una propiedad permanente de esa era. Con la regla actual, NINGÚN candidato puede aprobarse jamás — el protocolo se vuelve decorativo justo cuando por fin produce un ganador.",
+    "method": "El DSR es monótono en el conteo de trials, así que en vez de adivinar N se demuestra si la DECISIÓN depende de N: scripts/dsr-trial-sensitivity.ts re-ejecuta la selección exacta (correctedDsr → aggregateInner → selectCandidate, mismos dailyReturns del runs.jsonl) sobre una rejilla de N que abarca órdenes de magnitud.",
+    "appliedTo": {
+      "artifact": "data/backtests/9f37b048a4d17250900d94d19e7b49fe53978f2cb14ba1cb92691d3faf6807f2/",
+      "manifest": "experiments/momentum-crypto-sizing-v1.json",
+      "declaredPriorTrials": 259,
+      "correctedLowerBound": 271,
+      "result": "vt-35 gana la selección inner en TODOS los N probados: 259, 274, 300, 400, 500, 1k, 2.5k, 5k, 10k, 50k, 200k y 1.000.000. El orden vt-35 > vt-50 > incumbent-fixed es invariante a lo largo de cuatro órdenes de magnitud (el haircut del DSR encoge a los tres proporcionalmente y nunca invierte el ranking). Además los gates de aceptación se computan sobre los folds OUTER del candidato ya elegido y no leen el conteo de trials en absoluto.",
+      "conclusion": "La incompletitud del inventario es PROBADAMENTE NO VINCULANTE para este artefacto: ni el conteo real (≥271, o ~343 bajo la lectura más pesimista que incluye el barrido de pairs) ni un N absurdo de 1e6 habrían seleccionado otro candidato. Lo que queda bloqueando la aprobación es la regla booleana, no una duda estadística viva.",
+      "ownerDecisionNeeded": "Decisión del dueño, NO tomada aquí: si el protocolo admite aprobar cuando la selección es invariante a N sobre una rejilla declarada (una cláusula de robustez, no un atajo — exige MÁS evidencia, no menos), vt-35 sería el primer candidato aprobable de la historia del proyecto: los 12 gates en verde, incluidos los tres de drawdown que crypto siempre falló (43.07/48.60/49.42 vs caps 45/55/55) y el de exceso vs BTC (+7.58pp). Sin esa cláusula, sigue bloqueado para siempre por un número que nadie puede medir."
+    }
+  },
+  "authoritativeArtifactCryptoSizing": {
+    "path": "data/backtests/9f37b048a4d17250900d94d19e7b49fe53978f2cb14ba1cb92691d3faf6807f2/",
+    "manifest": "experiments/momentum-crypto-sizing-v1.json",
+    "verdict": "PASA LOS 12 GATES — el primer artefacto del proyecto que no falla ninguno. Seleccionado vt-35 (volTarget 35% anualizado, lookback 720, clamp 0.5-1.5). approved=false por UNA sola razón: 'historical trial accounting incomplete' (priorTrialsComplete=false), no por rendimiento. Mecánicamente coherente con el diagnóstico de julio: el problema de crypto siempre fue TAMAÑO, no señal (batía al benchmark reventando los caps de drawdown), y el sizing inverso a la volatilidad ataca el tamaño justo cuando la vol sube. Ver trialSensitivityFinding: la selección es invariante al conteo de trials.",
+    "cryptoSizing": {
+      "stitchedReturnPct": 130.32,
+      "sharpe": 0.707,
+      "maxDrawdownPct": 43.07,
+      "stressMaxDrawdownPct": 48.6,
+      "looMaxDrawdownPct": 49.42,
+      "benchReturnPct": 122.74,
+      "benchSharpe": 0.636,
+      "excessReturnVsBenchPct": 7.58,
+      "trades": 1079,
+      "winRatePct": 31.05,
+      "gatesFailed": [],
+      "approved": false,
+      "approvalReason": "historical trial accounting incomplete"
+    }
+  },
+  "authoritativeArtifactCryptoCooldown": {
+    "path": "data/backtests/08a5362edc2055a515b58d2b8c8f28684b8429f38c9a6362464e4bb3d0a9d79f/",
+    "manifest": "experiments/momentum-crypto-cooldown-v1.json",
+    "verdict": "REFUTADO. El incumbent SIN cooldown gana la selección; ni cooldown-4 ni cooldown-12 mejoran. Stitched 129.7%/Sharpe 0.64/DD 49.2%, 622 trades, y falla los tres gates de drawdown (maxDrawdown, stressMaxDrawdown, looMaxDrawdown) igual que el incumbent de siempre. Contradice la intuición del churn observado en vivo (BCH dando 3 vueltas en 5h el 2026-09-04): suprimir la re-entrada tras una salida no compra nada en el histórico. El churn es real, pero el cooldown no es su remedio — y el eje del tamaño (vt-35) sí ataca el mismo síntoma por otra vía. Hipótesis cerrada; no reabrir sin un mecanismo distinto."
+  },
+  "authoritativeArtifactCryptoDisplacement": {
+    "path": "data/backtests/fee0ec6544083e5420a081f19822e80ce6715e5831a565cbab1fe50ecf101818/",
+    "manifest": "experiments/momentum-crypto-displacement-v1.json",
+    "date": "2026-09-10",
+    "verdict": "REFUTADO (segunda hipótesis de turnover refutada tras el cooldown). slotHysteresis — conservar todo held con señal válida y solo rellenar slots libres — pierde la selección inner en 6 de 9 folds: Sharpe mediano 0.65 vs 0.88 del incumbent. Ganó el inner del fold 0 (2022-05→2023-10, bear/chop) y ahí corrió OOS: −13.6% / 85 trades, donde el incumbent había hecho +9.4% / 225 trades sobre la misma ventana. La predicción pre-registrada sobre TURNOVER se cumplió (trades −62%, hold mucho más largo); la predicción sobre P&L se refutó: en chop, rotar hacia el momentum más fresco bate a aguantar tendencias en decadencia. El 'caso en contra' declarado en el manifest ('conserva tendencias decaídas en vez de las más fuertes') es exactamente lo que ocurrió. Lectura para el vivo: la rotación por desplazamiento ES churn (51% de los cierres del incumbent, gate maxDisplacementShare 0.35 FALLA), pero suprimirla cuesta más de lo que ahorra; la observación en vivo del 08-10 sep (5/5 SLOT_DISPLACED perdedores) era n=5. Hipótesis cerrada; no reabrir sin un mecanismo distinto (p.ej. buffer de ranking en unidades de σ, o suavizado de señal — ninguno pre-registrado aún).",
+    "firstRunWithEvidenceGates": {
+      "note": "Primer artefacto con los gates outer de evidencia (2026-09-07) activos. Sobre el stitched del incumbent-mezcla: outerPSR 0.928 < 0.95 FALLA; foldPSR [0.51, 0.99, 0.26] → 2/3 PASA; break-even 25.4 bps ≥ 20 PASA (curva: 0→0.92, 2→0.90, 5→0.75, 10→0.63, 20→0.22, 30→−0.19 — monótona, no caótica en este candidato); turnover 87/año ≤ 150 PASA (la estimación ~240 del audit era errónea con la definición del sim); displacementShare 0.508 > 0.35 FALLA. Y el dato que manda: certifiableSharpeAtPsr95 = 0.81 con 1516 días OOS — el Sharpe outer 0.75 del incumbent está POR DEBAJO de lo que esta ventana puede certificar. El sleeve crypto no es distinguible de ruido a PSR 95% con la historia disponible, independientemente del eje que se barra.",
+      "stitched": {
+        "totalReturnPct": 196.3,
+        "sharpe": 0.75,
+        "maxDrawdownPct": 49.2,
+        "trades": 512,
+        "benchReturnPct": 122.7,
+        "benchSharpe": 0.636
+      },
+      "gatesFailed": [
+        "maxDrawdown",
+        "stressMaxDrawdown",
+        "looMaxDrawdown",
+        "minOuterPsr",
+        "maxDisplacementShare"
+      ]
+    }
+  },
+  "authoritativeArtifactStocksDisplacement": {
+    "path": "data/backtests/205de58f06575bd06398e4422adbfd2affdace64965e9f7683e317e9bf511b50/",
+    "manifest": "experiments/momentum-stocks-displacement-v1.json",
+    "date": "2026-09-10",
+    "verdict": "SIGNO OPUESTO A CRYPTO. no-displacement (slotHysteresis) GANA en stocks: inner Sharpe mediano 2.54 vs 1.31 del incumbent, seleccionado en los 3 folds outer. Stitched OOS +35.4% / Sharpe 0.70 / DD 28.8% / 120 trades vs incumbent (momentum-stocks-v1, misma ventana) +7.6% / 0.26 / 25.8% / 244 trades. Bate a SPY en retorno (+4.2pp, minExcessReturnVsBench PASA — primer artefacto de stocks que lo hace) pero no en Sharpe (0.70 vs 0.92). Trades −51%, displacementCloses 0. Falla UN solo gate: minOuterPsr 0.825 < 0.95. Por fold: −28.0% / +72.3% / −2.1% (PSR 0.06 / 0.99 / 0.66) — el fold 0 es PEOR que el incumbent (−22.8%) y todo el exceso viene del fold 1 (2025). certifiableSharpeAtPsr95 = 1.20 con solo 474 días OOS: incertificable, como todo lo de stocks. Lectura: en un universo de megacaps+ETFs con barras de 5m y decisión horaria, el desplazamiento es fricción pura (el ping-pong GLD/QQQ del audit); en crypto (8 nombres correlados, rápido) rotar hacia el momentum fresco paga. Mismo eje, dos sleeves, dos signos — la regla no es universal. NO promovible por protocolo (PSR); candidato a override del dueño con la evidencia a favor más fuerte que ha tenido el sleeve de stocks, y con la advertencia de que un fold peor y un fold que lo carga todo es el patrón que el auditor del protocolo llamó fragilidad.",
+    "stocksDisplacement": {
+      "stitchedReturnPct": 35.4,
+      "sharpe": 0.7,
+      "maxDrawdownPct": 28.8,
+      "trades": 120,
+      "benchReturnPct": 31.1,
+      "benchSharpe": 0.92,
+      "excessReturnVsBenchPct": 4.2,
+      "outerPsr": 0.825,
+      "foldReturnsPct": [
+        -28,
+        72.3,
+        -2.1
+      ],
+      "breakEvenSlippageBps": 29.1,
+      "gatesFailed": [
+        "minOuterPsr"
+      ]
+    }
+  },
+  "authoritativeArtifactCryptoGatesAblation": {
+    "path": "data/backtests/988bb0c57f9fe65621510b57dc6cb7976683033997638855c625e005ae7dd35c/",
+    "manifest": "experiments/momentum-crypto-gates-v1.json",
+    "date": "2026-09-13",
+    "verdict": "El gate de REGIMEN (correlacion/vol-spike) es PROTECTOR, no neutro: regime-off stitched 144.8%/Sharpe 0.66/DD 53.8% vs incumbent 196%/0.75/49.2% — quitarlo SUBE el maxDD 4.6pp y falla maxDrawdown/stress/LOO peor que el incumbent. El diagnostico in-sample del audit (26% de ticks bloqueados con efecto ~neutro) queda refutado en OOS: el gate bloquea en rallies amplios y evita comprar el techo. El gate de SHARPE rolling {30d,0} es el candidato a peso muerto: sharpe-off inner Sharpe mediano 1.28 vs 0.88 del incumbent — pero no gano la seleccion outer limpia (mezcla por fold) y no se puede aprobar sin su propio manifest de 2 candidatos. Regimen: MANTENER. Sharpe gate: hipotesis abierta, no accionar.",
+    "gatesFailed": [
+      "maxDrawdown",
+      "stressMaxDrawdown",
+      "looMaxDrawdown",
+      "minOuterPsr",
+      "minTrlSatisfied"
+    ]
+  },
+  "authoritativeArtifactCryptoSizingV2": {
+    "path": "data/backtests/de5b4fcc8f763c4bb0d7519c3f4d11c3315cbd2fb297fff4265056ad56dcd1e9/",
+    "manifest": "experiments/momentum-crypto-sizing-v2.json",
+    "date": "2026-09-13",
+    "verdict": "vt-35 bajo los gates de evidencia: inner Sharpe mediano 1.56 vs vt-50 1.28 vs incumbent 0.88 (dominante en 9 folds). Stitched identico a v1 (130.3%/0.71/DD 43.1%/1079 trades). Pasa 15 de 17 gates: maxDrawdown 43.1<45 (1.9pp), stress, LOO, foldPSR 2/3 (0.63/0.97/0.26), break-even >30 bps (NUNCA cruza en el rango — vs 25.4 del incumbent: mas robusto a costes), turnover. Falla exactamente los dos predichos/estructurales: minOuterPsr 0.927<0.95 (la ventana certifica solo SR>=0.81; prediccion pre-registrada cumplida) y maxDisplacementShare 0.60>0.35 (la rotacion del kernel, ya sabida). Es el mejor candidato crypto por toda medida salvo certificabilidad: menos DD que el incumbent (43 vs 49), menos retorno (130 vs 196), mucho mas robusto a slippage. Para un sleeve cuyo problema operativo es que los breakers disparan por DD, reducir DD 6pp es exactamente la palanca. NO promovible por protocolo (PSR); candidato a override del dueño con la evidencia mas fuerte de crypto.",
+    "gatesFailed": [
+      "minOuterPsr",
+      "maxDisplacementShare"
+    ],
+    "correction_2026_09_20": "CORRECCION (2026-09-20): el stitched 130.3%/0.71/43.1%/1079 de vt-35 es tambien una cadena MEZCLADA: el fold 1 outer lo gano vt-50 (+180.9%/DD 40.9), no vt-35. No existe todavia artefacto con la cadena pura de vt-35 (pre-registrado momentum-crypto-sizing-v3, 2 candidatos). Ademas, el veredicto \"mejor candidato por toda medida salvo certificabilidad\" se escribio contra la cadena mezclada del incumbent (+196%); contra la cadena PURA del incumbent (386.4%, +263pp sobre BTC B&H +122.7%) vt-35 excede a BTC B&H en solo +7.6pp. Lo que vt-35 SI compra, medido en gateBlocks del sim: ~60% menos bloqueos por soft drawdown por fold (1536/4728/1128 vs 5616/6840/5254 del incumbent) y DD stitched 43.1 vs 49.2. Fold a fold (base): f0 vt-35 +6.0%/DD 23.8 vs inc +9.4%/DD ?; f2 vt-35 -23%/DD 36.9 vs inc -32.1%/DD 39.8."
+  },
+  "authoritativeArtifactCryptoBreakers": {
+    "path": "data/backtests/4f1665cea5bca250bf81c0a1125e5a5535c20a3002cef83fd74c2aa54d30df18/",
+    "manifest": "experiments/momentum-crypto-breakers-v1.json",
+    "date": "2026-09-13",
+    "verdict": "REFUTADO con estrepito, y es el caso en contra pre-registrado ocurriendo al pie de la letra. Inner: TODOS los breakers relajados aplastan al incumbent (no-soft 1.92, soft15/30 1.85, soft20/40 1.72 vs 0.88 — folds cortos y tranquilos). Outer: no-soft seleccionado → stitched 5.6%/Sharpe 0.31/DD 65.4%, exceso vs BTC -117pp, stress -39%. El fold 0 (2022 chop/crash) destruyo el equity sin el soft-DD y la cadena de RiskState arrastro el dano. El soft-DD 10% con pausa 24h es MATERIALMENTE protector en OOS: reduce exposicion temprano en los drawdowns; el hard-DD 20% solo pausa entradas y no salva posiciones ya abiertas. Los 3 dias de crypto cerrado (10-13 sep) son el precio de sobrevivir a 2022. Umbrales 0.10/0.20: MANTENER. La mejora del volumen desplegado NO pasa por relajar el breaker sino por reducir el DD que lo dispara (vt-35). Textbook: inner ama lo que outer mata — el protocolo hizo su trabajo.",
+    "gatesFailed": [
+      "maxDrawdown",
+      "minExcessReturnVsBench",
+      "stressMaxDrawdown",
+      "stressMinTotalReturn",
+      "looMaxDrawdown",
+      "minOuterPsr",
+      "minFoldsPsrAbove",
+      "maxTurnoverAnnual",
+      "maxDisplacementShare",
+      "minBreakEvenSlippageBps"
+    ]
+  },
+  "authoritativeArtifactMeanrevRsiWilder": {
+    "path": "data/backtests/d1db86b790d19de5044fbb457b21520a29ab6b5d3d299b3003ac9ee55f253eff/",
+    "manifest": "experiments/meanrev-rsi-wilder-v1.json",
+    "date": "2026-09-13",
+    "verdict": "REFUTADO. cutler-incumbent gana la seleccion; ni deterministicTieBreak ni Wilder mejoran. Stitched 19.3%/Sharpe 0.43/DD 10.9%/1902 trades vs SPY 169.8%/0.80 (el sleeve sigue sin batir al benchmark, como siempre). outerPSR 0.874, foldPSR [0.39,0.92,0.60,0.56,0.45,0.95] → 4/6. Lectura: el RSI(2) implementado NO es Connors (es Cutler, dispara 4x mas) y el desempate por orden de lista es un defecto — pero corregir ambas cosas hacia la definicion canonica NO mejora el resultado en esta ventana; la estrategia validada de facto es \"dos cierres a la baja sobre SMA200\" y ese es el edge (modesto) que hay. Docstring corregido; produccion sigue Cutler sin tiebreak. Hipotesis cerrada.",
+    "gatesFailed": [
+      "minSharpe",
+      "minExcessSharpeVsBench",
+      "minOuterPsr"
+    ]
+  },
+  "authoritativeArtifactProfitLock": {
+    "crypto": {
+      "path": "data/backtests/2fca21aaf1210d4ebabab42ef9e24e4845b6e61eecfcec5ba4cf2222027e3f34/",
+      "manifest": "experiments/momentum-crypto-profitlock-v1.json"
+    },
+    "stocks": {
+      "path": "data/backtests/b78e065739d013afac2e08ce4bfc9769bf1b45361bb2564d3d205746d7d9bbdb/",
+      "manifest": "experiments/momentum-stocks-profitlock-v1.json"
+    },
+    "date": "2026-09-15",
+    "verdict": "REFUTADO en ambos sleeves (8o eje). breakeven-arm10 es un NO-OP: inner Sharpe 0.89 vs 0.88 (crypto), 1.31 vs 1.31 (stocks) — el lock a breakeven casi nunca es el nivel que dispara; el hard stop o la salida por senal llegan antes. peakMinus8-arm15 es DANINO en crypto (inner -0.46 vs 0.88): un trail que se arma tarde sigue amputando las colas gordas, exactamente el caso en contra declarado (el trail en crypto fue refutado por eso mismo en julio); en stocks 1.27 vs 1.31, neutro-negativo encima del trail existente. Incumbent seleccionado en los 3 folds de ambos. La ganancia no realizada de UNI (+46%) queda, por evidencia, mejor protegida por NADA que por un lock: el sleeve gana precisamente por dejar correr las colas. HALLAZGO COLATERAL: la cadena limpia del incumbent crypto (3/3 folds incumbent, sin mezcla) da stitched 394.3%/Sharpe 0.99/outerPSR 0.972 — PASA minOuterPsr. La lectura del 09-10 (\"la ventana no certifica crypto: 0.75 < 0.81\") era sobre la cadena MEZCLADA de displacement-v1 (fold 0 = no-displacement); la cadena pura del incumbent SI es certificable a PSR 95%. Crypto falla solo los gates de DD (size) y displacementShare. CORRECCION registrada. Deriva de paridad: incumbent 394.3%/656 trades hoy vs 386.4%/648 el 25-ago (shorts-v1) con mismo dataHash — +8 trades sin explicar desde los cambios del sim del 07-sep; el fingerprint (tape corto) no lo detecta. Pendiente bisect.",
+    "crypto_inner": {
+      "incumbent": 0.88,
+      "breakeven": 0.89,
+      "peakMinus": -0.46
+    },
+    "stocks_inner": {
+      "incumbent": 1.31,
+      "breakeven": 1.31,
+      "peakMinus": 1.27
+    },
+    "correction_2026_09_20": "CORRECCION (2026-09-20, hallada por quorum de 3 jueces + bisect): (1) \"Incumbent seleccionado en los 3 folds\" es FALSO para crypto: el fold 0 outer lo gano lock-breakeven-arm10 (mediana DSR inner 0.0147 vs 0.0053 del incumbent). El stitched 394.3%/0.99/656/PSR 0.972 es una cadena MEZCLADA. (2) \"breakeven es un NO-OP\" es inexacto a nivel de trade: en 0/0 da 54 trades vs 60 con exits profit_lock reales (LINK/USD 2022-06-08 sale 9h antes por profit_lock en vez de stop_loss); es economicamente casi neutro, no un no-op. (3) La cadena PURA del incumbent es la del artefacto a04c88d3 (2026-08-25): 386.4%/Sharpe 0.98/648 trades/outerPSR 0.971/foldPSR [0.66,1.00,0.26] — SIGUE pasando minOuterPsr; el veredicto no cambia de signo. (4) La \"deriva de paridad +8 trades\" NO existe: los 13 replays del incumbent compartidos entre 25-ago y 15-sep son bit-identicos (folds 1 y 2 outer: 242 trades/+554.3% y 181/-32.1% en ambos); los cambios del sim del 02-sep/07-sep/15-sep reproducen exacto. La diferencia era la sustitucion de candidato en el fold 0. Causa raiz: scripts/walk-forward.ts persistia solo selectedCandidate (= ganador del ULTIMO fold) y no la composicion per-fold de la cadena; corregido con summary.outerSelection + aviso MIXED OOS CHAIN (commit de 2026-09-20)."
+  },
+  "authoritativeArtifactCryptoSharpeGate": {
+    "path": "data/backtests/f755469a22742f2de336773aa914c832d6bd97e317dfcf1b938cfa010670e9af/",
+    "manifest": "experiments/momentum-crypto-sharpegate-v1.json",
+    "date": "2026-09-21",
+    "verdict": "REFUTADO (9o eje). sharpe-off (sin sharpeGate {30d,0}) gana el inner solo del fold 0 (por 0/1: 125% vs -1%) y pierde 6/9 inner; en el unico fold outer donde fue seleccionado (0/test) hace -0.1%/DD 45.5% vs +9.4% del incumbent puro (a04c88d3). Cadena stitched MEZCLADA (fold 0 sharpe-off, folds 1-2 incumbent): 155.5%/0.69/DD 49.5%/643 trades/outerPSR 0.907 — falla maxDrawdown. El fold 1 del incumbent sale +276.5%/231 trades en vez de +554.3%/242 porque HEREDA el RiskState final de sharpe-off (DD 45.5% al cierre del fold 0): prueba directa de que solo las cadenas puras son comparables entre artefactos. La senal de gates-v1 (inner 1.28 vs 0.88) era el fold 0 amplificado por la mezcla de 4 candidatos. El gate de Sharpe rolling se queda. Balance: 9 ejes, 2 supervivientes (vt-35 sizing, stocks no-displacement), 7 refutados."
+  },
+  "authoritativeArtifactCryptoVt35Pure": {
+    "path": "data/backtests/8b673e8a707035f654d80001f551f5e363ebaec63e82d09de30cde6423ddce78/",
+    "manifest": "experiments/momentum-crypto-vt35-pure-v1.json",
+    "date": "2026-09-21",
+    "verdict": "Cadena PURA de vt-35 (1 candidato, 3/3 folds outer vt-35 por construccion, outerSelection persistido): stitched 233.5% / Sharpe 0.99 / maxDD 36.9% / 1210 trades / outerPSR 0.976 / foldPSR [0.63,1.00,0.26] / stressDD y looDD dentro de gate. Pasa 16 de 17 gates; falla SOLO maxDisplacementShare 0.614>0.35, gate estructural del kernel que el incumbent tambien falla (0.60) y que es ortogonal al eje de sizing. Comparable directo con la cadena pura del incumbent a04c88d3 (mismo dataHash 360c2184, mismo asOf, mismas ventanas): 386.4% / 0.98 / DD 49.2% / PSR 0.971, que falla maxDrawdown+stressDD+looDD+displacementShare. Mismo Sharpe, 12pp menos DD, +111pp sobre BTC B&H (122.7%). Fold a fold: f0 +6.0%/DD 23.8 (inc +9.4%), f1 +304.6%/DD 34.0 (inc +554.3%/28.7), f2 -22.2%/DD 36.9 (inc -32.1%/39.8). Bloqueos por soft drawdown: 1536/2520/1128 vs 5616/6840/5254. Hallazgo previo (sizing-v3, 2 candidatos): vt-35 gana Sharpe inner en solo 2/9 folds contra el incumbent — la afirmacion \"domina 9/9\" de sizing-v2 no se sostiene; la seleccion por mediana DSR es lo que lo favorece. NO aprobado por protocolo (trial accounting + displacementShare). CABLEADO 2026-09-23 como decision delegada por el dueno tras quorum de 3 jueces (condicion cumplida: cadena pura certifica PSR y DD), con el sleeve pausado a 0 posiciones, breakers intactos, criterio de reversion pre-registrado en src/index.ts.",
+    "cryptoVt35Pure": {
+      "stitched": {
+        "totalReturn": 2.335,
+        "sharpe": 0.99,
+        "maxDrawdown": 0.369,
+        "trades": 1210
+      },
+      "outerPsr": 0.976,
+      "gatesFailed": [
+        "maxDisplacementShare"
+      ]
+    }
+  },
+  "authoritativeArtifactStocksGross": {
+    "path": "data/backtests/49757edd228b2841c3f382d70075881cdcd0e320ddcfafc0bcd25356045027b3/",
+    "manifest": "experiments/momentum-stocks-sizing-v1.json",
+    "date": "2026-09-21",
+    "verdict": "Eje de exposicion bruta de momentum_stocks {2x, 1.5x, 1x}: gross-1x seleccionado en los 3 folds outer (cadena pura, outerSelection persistido): stitched 9.9% / Sharpe 0.40 / DD 14.5% / 258 trades / 0 rechazos Reg-T, vs el baseline 2x del mismo kernel 7.6% / 0.26 / DD 25.8% con 28 rechazos. Inner: 1x tiene igual o mejor Sharpe que 2x en 7/9 folds y la mitad de DD en todos; 2x acumula 5/28/12/27/16 rechazos de margen en 5 de 9 folds (ejecuta algo distinto de lo que decide). Sigue FALLANDO 4 gates a cualquier gross: minExcessReturnVsBench (-21pp vs SPY 31.1%), minOuterPsr 0.703, maxDisplacementShare 0.52, minBreakEvenSlippageBps 10<20 — el sleeve no tiene edge certificable; 1x solo lo hace mas barato y ejecutable. ERROR DE PRE-REGISTRO DECLARADO: la descripcion del manifest afirma slotHysteresis:true en todos los candidatos, pero los candidatos se derivaron del incumbent de momentum-stocks-profitlock-v1, que no lleva la clave; el artefacto mide el eje de gross sobre el kernel SIN hysteresis (pre-09-10), no sobre la config viva. La direccion (1x domina 2x en Sharpe/DD/rechazos) no depende de la hysteresis, pero un rerun con slotHysteresis:true queda pendiente para cerrar la brecha. CABLEADO 2026-09-23: MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT 0.5 -> 0.25 (quorum 3/3 por 1x como retirada de una cifra no evidenciada, 3/3 contra shadow). Solo afecta entradas nuevas.",
+    "stocksGross": {
+      "stitched": {
+        "totalReturn": 0.099,
+        "sharpe": 0.4,
+        "maxDrawdown": 0.145,
+        "trades": 258,
+        "marginRejects": 0
+      },
+      "outerPsr": 0.703,
+      "gatesFailed": [
+        "minExcessReturnVsBench",
+        "minOuterPsr",
+        "maxDisplacementShare",
+        "minBreakEvenSlippageBps"
+      ]
+    }
+  },
+  "authoritativeArtifactCryptoMarketGate": {
+    "mixed": {
+      "path": "data/backtests/3790f7b810c5d75f8229c2668b7611a69b89813feeb77d7895d3abfac712f050/",
+      "manifest": "experiments/momentum-crypto-marketgate-v1.json"
+    },
+    "pure": {
+      "path": "data/backtests/b48c604edadf774808dde59c1ef539fc1eef3ea30fb82362ea5c8340b0353c56/",
+      "manifest": "experiments/momentum-crypto-marketgate-nosoftdd-pure-v1.json"
+    },
+    "date": "2026-09-24",
+    "verdict": "NO GANA DE FORMA ROBUSTA (10o eje; 2 hipotesis nuevas). marketgate-v1 (3 candidatos, mismo dataHash 360c2184 que a04c88d3/8b673e8a): cadena MEZCLADA — vt-35 gana inner en folds 0/1 (mediana DSR .076/.014 vs .044/.000 del nosoftdd), nosoftdd gana fold 2 (.219 vs .114). Cadena PURA de vt35-btc200-nosoftdd (b48c604e, outerSelection 3/3): stitched 267.8% / Sharpe 1.10 / maxDD 31.3% / 977 trades / outerPSR 0.988 / break-even >30bps — mejor que vt-35 puro (233.5/0.985/36.9) en las tres cifras de cabecera, PERO falla minFoldsPsrAbove (foldPSR [0.28, 1.00, 0.38]: solo 1 de 3 folds >=0.5, vt-35 puro pasaba con [0.63, 1.00, 0.26]) ademas del estructural maxDisplacementShare (0.605, todos lo fallan). Fold a fold contra vt-35 puro: f0 (2022-05..2023-10) -17.2%/DD 25.7 vs +6.0%/DD 23.8 — el gate BTC<SMA200 bloquea 5878 ticks (~245 dias) y se pierde la recuperacion H1-2023, exactamente el case-against pre-registrado (retrasa la entrada en arranques de bull); f1 +397.7/DD 31.3 vs +304.6/DD 34.0 (TODO el exceso viene de aqui); f2 -10.8/DD 22.2 vs -22.2/DD 36.9 (el gate si protege el bajista 2025-26: 251 dias bloqueados, estable en los 6 tiers de coste). La proteccion 2022 del soft-DD SI es sustituible por el gate en terminos de DD (fold 0 DD 25.7, stress 30.3, dentro de gates) pero NO en retorno. Diagnostico del lockout que motivo el eje (cadena pura vt-35, scripts/research-softdd-lockout.ts): 47 pausas soft-DD, p50 2d / p90 13d / max 34d, 216 de 1516 dias OOS (14.3%); durante las pausas BTC compuso +7.1% pero el universo EW8 -5.9% — la pausa cae en tramos donde el universo PIERDE en agregado; el coste de oportunidad neto in-sim es negativo, lo que debilita la premisa operativa de que el lockout regala upside. NO CABLEADO: el gate queda implementado opt-in (MomentumEngineConfig.marketTrend, fail-open) por si el dueno quiere el trade-off DD-por-retorno; la evidencia no cumple el estandar de promocion (fold-robustez 1/3).",
+    "cryptoMarketGatePure": {
+      "stitched": {
+        "totalReturn": 2.678,
+        "sharpe": 1.104,
+        "maxDrawdown": 0.313,
+        "trades": 977
+      },
+      "outerPsr": 0.988,
+      "gatesFailed": [
+        "minFoldsPsrAbove",
+        "maxDisplacementShare"
+      ]
+    }
+  },
+  "authoritativeArtifactStocksLiveControl": {
+    "path": "data/backtests/095903db0bb2a5591593134ffe8433bd09a100b162bd292dcf35f3863ead6c80/",
+    "manifest": "experiments/momentum-stocks-live-control-v1.json",
+    "date": "2026-09-24",
+    "verdict": "PRIMER control puro de la configuracion VIVA completa de momentum_stocks (1x + slotHysteresis + volStop volScaled {3,78,2,8} + trail {3,78,2,8} + 11 simbolos con SMH, 5m/hora, ventana 2024-01-01..2026-07-15): stitched +20.9% / Sharpe 0.68 / DD 15.0% / PSR 0.812 / 138 trades / turnover ~36x/yr / exposicion media 0.675x. Falla 2 gates: minExcessReturnVsBench (-10.2pp vs SPY +31.1%/0.92) y minOuterPsr (0.812<0.95). Cierra el hueco #0 del mapa: la combinacion viva NUNCA habia sido medida junta — queda medido que el kernel vivo NO bate a SPY (fold 0 -13.7%/-1.33). LOO worst GOOGL +17.1%/0.60. Referencia contra la que se juzgo el eje de horizonte diario (ver authoritativeArtifactStocksHorizon).",
+    "stocksLiveControl": {
+      "stitched": {
+        "totalReturn": 0.209,
+        "sharpe": 0.68,
+        "maxDrawdown": 0.15,
+        "trades": 138
+      },
+      "outerPsr": 0.812,
+      "gatesFailed": [
+        "minExcessReturnVsBench",
+        "minOuterPsr"
+      ]
+    }
+  },
+  "authoritativeArtifactStocksHorizon": {
+    "paths": {
+      "mixed3cand": "data/backtests/ee89bbca55fc1987491eb7fec67b559a98ee94a3fd415d8a9d636e01f33e6ced/",
+      "h126Pure": "data/backtests/77372b9cac93f30022e2519615e425c57c72b82346a7f01e128b776b498508bd/",
+      "h252Pure": "data/backtests/3987f38daa90957d0f359ede8216d997b4bb9793ea82f72091e2167b2f2ecb21/",
+      "h14Pure": "data/backtests/74d296fa3c596a1d739d1866c7f8c8faca62a31b81c99b135cbcdaaea78f2d32/",
+      "w2024mixed": "data/backtests/99ca1c0a71011a5eb08f865ebf685687daffe50bf927f4e30081c7dc3429b044/",
+      "w2024h126Pure": "data/backtests/201ac4beebeae46e73432f53ffd4c92c9ce45099903e7b97d97f773d6210e2a0/",
+      "w2024h252Pure": "data/backtests/217f3838246bb5cd32d7d57d1abb29094cb46e4f5dfa8a9c54ca5c8bf62c2aa0/"
+    },
+    "manifest": "experiments/momentum-stocks-horizon-v1.json (+ *-pure-v1, *-2024w-*)",
+    "date": "2026-09-24",
+    "verdict": "Eje de HORIZONTE TSM sobre barras DIARIAS alpaca_wide/1d, 11 simbolos con SMH, kernel vivo (1x+hyst+volStop/trail diarios {3,20,2,12}), ventana 2017-06..2026-09 (OOS 2019-09-29..2026-09-24, 1755 obs, certifiable 0.62). Cadenas PURAS: h126-ma200 +306.3%/Sharpe 1.07/DD 24.1%/PSR 0.997/262 tr — 17/17 gates, PRIMER artefacto stocks que pasa TODOS los gates incl. minOuterPsr; h252-ma200 +252.8%/0.97/24.1%/0.992 — 17/17; h14-ma30 diario +234.9%/0.98/21.4%/0.994 — 17/17. SPY B&H +159.8%/0.80. HALLAZGO PRINCIPAL: el grueso del salto vs los artefactos 5m es el KERNEL DIARIO en si (h14 diario 0.98 vs control vivo 5m 0.68 en 095903db), y el horizonte largo anade encima (seleccion inner prefirio h126/h252 en 9/9 folds; h14 nunca gano un fold). LOO robusto (h126 worst = sin NVDA: +179.6%/0.92); displacement 0; turnover 15-23x/yr; exposicion media ~0.70x; break-even >30bps. HONESTIDAD OBLIGADA (survivorship): el B&H equiponderado del MISMO universo superviviente da +507%/Sharpe 1.15/DD 40.1% — la estrategia NO bate en Sharpe a la cesta congelada de ganadores de hoy (1.07 vs 1.15), solo recorta el DD (24 vs 40); el exceso vs SPY (+147pp) esta inflado por el universo. Sub-ventana 2024-01..2026-07 (476 obs, infrapotenciada, certifiable 1.20): h252 +31.9%/0.87/16.4%, h126 +25.8%/0.78/14.7%, control vivo 5m +20.9%/0.68/15.0%, h14 diario +15.6%/0.55/19.9%, SPY +35.8%/1.05, eqw B&H +57.4%/1.22/DD 20.9% — los horizontes largos baten al kernel vivo pero NADIE bate a SPY en 2024+. NO cableado: MOMENTUM_STOCKS_DAILY_HORIZON (src/index.ts) queda en null por defecto; recomendacion R2 = h126-ma200 si el dueno decide activar.",
+    "stocksHorizon": {
+      "h126Pure": {
+        "totalReturn": 3.063,
+        "sharpe": 1.07,
+        "maxDrawdown": 0.241,
+        "outerPsr": 0.997,
+        "gatesFailed": []
+      },
+      "h252Pure": {
+        "totalReturn": 2.528,
+        "sharpe": 0.97,
+        "maxDrawdown": 0.241,
+        "outerPsr": 0.992,
+        "gatesFailed": []
+      },
+      "h14PureDaily": {
+        "totalReturn": 2.349,
+        "sharpe": 0.98,
+        "maxDrawdown": 0.214,
+        "outerPsr": 0.994,
+        "gatesFailed": []
+      },
+      "eqwBuyHoldSameUniverse": {
+        "totalReturn": 5.074,
+        "sharpe": 1.15,
+        "maxDrawdown": 0.401
+      }
+    }
+  },
+  "authoritativeArtifactMeanrevControlPure": {
+    "path": "data/backtests/01d92c2a80c61ff5c784b422919f66302bab84750baa74dfb1c455c2460259cd/",
+    "manifest": "experiments/meanrev-control-pure-v1.json",
+    "date": "2026-09-24",
+    "verdict": "PRIMERA cadena PURA del sleeve meanrev_stocks vivo (1 candidato, outerSelection uniforme 6/6 folds) bajo los gates de evidencia 2026-09. Config verbatim src/index.ts: Cutler RSI2<5/SMA200/exitSMA5/timeStop10/5 slots x.10/hardStop volScaled k3-20-2-12 (maxGrossExposureMult omitido por ser prohibido en candidatos meanrev y redundante con 5x.10=0.5x, ver docstring del manifest). Stitched OOS +39.9% / Sharpe 0.69 / DD 12.7% / 2484 trades sobre 2019-03-25..2026-08-06 (6 folds purgados). Pasa 12 de 14 gates, incluidos los tres mas duros que el sleeve nunca habia pasado en una cadena pura: minOuterPsr 0.964>=0.95, minFoldsPsrAbove 6/6>=3, y los tres pares stress/LOO. Falla por margen estrecho: minExcessSharpeVsBench -0.085<0 (SPY B&H mismo tramo +159.6%/Sharpe 0.77) y minBreakEvenSlippageBps 9.08<10 (el break-even real del sleeve vivo, con 2bps de slippage base, esta a menos de medio punto del piso). power: con 1852 dias OOS solo se certifica a PSR95% un Sharpe anualizado >=0.61 — el 0.69 observado esta por encima de esa barra. Sirve de baseline honesto para meanrev-breadth-v1: es la PRIMERA medicion sin selection bias del sleeve vivo, y confirma sobre datos actuales lo que las diagnosticas previas (ad634c7b) ya insinuaban con vol-k3."
+  },
+  "authoritativeArtifactMeanrevBreadthMixed": {
+    "path": "data/backtests/68be3db1c0add15c805fd1283c70c35b3cae1e693b3c8f2a1994b23b3951a6b5/",
+    "manifest": "experiments/meanrev-breadth-v1.json",
+    "date": "2026-09-24",
+    "verdict": "Eje breadth {control 5x.10, 7x.10, 10x.10} — cadena MEZCLADA: control gana folds 0/1/3 (mediana DSR 0.011/0.010/0.091), breadth-7x10 gana 2/5 (0.026/0.288), breadth-10x10 gana solo el fold 4 (0.058, apenas por delante de breadth-7x10 0.045). Sobre los 18 folds internos, control gana 10/18, breadth-7x10 6/18, breadth-10x10 2/18 — breadth-10x10 es el punto peor soportado del eje (mediana Sharpe inner -0.490 vs -0.064 de breadth-7x10 y -0.009 del control). Stitched (mezclado, NO atribuible a un solo candidato) +49.0% / Sharpe 0.73 / DD 12.0% / 2939 trades; pasa 12/14 gates igual que el control puro, falla los mismos dos (minExcessSharpeVsBench -0.044, minBreakEvenSlippageBps 9.55<10). Fold-por-fold contra el control puro: en el fold 2 (unico donde breadth-7x10 fue seleccionado por DSR y perdio en OOS: +1.02% vs +4.22% que habria dado el control) la seleccion inner NO garantiza superioridad OOS — el caso-en-contra declarado (correlacion/seleccion de menor calidad) se observa parcialmente ahi. Por protocolo (ganador en cadena mezclada), se corrio la cadena PURA del mejor alternativo — ver authoritativeArtifactMeanrevBreadth7Pure — porque es mas informativa que esta mezcla."
+  },
+  "authoritativeArtifactMeanrevBreadth7Pure": {
+    "path": "data/backtests/033829729c2841f3c085e7e324c9aec81f6791d9f57d964b95556770f9956be8/",
+    "manifest": "experiments/meanrev-breadth7-pure-v1.json",
+    "date": "2026-09-25",
+    "supersedes": "data/backtests/9bfaa6a93569bafdc1b5ced6341e63cc24cd8cbc7cde0f700eb22aa0f83f0976/ (2026-09-24, simulador pre-fix)",
+    "verdict": "RERUN de identidad de ejecucion (mismo manifest, 0 trials nuevos, mismo dataHash 7067362b...) tras dos fixes del simulador meanrev (commit 762727e): (1) los stops que el open ATRAVIESA se ejecutan al open ANTES del runDaily del dia — el GTC/loop de 15s vivo dispara ~09:30, libera el slot y baja la equity antes de la pasada de ~09:35; el replay anterior evaluaba TODOS los stops despues de las decisiones (item P2 de OPEN.md, cerrado); los stops intradia no atravesados en la apertura siguen post-pasada; (2) SimMeanRevBroker.book() ahora persiste entryAt/entryPrice/exitPrice/qty en ClosedTrade (la limitacion de instrumentacion declarada en el verdict anterior queda arreglada para artefactos futuros). LA EVIDENCIA SE SOSTIENE y mejora marginalmente en gates: stitched OOS +57.5% / Sharpe 0.76 / DD 14.5% / 3175 trades (antes +57.9%/0.77/14.2%/3169 — deltas dentro del ruido de timing de stops), outerPSR 0.978 identico, foldsPSR>=0.5 en 5/6 (fold 0 cae a 0.47; antes 6/6, el gate pide 3), stress y LOO ligeramente MEJORES (stress SR 0.32 vs 0.28; LOO minSharpe 0.59 vs 0.56), y minBreakEvenSlippageBps AHORA PASA (10.19>=10, antes 9.92<10). Queda 13/14 gates: el unico fallo es minExcessSharpeVsBench (-0.011, antes -0.006). Fold-por-fold nuevo vs viejo: [-1.2,21.3,3.9,10.0,0.4,19.8] vs [2.7,20.2,1.0,9.6,0.3,20.5] — el timing corregido redistribuye los dias de gap (fold 0 empeora, fold 2 mejora), sin cambiar la conclusion. Sigue NO aprobado por protocolo (trial accounting historico incompleto + excess Sharpe vs SPY), y siguen vigentes las advertencias del verdict anterior sobre utilizacion real y capital compartido con momentum_stocks. Verdict previo (artefacto 9bfaa6a9..., simulador pre-fix) conservado en el historial git para trazabilidad."
+  },
+  "authoritativeArtifactStocksUniverse": {
+    "etf15": {
+      "path": "data/backtests/f8cf12785fadb7abab992093fee5ec7cf6adb3f945e07bd5da888f4142239970/",
+      "manifest": "experiments/momentum-stocks-daily-etf15-v1.json",
+      "date": "2026-09-25",
+      "universe": [
+        "SPY",
+        "QQQ",
+        "IWM",
+        "DIA",
+        "GLD",
+        "SMH",
+        "TLT",
+        "HYG",
+        "EFA",
+        "EEM",
+        "XLK",
+        "XLY",
+        "XLU",
+        "XLB",
+        "XLRE"
+      ],
+      "stitched": {
+        "totalReturn": 0.852,
+        "sharpe": 0.664,
+        "maxDrawdown": 0.24,
+        "trades": 286
+      },
+      "outerPsr": 0.952,
+      "foldPsr": [
+        0.83,
+        0.92,
+        0.75
+      ],
+      "breakEvenSlippageBps": ">30 (nunca cruza en el rango probado)",
+      "gatesFailed": [
+        "minExcessReturnVsBench"
+      ],
+      "gatesPassed": 16,
+      "gatesTotal": 17,
+      "eqwBuyHoldSameUniverse": {
+        "totalReturn": 1.138,
+        "sharpe": 0.724,
+        "maxDrawdown": 0.287
+      },
+      "worstLoo": {
+        "excludedSymbol": "GLD",
+        "sharpe": 0.556,
+        "totalReturn": 0.663,
+        "maxDrawdown": 0.254
+      },
+      "bestLoo": {
+        "excludedSymbol": "EEM",
+        "sharpe": 0.763,
+        "totalReturn": 1.016,
+        "maxDrawdown": 0.203
+      },
+      "tradesPerYearApprox": 41,
+      "note": "HYG (0 trades en todo el periodo) nunca dispara el umbral entryPct=5% a 126d — no es un bug, es baja dispersion de momentum en credito HY frente al resto del universo."
+    },
+    "live11plus4": {
+      "path": "data/backtests/d96eb66ae380acbb2fce06873b0461dfd14bc91c3200f0af4ba06dc939d8f388/",
+      "manifest": "experiments/momentum-stocks-daily-live11plus4-v1.json",
+      "date": "2026-09-25",
+      "universe": [
+        "SPY",
+        "QQQ",
+        "IWM",
+        "GLD",
+        "SMH",
+        "AAPL",
+        "MSFT",
+        "NVDA",
+        "META",
+        "GOOGL",
+        "AMZN",
+        "TLT",
+        "HYG",
+        "EFA",
+        "EEM"
+      ],
+      "stitched": {
+        "totalReturn": 2.363,
+        "sharpe": 0.924,
+        "maxDrawdown": 0.259,
+        "trades": 272
+      },
+      "outerPsr": 0.991,
+      "foldPsr": [
+        0.93,
+        0.98,
+        0.71
+      ],
+      "breakEvenSlippageBps": ">30 (nunca cruza en el rango probado)",
+      "gatesFailed": [],
+      "gatesPassed": 17,
+      "gatesTotal": 17,
+      "eqwBuyHoldSameUniverse": {
+        "totalReturn": 2.833,
+        "sharpe": 1.039,
+        "maxDrawdown": 0.359
+      },
+      "worstLoo": {
+        "excludedSymbol": "GLD",
+        "sharpe": 0.749,
+        "totalReturn": 1.603,
+        "maxDrawdown": 0.278
+      },
+      "bestLoo": {
+        "excludedSymbol": "AAPL",
+        "sharpe": 1.049,
+        "totalReturn": 3.029,
+        "maxDrawdown": 0.245
+      },
+      "looExcludingTlt": {
+        "sharpe": 1.005,
+        "totalReturn": 2.743,
+        "maxDrawdown": 0.25
+      },
+      "tradesPerYearApprox": 39,
+      "note": "HYG tambien 0 trades. Excluir TLT sube el Sharpe de 0.924 a 1.005 (~+0.08), confirmando que 2022 (TLT ~-30%) costo Sharpe como predecia el caso-en-contra, pero no basta para acercarse al control (1.07)."
+    },
+    "control": {
+      "manifest": "experiments/momentum-stocks-horizon-h126-pure-v1.json",
+      "path": "data/backtests/77372b9c.../",
+      "universe": [
+        "SPY",
+        "QQQ",
+        "IWM",
+        "GLD",
+        "AAPL",
+        "MSFT",
+        "NVDA",
+        "META",
+        "GOOGL",
+        "AMZN",
+        "SMH"
+      ],
+      "stitched": {
+        "totalReturn": 3.063,
+        "sharpe": 1.07,
+        "maxDrawdown": 0.241,
+        "outerPsr": 0.997
+      },
+      "eqwBuyHoldSameUniverse": {
+        "totalReturn": 5.074,
+        "sharpe": 1.15,
+        "maxDrawdown": 0.401
+      }
+    },
+    "verdict": "AMBOS universos alternativos REFUTADOS por el criterio pre-declarado. etf15 (Sharpe 0.664, gap 0.41 vs control >> umbral 0.10) no es preferible pese a casi eliminar el sesgo de supervivencia (su propio B&H equiponderado cae de 507%/1.15 del control a 114%/0.72 — confirma que el control SI estaba inflado por supervivencia) porque el edge de la estrategia se erosiona igual o mas rapido que el benchmark. live11plus4 no mejora Sharpe NI DD (0.924<1.07 y 25.9%>24.1%, ambos peor), pese a que su B&H equiponderado tambien es mas honesto (283%/1.04 vs 507%/1.15). Patron consistente en los tres puntos (control, live11plus4, etf15): la estrategia SIEMPRE recorta DD sustancialmente frente a su propio B&H equiponderado (24.1 vs 40.1, 25.9 vs 35.9, 24.0 vs 28.7) pero NUNCA supera su Sharpe — el valor anadido honesto del kernel es reduccion de riesgo de cola, no alfa de Sharpe, en los tres universos probados. El universo vivo de 11 simbolos permanece el mejor punto medido; diversificar activos no preserva el eje de horizonte con este kernel exacto (maxLongs=4 sin re-tunear). Sin cambios de codigo — src/config/riskProfiles.ts::MOMENTUM_STOCKS_UNIVERSE no se toca."
+  },
+  "authoritativeArtifactStocksDailyExits": {
+    "path": "data/backtests/322fa1edef518284956940ad5668833f674a6d988be1711380fc7a4b71631fe9/",
+    "manifest": "experiments/momentum-stocks-daily-exits-v1.json",
+    "date": "2026-09-25",
+    "verdict": "Eje A (ancho de salida) sobre el kernel diario h126-ma200 vivo: k3-control identico al control puro (77372b9c), k5-wide {5,20,3,20}, k8-widest {8,20,5,30}. outerSelection UNIFORME: k8-widest gana los 3 folds outer (0/1/2), asi que este run YA es una cadena pura (no hizo falta rerun). Stitched OOS +505.4% / Sharpe 1.18 / DD 28.6% / 64 trades (~9.2/ano vs ~37.6/ano del control) / turnover 2.9-5.4x/ano (vs 15-23x/ano del control) / 17-17 gates PASA. Comparado con el control puro (+306.3%/1.07/24.1%/PSR .997/foldPSR .97-.98-.77/LOO peor .92): k8-widest MEJORA Sharpe (+0.11), PSR (0.998 vs 0.997), foldPSR fold1/fold2 (.99/.88 vs .98/.77) aunque fold0 es peor (.93 vs .97), y LOO peor (1.047 sin NVDA, por encima del piso 0.92) — pero EMPEORA maxDD (28.6% vs 24.1%, +4.5pp). NO ES GANADOR ROBUSTO bajo el criterio pre-registrado (Sharpe Y maxDD deben mejorar juntos). Lectura honesta: a nivel de folds INTERNOS la mediana Sharpe/DD mejora MONOTONAMENTE al ensanchar el stop (k3 0.963/17.2% -> k5 1.086/17.0% -> k8 1.205/16.0%, k8 gana los 9/9 folds internos) — el mecanismo hipotetizado (menos rotacion, colas mas largas) SI opera y es fuerte; pero el DD STITCHED realizado sobre el path OOS concreto es peor que el del control, una divergencia inner-mediana vs outer-stitched real, no un error de computo (turnover cae de 15-23x a 2.9-5.4x/ano exactamente como predecia la hipotesis). Limitacion declarada: el ReplayResult del harness no expone un desglose de cierres por razon (STOP_LOSS/TRAIL_STOP/senal) — solo el conteo total de trades y turnoverAnnual: no es posible reportar 'numero de salidas por stop/trail' con precision sin instrumentar el simulador (no se toco src/ ni el simulador para esto, no es un bug bloqueante). NO cableable por protocolo (falla el criterio robusto declarado); candidato interesante para un futuro eje de compensacion Sharpe/DD si el dueno decide relajar el criterio.",
+    "stocksDailyExits": {
+      "k8Widest": {
+        "totalReturn": 5.054,
+        "sharpe": 1.184,
+        "maxDrawdown": 0.286,
+        "outerPsr": 0.998,
+        "foldPsr": [
+          0.928,
+          0.992,
+          0.882
+        ],
+        "trades": 64,
+        "turnoverAnnualByFold": [
+          2.89,
+          4.94,
+          5.37
+        ],
+        "looWorstSharpe": 1.047,
+        "gatesFailed": []
+      }
+    }
+  },
+  "authoritativeArtifactStocksDailyBreadth": {
+    "paths": {
+      "mixed": "data/backtests/e38301ecc22a72e523ac6035308d10e425964fd6c79ec362dba678473068a7b8/",
+      "s8Pure": "data/backtests/70ac1519983dd93f3ddd656d330c513a86c234fb5dfedbe98245af9c69724780/"
+    },
+    "manifest": "experiments/momentum-stocks-daily-breadth-v1.json (+ momentum-stocks-daily-breadth8-pure-v1.json)",
+    "date": "2026-09-25",
+    "verdict": "Eje B (amplitud a bruto 1.0x) sobre el kernel diario h126-ma200 vivo: s4-control identico al control puro (77372b9c), s6-breadth (6x1/6), s8-breadth (8x0.125). daily-breadth-v1 salio MEZCLADA: fold0/test y fold2/test seleccionan s8-breadth, fold1/test selecciona s4-control (⚠ MIXED OOS CHAIN, stitched +220.7%/Sharpe 1.00/DD 21.9%/452 trades — NO atribuible a un solo candidato). Sobre los 9 folds internos: s4-control tiene la MEJOR DSR mediana pooled (0.0549) frente a s6 (0.0384) y s8 (0.0272) — el caso-en-contra ('slots 5-8 son tendencias mas debiles') se confirma en la mediana — pero s8-breadth gana MAS folds individuales (4/9) que s6 (2/9), y esos 4 incluyen 2 de los 3 folds outer. Por protocolo (ganador en cadena mezclada -> correr la cadena pura del mejor alternativo, 1 candidato, 0 trials nuevos): momentum-stocks-daily-breadth8-pure-v1.json aisla s8-breadth. Cadena PURA de s8-breadth (outerSelection uniforme 3/3): stitched OOS +184.7% / Sharpe 1.00 / DD 17.4% / 497 trades (~71.4/ano vs ~37.6/ano del control) / turnover 12.4-22.0x/ano (similar al control 15-23x/ano) / 17-17 gates PASA. Comparado con el control puro (+306.3%/1.07/24.1%/PSR .997/foldPSR .97-.98-.77/LOO peor .92): s8-breadth-pure MEJORA maxDD (17.4% vs 24.1%, -6.7pp) y LOO peor (0.931 sin NVDA, por encima del piso 0.92) pero EMPEORA Sharpe (1.00 vs 1.07) y foldPSR en el fold2 (0.64 vs 0.77, el fold mas debil de ambas cadenas: s8-breadth solo hace +5.6% ahi). NO ES GANADOR ROBUSTO bajo el criterio pre-registrado (Sharpe Y maxDD deben mejorar juntos): el DD mejora pero el Sharpe empeora — la hipotesis de amplitud queda REFUTADA en su forma fuerte (diversificar no compensa la menor calidad marginal de los slots 5-8 en un universo de 11 nombres), aunque SI reduce concentracion (maxConcentration 0.427 vs 0.540 del control) y drawdown. Como ningun eje (A ni B) produjo ganador robusto, NO se corrio la combinacion k8-widest+s8-breadth (0 trials adicionales sobre los 4 de este batch).",
+    "stocksDailyBreadth": {
+      "s8BreadthPure": {
+        "totalReturn": 1.847,
+        "sharpe": 1.001,
+        "maxDrawdown": 0.174,
+        "outerPsr": 0.995,
+        "foldPsr": [
+          0.964,
+          0.988,
+          0.643
+        ],
+        "trades": 497,
+        "turnoverAnnualByFold": [
+          19.09,
+          12.42,
+          22.04
+        ],
+        "looWorstSharpe": 0.931,
+        "gatesFailed": []
+      }
+    }
+  },
+  "authoritativeArtifactStocksExitsBreadth": {
+    "paths": {
+      "k8s8Pure": "data/backtests/5a5a9577a0a7c0415b4ce36b17b211f1f4f42fd57b0c5852f0d87f26acdd9985/",
+      "k8s6Pure": "data/backtests/158d229306eed70bb1b62728d049849f9ed496c5bd8cada4412c8396d53bbfbc/"
+    },
+    "manifest": "experiments/momentum-stocks-daily-k8s{8,6}-pure-v1.json",
+    "date": "2026-09-25",
+    "verdict": "k8-s8 (8 slots x 0.125, trail+hardStop volScaled {8,20,5,30}) GANA de forma robusta contra el control vivo 77372b9c en la misma ventana OOS 2019-09..2026-09 (1755 obs): +307.6% / Sharpe 1.14 / maxDD 21.2% / outerPSR 0.997 / 135 trades vs +306.3% / 1.07 / 24.1% / 0.997 / 262. Pasa todos los gates; LOO peor Sharpe 1.07 (sin GLD) vs 0.92 del control; DD menor en los 3 folds (20.4/14.2/16.1 vs 22.5/14.4/19.3), fold 2 +24.4% vs +20.5%; break-even >30bps (SR 1.08 a 30bps). Mecanismo: stops anchos dejan correr las tendencias (k8 solo: SR 1.18 pero DD 28.6%) y 8 slots diversifican la cola (s8 solo: DD 17.4% pero SR 1.00); combinados dominan. k8-s6: +398.2% / 1.19 / DD 24.8% — falla el criterio (DD > 24.1%). Post-hoc declarado: ambos ejes se miraron en la misma ventana; +2 trials contados.",
+    "stocksExitsBreadth": {
+      "k8s8Pure": {
+        "totalReturn": 3.076,
+        "sharpe": 1.14,
+        "maxDrawdown": 0.212,
+        "outerPsr": 0.997,
+        "gatesFailed": []
+      },
+      "k8s6Pure": {
+        "totalReturn": 3.982,
+        "sharpe": 1.19,
+        "maxDrawdown": 0.248,
+        "outerPsr": 0.998,
+        "gatesFailed": []
+      }
+    }
+  },
+  "authoritativeArtifactCryptoDdScale": {
+    "path": "data/backtests/82a13f2e4b21a54bfe46299890eaa7946da33f92cecd10c91d94a0404f71ef35/",
+    "mixedChain": {
+      "path": "data/backtests/83e4f545cb808161007a92fc6a96e5c71d480cc8996ec0c984939edbfff41255/",
+      "manifest": "experiments/momentum-crypto-ddscale-v1.json"
+    },
+    "pureChain": {
+      "manifest": "experiments/momentum-crypto-ddscale-dd520-pure-v1.json"
+    },
+    "date": "2026-09-25",
+    "verdict": "REFUTADO EN LOS 4 CRITERIOS PRE-DECLARADOS (11o eje; 2 hipotesis nuevas). ddscale-v1 (3 candidatos, mismo dataHash 360c2184 que 8b673e8a): cadena MEZCLADA — dd5-20 gana inner en folds 0/2 (mediana DSR .0782/.1310 vs .0754/.1132 de vt-35), vt-35 gana fold 1 (.0140 vs .0060); dd10-20 no gana ningun fold (peor que dd5-20 en 3/3). Cadena PURA de vt35-dd5-20 (82a13f2e, outerSelection 3/3): stitched 128.6% / Sharpe 0.76 / maxDD 39.5% / 1367 trades / outerPSR 0.934 / foldPSR [0.50, 1.00, 0.19] / break-even 29.0 bps — PEOR que vt-35 puro (233.5/0.985/36.9/PSR 0.976) en TODO: (1) Sharpe 0.76 < 0.985 FALLA; (2) maxDD 39.5 > 36.9 FALLA; (3) minFoldsPsrAbove 1/3 FALLA (tambien minOuterPsr 0.934<0.95, gates que vt-35 puro pasaba); (4) fold 0 (2022-23) -5.9% < +6.0% del control FALLA. Fold a fold vs vt-35 puro: f0 -5.9/DD 26.5 vs +6.0/23.8 — operar escalado (media 0.87x, min 0.09x) en las piernas bajistas de 2022 PIERDE lo que la pausa binaria no perdia, y el sleeve alcanza el breaker HARD del 20% (168 ticks de pausa 7d) que bajo el soft-DD nunca se tocaba — exactamente el case-against #1 pre-registrado; f1 +230.3/DD 34.1 vs +304.6/34.0 — TAMBIEN peor en el bull: la pausa re-entra a tamano COMPLETO cuando el pico decae, ddScale sub-participa la recuperacion re-entrando pequeno (case-against #2: las pausas del incumbente caian sobre tramos donde el universo EW8 perdia -5.9%); f2 -26.4/DD 39.5 vs -22.2/36.9. Telemetria del eje: 55-70% de los ticks con escala <1 (media 0.86-0.89 por fold), 0 bloqueos por 'dd scale' a cero — el escalado ESTUVO activo y aun asi perdio; el valor del soft-DD binario NO esta solo en cortar tamano sino en el 0/1: no pagar fees/slippage en rallies bajistas y re-entrar a tamano completo tras el decaimiento. TERCERA refutacion del eje 'tocar el soft-DD' (breakers-v1 2026-09-13, marketgate-nosoftdd 2026-09-24, ddscale 2026-09-25). NO CABLEADO: risk.ddScale queda implementado opt-in (RiskGuardConfig.ddScale, default ausente = byte-identico) por si un eje futuro lo combina distinto (p.ej. minScale>0 o start/end mas anchos), pero la evidencia actual va en contra."
+  },
+  "authoritativeArtifactStocksVolSizing": {
+    "date": "2026-09-25",
+    "manifest": "experiments/momentum-stocks-daily-volsizing-v1.json",
+    "path": "data/backtests/c5c155a80b7561d5f809e04923f12fd56971a1d3a910d39c4d7768d489fef35f/",
+    "stocksVolSizing": {
+      "outerFoldReturnsPct": [
+        86.45,
+        75.7,
+        24.43
+      ],
+      "stitchedReturnPct": 307.65,
+      "sharpe": 1.136,
+      "maxDrawdownPct": 21.25,
+      "outerPsr": 0.997,
+      "trades": 135,
+      "gatesFailed": []
+    },
+    "verdict": "Eje TAMANO POR VOLATILIDAD INVERSA (volSizing: notional = equity x 0.125 x clamp(sigma_ref/sigma_i, 0.5, 2.0), sigma_ref = mediana del universo; MOP 2012 / Barroso-Santa-Clara 2015) sobre el control vivo k8-s8: REFUTADO en la seleccion. La cadena OOS salio UNIFORME al control (3/3 outer, control gana 6/9 inner; iv20 3/9, iv60 0/9) — el stitched ES la identidad del control 5a5a9577 (+307.6% / 1.136 / 21.2%). Medianas inner: control DSR 0.0656 / SR 1.087 vs iv60 0.0604/0.922 y iv20 0.0556/0.866 — igualar riesgo por slot RECORTA la cola derecha de los nombres de alta vol (NVDA/SMH) sin recortar el DD (14.6-15.3% vs 14.7% inner), exactamente el case-against declarado. Ninguna cadena pura corrida (la regla pre-registrada solo la exige en cadena MEZCLADA). NO cablear."
+  },
+  "authoritativeArtifactStocksMultiHorizon": {
+    "date": "2026-09-25",
+    "manifest": "experiments/momentum-stocks-daily-{multihorizon,blend3-pure}-v1.json",
+    "paths": {
+      "mixed": "data/backtests/cbfd45361517afcb85d7710f8caa6f240328526101a2f2a512e23d35c21754c2/",
+      "blend3Pure": "data/backtests/cc2f5d690c316db0e36dfbf657b5809f3a78198573422864e286d99c70f868c3/"
+    },
+    "stocksMultiHorizonMixed": {
+      "outerFoldReturnsPct": [
+        86.45,
+        75.7,
+        27.89
+      ],
+      "stitchedReturnPct": 318.96,
+      "sharpe": 1.146,
+      "maxDrawdownPct": 21.25,
+      "outerPsr": 0.998,
+      "trades": 128,
+      "gatesFailed": []
+    },
+    "stocksBlend3Pure": {
+      "outerFoldReturnsPct": [
+        97.24,
+        79.12,
+        27.89
+      ],
+      "stitchedReturnPct": 351.82,
+      "sharpe": 1.192,
+      "maxDrawdownPct": 21.19,
+      "outerPsr": 0.998,
+      "trades": 122,
+      "gatesFailed": []
+    },
+    "verdict": "Eje SENAL MULTI-HORIZONTE (lookbackDaysList: r = media de retornos 63/126/252d, umbrales sobre el r combinado, MA200 intacta; Hurst-Ooi-Pedersen 2017) sobre el control vivo k8-s8 h126: cadena mezclada (folds 0/1 control, fold 2 blend-63-126-252) => por regla pre-registrada se corrio la cadena PURA de blend-63-126-252 (+0 trials). La cadena pura GANA el criterio robusto pre-declarado en sus 5 condiciones vs 5a5a9577: Sharpe 1.193 > 1.136, maxDD 21.19% < 21.25% (margen 0.06pp - nivel de ruido), 17/17 gates, foldPSR mejor en LOS TRES folds (.964/.992/.837 vs .954/.991/.821), LOO peor 1.131 (sin NVDA) >= 1.07. +351.8% vs +307.6%, 122 vs 135 trades, fold-a-fold ret 97.2/79.1/27.9 vs 86.4/75.7/24.4, break-even >30bps (SR 1.14 a 30bps). Caveats honestos: la mejora de maxDD stitched es marginal y el DD del fold 2 empeora aislado (17.4% vs 16.1%); la seleccion inner favorecio al control (5/9 folds, mediana SR 1.087 vs 0.971) — el caso-en-contra (promediar diluye la senal fuerte) aplica DENTRO de los tramos de entrenamiento, pero el OOS puro domina en retorno y Sharpe en los 3 folds. GANADOR ROBUSTO por el criterio declarado; decision de cableado delegada al director."
+  },
+  "authoritativeArtifactMeanrevCrypto": {
+    "date": "2026-09-26",
+    "manifest": "experiments/meanrev-crypto-rsi10sma200-pure-v1.json",
+    "path": "data/backtests/8d3722d3ea9e86036d875f2ebb9a355ea2aee0296768e16b01ba020cef2546a5/",
+    "mixedChain": {
+      "path": "data/backtests/87163596969234e36e7ff339d128dd8d1d398e17c8cacf0f73a2a569ef6b02a2/",
+      "manifest": "experiments/meanrev-crypto-v1.json"
+    },
+    "meanrevCrypto": {
+      "outerFoldReturnsPct": [
+        -11.76,
+        -20.61,
+        -20.97
+      ],
+      "stitchedReturnPct": -43.94,
+      "sharpe": -0.377,
+      "maxDrawdownPct": 54.7,
+      "benchReturnPct": 124.24,
+      "benchSharpe": 0.641,
+      "excessSharpeVsBench": -1.018,
+      "outerPsr": 0.238,
+      "trades": 453,
+      "gatesFailed": [
+        "looMaxDrawdown",
+        "looMinSharpe",
+        "looMinTotalReturn",
+        "maxDrawdown",
+        "minBreakEvenSlippageBps",
+        "minExcessSharpeVsBench",
+        "minFoldsPsrAbove",
+        "minOuterPsr",
+        "minSharpe",
+        "minTotalReturn",
+        "stressMaxDrawdown",
+        "stressMinSharpe",
+        "stressMinTotalReturn"
+      ]
+    },
+    "verdict": "REFUTADO EN LOS 6 CRITERIOS PRE-DECLARADOS (W6, 3 hipotesis nuevas, 292->295). meanrev-crypto-v1 (87163596): los 3 candidatos pierden dinero en las medianas inner (medDSR 0.0002-0.0012, medSR -0.57..-0.15) y la cadena salio MEZCLADA (cada fold gano un candidato distinto): stitched -40.4% / Sharpe -0.31 / DD 51.8% / outerPSR 0.278 / break-even 0 bps. Cadena PURA del mejor por el criterio del protocolo (rsi10-sma200, medDSR 0.0012): -43.9% / Sharpe -0.377 / DD 54.7% / outerPSR 0.238 / foldPSR [0.44, 0.33, 0.17] / 0 de 3 folds positivos / break-even 0 bps / 13 de 16 puertas FALLAN. Vs criterios shadow: (1) Sharpe -0.38 < 0.8 FALLA; (2) PSR 0.238 < 0.95 FALLA; (3) DD 54.7% > 35% FALLA; (4) 0/3 folds positivos FALLA; (5) correlacion diaria UTC con la cadena pura de vt-35 (8b673e8a) = 0.352 >= 0.3 FALLA — ni siquiera diversifica: ambos son beta larga cripto; (6) combo 50/50 Sharpe 0.494 < 1.008 de vt-35 solo FALLA (lo divide por dos). Exceso vs BTC B&H: -168.2pp (excess Sharpe -1.02). Coste de funding de la cadena pura: $398.94 (~fees $452.50; fold 1 bull 2023-24 pago $297 de funding — case-against #3 confirmado). El case-against pre-registrado se confirma entero: comprar caidas de 1-2 dias en perps con costes y stops reales PIERDE incluso con filtro de tendencia; el ~99.7% de ciclos cerrados del spot-bot DCA era supervivencia sin stops (el precio 'siempre vuelve' hasta que no vuelve), no un edge neto de costes. La reversion corta diaria de acciones NO se transfiere a crypto. NO SHADOW, NO CABLEAR; el modo crypto del replay meanrev queda implementado opt-in (source=binance_futures) para ejes futuros."
+  },
+  "authoritativeArtifactCryptoRedesign": {
+    "paths": {
+      "c0ControlPure": "data/backtests/a510131622444378ceb5ee1a3a4f1967acf5bebab9719ca6c152179ce96a4db3/",
+      "c1Universe16Pure": "data/backtests/2156614dcbe654648c0f34852e5aebc1b9830018acba2283c59305c4375fe7a9/",
+      "c2MultiHorizonPure": "data/backtests/8cd36efa3c11c406da42a1060aa85061e885623a78494b8e0ae6174855afdea8/",
+      "c3ResumePure": "data/backtests/325a76c21e1622b3ca58e8981d0d4260f95b2fa06660443c15ec4f1fe6a2c81c/"
+    },
+    "manifest": "experiments/momentum-crypto-2026w-{control,universe16,multihorizon,resume}-pure-v1.json",
+    "date": "2026-09-26",
+    "verdict": "Rediseno de momentum_crypto sobre la ventana 2021-01-01..2026-09-26 (1571 obs OOS, BTC B&H +177.1%/SR 0.73). El control vt-35 (misma config viva) es el mejor: +353.6% / Sharpe 1.13 / maxDD 37.3% / outerPSR 0.991 / foldPSR [0.89,0.99,0.68] / break-even >30 bps. Universo16 (+42.5%/0.41/DD 67.5%), multi-horizonte [7,14,28] (+177.4%/0.83/DD 50.0%) y shadow-equity resume 3% (+264.4%/0.97/DD 41.0%) pierden en Sharpe y DD. El control re-corrido pasa a ser el artefacto autoritativo del sleeve (supersede 8b673e8a, mismo candidato). El problema vivo no era el kernel: el replay vt-35 no esta pausado en septiembre mientras el vivo si, por heredar el pico del modelo anterior -> re-anclaje one-shot via modelVersion.",
+    "cryptoRedesign": {
+      "c0ControlPure": {
+        "totalReturn": 3.536,
+        "sharpe": 1.13,
+        "maxDrawdown": 0.373,
+        "outerPsr": 0.991
+      },
+      "c1Universe16Pure": {
+        "totalReturn": 0.425,
+        "sharpe": 0.41,
+        "maxDrawdown": 0.675,
+        "outerPsr": 0.804
+      },
+      "c2MultiHorizonPure": {
+        "totalReturn": 1.774,
+        "sharpe": 0.83,
+        "maxDrawdown": 0.5,
+        "outerPsr": 0.953
+      },
+      "c3ResumePure": {
+        "totalReturn": 2.644,
+        "sharpe": 0.97,
+        "maxDrawdown": 0.41,
+        "outerPsr": 0.976
+      }
+    }
+  },
+  "authoritativeArtifactUsdcControl": {
+    "date": "2026-09-26",
+    "manifest": "experiments/momentum-crypto-usdc-control-pure-v1.json",
+    "path": "data/backtests/4b4035017905251173c993c265ace34957199c8915f3f8812d598c8c8096724c/",
+    "redesign": {
+      "round1Mixed": {
+        "path": "data/backtests/6ae8182d6d1d86483dd4103eec12a8a8e365a623dd6b99232a07affca4be80aa/",
+        "manifest": "experiments/momentum-crypto-usdc-redesign-v1.json"
+      },
+      "round1BestPure": {
+        "path": "data/backtests/65500e1e9aede8ba1377e32e9a9b9fb9cb81bfa3a58d134620305e6412759f01/",
+        "manifest": "experiments/momentum-crypto-usdc-vt35-pure-v1.json",
+        "stitchedReturnPct": 15.13,
+        "sharpe": 0.263,
+        "maxDrawdownPct": 70.93
+      },
+      "round2Mixed": {
+        "path": "data/backtests/7143d84e2c38df3a7828f0c42f441388717bbaeeff74bddf364b010bf5a40388/",
+        "manifest": "experiments/momentum-crypto-usdc-redesign-v2.json"
+      },
+      "round2BestPure": {
+        "path": "data/backtests/e37f99cfea072d3201f31e8b62e7a52600a3b225ac52ec8aa7749c573aa6c0d9/",
+        "manifest": "experiments/momentum-crypto-usdc-vtcap-pure-v1.json",
+        "stitchedReturnPct": 18.7,
+        "sharpe": 0.279,
+        "maxDrawdownPct": 70.55
+      }
+    },
+    "usdcControl": {
+      "outerFoldReturnsPct": [
+        60.59,
+        48.87,
+        -9.19
+      ],
+      "stitchedReturnPct": 117.09,
+      "sharpe": 0.604,
+      "maxDrawdownPct": 71.23,
+      "benchReturnPct": 177.09,
+      "benchSharpe": 0.731,
+      "excessReturnVsBenchPct": -60,
+      "outerPsr": 0.884,
+      "trades": 871,
+      "gatesFailed": [
+        "looMaxDrawdown",
+        "looMinTotalReturn",
+        "maxDisplacementShare",
+        "maxDrawdown",
+        "minBreakEvenSlippageBps",
+        "minExcessReturnVsBench",
+        "minOuterPsr",
+        "stressMaxDrawdown",
+        "stressMinSharpe",
+        "stressMinTotalReturn"
+      ]
+    },
+    "verdict": "NO VALIDADO Y SIN MEJORA ROBUSTA EN DOS RONDAS PRE-REGISTRADAS (U1, 6 hipotesis nuevas, 295->301). Control puro de la config viva USDC exacta (13 bases proxy USDT mainnet, costes reales medidos 17+3 base / 60+5 stress, asOf 2026-09-26T16:00Z): +117.1% / Sharpe 0.60 / maxDD 71.2% / outerPSR 0.884 / exceso vs BTC -60pp / break-even 4.2 bps — falla 10 de 17 gates (incl. maxDisplacementShare, excepcion estructural declarada). Rediseno ronda 1 (vt35/s4/mh7-14-28 sobre el control): cadena mezclada 6ae8182d; cadena pura del mejor (usdc-vt35): +15.1% / 0.26 / DD 70.9% — mejora break-even (22.5 bps) y los DD inner (28.1 vs 41.8 mediana) pero DESTRUYE el fold 2 reciente (-34.7% vs -9.2%) y falla el criterio Sharpe-Y-DD. Ronda 2 (combinaciones vtcap downsize-only y vt35+s4): cadena mezclada 7143d84e; pura del mejor (usdc-vtcap): +18.7% / 0.28 / DD 70.5% — la vol realizada 720h de estos perps casi nunca baja del 35% anual asi que vtcap colapsa a vt35; tampoco gana. Hallazgo transversal: a costes reales (~20 bps/lado) el kernel TSM horario NO certifica en 13 bases (el break-even del control es 4.2 bps, seis veces por debajo de su coste real); el +52.6% vivo de 2 meses es consistente con la varianza del artefacto (final ret p5/p95 del MC: -66%..+1570%), no evidencia de edge. POR LA REGLA DEL DUENO el sleeve SIGUE OPERANDO con el control como config autoritativa: artefacto 4b403501 = banda de expectativa del scorecard + candado vivo=manifest (liveSleeveConfigs), revision a 60 sesiones vivas, siguientes ejes solo por pre-registro nuevo. SUPERSEDIDO EL MISMO DIA por las rondas 3-5 (replanteo a kernel DIARIO por orden del dueno — ver authoritativeArtifactUsdcDaily): la config viva paso a ser d13-s5-blend-63-126-252 (artefacto 752767ae); este artefacto queda como el registro honesto del kernel horario refutado."
+  },
+  "authoritativeArtifactUsdcDaily": {
+    "date": "2026-09-26",
+    "manifest": "experiments/momentum-crypto-usdc-daily-s5-pure-v1.json",
+    "path": "data/backtests/752767ae1610f58ab0e236615859d6fb4a789c24e0ec771589ba369be3512694/",
+    "window": {
+      "from": "2021-08-01",
+      "asOf": "2026-09-26T00:00:00Z",
+      "note": "ventana declarada por el fail-closed de warmup del kernel 252d/MA200 (NEAR listado 2020-10-15); el baseline horario se re-corrio en la MISMA ventana"
+    },
+    "baselineControlW2": {
+      "path": "data/backtests/aaa0bcca48de8103466e69de68f47bbe4968806d77a02cc8bb2bf4abc1adb1f3/",
+      "manifest": "experiments/momentum-crypto-usdc-control-w2-pure-v1.json",
+      "stitchedReturnPct": 176.05,
+      "sharpe": 0.764,
+      "maxDrawdownPct": 70.8,
+      "outerPsr": 0.938,
+      "gatesFailedCount": 9
+    },
+    "siblings": {
+      "dailyV1Mixed": {
+        "path": "data/backtests/9257683003a71a680c77f0026a95e4cbfc4c99afde244b04b2e5aaff0d163fe4/",
+        "manifest": "experiments/momentum-crypto-usdc-daily-v1.json"
+      },
+      "blend63S3Pure": {
+        "path": "data/backtests/37092597b3e1e5a995c4428af80fd8e831e8546153e899bee94cbb6950096be7/",
+        "sharpe": 0.612,
+        "maxDrawdownPct": 56.94
+      },
+      "blend28S3Pure": {
+        "path": "data/backtests/2a5fd653f7ca60d009ceb9f5c9ce0f4324b5075d33fe3dcc94fde084887b013e/",
+        "sharpe": 0.424,
+        "maxDrawdownPct": 64.14
+      },
+      "liquid5Pure": {
+        "path": "data/backtests/9134691de1647d5a51a11bb4025db95347c643bfa545f966318efe23d248c69a/",
+        "sharpe": 0.788,
+        "maxDrawdownPct": 44.35,
+        "outerPsr": 0.94
+      },
+      "s6Pure": {
+        "path": "data/backtests/1331e2a3f3e45c371a6b8db9603851ba90c0c0e9195046a43a2005bc05e6766e/",
+        "sharpe": 0.848,
+        "maxDrawdownPct": 50.42
+      },
+      "s8Pure": {
+        "path": "data/backtests/90eaf9d9e4d97d43141f9ccf486999b48532e7b55b7d8d525fd4d7633fe9240c/",
+        "sharpe": 0.664,
+        "maxDrawdownPct": 47.72
+      }
+    },
+    "usdcDaily": {
+      "outerFoldReturnsPct": [
+        100.42,
+        28.13,
+        66.81
+      ],
+      "stitchedReturnPct": 328.37,
+      "sharpe": 1.033,
+      "maxDrawdownPct": 52.37,
+      "benchReturnPct": 352.81,
+      "benchSharpe": 1.079,
+      "excessReturnVsBenchPct": -24.43,
+      "outerPsr": 0.979,
+      "trades": 106,
+      "gatesFailed": [
+        "maxDrawdown",
+        "minExcessReturnVsBench"
+      ]
+    },
+    "verdict": "GANADOR DEL REPLANTEO (U1 rondas 3-5, 6 hipotesis nuevas, 301->307) — AUTORITATIVO, NO CERTIFICADO (declarado honestamente). Diagnostico que motivo el replanteo: el kernel horario rota demasiado para su coste real (~20 bps/lado): control 871 trades/4.3a, break-even 4.2 bps, 66% cierres por desplazamiento. Ronda 3 (kernel DIARIO, el patron que valido momentum_stocks; el replay soporta crypto 1d sin cambios — verificado y declarado en el manifest): daily-v1 (blend 28-56-112/MA100 y 63-126-252/MA200, slotHysteresis, stops volScaled k8 {8,20,5,30}, 3x1/3, ventana 2021-08-01 por el warmup de NEAR, baseline control-w2 re-corrido en la misma ventana +0). Cadena mezclada 92576830; puras: blend63 0.61/56.9, blend28 0.42/64.1 — mejoran DD y break-even (>30 bps, curva plana) pero no el Sharpe del control-w2 (0.76/70.8). Ronda 4 (misma linea): liquid5 (BTC/ETH/SOL/XRP/DOGE) 0.79/44.4/PSR 0.940; d13-s5 (5 slots x 0.2) 328.4%/1.03/52.4/PSR 0.979/foldPSR 0.92-0.74-0.91/turnover 10.4x/desplazamiento 0/curva 1.02-1.06 plana en 0-30 bps — DOMINA al control-w2 en Sharpe Y maxDD Y break-even (criterio de cableado pre-declarado) y pasa 15/17 gates (falla maxDD 52.4>45 y exceso vs BTC -24.4pp). Ronda 5 (extension del eje declarado): s6 0.85/50.4, s8 0.66/47.7 — el eje pica en s5 (case-against de tendencias 6a-8a debiles confirmado). CABLEADO: d13-s5-blend-63-126-252 como config viva de momentum_crypto_usdc (rebalanceMinutes 1440 al cierre UTC, klines 1d del venue, stops vol-scaled por fila via BinanceMomentumAdapter.openPosition.stopLossPct, 5x0.2, slotHysteresis); banda de expectativa y candado vivo=manifest apuntando a 752767ae; revision a 60 sesiones vivas. El sleeve NUNCA dejo de operar (regla del dueno)."
+  },
+  "authoritativeArtifactStocksSlotSize": {
+    "path": "data/backtests/b6f4a33d69ad3b0b4ef3738106cccad4a5ceda1edf7a63280dd7cbcabae16c17/",
+    "paths": {
+      "slot125Control": "data/backtests/b6f4a33d69ad3b0b4ef3738106cccad4a5ceda1edf7a63280dd7cbcabae16c17/",
+      "slot167": "data/backtests/e3c405f97c597f6c50d8802b3c73f3185105d5e66fe0c706ba0e06c7548f4ec2/",
+      "slot20": "data/backtests/c5dc54cbee3e10796f5113d4db9bebd098f8ec516ef67a5e52ca20cd0a150d6d/"
+    },
+    "manifest": "experiments/momentum-stocks-slot20-pure-v1.json",
+    "date": "2026-09-27",
+    "verdict": "REFUTADO por criterio pre-declarado. Eje tamano de slot a igual tope bruto 1.0x sobre el kernel vivo (blend-63-126-252/MA200/slotHysteresis/stops volScaled k8, 11 simbolos, base historica 2026-09-28 asOf latest). Criterio de ganador: mejor CAGR con Sharpe >= control-0.02, maxDD <= control+3pp, LOO peor >=1.0, PSR>=0.95, sin fallar ningun gate que el control pase. Resultado: NINGUN alternativo mejora el CAGR del control (24.1% control vs 21.3% slot167 vs 22.0% slot20) — pierden en CAGR, Sharpe Y maxDD simultaneamente, el peor de los tres resultados posibles frente al criterio. La exposicion media realizada NO sube con el slot mas grande (0.668x control vs 0.619x slot167 vs 0.616x slot20, medida sobre closedTrades*equityHistory de runs.jsonl): con menos nombres calificando en simultaneo el motor simplemente rota MENOS veces (trades/ano 17.4 -> 12.6 -> 10.7), el mecanismo contrario al hipotetizado (mas capital ocioso desplegado). LOO peor (sin NVDA en los tres): control +254.5%/Sharpe 1.155/DD 18.6%; slot167 +217.2%/1.053/DD 21.8%; slot20 +180.0%/0.936/DD 22.8% — se degrada monotonamente con el tamano de slot, consistente con el caso-en-contra declarado (mas concentracion por nombre). NOTA DE INSTRUMENTACION (declarada honestamente): gateBlocks del simulador solo agrega bloqueos a nivel de TICK (regimen/soft-DD/sharpe-gate, via report.blockedReason); el veto per-simbolo de maxGrossExposureMult ocurre DENTRO de un tick por lo demas operable (MomentumEngine.tick, 'continue' tras el log.warn) y NO se registra en gateBlocks en este arnes de replay — no se pudo contar cuantas entradas bloqueo el tope sin instrumentar src/ o scripts/, fuera del alcance permitido de esta tarea (solo experiments/). La evidencia indirecta (trades/ano cayendo, exposicion NO subiendo) sugiere que el tope rara vez llego a morder con fuerza real: el freno dominante fue que MENOS nombres calificaron a la vez, no el recorte del tope sobre entradas de bajo ranking. Sin cambio de wiring: MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT=0.125 / MAX_LONGS=8 / MAX_GROSS_EXPOSURE_MULT=1.0 se quedan como estan en src/index.ts.",
+    "stocksSlotSize": {
+      "slot125Control": {
+        "outerFoldReturnsPct": [
+          93.62,
+          77.74,
+          31.11
+        ],
+        "stitchedReturnPct": 351.2,
+        "sharpe": 1.19,
+        "maxDrawdownPct": 21.45,
+        "outerPsr": 0.998,
+        "trades": 122,
+        "gatesFailed": []
+      },
+      "slot167": {
+        "outerFoldReturnsPct": [
+          71.53,
+          81.8,
+          23.34
+        ],
+        "stitchedReturnPct": 284.65,
+        "sharpe": 1.069,
+        "maxDrawdownPct": 23.5,
+        "outerPsr": 0.995,
+        "trades": 88,
+        "gatesFailed": []
+      },
+      "slot20": {
+        "outerFoldReturnsPct": [
+          68.87,
+          90.33,
+          24.75
+        ],
+        "stitchedReturnPct": 300.96,
+        "sharpe": 1.055,
+        "maxDrawdownPct": 24.94,
+        "outerPsr": 0.994,
+        "trades": 75,
+        "gatesFailed": []
+      }
+    }
+  },
+  "authoritativeArtifactMeanrevSlot": {
+    "paths": {
+      "slot10Pure": "data/backtests/1616523e32330ae9a9cfddd6a50524b8ee34fc4823dd4220138c0232e41c21c5/",
+      "slot12Pure": "data/backtests/624d50e930d47ef55e42f16e6537e0e895dec847fb0b709c26b2ecd94ea37db7/",
+      "slot14Pure": "data/backtests/c6a848eaf5d6eb873b139fc111cdeb02195791ab470c569b041857f96e388e10/"
+    },
+    "manifest": "experiments/meanrev-slot{10-pure-v2,12-pure-v1,14-pure-v1}.json",
+    "date": "2026-09-28",
+    "verdict": "Con barras adjustment=all el control 7x0.10 baja a +50.4% / Sharpe 0.68 / DD 15.0% / PSR 0.964 (era +57.5%/0.76 con split-only). 7x0.12: +64.3% / 0.70 / DD 17.6% / PSR 0.968, mismos 2 gates fallados (excess Sharpe vs SPY, break-even 8.4 bps), mejora 5 de 6 folds; la regla pre-declarada por fold (>= control x 0.9) falla en el fold 4 por 0.1pp (-0.3% vs -0.2%) — regla mal especificada para un eje de tamano (en un fold perdedor cualquier aumento de tamano escala la perdida). 7x0.14: +67.4% / 0.65 / DD 22.2% — rompe el tope de DD 20%. Vista de cuenta Alpaca 50/50 con momentum_stocks: CAGR 15.4% -> 16.2%, Sharpe 1.21 -> 1.22, DD 17.2% -> 17.7%. CABLEADO 0.12 como decision del director con la desviacion declarada. Contexto honesto: meanrev no bate al indice (SPY mismos folds +188.9% / Sharpe 0.85); su valor es de diversificacion a nivel de cuenta (corr 0.43 con momentum_stocks).",
+    "meanrevSlot": {
+      "slot10Pure": {
+        "totalReturn": 0.504,
+        "sharpe": 0.68,
+        "maxDrawdown": 0.15,
+        "outerPsr": 0.964
+      },
+      "slot12Pure": {
+        "totalReturn": 0.643,
+        "sharpe": 0.7,
+        "maxDrawdown": 0.176,
+        "outerPsr": 0.968
+      },
+      "slot14Pure": {
+        "totalReturn": 0.674,
+        "sharpe": 0.65,
+        "maxDrawdown": 0.222,
+        "outerPsr": 0.954
+      }
+    }
+  },
+  "authoritativeArtifactCryptoStop": {
+    "paths": {
+      "controlPure": "data/backtests/ddcd9040a17fcd93ef517e76dcabb43d2a045fa694ffb3da7ba92592fef9826f/",
+      "fixed8Pure": "data/backtests/7938f2b73e234775341fbdb2861457d95490dd440d84ab8c50711c271f7fca1f/",
+      "volPure": "data/backtests/a86db1293ecdf1d06d8363c15ae487cfbb2f171cc2c6296861fddc800b395e90/",
+      "nonePure": "data/backtests/6fb5775d9430ccc96d1146aefcd509c27ea09e1b393a30084df0d24b3aa3beac/"
+    },
+    "manifest": "experiments/momentum-crypto-stop-{control-pure-v2,fixed8-pure-v1,vol-pure-v1,none-pure-v1}.json",
+    "date": "2026-09-28",
+    "verdict": "S4: el hardStop fijo 4% (control, identico a a5101316) GANA en Sharpe, maxDD y CAGR sobre los 3 candidatos del eje (fixed 0.08, volScaled k3/24h/6-20%, none). El caso-en-contra pre-registrado se confirma: en un book 2x de 8 majors correlacionados sin trail propio, ensanchar o quitar el stop deja correr la MISMA mecha en los 8 nombres a la vez en el fold de crash reciente (outer fold 2, 2025-04..2026-09): Sharpe de fold control 0.42 vs fixed8 0.03, vol -0.03, none -0.02 — ninguno cumple el umbral 'fold Sharpe >= control-0.15'. fixed8 ademas falla looMaxDrawdown (0.60 > 0.55, gate que el control si pasa). Ningun candidato satisface el criterio de ganador pre-declarado; eje CERRADO sin cambio de wiring. La fuga en vivo (-$722, 9 BROKER_STOP_LOSS, patron ADA in-and-out) queda re-caracterizada como un problema de RE-ENTRADA inmediata, no de distancia del stop — candidato a un eje de cooldown post-stop en crypto (nunca barrido), fuera del alcance de esta mision.",
+    "cryptoStop": {
+      "controlPure": {
+        "stitchedReturn": 3.624,
+        "sharpe": 1.141727226740031,
+        "maxDrawdown": 0.37346977174116824,
+        "outerPsr": 0.9915396220936263,
+        "trades": 1266,
+        "foldSharpe": [
+          0.990096069960493,
+          1.7739936547553807,
+          0.4186773964571637
+        ]
+      },
+      "fixed8Pure": {
+        "stitchedReturn": 2.267625819333505,
+        "sharpe": 0.9249215658176737,
+        "maxDrawdown": 0.44249167447307264,
+        "outerPsr": 0.9733590181199661,
+        "trades": 1157,
+        "foldSharpe": [
+          0.9099731692615369,
+          1.5540833296173568,
+          0.02910745187841249
+        ]
+      },
+      "volPure": {
+        "stitchedReturn": 3.35889718316298,
+        "sharpe": 1.0785300991535982,
+        "maxDrawdown": 0.44305994936593684,
+        "outerPsr": 0.9871285293622736,
+        "trades": 1149,
+        "foldSharpe": [
+          0.904114640391881,
+          1.9382417334031918,
+          -0.027788747063547975
+        ]
+      },
+      "nonePure": {
+        "stitchedReturn": 3.379012603231599,
+        "sharpe": 1.085418833825202,
+        "maxDrawdown": 0.44496102459545095,
+        "outerPsr": 0.9877855329060745,
+        "trades": 1135,
+        "foldSharpe": [
+          0.9097298700238687,
+          1.9480801550780233,
+          -0.01986546406789058
+        ]
+      }
+    }
+  },
+  "authoritativeArtifactMeanrevCore": {
+    "paths": {
+      "corePure": "data/backtests/8f89d8f8ee9d84e131326f5568c55d26508ca98e3b71f1c18fd40ac4900c74d5/",
+      "controlRerun": "data/backtests/23ea995cc5e42114ae6e6453e914efc129408e6c6355227fd7a428c402a6c41c/",
+      "control": "data/backtests/624d50e930d47ef55e42f16e6537e0e895dec847fb0b709c26b2ecd94ea37db7/"
+    },
+    "manifest": "experiments/meanrev-slot12-core-pure-v1.json @ 96c18a7 (rama research/meanrev-core; cableado vivo preparado en research/meanrev-core-wire, sin integrar)",
+    "date": "2026-09-29",
+    "verdict": "REFUTED — no se cablea. Mismo dataHash que el control (e433c5b0ce56; el control re-corrido 23ea995c reproduce 624d50e9 exacto). Nucleo: +83.3% / Sharpe 0.71 / DD 23.1% / PSR 0.962 / 4519 trades (control +64.3% / 0.70 / 17.6% / 0.968 / 3220). Criterio pre-registrado: (a) CAGR sleeve 8.60% >= 6.99%+3.0pp = 9.99% FALLA; (b) cuenta Alpaca 50/50 con momentum_stocks b6f4a33d: CAGR 16.17% -> 16.94%, Sharpe 1.22 -> 1.15 (< 1.19) FALLA, maxDD 17.75% -> 17.83%; (c) PSR PASA; (d) mismos 2 gates que el control. La estimacion por superposicion (sleeve 12.6% / Sharpe 0.92) sobrestimo: invertia el 100% de la fraccion ociosa cada dia a retornos cierre-cierre; el motor invierte en lotes enteros con colchon, reajusta en la apertura siguiente y cada entrada/salida del satelite vende/recompra lotes (~1300 trades de nucleo en 7.35 anos). La mejor configuracion validada sigue siendo satelite 7x0.12 + tesoreria BOXX sobre la caja ociosa (vista de cuenta Sharpe 1.27).",
+    "meanrevCore": {
+      "corePure": {
+        "stitchedReturn": 0.8335,
+        "sharpe": 0.708,
+        "maxDrawdown": 0.2306,
+        "outerPsr": 0.962,
+        "trades": 4519,
+        "foldReturns": [
+          0.0575,
+          0.3684,
+          0.0374,
+          0.2008,
+          -0.0651,
+          0.1495
+        ]
+      },
+      "controlRerun": {
+        "stitchedReturn": 0.6432,
+        "sharpe": 0.705,
+        "maxDrawdown": 0.1763,
+        "outerPsr": 0.968,
+        "trades": 3220,
+        "foldReturns": [
+          0.0046,
+          0.2141,
+          0.0181,
+          0.1363,
+          -0.0025,
+          0.2372
+        ]
+      },
+      "accountView5050": {
+        "control": {
+          "cagr": 0.1617,
+          "sharpe": 1.22,
+          "maxDrawdown": 0.1775
+        },
+        "core": {
+          "cagr": 0.1694,
+          "sharpe": 1.149,
+          "maxDrawdown": 0.1783
+        }
+      }
+    }
+  },
+  "authoritativeArtifactSp500Pit": {
+    "paths": {
+      "momentumControl": "data/backtests/b53540759f848266bbe9f852327595ba5e3bc73e5a59ee19bde6acbd1868ef1a/",
+      "m1Top20dv": "data/backtests/06d81aee439faa3ec51c041d3839e7842e4fedd354114dd41dfb5d86fac8e56a/",
+      "m2All": "data/backtests/7457ead9544f012bf568d599c5e0d24c48ba047de3b32fc78e872c529ad3f715/",
+      "meanrevControl": "data/backtests/48451ce81f406ceee4b1cab2967d2cb34d4bacfefbfb77601b83b2464c173f97/",
+      "m3Meanrev": "data/backtests/ec5d678854398821b0c900217fb13c2fae3f8ac9ae3596cc6264658c372b4f13/"
+    },
+    "manifest": "experiments/momentum-stocks-sp500pit-top20dv-pure-v1.json, experiments/momentum-stocks-sp500pit-all-pure-v1.json, experiments/meanrev-sp500pit-pure-v1.json @ 89b33f0 (pre-registro, antes de correr); controles = momentum-stocks-slot125-pure-v2 y meanrev-slot12-pure-v1 re-corridos en la misma base (+0)",
+    "date": "2026-10-02",
+    "verdict": "REFUTADO (los 3 candidatos) por el criterio pre-registrado: no se cablea nada. Criterio: VALIDADO si outer PSR >= 0.95, ningun gate fallado que su control pase y maxDD <= max(DD control + 5pp, 25%). M1 (5 ETFs vivos + top-20 PIT por dollar volume): +521.7% / CAGR 29.9% / Sharpe 1.03 / DD 31.7% / PSR 0.996 / 0 gates fallados, pero DD 31.7% > 26.5%. M2 (5 ETFs + todos los miembros PIT): +523.8% / CAGR 30.0% / Sharpe 0.91 / DD 37.3% / PSR 0.989; falla el gate maxDrawdown (35%), que el control pasa. M3 (meanrev sobre miembros PIT menos los 11 de momentum + 6 ETFs vivos): +64.3% / CAGR 7.0% / Sharpe 0.52 / DD 20.1% / PSR 0.919 < 0.95; falla minOuterPsr, que el control pasa. Controles en la misma base: momentum +365.2% / CAGR 24.6% / Sharpe 1.21 / DD 21.5% / PSR 0.999 / 0 gates fallados; meanrev +64.3% / CAGR 7.0% / Sharpe 0.70 / DD 17.6% / PSR 0.968 (reproduce 624d50e9 exacto, mismo dataHash e433c5b0ce56). Estimacion del sesgo de seleccion de los universos elegidos a mano: NO infla el retorno (momentum PIT +5.3pp de CAGR, meanrev PIT empata) pero SI el Sharpe (-0.18 en ambos sleeves) y la caida (+10.2pp momentum, +2.5pp meanrev). El edge de los dos sleeves sobrevive sin hindsight; las expectativas de Sharpe vivo deberian descontar ~0.18 frente a los backtests. DELISTED en el OOS: M1 0, M2 2 (LB 2021-08 renombrada, ABMD 2022-12 comprada), M3 1 (APC 2019-08 comprada); cierre optimista al ultimo close registrado.",
+    "sp500Pit": {
+      "momentumControl": {
+        "outerFoldReturnsPct": [
+          95.03,
+          76.91,
+          34.85
+        ],
+        "stitchedReturnPct": 365.24,
+        "sharpe": 1.213,
+        "maxDrawdownPct": 21.49,
+        "outerPsr": 0.999,
+        "trades": 122,
+        "gatesFailed": []
+      },
+      "m1Top20dv": {
+        "outerFoldReturnsPct": [
+          64.15,
+          59.43,
+          137.55
+        ],
+        "stitchedReturnPct": 521.66,
+        "sharpe": 1.028,
+        "maxDrawdownPct": 31.68,
+        "outerPsr": 0.996,
+        "trades": 160,
+        "gatesFailed": []
+      },
+      "m2All": {
+        "outerFoldReturnsPct": [
+          28.75,
+          54.09,
+          214.43
+        ],
+        "stitchedReturnPct": 523.76,
+        "sharpe": 0.911,
+        "maxDrawdownPct": 37.33,
+        "outerPsr": 0.989,
+        "trades": 161,
+        "gatesFailed": [
+          "maxDrawdown"
+        ]
+      },
+      "meanrevControl": {
+        "outerFoldReturnsPct": [
+          0.46,
+          21.41,
+          1.81,
+          13.63,
+          -0.25,
+          23.72
+        ],
+        "stitchedReturnPct": 64.32,
+        "sharpe": 0.705,
+        "maxDrawdownPct": 17.63,
+        "outerPsr": 0.968,
+        "trades": 3220,
+        "gatesFailed": [
+          "minBreakEvenSlippageBps",
+          "minExcessSharpeVsBench"
+        ]
+      },
+      "m3Meanrev": {
+        "outerFoldReturnsPct": [
+          4.15,
+          28.57,
+          12.9,
+          2.79,
+          -5.38,
+          16.33
+        ],
+        "stitchedReturnPct": 64.31,
+        "sharpe": 0.522,
+        "maxDrawdownPct": 20.14,
+        "outerPsr": 0.919,
+        "trades": 4592,
+        "gatesFailed": [
+          "minBreakEvenSlippageBps",
+          "minExcessSharpeVsBench",
+          "minOuterPsr"
+        ]
+      }
+    }
+  },
+  "authoritativeArtifactCryptoFixedSim": {
+    "paths": {
+      "control": "data/backtests/06e1a160c3556102aa2fff769f9e4c2a3d27d09a6f3874841286426425faf6e4/",
+      "stopFixed8": "data/backtests/c1ed4b205855a831e9cafd9a2b99d6cb5edd6031a7cab900c270f61d9975bdff/",
+      "stopVol": "data/backtests/4e5cb0fcd22560e9cbb0b71ec3427bd4806a28dcea75dbbfb60ff67d02352d61/",
+      "cooldown4": "data/backtests/9c7d427cece7c5918f1be68d38ee29b394b9e5038731c4bdeebc093d650223b1/",
+      "cooldown12": "data/backtests/afb2f27dcc2672afee4d51a72c5593a1178192cd7d1027d59ad28dfb630bdd4f/",
+      "hysteresis": "data/backtests/71104a00234890b71f03dbb0742e8e8a994f18e2a68c722f8918c8b1d4931bf9/"
+    },
+    "manifest": "experiments/momentum-crypto-fixedsim-{stop-fixed8,stop-vol,cooldown4,cooldown12,hysteresis}-pure-v1.json @ 50865e9 (pre-registro, antes de correr); control = momentum-crypto-2026w-control-pure-v1 reutilizado (06e1a160, +0)",
+    "date": "2026-10-04",
+    "diagnosticArtifact": "data/backtests/b195dd8d09fa2d5cf82dcd447a5dd9caa629d109dc08e43f2207535bc6a26d28",
+    "verdict": "REFUTADO (los 5 candidatos) por el criterio pre-registrado: no se cablea nada; el kernel vivo vt-35 (stop fijo 4%, sin cooldown, displacement activo) queda como el mejor conocido, AHORA VALIDADO CON EL SIMULADOR CORREGIDO (el primer batch crypto post-fix f0c08c9). Criterio: ganador = mayor Sharpe outer entre los que cumplan Sharpe >= control+0.05 (1.3626), maxDD <= control+3pp (35.58%), outer PSR >= 0.95, ningun gate nuevo fallado (el control falla solo maxDisplacementShare) y peor LOO >= 1.0. cooldown12 (+578.5% / Sharpe 1.371 / DD 33.1% / PSR 0.998 / foldPSR [0.95,0.99,0.72]) cumple 4 de 5 — supera al control en Sharpe (+0.058), retorno (+69pp) y foldPSR del fold 2, con DD +0.5pp — pero su peor LOO (sin XRP/USD) es 0.909 < 1.0, PEOR que el del propio control (0.944): el retardo de re-entrada concentra mas edge en XRP, exactamente la fragilidad que el liston LOO pre-declarado existia para cazar. cooldown4 (1.291/32.35) mejora el DD del control pero pierde Sharpe. El eje STOP queda RE-CONFIRMADO con el sim corregido y el margen del control CRECE: fixed8 1.169/DD 44.9, volScaled 1.167/DD 42.2 vs control 1.313/32.6 — bajo el replay viejo el control (4%, mas stops) cargaba MAS pausas espurias de racha que los stops anchos, asi que la correccion favorecio al control, no a los candidatos (S4 habia medido 1.142 vs 0.925/1.079 con el bug; la direccion se mantiene y se ensancha). La hysteresis queda RE-CONFIRMADA como no-ganadora en crypto sobre vt-35 (1.135 < 1.313, -171pp de retorno) PERO produce el primer artefacto crypto con CERO gates fallados (displacementShare 0.000, 455 trades vs 1229) y el mejor fold 0 del batch (+118.4% vs +79.1%): queda registrada como el unico punto conocido que resuelve el gate estructural maxDisplacementShare, a coste de Sharpe — hipotesis cerrada salvo nuevo mecanismo pre-registrado. Los 3 nuevos trials llevan el ledger a 319.",
+    "cryptoFixedSim": {
+      "control": {
+        "outerFoldReturnsPct": [
+          79.05,
+          202.95,
+          12.42
+        ],
+        "stitchedReturnPct": 509.77,
+        "sharpe": 1.313,
+        "maxDrawdownPct": 32.58,
+        "outerPsr": 0.997,
+        "trades": 1229,
+        "gatesFailed": [
+          "maxDisplacementShare"
+        ],
+        "looWorstSharpe": 0.944
+      },
+      "stopFixed8": {
+        "outerFoldReturnsPct": [
+          70.99,
+          229.71,
+          -13.4
+        ],
+        "stitchedReturnPct": 388.22,
+        "sharpe": 1.169,
+        "maxDrawdownPct": 44.92,
+        "outerPsr": 0.992,
+        "trades": 1077,
+        "gatesFailed": [
+          "maxDisplacementShare"
+        ],
+        "looWorstSharpe": 0.974
+      },
+      "stopVol": {
+        "outerFoldReturnsPct": [
+          78.43,
+          205.29,
+          -8.85
+        ],
+        "stitchedReturnPct": 396.54,
+        "sharpe": 1.167,
+        "maxDrawdownPct": 42.23,
+        "outerPsr": 0.993,
+        "trades": 1072,
+        "gatesFailed": [
+          "maxDisplacementShare"
+        ],
+        "looWorstSharpe": 0.954
+      },
+      "cooldown4": {
+        "outerFoldReturnsPct": [
+          76.17,
+          184.23,
+          17.13
+        ],
+        "stitchedReturnPct": 486.51,
+        "sharpe": 1.291,
+        "maxDrawdownPct": 32.35,
+        "outerPsr": 0.997,
+        "trades": 1243,
+        "gatesFailed": [
+          "maxDisplacementShare"
+        ],
+        "looWorstSharpe": 0.988
+      },
+      "cooldown12": {
+        "outerFoldReturnsPct": [
+          79.23,
+          224.05,
+          16.82
+        ],
+        "stitchedReturnPct": 578.48,
+        "sharpe": 1.371,
+        "maxDrawdownPct": 33.1,
+        "outerPsr": 0.998,
+        "trades": 1221,
+        "gatesFailed": [
+          "maxDisplacementShare"
+        ],
+        "looWorstSharpe": 0.909
+      },
+      "hysteresis": {
+        "outerFoldReturnsPct": [
+          118.4,
+          47.53,
+          36.24
+        ],
+        "stitchedReturnPct": 338.98,
+        "sharpe": 1.135,
+        "maxDrawdownPct": 33.12,
+        "outerPsr": 0.991,
+        "trades": 455,
+        "gatesFailed": [],
+        "looWorstSharpe": 0.871
+      }
+    }
+  }
+}

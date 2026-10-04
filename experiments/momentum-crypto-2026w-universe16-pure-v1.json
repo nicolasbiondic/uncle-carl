@@ -1,0 +1,107 @@
+{
+  "name": "momentum-crypto-2026w-universe16-pure-v1",
+  "sleeve": "crypto",
+  "description": "C1 UNIVERSE16 del batch crypto-redesign-2026-09-26, pre-registrado 2026-09-26 ANTES de correr (contexto y criterio de ganador: ver momentum-crypto-2026w-control-pure-v1). HIPOTESIS: el universo de 8 majors USDT deja fuera exactamente los nombres que hicieron el +52.6% del gemelo USDC (UNI, NEAR) — ampliar a los 16 perps del SYMBOL_MAP del ejecutor (src/executor/binance-executor.ts, configurados y verificados en testnet desde jul-2026: los 8 actuales + BNB/LTC/BCH/ATOM/NEAR/UNI/TRX/DOT) da al ranking TSM mas dispersion transversal para llenar 4 slots con tendencias reales. DECLARACION DE HONESTIDAD DEL UNIVERSO: los 16 son la lista de 'majors liquidos' que el ejecutor soporta desde julio de 2026, elegidos entonces por liquidez/cobertura de datos, NO elegidos hoy mirando el rendimiento posterior; el orden declara los 8 actuales primero (orden vivo) y los 8 nuevos en el orden del SYMBOL_MAP. Kernel IDENTICO a vt-35 (4x0.375, +5/-2, sharpeGate 30d, volTarget 35, peakHalfLife 30). CASO EN CONTRA (declarado antes de correr): (a) mas alts = mas correlacion en crash — el maxDD puede empeorar, y los gates DD/LOO deciden; (b) los alts chicos pagan mas funding y tienen colas peores (LUNA-class); (c) LOO pasa de 8 a 16 cadenas — mas superficie para fallar looMaxDrawdown; (d) el ranking con 16 nombres rota mas (mas displacement churn, maxDisplacementShare decide). TRIAL ACCOUNTING: +1 hipotesis nueva (universo nuevo con el mismo kernel; no es identidad de ejecucion de nada previo). Base=295 (batch compartido; el batch crypto-redesign-2026 suma +3 en total: C1, C2, C3). priorUniqueTrials=295. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 295,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD",
+      "BNB/USD",
+      "LTC/USD",
+      "BCH/USD",
+      "ATOM/USD",
+      "NEAR/USD",
+      "UNI/USD",
+      "TRX/USD",
+      "DOT/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt35-u16",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

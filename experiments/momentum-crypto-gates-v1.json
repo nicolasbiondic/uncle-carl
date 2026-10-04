@@ -1,0 +1,99 @@
+{
+  "name": "momentum-crypto-gates-v1",
+  "sleeve": "crypto",
+  "description": "Gate-ablation axis for the TSM crypto sleeve, pre-registered 2026-09-07 BEFORE any run. What is under test: the two protective layers the sleeve has ALWAYS carried without ever being ablated under the nested protocol — the regime filter (the simulator instantiates it unconditionally; regime:'off' -> {enabled:false} is the first time it can be switched off per-candidate) and the sharpeGate {30d, minSharpe 0} the incumbent config ships. Neither layer's contribution has ever been measured in isolation; until this run they are cargo cult with good intentions. The simulator stream's new gateBlocks telemetry reports how often each gate actually blocked an entry, so the artifact will show mechanism, not just outcome. Hypothesis (FOR ablation): both layers were tuned pre-protocol and may cost more in blocked good entries than they save in avoided bad ones — particularly the sharpeGate, which keys on trailing 30d Sharpe and re-admits symbols exactly after their run is over. Declared case AGAINST (why the incumbent may rightly win): the 2022 crash fold (-32.05% for the long/flat incumbent vs BTC -53.3%) is precisely where a regime filter earns its keep; turning it off may blow maxDrawdown 0.45 outright, and that would be the cheapest possible proof the layer is real. 4 candidates declared up front, none trimmed after results: incumbent (execution-identity rerun), regime-off, sharpe-off (sharpeGate key absent), both-off. Any change to production gates requires the FULL evidence bar, so this manifest carries the 2026-09 evidence gates: minOuterPsr 0.95, minFoldsPsrAbove {0.5, 2}, minTrlSatisfied true (the stitched OOS series must be at least its own MinTRL at 95% — first manifest to use this gate), minBreakEvenSlippageBps 20. EVERYTHING else FROZEN to experiments/momentum-crypto-v1.json: same 8-symbol universe, window 2021-01-01..2026-07-15 asOf-pinned, 3x3 purged folds, costs base 5/4 stress 10/8, real settled funding, BTC B&H benchmark. trialAccounting arithmetic, documented in full: 272 = 271 declared by momentum-crypto-displacement-v1 (registered earlier the same day; see that manifest for the complete chain — strict ledger-identity count 265 = 251 legacy + 1 + 5 + 2 + 2 + 2 + 2, plus the audit's deliberate +6 over-floor, overcounting only tightens DSR deflation) + 1 new hypothesis introduced there (no-displacement). This manifest introduces 3 new hypotheses (regime-off, sharpe-off, both-off); incumbent is an execution-identity rerun. Inventory incomplete, so complete=false and approval stays blocked by protocol regardless of gates.",
+  "trialAccounting": { "priorUniqueTrials": 272, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": { "slippageBps": 5, "commissionBps": 4 },
+    "stress": { "slippageBps": 10, "commissionBps": 8 }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "regime-off",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "regime": "off",
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "sharpe-off",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "both-off",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "regime": "off",
+      "risk": { "peakHalfLifeDays": 30 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": { "threshold": 0.5, "count": 2 },
+    "minTrlSatisfied": true,
+    "minBreakEvenSlippageBps": 20
+  }
+}

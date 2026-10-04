@@ -1,0 +1,183 @@
+{
+  "name": "momentum-stocks-daily-multihorizon-v1",
+  "sleeve": "stocks",
+  "description": "Eje SENAL MULTI-HORIZONTE (lookbackDaysList, Hurst-Ooi-Pedersen 2017: promediar 1/3/12 meses es mas robusto que un solo lookback), pre-registrado 2026-09-25 ANTES de correr, misma data/ventana/costes/gates que el control vivo k8-s8 (5a5a9577: +307.6% / Sharpe 1.14 / maxDD 21.2% / PSR 0.997 / foldPSR .954/.991/.821 / LOO peor 1.07 / 135 trades). Candidatos: control h126 (identidad de ejecucion, +0 trials), blend-63-126-252 y blend-126-252: r = media de los retornos de cada lookback (dias de sesion), umbrales +5/-2 sobre el r combinado, MA200 sin cambios. Hipotesis: el blend suaviza la dependencia del horizonte unico y reduce el timing-luck del parametro h126. Case-against declarado: h252 SOLO fue peor que h126 en esta misma ventana (Sharpe 0.97 vs 1.07, R2 2026-09-24) \u2014 promediar puede diluir la senal mas fuerte; y son mas trials sobre la misma ventana OOS. Criterio de ganador ROBUSTO declarado de antemano: la cadena PURA del alternativo mejora al control en Sharpe Y maxDD, no falla ningun gate que el control pasa, foldPSR no peor (ningun fold >0.02 por debajo del correspondiente .954/.991/.821) y LOO peor >= 1.07. Si la cadena sale mezclada se corre la cadena pura del mejor alternativo (+0 trials). Si AMBOS ejes (volsizing-v1 y este) ganan, se corre la cadena pura de la combinacion (+1 trial). +2 hipotesis (290->292).",
+  "trialAccounting": {
+    "priorUniqueTrials": 290,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-24",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "control-k8s8",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.125,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 0,
+      "lookbackDays": 126,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "blend-63-126-252",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.125,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 0,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "lookbackDaysList": [
+        63,
+        126,
+        252
+      ]
+    },
+    {
+      "name": "blend-126-252",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.125,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 0,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "lookbackDaysList": [
+        126,
+        252
+      ]
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

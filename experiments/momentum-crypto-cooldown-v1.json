@@ -1,0 +1,86 @@
+{
+  "name": "momentum-crypto-cooldown-v1",
+  "sleeve": "crypto",
+  "description": "Post-stop re-entry cooldown for the TSM crypto sleeve, pre-registered 2026-09-02 BEFORE any run, on the axis shipped this same day in the simulator (cooldownBarsAfterStop: after a HARD-STOP close — and only a hard stop; signal-flip/trail/time exits do not arm it — the symbol is blocked for N decision bars). Live motivation, dated: 2026-09-02 SOL/USDC stopped out 10:32 (-$67 BROKER_STOP_LOSS) and re-entered 11:24 the same day; the stock twin shows the same class at larger scale (GLD 5 entries in 14 days, NVDA re-entered the day after its trail stop for a further -$621). The stop already said the thesis failed at current prices; re-entering one bar later re-pays entry costs for the same information. Declared case AGAINST, stated up front: TSM signal persistence is genuine — after a shakeout stop the resumed trend is sometimes the best entry, and a cooldown forfeits exactly those; the 251-trial legacy grid never swept this axis so there is no prior either way. EVERYTHING except cooldownBarsAfterStop is FROZEN to experiments/momentum-crypto-v1.json (e5x2, 0.375, maxLongs 4, no shorts, same data/window/costs/gates, asOf pinned 2026-07-15). 3 candidates declared up front, none trimmed after results: incumbent-no-cooldown (absent — execution-identity rerun, adds 0 new hypotheses), cooldown-4 (4 decision bars = 4h at production cadence), cooldown-12 (12h). priorUniqueTrials=263: 261 after momentum-crypto-sizing-v1 plus momentum-crypto-e8x2-sizing-v1's 2 size variants (registered earlier this same day). The 2 cooldown variants here are new hypotheses. Inventory incomplete, so complete=false and approval stays blocked by protocol regardless of gates.",
+  "trialAccounting": { "priorUniqueTrials": 263, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": { "slippageBps": 5, "commissionBps": 4 },
+    "stress": { "slippageBps": 10, "commissionBps": 8 }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent-no-cooldown",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "cooldown-4",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "cooldownBarsAfterStop": 4,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "cooldown-12",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "cooldownBarsAfterStop": 12,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3
+  }
+}

@@ -1,0 +1,11 @@
+[Unit]
+Description=Uncle Carl auto-deploy poll (every 2 min)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

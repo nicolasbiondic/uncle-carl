@@ -1,0 +1,102 @@
+{
+  "name": "momentum-timestop-v1",
+  "sleeve": "stocks",
+  "description": "Time-barrier sweep for the TSM stocks sleeve (Lopez de Prado's third barrier; Hummingbot TripleBarrierConfig.time_limit). Motivation: momentum holds are unlimited by design (signal flip/trail/hard stop only) and prod's p90 hold is 263h — the protection-equilibrium audit (AUDITS 2026-08-03) found the multi-week bleed band covered by nothing but slow governor demotion, and the stop-sizing sweep's honest reading named 'none-with-time-stop' a winner direction. Everything except the timeStop axis is FROZEN to experiments/momentum-stocks-v1.json / momentum-stop-sizing-v1.json: same universe/costs/window/folds/gates including the binding minExcessReturnVsBench 0. All 4 candidates carry the production incumbent knobs (cadence 60, slot 0.5, entry 5/exit -2, maxLongs 4, fixed 4% hard stop via ABSENT hardStop, tsmTrail k3/78/2-8, sharpeGate 30d/0, peakHalfLifeDays 30) and differ ONLY in timeStop.maxHoldHours (calendar hours on the engine clock — the unit prod telemetry measures holds in, counting the overnight/weekend gap exposure a bars unit would exclude): incumbent (ABSENT = unlimited holds), 120h (~p50-adjacent, aggressive horizon), 264h (~prod p90 — trims only the tail), 504h (3 weeks — pure zombie-catcher). priorUniqueTrials=256: the 251 inventoried legacy v7 hypotheses + momentum-stocks-v1's incumbent + momentum-stop-sizing-v1's 4 candidates. Inventory incomplete, so complete=false and approval stays blocked by protocol regardless of gates.",
+  "trialAccounting": { "priorUniqueTrials": 256, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_split",
+    "timeframe": "5m",
+    "universe": ["SPY", "QQQ", "IWM", "GLD", "AAPL", "MSFT", "NVDA", "META", "GOOGL", "AMZN"],
+    "refSymbol": "SPY",
+    "rthOnly": true,
+    "funding": false,
+    "barMinutes": 5,
+    "barMinutesEq": 18.4615384615
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2024-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 60
+  },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0 },
+    "stress": { "slippageBps": 5, "commissionBps": 2 }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent-unlimited",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "tsmTrail": { "kSigma": 3, "lookbackBars": 78, "minPct": 2, "maxPct": 8 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "timestop-120h",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "timeStop": { "maxHoldHours": 120 },
+      "tsmTrail": { "kSigma": 3, "lookbackBars": 78, "minPct": 2, "maxPct": 8 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "timestop-264h",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "timeStop": { "maxHoldHours": 264 },
+      "tsmTrail": { "kSigma": 3, "lookbackBars": 78, "minPct": 2, "maxPct": 8 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "timestop-504h",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "timeStop": { "maxHoldHours": 504 },
+      "tsmTrail": { "kSigma": 3, "lookbackBars": 78, "minPct": 2, "maxPct": 8 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3
+  }
+}

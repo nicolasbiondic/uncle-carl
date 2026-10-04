@@ -1,0 +1,135 @@
+{
+  "name": "momentum-crypto-profitlock-v1",
+  "sleeve": "crypto",
+  "description": "Eje PROFIT-LOCK (tercer mecanismo de salida: ni trail ni hard stop fijo), pre-registrado 2026-09-15 ANTES de correr, en respuesta a una lectura de broker-truth: el no-realizado del sistema (+$2,728) son DOS posiciones — META +$2,398 (momentum_stocks, protegida por un trail que historicamente devuelve: GLD +1.8% → -3.5%) y UNI/USDC +$776 (+46% a 2x, protegida solo por el hard stop a entry-4% = 35% bajo el mark). Mecanismo: cuando la ganancia peak-vs-entry supera armAtPct, el stop sube a breakeven (mode breakeven) o a peak-lockPct% (mode peakMinus, ratchet monotono) y nunca baja; el hard stop de entrada sigue vigente por debajo. TODO congelado al incumbent salvo profitLock. 3 candidatos declarados: incumbent (sin lock), lock-breakeven-arm10 (armAt 10%, lockPct 0), lock-peakminus8-arm15 (armAt 15%, peak-8%). A FAVOR: convierte ganancias no realizadas en piso realizado sin amputar la subida antes de armarse. EN CONTRA (declarado): el trail en crypto fue REFUTADO por amputar colas gordas — un lock peakMinus es un trail que solo se activa tarde, y puede sufrir el mismo defecto atenuado; en stocks el trail YA existe y el lock puede ser redundante o pelearse con el (el nivel efectivo es el max de ambos). Prediccion falsable: breakeven sube el WR y baja el retorno medio por trade; peakMinus-8 mejora DD sin hundir el retorno SOLO si las colas gordas ocurren antes del arm. Si ambos pierden vs incumbent en inner, el eje queda refutado como el cooldown. 2 hipotesis nuevas. priorUniqueTrials=281: 275 (sizing-v2/breakers-v1) + 3 (gates-v1: regime-off, sharpe-off, both-off) + 3 (breakers-v1). complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 281,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "lock-breakeven-arm10",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "profitLock": {
+        "armAtPct": 10,
+        "mode": "breakeven",
+        "lockPct": 0
+      }
+    },
+    {
+      "name": "lock-peakminus8-arm15",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "profitLock": {
+        "armAtPct": 15,
+        "mode": "peakMinus",
+        "lockPct": 8
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

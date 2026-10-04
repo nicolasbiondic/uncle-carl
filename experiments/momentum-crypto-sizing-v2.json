@@ -1,0 +1,137 @@
+{
+  "name": "momentum-crypto-sizing-v2",
+  "sleeve": "crypto",
+  "description": "Re-run de momentum-crypto-sizing-v1 (vt-35 / vt-50 / incumbent-fixed) bajo los gates de evidencia del 2026-09-07 (minOuterPsr 0.95, minFoldsPsrAbove {0.5,2/3}, minBreakEvenSlippageBps 20, maxTurnoverAnnual 150, maxDisplacementShare 0.35), pre-registrado 2026-09-12 ANTES de correr. Motivo: vt-35 fue el primer artefacto en pasar los 12 gates viejos (2026-09-02) y la auditoria del protocolo (2026-09-06) mostro que esos gates no median significancia (PSR outer 0.93), estabilidad por fold (folds +6/+181/-23) ni sensibilidad a ejecucion. Hipotesis: vt-35 NO sobrevive (prediccion: falla minOuterPsr; certifiableSharpeAtPsr95 en esta ventana es ~0.81 y su Sharpe outer fue 0.71). Si sobrevive, es candidato de promocion con evidencia real. Candidatos IDENTICOS a v1 (identidad de ejecucion, +0 hipotesis). priorUniqueTrials=275: 272 (gates-v1, registrado antes) + 3 variantes de gates-v1 (regime-off, sharpe-off, both-off) que se lanzan en la misma cadena antes que este. Inventario pre-protocolo incompleto: complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 275,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent-fixed",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "vt-50",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 50,
+        "lookbackBars": 720,
+        "minScale": 0.5,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "vt-35",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

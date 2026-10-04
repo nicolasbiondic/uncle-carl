@@ -1,0 +1,116 @@
+{
+  "name": "momentum-stocks-slot125-pure-v2",
+  "sleeve": "stocks",
+  "description": "CONTROL re-corrido en la base historica nueva (data/historical.db copia de prod al 2026-09-28, alpaca_wide/1d SIP ajustado adjustment=all hasta 2026-09-25 — la misma que lee el bot en vivo hoy). Identidad de ejecucion byte-a-byte del candidato blend-63-126-252 de experiments/momentum-stocks-daily-blend3-pure-v1.json (artefacto cc2f5d69..., +351.8%/Sharpe 1.19/maxDD 21.2%, el kernel que corre en vivo desde hoy 2026-09-27): mismo universo de 11 simbolos, blend 63/126/252 sesiones sobre MA200, slotHysteresis true, stops volScaled hardStop/tsmTrail {kSigma 8, lookbackBars 20, minPct 5, maxPct 30}, sharpeGate {30d,0}, risk.peakHalfLifeDays 30, 8 slots x notionalPctPerSlot 0.125 (bruto nominal 1.0x por construccion: 8*0.125=1.0, sin necesidad de maxGrossExposureMult explicito, igual que el manifest original omite ese campo). UNICO cambio: asOf 'latest' (en vez de pinneado 2026-09-24) para que window.to (extendido a 2026-12-31) resuelva contra los ~2 dias habiles adicionales que la copia de investigacion incorpora sobre el artefacto cc2f5d69 (que se corrio con asOf pinneado a 2026-09-24). Es el CONTROL de este batch (slot-size axis): slot167-pure-v1 y slot20-pure-v1 comparten TODO salvo notionalPctPerSlot/maxGrossExposureMult. TRIAL ACCOUNTING: identidad de ejecucion (mismo candidato efectivo, unico eje que cambia es la fecha de corte de datos, igual que la regla ya usada en meanrev-stop-sizing-v2 y momentum-crypto-usdc-control-w2-pure-v1: un rerun en una ventana/asOf distinto de un candidato YA contado no multiplica hipotesis). +0 trials. Base = 307 (ledger tras el batch usdc-daily-replant-2026-09-26, ultimo manifest registrado: momentum-crypto-usdc-daily-s8-pure-v1, priorUniqueTrials 306 -> 307).",
+  "trialAccounting": {
+    "priorUniqueTrials": 307,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "slot125-control",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.125,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 0,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "lookbackDaysList": [
+        63,
+        126,
+        252
+      ]
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

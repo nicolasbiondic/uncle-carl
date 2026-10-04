@@ -1,0 +1,81 @@
+{
+  "name": "meanrev-crypto-rsi10sma200-pure-v1",
+  "sleeve": "meanrev",
+  "description": "Cadena PURA pre-registrada por la regla declarada en meanrev-crypto-v1 ('si la cadena sale mezclada, corre la pura del mejor, 0 trials'). meanrev-crypto-v1 (artefacto 87163596) salio MEZCLADA: cada outer fold lo gano un candidato distinto (0/test=rsi10-sma200, 1/test=rsi10-sma100, 2/test=rsi5-sma200) y la cadena mezclada quedo en -40.4% / Sharpe -0.31 / DD 51.8% / outerPSR 0.278 / break-even 0 bps — 13 de 16 puertas FALLAN. 'El mejor' por el criterio de seleccion del propio protocolo (mediana DSR inner, luego Sharpe): rsi10-sma200 (medDSR 0.0012 / medSR -0.153 sobre 9 inner folds, vs 0.0006/-0.300 de rsi10-sma100 y 0.0002/-0.574 de rsi5-sma200). ESTE manifest aisla rsi10-sma200 como candidato UNICO (identidad de ejecucion: mismo candidato x mismos folds x mismos costes que dentro de meanrev-crypto-v1) para producir su cadena OOS pura, directamente comparable con la cadena pura de vt-35 (8b673e8a). TRIAL ACCOUNTING: +0 hipotesis nuevas (rsi10-sma200 ya fue declarado y corrido como uno de los 3 candidatos pre-registrados de meanrev-crypto-v1, que subio el total del ledger a 295). priorUniqueTrials=295. Todo lo demas (ventana, folds, costes, ledger, sesgos declarados, criterio 'vale la pena shadow') FROZEN identico a meanrev-crypto-v1. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 295,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1d",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 365
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 1,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "rsi10-sma200",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "volScaled", "kSigma": 3, "lookbackBars": 20, "minPct": 2, "maxPct": 12 },
+      "meanrev": { "entryRsi": 10, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 4, "slotPct": 0.25 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0.8,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": 0,
+    "minExcessSharpeVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 100,
+    "stressMinSharpe": 0.4,
+    "stressMaxDrawdown": 0.4,
+    "stressMinTotalReturn": -0.1,
+    "looMinSharpe": 0.4,
+    "looMaxDrawdown": 0.4,
+    "looMinTotalReturn": -0.1,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "minBreakEvenSlippageBps": 20
+  }
+}

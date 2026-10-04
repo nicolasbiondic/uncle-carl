@@ -1,0 +1,54 @@
+/* ── tokens.css — one design system. Themes via [data-theme] on <html>. ── */
+:root {
+  /* dark (default) */
+  --bg:        #0a0e17;
+  --bg-1:      #0e1524;   /* elevated surface */
+  --bg-2:      #131c30;   /* input / hover */
+  --card:      #0d1526;
+  --border:    #1e2942;
+  --border-2:  #2b3a5c;   /* hover border */
+  --text:      #e6edf7;
+  --text-2:    #9fb0c9;   /* secondary */
+  --muted:     #73849f;   /* tertiary — WCAG AA: ~4.8:1 vs --card, ~5.1:1 vs --bg (was ~4.3:1) */
+  --accent:    #4c9cff;
+  --accent-2:  #2b6fd6;
+  --up:        #2dd4a0;
+  --down:      #f16b6b;
+  --warn:      #eab308;
+  --cyan:      #38bdf8;
+  --up-soft:   rgba(45,212,160,.12);
+  --down-soft: rgba(241,107,107,.12);
+  --accent-soft: rgba(76,156,255,.12);
+
+  /* scale */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px;
+  --r1: 6px; --r2: 10px; --r3: 14px; --r-pill: 999px;
+  --t-xs: 11px; --t-sm: 13px; --t-md: 15px; --t-lg: 20px; --t-xl: 28px; --t-2xl: 34px;
+  --shadow-1: 0 2px 8px rgba(0,0,0,.25);
+  --shadow-2: 0 8px 28px rgba(0,0,0,.45);
+  --dur: 160ms;
+  --ease: cubic-bezier(.22,1,.36,1);
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+}
+
+[data-theme="terminal"] {
+  --bg: #000; --bg-1: #0c0a02; --bg-2: #141003; --card: #0c0a02;
+  --border: #2a2205; --border-2: #4a3d0a;
+  --text: #ffcf4d; --text-2: #c79a1f; --muted: #957f45;  /* WCAG AA: ~5.1:1 vs --card, ~5.4:1 vs --bg (was ~3.3:1) */
+  --accent: #ffb000; --accent-2: #cc8d00; --cyan: #ffb000;
+  --up: #33ff88; --down: #ff5c5c;
+  --up-soft: rgba(51,255,136,.1); --down-soft: rgba(255,92,92,.1); --accent-soft: rgba(255,176,0,.12);
+}
+
+[data-theme="light"] {
+  --bg: #f4f6fb; --bg-1: #fff; --bg-2: #eef2f9; --card: #fff;
+  --border: #dbe2ee; --border-2: #c3cede;
+  --text: #0f1b30; --text-2: #45566f; --muted: #617086;  /* WCAG AA: ~5.0:1 vs --card, ~4.7:1 vs --bg (was ~3.6:1) */
+  --accent: #2b6fd6; --accent-2: #1f57ab;
+  --up: #0a9d78; --down: #d64545; --warn: #b7791f;
+  --up-soft: rgba(10,157,120,.1); --down-soft: rgba(214,69,69,.1); --accent-soft: rgba(43,111,214,.1);
+  --shadow-1: 0 1px 4px rgba(15,27,48,.08); --shadow-2: 0 8px 24px rgba(15,27,48,.12);
+}
+
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

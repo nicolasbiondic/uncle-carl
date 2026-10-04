@@ -1,0 +1,110 @@
+{
+  "name": "momentum-stocks-live-control-v1",
+  "sleeve": "stocks",
+  "description": "CONTROL PURO de la configuracion VIVA de momentum_stocks a 5m (hipotesis #0 del mapa de investigacion, pre-registrado 2026-09-24 ANTES de correr): UN candidato = exactamente lo que corre src/index.ts hoy — 4 slots x 0.25 (1.0x, MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT desde 2026-09-23), slotHysteresis true (override 2026-09-10), tsmTrail {k3,78,2,8}, hard stop VOL-SCALED {k3,78,2,8} (override 2026-08-28; los manifests previos simulaban el fijo 4% que ya no corre — hallazgo C#3), entry +5/exit -2, sharpeGate {30d,0}, cadencia horaria, y los 11 simbolos VIVOS incl. SMH (alpaca_split 5m cubre SMH hasta 2026-07-24 >= asOf 2026-07-15; los manifests stocks previos usaban 10). Motivo: NO EXISTE cadena OOS pura de esta combinacion — 205de58f probo hysteresis a 2x/fijo4/10simbolos y 49757edd probo 1x SIN hysteresis/fijo4/10 — asi que ningun numero citado es de la config que gestiona dinero. Con 1 candidato la cadena outer es pura por construccion y la seleccion inner es trivial. Ventana/costes/gates IDENTICOS a momentum-stocks-sizing-v1 (2024-01-01..2026-07-15 asOf pinned, 3x3 purged, base 2/0 stress 5/2, SPY B&H, gates completos incl. minOuterPsr 0.95 y minExcessReturnVsBench 0 SIN relajar). Caso en contra declarado: la combinacion puede rendir PEOR que ambos artefactos parciales (interaccion trail/volStop/hysteresis nunca medida) y este control es tambien la vara contra la que compite el eje de horizonte diario (momentum-stocks-horizon-v1, registrado el mismo dia): si el propio control no bate a SPY, el listón para cualquier alternativa es batir a SPY, no batir al control. Limite de paridad conocido y NO corregido por este manifest (hallazgos C#1/C#2): el vivo decide con corte SIP -16min y fase :00+15s mientras el sim decide al cierre exacto con fase :35 — este artefacto mide el KERNEL, no la ejecucion viva. trialAccounting: cadena stocks = 251 legacy + 1 (stocks-v1) + 4 (stop-sizing-v1) + 3 (timestop-v1) + 1 (displacement-v1) + 2 (profitlock-v1) + 2 (sizing-v1) = 264 previos; este manifest introduce 1 hipotesis nueva (la combinacion viva exacta con SMH nunca corrida). complete=false (inventario pre-protocolo incompleto, aprobacion bloqueada por protocolo).",
+  "trialAccounting": {
+    "priorUniqueTrials": 264,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_split",
+    "timeframe": "5m",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": true,
+    "funding": false,
+    "barMinutes": 5,
+    "barMinutesEq": 18.4615384615
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2024-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 60
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "live-1x-hyst-volstop",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.25,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 3,
+        "lookbackBars": 78,
+        "minPct": 2,
+        "maxPct": 8
+      },
+      "tsmTrail": {
+        "kSigma": 3,
+        "lookbackBars": 78,
+        "minPct": 2,
+        "maxPct": 8
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

@@ -1,0 +1,84 @@
+{
+  "name": "momentum-crypto-e8x2-sizing-v1",
+  "sleeve": "crypto",
+  "description": "Slot-size axis for the thresholds-v1 winner (slow-entry e8x2), pre-registered 2026-09-02 BEFORE any run. Context: artifact 9476341 (momentum-crypto-thresholds-v1, 2026-08-08) selected slow-entry-e8x2 on inner folds and it is the FIRST crypto candidate to pass every base gate (Sharpe 0.636, DD 42.2%<45, +4.0pp excess over BTC B&H) AND every stress gate — blocked ONLY by leave-one-out (looMaxDrawdown 71.5%>55, looMinTotalReturn -33.4%<-30): drop one symbol and the book is concentration-fragile. Hypothesis under test: shrinking notionalPctPerSlot compresses the whole DD distribution including the LOO tail (gross cap falls from 1.5x to 1.0x/0.75x equity) enough to clear both LOO gates. Declared tension, stated up front so a null result is a finding and not a surprise: excess return over the benchmark was only +4.0pp at 0.375 and smaller slots scale the excess down roughly linearly — it is entirely possible that NO size clears LOO-DD and minExcessReturnVsBench simultaneously; that honest negative would close the e8x2 promotion question instead of leaving it half-open. EVERYTHING except notionalPctPerSlot is FROZEN to momentum-crypto-thresholds-v1's e8x2 candidate (entryPct 8, exitPct -2, cadence 60, maxLongs 4, no shorts) and its data/window/costs/gates. 3 candidates declared up front, none trimmed after results: e8x2-0.375 (the artifact's winner — execution-identity rerun, adds 0 new hypotheses), e8x2-0.25, e8x2-0.1875. priorUniqueTrials=261: 259 after momentum-crypto-shorts-v1 plus momentum-crypto-sizing-v1's 2 volTarget variants (registered earlier this same day). The 2 size variants here are new hypotheses. Inventory incomplete, so complete=false and approval stays blocked by protocol regardless of gates.",
+  "trialAccounting": { "priorUniqueTrials": 261, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": { "slippageBps": 5, "commissionBps": 4 },
+    "stress": { "slippageBps": 10, "commissionBps": 8 }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "e8x2-0.375",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 8,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "e8x2-0.25",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.25,
+      "entryPct": 8,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "e8x2-0.1875",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.1875,
+      "entryPct": 8,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3
+  }
+}

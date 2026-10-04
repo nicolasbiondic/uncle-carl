@@ -1,0 +1,104 @@
+{
+  "name": "momentum-crypto-marketgate-nosoftdd-pure-v1",
+  "sleeve": "crypto",
+  "description": "Cadena PURA de vt35-btc200-nosoftdd (1 candidato: sin seleccion inner, los 3 folds outer lo corren por construccion), pre-registrada 2026-09-24 tras marketgate-v1 (artefacto 3790f7b8), cuya cadena salio MEZCLADA: folds 0/1 outer = vt-35 (control), fold 2 = vt35-btc200-nosoftdd (mediana DSR inner .219 vs .114 del control en ese fold; outer 2: -10.3%/DD 22.2 vs -22.2%/DD 36.9 del incumbente puro 8b673e8a). Este manifest produce el numero comparable con las cadenas puras del incumbente (a04c88d3) y de vt-35 (8b673e8a): mismo asOf/ventanas/costes/gates. Prediccion pre-registrada en marketgate-v1: nosoftdd solo sobrevive si el gate de mercado sustituye la proteccion 2022 del soft-DD (maxDD<=0.45 y stress/LOO en gate deciden). 0 hipotesis nuevas (candidato ya contado en marketgate-v1). priorUniqueTrials=286: 284 + 2 de marketgate-v1. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 286,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt35-btc200-nosoftdd",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "marketTrend": {
+        "symbol": "BTC/USD",
+        "maDays": 200
+      },
+      "risk": {
+        "peakHalfLifeDays": 30,
+        "softDrawdownPct": 1
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

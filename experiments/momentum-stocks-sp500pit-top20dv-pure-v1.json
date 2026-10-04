@@ -1,0 +1,77 @@
+{
+  "name": "momentum-stocks-sp500pit-top20dv-pure-v1",
+  "sleeve": "stocks",
+  "description": "PRE-REGISTERED (2026-10-02), point-in-time S&P 500 universe for momentum_stocks, candidate M1 de 2 (ver momentum-stocks-sp500pit-all-pure-v1). HIPOTESIS: el universo vivo de 11 simbolos (6 single names elegidos HOY sabiendo quien gano) infla el backtest por sesgo de seleccion; el analogo con regla y sin hindsight es 'los 5 ETFs del universo vivo (SPY/QQQ/IWM/GLD/SMH) + los 20 miembros PIT del S&P 500 con mayor dollar volume mediano de 60 sesiones en cada fecha de decision' (data.membership sp500 @ fja05680/sp500 commit a2430f2, tabla index_membership; data.liquidityRank {topN 20, lookbackSessions 60}, estrictamente backward-looking). Kernel IDENTICO al vivo/control (momentum-stocks-slot125-pure-v2 re-corrido en ESTA base): blend 63/126/252 sobre MA200, slotHysteresis, stops volScaled {8,20,5,30}, sharpeGate {30,0}, risk.peakHalfLifeDays 30, 8 slots x 0.125, mismos window/folds/costes/gates. Entradas solo si el ticker es miembro en la fecha de decision; posiciones abiertas conservan sus reglas de salida tras la remocion; tapes que terminan dentro del fold cierran DELISTED a la ultima barra disponible (OPTIMISTA declarado: el ultimo print negociable real puede ser peor). asOf PINNEADO 2026-10-02T04:00Z (ultimo bar comun del DB de investigacion, el mismo que resuelve el control con asOf latest). CRITERIO PRE-REGISTRADO (declarado antes de correr): el diseno PIT queda VALIDADO si (a) outer PSR >= 0.95, (b) no falla ningun gate que su control pase, y (c) maxDD <= max(DD del control + 5pp, 25%). Se reporta ademas dCAGR y dSharpe vs control como estimacion del sesgo de seleccion del universo actual. TRIAL ACCOUNTING (honesto): base 313 (ledger tras meanrev-core-2026-09-29, ultimo manifest pre-registrado declaro 312 y sumo +1). Este candidato es NUEVO: +1, total 314.",
+  "trialAccounting": {
+    "priorUniqueTrials": 313,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": ["SPY", "QQQ", "IWM", "GLD", "SMH"],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440,
+    "membership": { "index": "sp500" },
+    "liquidityRank": { "topN": 20, "lookbackSessions": 60 }
+  },
+  "asOf": "2026-10-02T04:00:00Z",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0 },
+    "stress": { "slippageBps": 5, "commissionBps": 2 }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "sp500pit-top20dv",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.125,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 0,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": { "mode": "volScaled", "kSigma": 8, "lookbackBars": 20, "minPct": 5, "maxPct": 30 },
+      "tsmTrail": { "kSigma": 8, "lookbackBars": 20, "minPct": 5, "maxPct": 30 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 },
+      "lookbackDaysList": [63, 126, 252]
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": { "threshold": 0.5, "count": 2 },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

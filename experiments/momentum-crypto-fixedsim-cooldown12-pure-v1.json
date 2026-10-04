@@ -1,0 +1,100 @@
+{
+  "name": "momentum-crypto-fixedsim-cooldown12-pure-v1",
+  "sleeve": "crypto",
+  "description": "CONTEXTO DEL BATCH crypto-fixedsim-2026-10-04: el 2026-10-03 se arreglo el bug del replay de momentum (f0c08c9): los cierres del MOTOR se estampaban en el instante exacto del tick, que es el ancla del P&L realizado de RiskGuard, y getRealisedPnlSince filtra exitAt > ancla — esos cierres NUNCA contaban, la racha de perdidas solo veia stops, nunca se reiniciaba con cierres ganadores, y el sim pausaba tras cada 5 stops acumulados. El control vivo vt-35 sobre la MISMA base paso de +363.6%/Sharpe 1.155/DD 35.6% (replay viejo, d6c0cdbe) a +509.8%/1.313/32.6% (corregido, 06e1a160). TODOS los veredictos de ejes de crypto del ledger se tomaron con el replay viejo; los ejes que cambian cuantos stops hay o cuando (stop distance, cooldown post-stop, hysteresis de slots) son los mas sospechosos. Modo de fallo vivo que ataca el batch: stops en racimo con mercado correlacionado (2026-09-28 ADA/AVAX/LINK; 2026-10-02 LINK/AVAX/DOGE en ~10 min). Misma base de datos que 06e1a160 (hist-sp500.db, prod 2026-10-02) para comparabilidad de dataHash; control NO re-corrido (reutilizado 06e1a160, +0, identidad de ejecucion: mismo configHash/dataHash/codeHash). EJE COOLDOWN POST-STOP (+1, 317->318): cooldownBarsAfterStop 12 (12h) sobre el kernel vt-35 vivo. Mismo razonamiento que cooldown4 (ver ese manifest); el punto largo cubre el caso en que 4h no basta para dejar pasar el episodio correlacionado entero (el racimo del 10-02 duro ~10 min pero el mercado siguio bajando horas). Caso-en-contra pre-registrado: si la senal sigue valida tras el stop, 12h fuera del mercado pierde la recuperacion (el patron del 10-03/10-04 vivo: AVAX re-entrada +26.42). Cadena PURA de 1 candidato por construccion: mismo universo/ventana/folds/costes/gates/asOf latest que momentum-crypto-2026w-control-pure-v1 (control corregido 06e1a160: +509.8% / Sharpe 1.3126 / maxDD 32.58% / PSR 0.997 / foldPSR [0.950,0.990,0.685] / 1229 trades / peor LOO 0.944 / falla solo maxDisplacementShare). CRITERIO DE GANADOR PRE-DECLARADO (identico en los 5 manifests del batch, escrito ANTES de correr): gana el candidato con MAYOR Sharpe outer entre los que cumplen TODO: (1) Sharpe outer >= control + 0.05 = 1.3626 (control corregido 06e1a160: Sharpe 1.3126); (2) maxDD stitched <= DD control + 3pp = 35.58% (control 32.58%); (3) outer PSR >= 0.95; (4) no falla ningun gate que el control pase (el control falla SOLO maxDisplacementShare 0.605>0.35); (5) peor LOO con Sharpe >= 1.0 (control: peor LOO 0.944 sin XRP — el liston exige que el candidato sea MAS robusto que el control en LOO, deliberadamente). Si ninguno cumple: REFUTADO y el diseno vivo vt-35 queda como el mejor conocido, ahora validado con el simulador corregido. En esta rama NO se cablea nada en vivo. TRIAL ACCOUNTING del batch (cascada declarada ANTES de correr): base = 316, el total corriente del ledger tras sp500-pit-universe-2026-10-02 (313 + 3). stop-fixed8 +0 y stop-vol +0 (identidades de ejecucion de los candidatos de S4 2026-09-28, ya contados ahi); cooldown4 +1, cooldown12 +1, hysteresis +1 (configuraciones efectivas nuevas: esos ejes solo se probaron sobre el incumbent pre-volTarget). Total tras el batch: 319. Control reutilizado 06e1a160 (+0). complete=false (era pre-protocolo).",
+  "trialAccounting": {
+    "priorUniqueTrials": 317,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt-35-cooldown12",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "cooldownBarsAfterStop": 12
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

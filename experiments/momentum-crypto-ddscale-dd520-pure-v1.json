@@ -1,0 +1,104 @@
+{
+  "name": "momentum-crypto-ddscale-dd520-pure-v1",
+  "sleeve": "crypto",
+  "description": "Cadena PURA de vt35-dd5-20 (1 candidato: sin seleccion inner, los 3 folds outer lo corren por construccion), pre-registrada 2026-09-25 tras ddscale-v1 (artefacto 83e4f545), cuya cadena salio MEZCLADA: folds 0/2 outer = vt35-dd5-20, fold 1 = vt-35 (control; dd5-20 gano la seleccion inner con mediana DSR 0.131). Este manifest produce el numero comparable con la cadena pura del incumbente vt-35 (8b673e8a: 233.5%/0.985/DD 36.9/folds +6.0/+304.6/-22.2): mismo asOf/ventanas/costes/gates, mismo dataHash-objetivo 360c2184. CRITERIO DE ROBUSTEZ pre-declarado en ddscale-v1 (sin cambios): mejorar Sharpe 0.985 SIN peor maxDD 36.9%, PASAR minFoldsPsrAbove, y fold 0 >= +6.0%. Nota honesta pre-run: en la cadena mezclada el fold 0 de dd5-20 ya dio -5.9% (< +6.0% del control) y el fold 2 -26.1% (vs -22.2%) — la cadena pura solo puede diferir por la continuidad del RiskState entre folds (el fold 0 es identico por construccion: mismo candidato, estado inicial fresco), asi que el criterio del fold 0 esta matematicamente decidido en contra; se corre igualmente para tener el numero puro atribuible y el desglose bloqueado-vs-escalado. 0 hipotesis nuevas (candidato ya contado en ddscale-v1). priorUniqueTrials=288: 286 + 2 de ddscale-v1. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 288,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt35-dd5-20",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30,
+        "ddScale": {
+          "startPct": 0.05,
+          "endPct": 0.2,
+          "minScale": 0
+        }
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

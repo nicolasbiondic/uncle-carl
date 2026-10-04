@@ -1,0 +1,17 @@
+.git
+.github
+node_modules
+data
+logs
+reports
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+!.env.example
+*.bak-*
+AUDITS.md
+OPEN.md
+HANDOFF.md
+docs/archive

@@ -1,0 +1,102 @@
+{
+  "name": "momentum-stop-sizing-v2",
+  "sleeve": "stocks",
+  "description": "Re-validation of momentum-stop-sizing-v1 (artifact ff70c47e, asOf pinned 2026-07-15) with the UPDATED data window through the latest alpaca_split 5m bars (2026-08-05+): the added three weeks contain the live period in which -$3,322 of momentum_stocks' -$4,806 exited via 4% stops (AAPL -1947 STOP_LOSS after 263h, GOOGL -1059 BROKER_STOP_LOSS after 50h, META -317). EVERYTHING else is FROZEN to v1: same universe/costs/fold geometry and the same acceptance gates including minExcessReturnVsBench 0 (full-exposure sleeve; NOT relaxed). Same 4 candidates differing ONLY in the hard stop (v1's declared cost cap of 4 candidates is retained — declared, not trimmed after results). These 4 effective configs were already run in v1 — per the ledger's identity rule a rerun on a longer window is an execution identity, not a new hypothesis; they add 0 new hypotheses and priorUniqueTrials=256 = v1's 252 + the 4 stop-axis candidates v1 itself introduced. Inventory incomplete, so complete=false and approval stays blocked by protocol regardless of gates. Pre-registered question: does v1's conclusion (entry-anchored fixed-4% amputates ~24.5pp of stitched return and 0.385 Sharpe while buying NO drawdown reduction over the active vol trail) hold with the updated window? Do NOT trim candidates after seeing results.",
+  "trialAccounting": { "priorUniqueTrials": 256, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_split",
+    "timeframe": "5m",
+    "universe": ["SPY", "QQQ", "IWM", "GLD", "AAPL", "MSFT", "NVDA", "META", "GOOGL", "AMZN"],
+    "refSymbol": "SPY",
+    "rthOnly": true,
+    "funding": false,
+    "barMinutes": 5,
+    "barMinutesEq": 18.4615384615
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2024-01-01",
+    "to": "2026-08-06",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 60
+  },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0 },
+    "stress": { "slippageBps": 5, "commissionBps": 2 }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent-fixed4",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "tsmTrail": { "kSigma": 3, "lookbackBars": 78, "minPct": 2, "maxPct": 8 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "no-stop",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "hardStop": { "mode": "none" },
+      "tsmTrail": { "kSigma": 3, "lookbackBars": 78, "minPct": 2, "maxPct": 8 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "vol-k3",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "hardStop": { "mode": "volScaled", "kSigma": 3, "lookbackBars": 78, "minPct": 2, "maxPct": 8 },
+      "tsmTrail": { "kSigma": 3, "lookbackBars": 78, "minPct": 2, "maxPct": 8 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "vol-k4",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "hardStop": { "mode": "volScaled", "kSigma": 4, "lookbackBars": 78, "minPct": 3, "maxPct": 12 },
+      "tsmTrail": { "kSigma": 3, "lookbackBars": 78, "minPct": 2, "maxPct": 8 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3
+  }
+}

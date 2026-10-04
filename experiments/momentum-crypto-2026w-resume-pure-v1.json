@@ -1,0 +1,103 @@
+{
+  "name": "momentum-crypto-2026w-resume-pure-v1",
+  "sleeve": "crypto",
+  "description": "C3 SHADOW-EQUITY RESUME del batch crypto-redesign-2026-09-26, pre-registrado 2026-09-26 ANTES de correr (contexto y criterio de ganador: ver momentum-crypto-2026w-control-pure-v1). HIPOTESIS: el problema del soft-DD no es el freno (relajarlo esta REFUTADO — breakers-v1 2026-09-13 destruyo 2022; ddScale REFUTADO 2026-09-25; gate BTC-SMA200 no robusto por folds 2026-09-24) sino la REGLA DE REANUDACION: con el libro plano la pausa solo levanta cuando decae el pico (half-life 30d) — 47 pausas, p50 2d / p90 13d / max 34d en el OOS 2021-26, y el vivo lleva desde el 10-sep sin operar. risk.shadowResume (nuevo, opt-in; ausente = byte-identico, fingerprints verdes): durante la pausa soft el engine mantiene una equity VIRTUAL de la cartera long que el ranking TSM elegiria (misma logica de slots via un segundo rank() con las tenencias virtuales, cada slot a notionalPctPerSlot, neto de costBpsPerSide=9 por lado virtual — el coste base del manifest; el medido vivo es ~7); la pausa levanta cuando la ESTRATEGIA vuelve a funcionar (equity virtual +recoverPct=3% desde el ancla de inicio de pausa, o por encima del pico pre-pausa) y el pico de referencia se re-ancla a la equity real del momento para que el pico viejo no re-arme el lockout. Hard-DD 20%, daily cap y loss-streak INTACTOS; solo pausas soft se levantan. recoverPct=3% pre-declarado (≈ un tercio del umbral soft: exige senal real sin esperar la recuperacion completa). Kernel y universo IDENTICOS a vt-35 en todo lo demas. CASO EN CONTRA (declarado antes de correr): (a) las pausas historicamente PROTEGIERON en agregado (durante ellas el universo EW8 cayo -5.9%, research-softdd-lockout R3) — reanudar antes puede re-exponer el libro en rallies bajistas de 2022 y empeorar maxDD/fold 0 (los gates y el criterio fold-0 deciden); (b) un rebote virtual del +3% puede ser ruido de un bear rally — la proteccion residual es que el libro re-entra con vt-35 y el hard-DD 20% intacto; (c) el coste estimado de 9bps/lado en la equity virtual es una aproximacion declarada (sin funding ni volTarget en el tracker). TRIAL ACCOUNTING: +1 hipotesis nueva (eje nuevo del simulador/engine). Base=295 (batch compartido, +3 total). priorUniqueTrials=295. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 295,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt35-resume3",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30,
+        "shadowResume": {
+          "recoverPct": 0.03,
+          "costBpsPerSide": 9
+        }
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

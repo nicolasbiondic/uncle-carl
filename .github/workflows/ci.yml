@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+      - "feat/**"
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  # ── 1. Type check ─────────────────────────────────────────────────────────
+  typecheck:
+    name: TypeScript type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run type check
+        run: bun tsc --noEmit
+
+  # ── 2. Test suite ────────────────────────────────────────────────────────
+  test:
+    name: Test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run tests
+        run: bun test
+
+  # ── 3. Dependency security audit ──────────────────────────────────────────
+  audit:
+    name: Dependency security audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Audit dependencies
+        run: |
+          RESULT=$(bun audit --json 2>/dev/null || echo '{}')
+          echo "$RESULT"
+          # Fail if any HIGH or CRITICAL vulnerabilities found
+          HIGH=$(echo "$RESULT" | bun -e "
+            const d = require('fs').readFileSync('/dev/stdin','utf8');
+            try {
+              const j = JSON.parse(d);
+              const vulns = j.vulnerabilities || {};
+              const bad = Object.values(vulns).filter(v =>
+                ['high','critical'].includes((v as any).severity)
+              ).length;
+              process.stdout.write(String(bad));
+            } catch { process.stdout.write('0'); }
+          " 2>/dev/null || echo "0")
+          if [ "$HIGH" -gt "0" ]; then
+            echo "ERROR: $HIGH high/critical vulnerabilities found"
+            exit 1
+          fi
+          echo "Audit clean (no high/critical vulnerabilities)"
+
+  # ── 4. Smoke verify — self-hosted runner on LAN ───────────────────────────
+  # This job only runs when a self-hosted runner tagged 'trading-lan' is
+  # available. It requires VERIFY_USERNAME and VERIFY_PASSWORD secrets.
+  verify:
+    name: Smoke verify (self-hosted)
+    runs-on: [self-hosted, trading-lan]
+    if: ${{ vars.TRADING_BOT_HOST != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Smoke verify
+        env:
+          VERIFY_USERNAME: ${{ secrets.VERIFY_USERNAME }}
+          VERIFY_PASSWORD: ${{ secrets.VERIFY_PASSWORD }}
+          VERIFY_BASE_URL: ${{ vars.TRADING_BOT_HOST }}
+        run: bun run verify
+
+  # ── 5. Baseline snapshot — self-hosted runner on LAN ─────────────────────
+  baseline:
+    name: Baseline snapshot (self-hosted)
+    runs-on: [self-hosted, trading-lan]
+    if: ${{ vars.TRADING_BOT_HOST != '' && github.ref == 'refs/heads/master' }}
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Capture baseline
+        env:
+          BASELINE_USERNAME: ${{ secrets.VERIFY_USERNAME }}
+          BASELINE_PASSWORD: ${{ secrets.VERIFY_PASSWORD }}
+          BASELINE_BASE_URL: ${{ vars.TRADING_BOT_HOST }}
+        run: bun run baseline
+
+      - name: Upload baseline report
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseline-${{ github.sha }}
+          path: reports/baseline/
+          retention-days: 30

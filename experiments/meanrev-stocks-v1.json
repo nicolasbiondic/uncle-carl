@@ -1,0 +1,76 @@
+{
+  "name": "meanrev-stocks-v1",
+  "sleeve": "meanrev",
+  "description": "First rigorous nested/purged protocol run for the live meanrev_stocks sleeve (Connors RSI2+SMA200 daily). Universe: MEANREV_UNIVERSE copied verbatim from src/strategies/meanrev/MeanRevEngine.ts:226 (32 symbols, disjoint from momentum_stocks by design — shared Alpaca wallet); refSymbol SPY is benchmark/timeline only and is NOT traded. Incumbent candidate = production DEFAULT_MEANREV_CONFIG (entryRsi 5, smaLong 200, smaExit 5, timeStop 10, 5 slots x 10%) plus 3 moderate alternates, all counted in trial accounting. priorUniqueTrials=9 is the documentable LOWER BOUND of prior meanrev hypotheses (incumbent replay in backtest-meanrev.ts; 2 sizing variants in backtest-meanrev-wide.ts; MR-short; crypto-1h MR; slotPct sweep 0.10/0.20/0.30/0.40 per AUDITS 2026-07-27) — inventory incomplete, so complete=false and approval stays blocked by protocol. asOf=latest because HON daily bars end 2026-07-10 while the rest of the universe reaches 2026-07-31. Acceptance uses minExcessSharpeVsBench (NOT minExcessReturnVsBench): the sleeve deploys at most ~50% notional on dip days, so the fair benchmark-relative vara is risk-adjusted (see AcceptanceConfig in scripts/walk-forward.ts).",
+  "trialAccounting": { "priorUniqueTrials": 9, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "ABBV", "AVGO", "BAC", "CAT", "COST", "CVX", "DIS", "GE", "HD", "HON",
+      "JNJ", "JPM", "KO", "LLY", "MA", "MCD", "MRK", "NFLX", "NKE", "ORCL",
+      "PG", "QCOM", "UNH", "V", "WMT", "XLE", "XLF", "XLI", "XLP", "XLV",
+      "XOM", "SLV"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2018-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 6,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 365
+  },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0 },
+    "stress": { "slippageBps": 5, "commissionBps": 2 }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 1,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent",
+      "cadenceMin": 1440,
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    },
+    {
+      "name": "alt-entry10",
+      "cadenceMin": 1440,
+      "meanrev": { "entryRsi": 10, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    },
+    {
+      "name": "alt-timestop5",
+      "cadenceMin": 1440,
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 5, "maxPositions": 5, "slotPct": 0.1 }
+    },
+    {
+      "name": "alt-exit10",
+      "cadenceMin": 1440,
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 10, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0.5,
+    "maxDrawdown": 0.25,
+    "minTotalReturn": 0,
+    "minExcessSharpeVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 100,
+    "stressMinSharpe": 0,
+    "stressMaxDrawdown": 0.3,
+    "stressMinTotalReturn": -0.1,
+    "looMinSharpe": 0,
+    "looMaxDrawdown": 0.3,
+    "looMinTotalReturn": -0.1
+  }
+}

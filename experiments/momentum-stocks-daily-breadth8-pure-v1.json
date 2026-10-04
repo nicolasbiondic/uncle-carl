@@ -1,0 +1,112 @@
+{
+  "name": "momentum-stocks-daily-breadth8-pure-v1",
+  "sleeve": "stocks",
+  "description": "Cadena PURA de s8-breadth (8 slots x 0.125, bruto 1.0x), registrada 2026-09-25 tras el run mixto momentum-stocks-daily-breadth-v1 (artefacto e38301ec...: cadena MEZCLADA — fold 0/test=s8-breadth, 1/test=s4-control, 2/test=s8-breadth; s8-breadth gana 2/3 outer y 4/9 inner (mas que s6-breadth con 2/9), aunque la DSR mediana pooled de los 9 folds internos favorece al control (0.0549) sobre s6 (0.0384) y s8 (0.0272) — el caso-en-contra declarado (slots 5-8 son tendencias mas debiles por construccion del ranking TSM) se confirma en la mediana pero NO en el conteo de victorias por fold, que es lo que efectivamente decide la seleccion outer). Candidato IDENTICO a s8-breadth de momentum-stocks-daily-breadth-v1 (identidad de ejecucion, 0 hipotesis nuevas). Todo lo demas (data/ventana/costes/gates) copiado verbatim del control h126-pure. priorUniqueTrials=272 (268 cierre stocks-horizon-daily-2026-09-24 + 2 daily-exits-v1 + 2 daily-breadth-v1). complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 272,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-24",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "s8-breadth",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.125,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 0,
+      "lookbackDays": 126,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "tsmTrail": {
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

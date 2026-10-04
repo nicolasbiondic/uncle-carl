@@ -1,0 +1,58 @@
+# ══════════════════════════════════════════════
+# systemd-user unit for Uncle Carl trading bot.
+# Install with: scripts/install-systemd.sh
+# ══════════════════════════════════════════════
+
+[Unit]
+Description=Uncle Carl Trading Bot (paper)
+After=network-online.target
+Wants=network-online.target
+# Restart throttle: ≤5 restarts within 60s, otherwise unit goes to `failed`.
+# StartLimit* belongs in [Unit], not [Service] — systemd silently ignores it
+# in [Service] (logged as "Unknown key name").
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=__ROOT__
+# __BUN__ / __ROOT__ are substituted by scripts/install-systemd.sh at install
+# time (bun is auto-detected: PATH, mise shim, or ~/.bun/bin) so the unit never
+# hardcodes a bun path that a version-manager move can break (203/EXEC).
+ExecStart=__BUN__ run src/index.ts
+StandardOutput=append:__ROOT__/logs/bot.log
+StandardError=append:__ROOT__/logs/bot.log
+
+# Restart policy: come back from ANY exit, clean or not. `on-failure` left a
+# hole (2026-08-06 audit): a clean exit(0) — an unhandled shutdown path, a
+# library calling process.exit(0), an operator's stray SIGTERM to the child —
+# left the bot down with systemd considering that outcome correct. A trading
+# bot with open positions has no "correct" reason to exit on its own; if it
+# does, come back and let the reconcilers sort out the state.
+#
+# This pair is also the second half of the crash-and-restart policy
+# (src/index.ts uncaughtException/unhandledRejection handlers, 2026-09-07):
+# a process in an unknown state must NOT keep managing money — it pages,
+# flushes, and exit(1)s, and THIS unit brings back a clean process.
+# RestartSec=10s keeps a persistently-bad state (bad config, dead broker
+# keys) from hot-looping; the StartLimit* throttle above parks the unit as
+# `failed` if it still crashes 5× in 60s.
+Restart=always
+RestartSec=10s
+
+# Resource limits: paper bot is light, but cap to catch runaways.
+# Audit fix (2026-05-10): bumped from 512M after one OOM kill on 2026-05-09.
+# Real RSS at steady state ~80-130M; the spike was likely from a stale
+# HistoricalStore query buffer. MemoryHigh signals throttling before hard kill.
+MemoryHigh=768M
+MemoryMax=1G
+CPUQuota=80%
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=__ROOT__/data __ROOT__/logs
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

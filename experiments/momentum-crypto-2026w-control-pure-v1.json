@@ -1,0 +1,99 @@
+{
+  "name": "momentum-crypto-2026w-control-pure-v1",
+  "sleeve": "crypto",
+  "description": "C0 CONTROL del batch crypto-redesign-2026-09-26, pre-registrado 2026-09-26 ANTES de correr ningun trial. Motivo del batch (puntos 2 y 3 del dueno): momentum_crypto (vt-35 vivo, 8 majors USDT, 4x0.375) va MAL en real: +14.1% desde el 18-jul vs BTC +29.7%, -11.2% en los ultimos 30d vs BTC +6.4%, y sin abrir posiciones desde ~10-sep por el lockout del soft-DD (13.5% > 10%, libro plano, el DD solo cierra por decaimiento del pico). El dueno exige redisenar para que el sleeve OPERE — prohibido apagarlo. Este manifest re-corre el incumbent vivo EXACTO (vt-35, cadena pura de 1 candidato) sobre la ventana NUEVA 2021-01-01..asOf latest (~2026-09-26), que incluye el tramo jul-sep 2026 donde el vivo fue mal — el numero base contra el que se miden C1 (universe16), C2 (multi-horizonte) y C3 (shadow-equity resume), todos con mismo asOf/ventana/costes/gates. CRITERIO DE GANADOR ROBUSTO (pre-declarado, identico para C1/C2/C3): cadena pura con Sharpe > C0 y maxDD <= C0 + 2pp, >= 2/3 folds con PSR > 0.5, fold 0 (cubre 2022-23) no peor que C0 en retorno, y sin fallar ningun gate que C0 pase. Se reporta ademas por fold: dias con entradas bloqueadas (blockedTicks, bucket 'soft drawdown') y duracion maxima de episodio de pausa — el objetivo operativo es que el sleeve no vuelva a pasar semanas sin operar. Si >= 2 candidatos ganan parcialmente, segunda ronda obligatoria con la combinacion como cadena pura (+1 trial). TRIAL ACCOUNTING: re-run del candidato vt-35 (ya contado en sizing-v1/v2/v3/vt35-pure-v1) sobre ventana mas larga = identidad de ejecucion, +0 hipotesis. Base = 295, el total corriente del ledger tras el batch meanrev-crypto-2026-09-26 (292+3). priorUniqueTrials=295. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 295,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt-35",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

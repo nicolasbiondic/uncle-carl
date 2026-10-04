@@ -1,0 +1,112 @@
+{
+  "name": "momentum-stocks-daily-k8s8-pure-v1",
+  "sleeve": "stocks",
+  "description": "Combinacion post-hoc DECLARADA (2026-09-25, director) de los dos ejes de R4, pre-registrada ANTES de correr: k8-widest (exits-v1, 322fa1ed: Sharpe 1.18 pero DD 28.6%) mejora retorno/Sharpe y empeora DD; s8-breadth (70ac1519: DD 17.4% pero Sharpe 1.00) hace lo contrario. Hipotesis: son complementarios — stops anchos dejan correr las tendencias (turnover 15-23x -> 3-5x) y 8 slots de 1/8 diversifican la cola que los stops anchos dejan pasar. Case-against: la seleccion de ambos ejes ya se miro en la misma ventana (post-hoc => +1 trial honesto); slots 5-8 son tendencias mas debiles; DD de k8 viene de pocos nombres grandes que la amplitud diluye solo en parte. Criterio declarado: cadena pura mejora al control vivo 77372b9c (Sharpe 1.07, maxDD 24.1%) en Sharpe Y maxDD, sin gates nuevos fallados, LOO peor >= 0.92. 1 candidato => cadena pura por construccion.",
+  "trialAccounting": {
+    "priorUniqueTrials": 272,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-24",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "k8-s8",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.125,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 0,
+      "lookbackDays": 126,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

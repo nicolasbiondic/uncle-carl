@@ -1,0 +1,152 @@
+{
+  "name": "momentum-crypto-marketgate-v1",
+  "sleeve": "crypto",
+  "description": "Eje GATE DE REGIMEN DE MERCADO (BTC cierre diario UTC < SMA200 => bloquear SOLO entradas nuevas; salidas intactas), pre-registrado 2026-09-24 ANTES de correr. Motivacion operativa: momentum_crypto (y USDC) llevan ~2 semanas con entradas bloqueadas por soft-DD (13.8% vs 10%): 372 de 388 ticks bloqueados del 09-09 al 09-24; con el libro plano el DD solo baja por el decaimiento del pico (half-life 30d) => lockout minimo de ~16 dias sin rebote posible, path-dependent de la PROPIA equity. Hipotesis (a priori, clasica en crypto): el dano de 2022 que el soft-DD evita (breakers-v1, 4f1665ce: quitarlo o relajarlo destruye 2022 OOS) venia de entradas en rallies bajistas; un filtro de MERCADO (BTC<SMA200 diaria, causal: solo dias cerrados) daria esa proteccion sin el lockout path-dependent. NO se relaja el umbral del soft-DD en ningun candidato. TODO congelado al incumbent vivo vt-35 (vt35-pure-v1, 8b673e8a) salvo el eje: mismo dataHash-objetivo (asOf 2026-07-15 pinned), mismas ventanas/costes/ledger/gates. 3 candidatos declarados: vt-35 (control = incumbent vivo exacto, cadena pura por reseleccion trivial si gana 3/3), vt35-btc200 (gate añadido, soft-DD INTACTO), vt35-btc200-nosoftdd (gate añadido, softDrawdownPct 1.0 = soft-DD desactivado como ablacion de SUSTITUCION, hard-DD 20% y daily cap y loss-streak intactos). Prediccion falsable: si el gate de mercado sustituye la proteccion de 2022, nosoftdd mantiene maxDD<=0.45 y stress/LOO en gate CON mas dias desplegados que el control; si 2022 se destruye (el patron breakers-v1), nosoftdd queda refutado y solo puede sobrevivir vt35-btc200. EN CONTRA (declarado): (1) el filtro por simbolo px>MA30 del kernel ya captura regimen — el gate puede ser redundante y solo restar; (2) BTC<SMA200 retrasa la entrada al inicio de nuevos bull runs (arranque 2023, rebotes post-crash), exactamente los tramos que pagan el sleeve; (3) en 2022 el soft-DD ya protegia — añadir el gate encima puede no mejorar nada y quitar el soft-DD apoyandose en el gate puede repetir breakers-v1; (4) son mas trials sobre una ventana que solo certifica SR>=0.81 (certifiableSharpeAtPsr95), riesgo de mineria reconocido. 2 hipotesis nuevas (vt35-btc200, vt35-btc200-nosoftdd); el control es identidad de ejecucion (+0). priorUniqueTrials=284 (misma base que sizing-v3/vt35-pure-v1: 283 + 1 sharpe-off). complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 284,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt-35",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "vt35-btc200",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "marketTrend": {
+        "symbol": "BTC/USD",
+        "maDays": 200
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "vt35-btc200-nosoftdd",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "marketTrend": {
+        "symbol": "BTC/USD",
+        "maDays": 200
+      },
+      "risk": {
+        "peakHalfLifeDays": 30,
+        "softDrawdownPct": 1
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

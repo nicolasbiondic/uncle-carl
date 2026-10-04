@@ -1,0 +1,63 @@
+{
+  "name": "momentum-stocks-v1",
+  "sleeve": "stocks",
+  "description": "Protocol-validation run for the TSM stocks sleeve. Incumbent config only; no optimization yet. minExcessReturnVsBench added 2026-08-02 (full-exposure sleeve, so excess RETURN vs SPY buy-and-hold is the fair vara); it applies from the NEXT protocol run — the existing 5m artifact predates the gate and was deliberately not re-run.",
+  "trialAccounting": { "priorUniqueTrials": 251, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_split",
+    "timeframe": "5m",
+    "universe": ["SPY", "QQQ", "IWM", "GLD", "AAPL", "MSFT", "NVDA", "META", "GOOGL", "AMZN"],
+    "refSymbol": "SPY",
+    "rthOnly": true,
+    "funding": false,
+    "barMinutes": 5,
+    "barMinutesEq": 18.4615384615
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2024-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 60
+  },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0 },
+    "stress": { "slippageBps": 5, "commissionBps": 2 }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "tsmTrail": { "kSigma": 3, "lookbackBars": 78, "minPct": 2, "maxPct": 8 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3
+  }
+}

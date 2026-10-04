@@ -1,0 +1,128 @@
+{
+  "name": "momentum-crypto-usdc-redesign-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTRO 2026-09-26 (U1 paso 3), escrito ANTES de correr ningun trial, DESPUES de que el control puro de la config viva USDC (momentum-crypto-usdc-control-pure-v1, artefacto 4b403501) NO VALIDARA: stitched +117.1% / Sharpe 0.60 / maxDD 71.2% / outerPSR 0.884 / exceso vs BTC -60pp / break-even 4.2 bps; falla 9 de 17 gates (maxDrawdown, minExcessReturnVsBench, los 3 stress, looMaxDD, looMinTotalReturn, minOuterPsr, minBreakEvenSlippageBps, ademas del maxDisplacementShare estructural). REGLA DEL DUENO: el sleeve se REDISENA para seguir operando — apagarlo/pausarlo no es una opcion ni una conclusion admisible. 4 candidatos declarados de antemano, cada uno UN eje sobre el control exacto (mismas 13 bases proxy USDT mainnet, mismos costes reales medidos 17+3 base / 60+5 stress, misma geometria 3x3 purge 0.25y warmup 45d, asOf PINNEADO 2026-09-26T16:00:00.001Z = la resolucion exacta del control para comparabilidad fold-a-fold): (1) usdc-control — identidad de ejecucion del control (+0, ancla de la seleccion inner); (2) usdc-vt35 — volTarget {annualizedPct 35, lookbackBars 720, minScale 0.33, maxScale 1.5}, el eje que GANO en momentum_crypto (artefacto 8b673e8a: DD 49.2->36.9, stress y LOO dentro de gates); HIPOTESIS: el fallo dominante del control es tamano-en-vol-alta (DD 71%, stress-DD 87%, LOO-DD 86%) y el volTarget lo ataca directamente normalizando el riesgo-$ por slot; ademas sube el break-even al recortar notional cuando la vol es alta (menos friccion por unidad de equity); (3) usdc-s4 — 4 slots x 0.25 al mismo bruto 1.0x; HIPOTESIS: con 13 nombres, 3 slots concentra (LOO: quitar BTC voltea el stitched a -69%); un cuarto slot diversifica el libro y baja el DD idiosincratico sin subir el bruto; (4) usdc-mh7-14-28 — lookbackDaysList [7,14,28] (media de los retornos a 3 horizontes, TSMConfig.lookbackDaysList ya soportado; Hurst/Ooi/Pedersen 2017); HIPOTESIS: la senal blend es menos ruidosa que la de 14d puro, reduce el churn de desplazamiento (66% de los cierres del control) y con 20 bps/lado el coste de rotacion es el primer orden. CASE-AGAINST declarado por candidato, no se argumenta en contra post-hoc: vt35 — el retorno del sleeve esta concentrado en exactamente los tramos de vol alta que downsizea (en USDT recorto el retorno 386->233pp) y el exceso vs BTC del control ya es -60pp: recortar gross puede dejar el exceso aun mas negativo; s4 — el 4o nombre por ranking es por construccion tendencia mas debil, y en crypto las altcoins correlacionan ~0.8 con BTC en crash: la diversificacion real puede ser ilusoria mientras el slot extra anade friccion; mh — promediar horizontes DILUYE la senal rapida de 7d con la lenta de 28d y puede perderse las rotaciones altcoin enteras que son la fuente del retorno del sleeve; nunca se ha corrido multi-horizonte en crypto (en stocks blend3 GANO, pero sobre 63/126/252 sesiones — regimen distinto). CRITERIO DE GANADOR ROBUSTO (declarado antes de correr): la cadena PURA del candidato mejora al control puro (4b403501) en Sharpe Y maxDD simultaneamente, no falla ningun gate que el control pase, y mantiene >= 2 de 3 folds con PSR > 0.5; si la cadena outer sale MEZCLADA se corre la cadena pura del mejor alternativo (1 candidato, +0 trials, regla estandar del protocolo); si NINGUN candidato logra el criterio en esta ronda, se pre-registra una SEGUNDA ronda combinando las mejoras parciales observadas (p.ej. vt35+s4) ANTES de concluir — el sleeve no se queda sin config. TRIAL ACCOUNTING: +3 hipotesis nuevas (vt35-sobre-USDC13, s4-sobre-USDC13, mh7-14-28-sobre-USDC13 — ninguna es identidad de ejecucion: el vt35 de 8b673e8a corre sobre 8 simbolos 4x0.375 a costes 5/4); usdc-control es identidad del control (+0). priorUniqueTrials=296 (295 del ledger + 1 del control USDC registrado hoy); el total pasa a 299. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 296,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "ADA/USD",
+      "AVAX/USD",
+      "BCH/USD",
+      "BNB/USD",
+      "BTC/USD",
+      "DOGE/USD",
+      "ETH/USD",
+      "LINK/USD",
+      "LTC/USD",
+      "NEAR/USD",
+      "SOL/USD",
+      "UNI/USD",
+      "XRP/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-09-26T16:00:00.001Z",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-09-27",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 17,
+      "commissionBps": 3
+    },
+    "stress": {
+      "slippageBps": 60,
+      "commissionBps": 5
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "usdc-control",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.3333333333333333,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 3,
+      "maxShorts": 0,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "usdc-vt35",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.3333333333333333,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 3,
+      "maxShorts": 0,
+      "volTarget": { "annualizedPct": 35, "lookbackBars": 720, "minScale": 0.33, "maxScale": 1.5 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "usdc-s4",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.25,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "usdc-mh7-14-28",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.3333333333333333,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 3,
+      "maxShorts": 0,
+      "lookbackDaysList": [7, 14, 28],
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

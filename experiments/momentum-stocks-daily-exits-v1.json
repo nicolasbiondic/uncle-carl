@@ -1,0 +1,176 @@
+{
+  "name": "momentum-stocks-daily-exits-v1",
+  "sleeve": "stocks",
+  "description": "R4 eje A — ANCHO DE SALIDA (tsmTrail + hardStop volScaled, ambos siempre iguales) sobre el kernel diario h126-ma200 EXACTO que hoy corre en vivo (control = experiments/momentum-stocks-horizon-h126-pure-v1.json, artefacto 77372b9c...: +306.3%/Sharpe 1.07/DD 24.1%/PSR 0.997/17-17 gates, LOO peor 0.92 sin NVDA, turnover 15-23x/ano). Pre-registrado 2026-09-25 ANTES de correr; misma data/ventana/costes/gates que el control, copiados verbatim. 3 candidatos declarados: k3 = control identico (kSigma 3, lookbackBars 20, minPct 2, maxPct 12 — identidad de ejecucion, 0 hipotesis nuevas), k5 (5, 20, 3, 20), k8 (8, 20, 5, 30). HIPOTESIS: un stop diario de 3 sigma (~3-4.5% en megacaps/ETFs) es ruido para una tendencia de 126 sesiones; salidas mas anchas reducen la rotacion (menos STOP_LOSS/TRAIL_STOP) y dejan correr las colas derechas — la literatura TSM (Moskowitz-Ooi-Pedersen 2012, Jegadeesh-Titman 1993) no usa stops intradiarios sobre horizontes de meses. CASO EN CONTRA (declarado antes de mirar resultados): los stops protegieron en 2020 y 2022 (folds con drawdowns marcados); ensanchar el stop hace que cada disparo pierda MAS por operacion aunque disparen menos veces (el gate de maxDD decide, no el conteo de stops); la salida por senal (px<MA200 o r126<-2%) es lenta y en un regimen adverso el trail/hardStop podrian ser la unica proteccion activa entre decisiones diarias. Criterio de ganador robusto (declarado antes de correr): la cadena PURA del alternativo mejora al control en Sharpe Y maxDD, no falla ningun gate que el control pase, foldPSR no peor, y LOO peor no inferior a 0.92. priorUniqueTrials=268 (cierre del batch stocks-horizon-daily-2026-09-24). k5 y k8 son 2 hipotesis nuevas; k3 es identidad (+0). complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 268,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-24",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "k3-control",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.25,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "lookbackDays": 126,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "tsmTrail": {
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "k5-wide",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.25,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "lookbackDays": 126,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 5,
+        "lookbackBars": 20,
+        "minPct": 3,
+        "maxPct": 20
+      },
+      "tsmTrail": {
+        "kSigma": 5,
+        "lookbackBars": 20,
+        "minPct": 3,
+        "maxPct": 20
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "k8-widest",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.25,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "lookbackDays": 126,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

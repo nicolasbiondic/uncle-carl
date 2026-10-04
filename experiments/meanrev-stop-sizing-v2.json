@@ -1,0 +1,85 @@
+{
+  "name": "meanrev-stop-sizing-v2",
+  "sleeve": "meanrev",
+  "description": "Re-validation of meanrev-stop-sizing-v1 (artifact 9dcd9781) with the UPDATED data window: v1's asOf resolved to 2026-07-11 (its data edge); this run extends through the latest alpaca_wide dailies (2026-08-05+), covering the 30 live days in which -$3,322 of momentum_stocks' losses exited via 4% stops and meanrev traded live at WR 72%. EVERYTHING else is FROZEN to v1: same 32-symbol universe, SPY benchmark, same fold geometry/purge/warmup, same base/stress costs, same acceptance gates including minExcessSharpeVsBench (NOT relaxed). Same 5 candidates differing ONLY in the hard stop. These 5 effective configs were already run in v1 — per the ledger's identity rule (a rerun on a longer window is an execution identity, not a new hypothesis) they add 0 new hypotheses; priorUniqueTrials=18 = v1's 13 + the 5 stop-axis candidates v1 itself introduced. Inventory still incomplete, so complete=false and approval stays blocked by protocol regardless of gates. The pre-registered question: does v1's conclusion (fixed-4% is the WORST stop on this axis; no stop config passes the benchmark gate) hold with three more weeks of data? Do NOT trim candidates after seeing results.",
+  "trialAccounting": { "priorUniqueTrials": 18, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "ABBV", "AVGO", "BAC", "CAT", "COST", "CVX", "DIS", "GE", "HD", "HON",
+      "JNJ", "JPM", "KO", "LLY", "MA", "MCD", "MRK", "NFLX", "NKE", "ORCL",
+      "PG", "QCOM", "UNH", "V", "WMT", "XLE", "XLF", "XLI", "XLP", "XLV",
+      "XOM", "SLV"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2018-01-01",
+    "to": "2026-08-06",
+    "outerFoldCount": 6,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 365
+  },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0 },
+    "stress": { "slippageBps": 5, "commissionBps": 2 }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 1,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent-fixed4",
+      "cadenceMin": 1440,
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    },
+    {
+      "name": "no-stop",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "none" },
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    },
+    {
+      "name": "vol-k2",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "volScaled", "kSigma": 2, "lookbackBars": 20, "minPct": 2, "maxPct": 12 },
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    },
+    {
+      "name": "vol-k3",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "volScaled", "kSigma": 3, "lookbackBars": 20, "minPct": 2, "maxPct": 12 },
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    },
+    {
+      "name": "vol-k4",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "volScaled", "kSigma": 4, "lookbackBars": 20, "minPct": 2, "maxPct": 12 },
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0.5,
+    "maxDrawdown": 0.25,
+    "minTotalReturn": 0,
+    "minExcessSharpeVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 100,
+    "stressMinSharpe": 0,
+    "stressMaxDrawdown": 0.3,
+    "stressMinTotalReturn": -0.1,
+    "looMinSharpe": 0,
+    "looMaxDrawdown": 0.3,
+    "looMinTotalReturn": -0.1
+  }
+}

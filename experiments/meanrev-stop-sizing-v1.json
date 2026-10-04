@@ -1,0 +1,85 @@
+{
+  "name": "meanrev-stop-sizing-v1",
+  "sleeve": "meanrev",
+  "description": "Stop-sizing sweep for the live meanrev_stocks sleeve (OPEN.md P2: stopLossPct 4 constant across sleeves whose horizons differ 10x). Everything except the hard-stop axis is FROZEN to experiments/meanrev-stocks-v1.json: same 32-symbol MEANREV_UNIVERSE, SPY benchmark-only refSymbol, same window/folds/purge/warmup, same base/stress costs, same acceptance gates including minExcessSharpeVsBench (NOT relaxed). All 5 candidates share the production Connors params (entryRsi 5, smaLong 200, smaExit 5, timeStop 10, 5 slots x 10%) and differ ONLY in the hard stop: incumbent (ABSENT hardStop = ledger fixed 4%, matching live AccountManager.checkAllStopLoss), no-stop (canonical Connors: time-stop only — the hypothesis to falsify is that the fixed stop destroys the edge by firing against the post-crash-entry thesis), and three vol-scaled entry-anchored variants (kSigma 2/3/4 x realized sigma(daily) over 20 sessions, clamped 2..12%, EXACT production trailPctFromVol formula imported from MomentumEngine — anchored at entry, no ratchet). priorUniqueTrials=13 is the documentable LOWER BOUND: the 9 inventoried behind meanrev-stocks-v1 plus that manifest's own 4 candidates (artifact 7fd05325, AUDITS 2026-08-02). Inventory still incomplete, so complete=false and approval stays blocked by protocol regardless of gates. This sweep is trial-mining by construction — that is what trialAccounting and the corrected DSR are for; do NOT trim candidates after seeing results.",
+  "trialAccounting": { "priorUniqueTrials": 13, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "ABBV", "AVGO", "BAC", "CAT", "COST", "CVX", "DIS", "GE", "HD", "HON",
+      "JNJ", "JPM", "KO", "LLY", "MA", "MCD", "MRK", "NFLX", "NKE", "ORCL",
+      "PG", "QCOM", "UNH", "V", "WMT", "XLE", "XLF", "XLI", "XLP", "XLV",
+      "XOM", "SLV"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2018-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 6,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 365
+  },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0 },
+    "stress": { "slippageBps": 5, "commissionBps": 2 }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 1,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent-fixed4",
+      "cadenceMin": 1440,
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    },
+    {
+      "name": "no-stop",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "none" },
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    },
+    {
+      "name": "vol-k2",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "volScaled", "kSigma": 2, "lookbackBars": 20, "minPct": 2, "maxPct": 12 },
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    },
+    {
+      "name": "vol-k3",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "volScaled", "kSigma": 3, "lookbackBars": 20, "minPct": 2, "maxPct": 12 },
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    },
+    {
+      "name": "vol-k4",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "volScaled", "kSigma": 4, "lookbackBars": 20, "minPct": 2, "maxPct": 12 },
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0.5,
+    "maxDrawdown": 0.25,
+    "minTotalReturn": 0,
+    "minExcessSharpeVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 100,
+    "stressMinSharpe": 0,
+    "stressMaxDrawdown": 0.3,
+    "stressMinTotalReturn": -0.1,
+    "looMinSharpe": 0,
+    "looMaxDrawdown": 0.3,
+    "looMinTotalReturn": -0.1
+  }
+}

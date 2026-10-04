@@ -1,0 +1,79 @@
+{
+  "name": "momentum-crypto-displacement-v1",
+  "sleeve": "crypto",
+  "description": "Slot-displacement/hysteresis axis for the TSM crypto sleeve, pre-registered 2026-09-07 BEFORE any run, first consumer of the evidence gates that landed in scripts/walk-forward.ts the same day (outer PSR / per-fold PSR / turnover / displacement share / break-even curve). Weakness attacked: measured friction is ~22%/yr of equity at base costs, and part of it is displacement churn — an open slot gets evicted because a marginally stronger signal wants it, re-paying the full round trip for a ranking difference that is often noise (same churn class documented at registration of cooldown-v1: SOL/USDC stop 10:32 -> re-entry 11:24 same day; stock twin GLD 5 entries in 14 days). Hypothesis: slotHysteresis=true (a displacing signal must clear a hysteresis band before evicting an open position — axis shipped by the simulator stream) cuts turnover and displacement closes with at-worst-neutral risk-adjusted return. Declared case AGAINST, stated up front: displacement is how the book rotates into accelerating trends; hysteresis makes the book stickier, holds decaying positions longer in fast alt rotations (2021), and the sleeve's OOS return is concentrated in exactly those rotations — if return collapses under hysteresis, that is the finding, do NOT trim candidates. NEW evidence gates and why each threshold, all declared as hypotheses before any run: minOuterPsr 0.95 (autocorr-penalized PSR of the stitched OOS daily series vs SR 0 — the outer verdict finally reads the significance statistic the inner selection already used; nothing weaker deserves the word certified), minFoldsPsrAbove {0.5, 2} (at least 2 of 3 outer folds must individually carry PSR >= 0.5 — one spectacular fold may no longer sustain the whole plane), minBreakEvenSlippageBps 20 (first Sharpe<=0 crossing of the new 0/2/5/10/20/30 bps curve must sit at or beyond 4x base slippage; this replaces reliance on the single x2 stress point, which is known-chaotic here — raising slippage 5->10 bps has RAISED return in this sim), maxDisplacementShare 0.35 (at most 35% of closes may be displacement evictions; above that the strategy is mostly trading its own ranking noise), maxTurnoverAnnual 150 declared as HYPOTHESIS not calibration: measured friction ~22%/yr divided by ~9 bps per side of base cost implies the incumbent turns over roughly 240x equity/yr; 150x/yr is one full rotation of the 1.5x-gross book per week (2 x 1.5 x 52 = 156), the fastest cadence still compatible with a monthly-scale TSM thesis. The incumbent's own measured turnover was deliberately NOT used to set the threshold (a gate anchored to the incumbent is vacuous for it); the incumbent may well FAIL this gate — that too is a pre-registered finding. Both candidates face identical gates. EVERYTHING else FROZEN to experiments/momentum-crypto-v1.json: same 8-symbol universe, window 2021-01-01..2026-07-15 asOf-pinned, 3x3 purged folds, costs base 5/4 stress 10/8, real settled funding, BTC B&H benchmark, DD/LOO gates as in sizing-v1. trialAccounting arithmetic, documented in full: the strict ledger-identity chain gives 265 prior unique crypto hypotheses = 251 (legacy v7 grid) + 1 (crypto-v1 incumbent) + 5 (thresholds-v1 variants; its incumbent-e5x2 was a rerun) + 2 (shorts-v1) + 2 (sizing-v1) + 2 (e8x2-sizing-v1) + 2 (cooldown-v1), incumbent reruns adding 0 per the ledger identity rule. Declared priorUniqueTrials=271 = 265 + 6, a deliberate over-floor per the 2026-09 protocol audit that re-counts the six sizing/e8x2/cooldown variants once more: priorUniqueTrials is a DSR-deflation input, so overcounting can only TIGHTEN the bar, and the inventory is incomplete either way. This manifest introduces 1 new hypothesis (no-displacement); incumbent is an execution-identity rerun. Inventory incomplete, so complete=false and approval stays blocked by protocol regardless of gates.",
+  "trialAccounting": { "priorUniqueTrials": 271, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": { "slippageBps": 5, "commissionBps": 4 },
+    "stress": { "slippageBps": 10, "commissionBps": 8 }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "no-displacement",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "slotHysteresis": true,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": { "threshold": 0.5, "count": 2 },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

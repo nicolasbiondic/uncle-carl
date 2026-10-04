@@ -1,0 +1,65 @@
+{
+  "name": "meanrev-control-pure-v1",
+  "sleeve": "meanrev",
+  "description": "Hypothesis #0 from D-research-map.md section 6: obligatory pure control before interpreting any other meanrev axis. ONE candidate, the LIVE meanrev_stocks config verbatim (src/index.ts ~1006-1037 / DEFAULT_MEANREV_CONFIG): Cutler RSI2 entry<5 (rsiMethod/deterministicTieBreak both UNSET, matching live's own unset defaults — cutler, non-deterministic list-order tie-break), close>SMA200, exit close>SMA5, timeStopDays 10, 5 slots x 10% of baseUsd, hard stop volScaled {kSigma:3, lookbackBars:20, minPct:2, maxPct:12} (owner override 2026-08-28, verbatim the vol-k3 candidate of locked artifact 9dcd9781 / re-confirmed ad634c7b). NOTE on maxGrossExposureMult: live also sets MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT=0.5 (slotPct*maxPositions), but scripts/walk-forward.ts's validateCandidate FORBIDS that key on meanrev candidates (section 3 of the research map: 'maxGrossExposureMult solo momentum aunque el motor meanrev ya lo soporta') because it is a redundant guard already implied by maxPositions*slotPct=0.5x with no per-day compounding in this daily sim — omitting it changes nothing behaviorally, so this candidate is still a byte-exact economic replica of the live sleeve. Window: from 2018-01-01 to 2026-08-06 (HON's alpaca_wide/1d tail stops 2026-08-06; asOf=latest resolves later for the other 31 symbols+SPY but window.to caps every fold there, per generateFolds' min(window.to, asOfMs) — the SAME cap experiments/meanrev-stop-sizing-v2.json (repaired rerun, artifact ad634c7b) already used). Same 32-symbol MEANREV_UNIVERSE, SPY refSymbol, 6x3 purged folds, base/stress costs, leverage 1, minExcessSharpeVsBench (low-exposure sleeve). TRIAL ACCOUNTING: this exact effective config (meanrev, entryRsi5/sma200/exit5/timeStop10/5x.10/hardStop volScaled k3-20-2-12, cutler, non-deterministic tiebreak) is an EXECUTION IDENTITY of the 'vol-k3' candidate already run twice (meanrev-stop-sizing-v1 artifact 9dcd9781, meanrev-stop-sizing-v2 repaired rerun artifact ad634c7b) — same candidate x cost tier x fold geometry (only the asOf/window.to happens to coincide exactly with ad634c7b's, since that manifest already used this HON-capped window). Per the ledger's identity rule this adds 0 new hypotheses; priorUniqueTrials stays at the ledger's current meanrev running total of 25 (9 inventoried + 4 meanrev-stocks-v1 + 5 stop-axis-v1 + 5 selectivity-v1 + 2 rsi-wilder-v1). Purpose is NOT discovery — it is producing the missing PURE (single-candidate, no inner selection, outerSelection trivially uniform) OOS chain of the live config with today's evidence gates (outerPsr/foldPsr/breakEven), which no prior artifact has: every existing meanrev summary is either an inner-selected MIX chain (different candidate per fold) or a per-candidate diagnostic run outside the gated protocol. Serves as the baseline every candidate in meanrev-breadth-v1 is measured against.",
+  "trialAccounting": { "priorUniqueTrials": 25, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "ABBV", "AVGO", "BAC", "CAT", "COST", "CVX", "DIS", "GE", "HD", "HON",
+      "JNJ", "JPM", "KO", "LLY", "MA", "MCD", "MRK", "NFLX", "NKE", "ORCL",
+      "PG", "QCOM", "UNH", "V", "WMT", "XLE", "XLF", "XLI", "XLP", "XLV",
+      "XOM", "SLV"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2018-01-01",
+    "to": "2026-08-06",
+    "outerFoldCount": 6,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 365
+  },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0 },
+    "stress": { "slippageBps": 5, "commissionBps": 2 }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 1,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent-live",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "volScaled", "kSigma": 3, "lookbackBars": 20, "minPct": 2, "maxPct": 12 },
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0.5,
+    "maxDrawdown": 0.25,
+    "minTotalReturn": 0,
+    "minExcessSharpeVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 100,
+    "stressMinSharpe": 0,
+    "stressMaxDrawdown": 0.3,
+    "stressMinTotalReturn": -0.1,
+    "looMinSharpe": 0,
+    "looMaxDrawdown": 0.3,
+    "looMinTotalReturn": -0.1,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": { "threshold": 0.5, "count": 3 },
+    "minBreakEvenSlippageBps": 10
+  }
+}

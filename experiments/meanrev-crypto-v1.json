@@ -1,0 +1,93 @@
+{
+  "name": "meanrev-crypto-v1",
+  "sleeve": "meanrev",
+  "description": "PRE-REGISTRO 2026-09-25 (W6, escrito ANTES de correr ningun trial). HIPOTESIS: la reversion de corto plazo que explota meanrev_stocks (dos cierres a la baja sobre una tendencia larga alcista; Connors RSI2) tambien existe a horizonte diario en los 8 perps principales de Binance: una estrategia long-only de compra de caidas con filtro de tendencia (close > SMA larga), salida por cierre > SMA5 o time stop de 10 dias, hard stop volScaled y costes+funding reales produce un flujo de retorno positivo y POCO CORRELACIONADO con momentum_crypto (vt-35 pasa semanas pausado por soft-DD mientras el capital esta ocioso). Evidencia motivadora (no concluyente, sin stops ni costes): el backtest del spot-bot DCA auditado (/tmp/opencode/uc/ext/gitlab-spotbot/REPORT.md) cerro ~99.7% de sus ciclos de compra-de-caida en 1-5 dias sobre velas publicas 2022-2026, incluso en el bajista de 2022. CASE-AGAINST (declarado antes de correr): (1) en crypto domina el momentum semanal — la evidencia del repo (11 ejes, 251+ hipotesis) es que seguir tendencia paga y contrariarla no; (2) los desplomes de 2022 (LUNA, FTX) y los -30% intradia castigan comprar caidas: el RSI2<5 dispara justo antes de las peores colas, y el filtro SMA200 estuvo POR DEBAJO gran parte de 2022, dejando el sleeve inactivo (bien) pero sin probar su edge en bajistas (sesgo de ventana); (3) el funding cuesta en bull: las entradas RSI2 coinciden con retrocesos dentro de tendencias alcistas donde el funding largo es positivo y se paga 3x/dia; (4) meanrev en acciones NUNCA paso las puertas del protocolo (meanrev-stocks-v1, stop-sizing, breadth: todas FAILED o subordinadas) — no hay razon a priori para que crypto sea mas facil con costes 5bps+4bps. TRIAL ACCOUNTING: +3 hipotesis nuevas (rsi5-sma200, rsi10-sma200, rsi10-sma100 — primera vez que meanrev se corre sobre binance_futures, ninguna es identidad de ejecucion de nada previo). Base = 292, el total corriente del ledger tras el batch stocks-smarter-sizing-2026-09-25 (blend3-pure, el ultimo manifest registrado: 288+2+2=292). priorUniqueTrials=292; el total pasa a 295. GEOMETRIA: misma ventana/folds que momentum-crypto-vt35-pure-v1 (2021-01-01..2026-07-15, asOf fijo 2026-07-15, 3 outer x 3 inner, purge 0.25y) para comparabilidad fold-a-fold y de fechas con la cadena pura de vt-35 (artefacto 8b673e8a); mismos costes base/stress y mismo initialEquity 5000; leverage 1 y 4 slots x 0.25 (1.0x bruto, sin apalancamiento). warmupDays 365 (SMA200 necesita 201 barras diarias; no altera los folds). SESGOS DECLARADOS (detalle en scripts/meanrev-replay.ts header): (a) AVAX (listado 2020-09-23) y SOL (2020-09-14) no tienen 201 barras al inicio de ventana — la puerta fail-closed de frescura del ENGINE bloquea TODAS las entradas de los candidatos sma200 hasta ~2021-04-12 en los inner folds x/0 (y ~2021-01-02 para sma100): los inner folds mas tempranos operan una ventana acortada, igual para todos los candidatos del mismo smaLong; (b) funding marcado al ultimo cierre diario completado (error de segundo orden rate x deriva intradia); la liquidacion que sale al open de hoy paga el settlement estampado exactamente en ese open (conservador contra el libro largo); (c) cantidades fraccionarias sin redondeo de stepSize; (d) sin modelo de margen (slots de notional fijo, 1.0x bruto). CRITERIO 'VALE LA PENA SHADOW' (pre-declarado, se evalua sobre la cadena PURA del mejor candidato si la cadena sale mezclada, 0 trials extra): Sharpe >= 0.8, outer PSR >= 0.95, maxDD <= 35%, retorno positivo en >= 2 de 3 outer folds, correlacion diaria (fechas UTC alineadas) con la cadena pura de vt-35 (8b673e8a) < 0.3, y la combinacion 50/50 mejora el Sharpe de vt-35 solo. Se reporta ademas el exceso vs BTC B&H y el coste total de funding. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 292,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1d",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 365
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 1,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "rsi5-sma200",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "volScaled", "kSigma": 3, "lookbackBars": 20, "minPct": 2, "maxPct": 12 },
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 4, "slotPct": 0.25 }
+    },
+    {
+      "name": "rsi10-sma200",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "volScaled", "kSigma": 3, "lookbackBars": 20, "minPct": 2, "maxPct": 12 },
+      "meanrev": { "entryRsi": 10, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 4, "slotPct": 0.25 }
+    },
+    {
+      "name": "rsi10-sma100",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "volScaled", "kSigma": 3, "lookbackBars": 20, "minPct": 2, "maxPct": 12 },
+      "meanrev": { "entryRsi": 10, "smaLong": 100, "smaExit": 5, "timeStopDays": 10, "maxPositions": 4, "slotPct": 0.25 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0.8,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": 0,
+    "minExcessSharpeVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 100,
+    "stressMinSharpe": 0.4,
+    "stressMaxDrawdown": 0.4,
+    "stressMinTotalReturn": -0.1,
+    "looMinSharpe": 0.4,
+    "looMaxDrawdown": 0.4,
+    "looMinTotalReturn": -0.1,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "minBreakEvenSlippageBps": 20
+  }
+}

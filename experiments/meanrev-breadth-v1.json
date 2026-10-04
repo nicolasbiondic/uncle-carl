@@ -1,0 +1,77 @@
+{
+  "name": "meanrev-breadth-v1",
+  "sleeve": "meanrev",
+  "description": "PRE-REGISTERED 2026-09-24, BEFORE running. Hypothesis #2 from D-research-map.md section 6: increase financeable breadth of the live meanrev_stocks sleeve without touching the entry filter. Candidates {control 5x.10 (=0.5x nominal, the live config, identity of experiments/meanrev-control-pure-v1.json's single candidate), 7x.10 (0.7x), 10x.10 (1.0x)} — everything else FROZEN to the control: same Cutler RSI2 entry<5/SMA200/exit-SMA5/timeStop10, same hardStop volScaled {kSigma3,lookbackBars20,minPct2,maxPct12}, same 32-symbol universe, SPY refSymbol, 6x3 purged folds 2018-01-01..2026-08-06 (HON asOf cap), base/stress costs, minExcessSharpeVsBench gate. HYPOTHESIS (declared before running): more slots let the SAME RSI2<5/SMA200 filter capture more of the valid signals it already generates but currently turns away for lack of an open slot — meanrev-selectivity-v1 (artifact b7c8f176/ad634c7b diagnostic) showed the OPPOSITE direction (5->3 slots) monotonically destroys return (30.88->~13%) and Sharpe (0.570->~0.35) with no DD benefit, i.e. the marginal trades beyond the top-3-ranked-by-RSI are net POSITIVE expectancy on this filter; if that holds going the other way, adding slots should scale stitched return roughly with average exposure (0.5x -> 0.7x -> 1.0x) while Sharpe stays flat or improves (more names diversifies idiosyncratic single-name risk on any given day, since entries are independent RSI2 dips, not a single systematic bet). CASE AGAINST (declared before running, not to be argued away post-hoc if it happens): (1) signal quality is NOT uniform below the RSI2<5 cutoff — the marginal 6th-10th ranked candidate on a given day may already be lower-quality than the marginal 4th-5th that selectivity-v1 tested, since RSI2 is a coarse coincidence filter (2543 vs 2521 vs 2501 trades across entryRsi 5/3/2 in selectivity-v1 shows almost all RSI2 observations already clear <5 — MORE slots is a different axis than a TIGHTER threshold, and could behave differently); (2) correlation on crash days — Connors dips frequently coincide across the 32-name universe on broad selloffs (all 10 slots could fill on the SAME day, concentrating exactly the tail-risk day the sleeve is supposed to be diversifying into cash on other days), which would raise maxDD roughly proportionally to exposure rather than leaving it flat; (3) this shares the Alpaca wallet with momentum_stocks (now wired at 1.0x of its own $50k after 2026-09-23's gross cut) — a meanrev breadth increase above ~0.5x-0.6x is not free capital, it competes for the SAME Reg-T buying power the live 15s stop-loss loop and momentum_stocks entries also draw on; this manifest measures ONLY the isolated-sleeve backtest edge, NOT capital contention (scripts/walk-forward.ts evaluates one sleeve at a time — see D-research-map.md section 3, 'Reparto entre dos sleeves Alpaca'), so a positive result here is necessary but not sufficient for wiring. TRIAL ACCOUNTING: control(5x.10) is an execution identity of meanrev-control-pure-v1.json's single candidate, +0. 7x.10 and 10x.10 are new effective configs on the already-explored maxPositions axis (selectivity-v1 tested 3 and 5, never 7 or 10) — +2. priorUniqueTrials=25 (current meanrev running total per the ledger), this manifest contributes +2, bringing the total to 27 after execution.",
+  "trialAccounting": { "priorUniqueTrials": 25, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "ABBV", "AVGO", "BAC", "CAT", "COST", "CVX", "DIS", "GE", "HD", "HON",
+      "JNJ", "JPM", "KO", "LLY", "MA", "MCD", "MRK", "NFLX", "NKE", "ORCL",
+      "PG", "QCOM", "UNH", "V", "WMT", "XLE", "XLF", "XLI", "XLP", "XLV",
+      "XOM", "SLV"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2018-01-01",
+    "to": "2026-08-06",
+    "outerFoldCount": 6,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 365
+  },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0 },
+    "stress": { "slippageBps": 5, "commissionBps": 2 }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 1,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "control-5x10",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "volScaled", "kSigma": 3, "lookbackBars": 20, "minPct": 2, "maxPct": 12 },
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 5, "slotPct": 0.1 }
+    },
+    {
+      "name": "breadth-7x10",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "volScaled", "kSigma": 3, "lookbackBars": 20, "minPct": 2, "maxPct": 12 },
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 7, "slotPct": 0.1 }
+    },
+    {
+      "name": "breadth-10x10",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "volScaled", "kSigma": 3, "lookbackBars": 20, "minPct": 2, "maxPct": 12 },
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 10, "slotPct": 0.1 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0.5,
+    "maxDrawdown": 0.25,
+    "minTotalReturn": 0,
+    "minExcessSharpeVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 100,
+    "stressMinSharpe": 0,
+    "stressMaxDrawdown": 0.3,
+    "stressMinTotalReturn": -0.1,
+    "looMinSharpe": 0,
+    "looMaxDrawdown": 0.3,
+    "looMinTotalReturn": -0.1,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": { "threshold": 0.5, "count": 3 },
+    "minBreakEvenSlippageBps": 10
+  }
+}

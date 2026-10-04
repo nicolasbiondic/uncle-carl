@@ -1,0 +1,65 @@
+{
+  "name": "meanrev-breadth7-pure-v1",
+  "sleeve": "meanrev",
+  "description": "Pure-chain follow-up to meanrev-breadth-v1 (artifact 68be3db1), pre-registered per the task protocol: 'if the winner comes out of a mixed chain, run the pure chain of the best alternate (1 candidate, 0 new trials)'. meanrev-breadth-v1's outer selection was MIXED: control-5x10 won folds 0/1/3, breadth-7x10 won folds 2/5, breadth-10x10 won fold 4 — the reported 'selected: breadth-7x10' name is only the LAST fold's inner winner (summary.selectedCandidate is not the stitched chain's owner; see summary.outerSelection). Among the two non-control breadth points, 7x10 won more inner selections (2/6 vs 1/6 for 10x10) and has the higher inner median DSR/Sharpe (0.288/0.949 vs whatever 10x10 posted) reported in that summary, so it is the 'best alternate' by the manifest's own selection criterion. ONE candidate here: breadth-7x10 (maxPositions 7, slotPct 0.10, same RSI2/SMA200/exit/timeStop/hardStop volScaled k3-20-2-12 as the control), everything else FROZEN identical to meanrev-breadth-v1/meanrev-control-pure-v1 (same 32-symbol universe, window 2018-01-01..2026-08-06, 6x3 purged folds, base/stress costs, same evidence gates). This produces breadth-7x10's OWN pure OOS chain (outerSelection uniformly breadth-7x10 by construction, 3/3... 6/6 folds), directly comparable fold-for-fold to meanrev-control-pure-v1's pure chain (artifact 01d92c2a) — the comparison the mixed chain in meanrev-breadth-v1 cannot honestly support. TRIAL ACCOUNTING: breadth-7x10 is NOT a new hypothesis — it was already declared and run as one of meanrev-breadth-v1's 3 pre-registered candidates (which itself added +2 new hypotheses, bringing the meanrev running total to 27). Isolating it into its own single-candidate manifest is an execution identity (same candidate x cost tier x fold geometry), so this manifest adds 0. priorUniqueTrials=27.",
+  "trialAccounting": { "priorUniqueTrials": 27, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "ABBV", "AVGO", "BAC", "CAT", "COST", "CVX", "DIS", "GE", "HD", "HON",
+      "JNJ", "JPM", "KO", "LLY", "MA", "MCD", "MRK", "NFLX", "NKE", "ORCL",
+      "PG", "QCOM", "UNH", "V", "WMT", "XLE", "XLF", "XLI", "XLP", "XLV",
+      "XOM", "SLV"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2018-01-01",
+    "to": "2026-08-06",
+    "outerFoldCount": 6,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 365
+  },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0 },
+    "stress": { "slippageBps": 5, "commissionBps": 2 }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 1,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "breadth-7x10",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "volScaled", "kSigma": 3, "lookbackBars": 20, "minPct": 2, "maxPct": 12 },
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 7, "slotPct": 0.1 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0.5,
+    "maxDrawdown": 0.25,
+    "minTotalReturn": 0,
+    "minExcessSharpeVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 100,
+    "stressMinSharpe": 0,
+    "stressMaxDrawdown": 0.3,
+    "stressMinTotalReturn": -0.1,
+    "looMinSharpe": 0,
+    "looMaxDrawdown": 0.3,
+    "looMinTotalReturn": -0.1,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": { "threshold": 0.5, "count": 3 },
+    "minBreakEvenSlippageBps": 10
+  }
+}

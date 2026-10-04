@@ -1,0 +1,108 @@
+{
+  "name": "meanrev-sp500pit-pure-v1",
+  "sleeve": "meanrev",
+  "description": "PRE-REGISTERED (2026-10-02), point-in-time S&P 500 universe para meanrev_stocks, candidato M3 (batch sp500-pit-universe-2026-10-02; controles = los dos manifests vivos re-corridos en ESTA base, +0). HIPOTESIS: el universo vivo de 32 simbolos elegidos a mano infla el backtest por sesgo de seleccion; el analogo con regla es 'los miembros PIT del S&P 500 (data.membership sp500 @ fja05680/sp500 commit a2430f2) MENOS los 11 simbolos del universo de momentum_stocks (disjuncion de la cartera compartida, data.membership.exclude) MAS los mismos 6 ETFs del universo vivo de meanrev (XLE/XLF/XLI/XLP/XLV/SLV, declarados)'. Motor y parametros IDENTICOS al vivo/control meanrev-slot12-pure-v1 re-corrido en esta base: RSI2 Cutler<5 sobre SMA200, salida SMA5 o timeStop 10, hardStop volScaled k3-20-2-12, 7 slots x 0.12; mismos window/folds/costes/gates. Entradas solo si miembro en la fecha de decision (miembro + barra fresca + SMA200+1 barras completadas; un tape muerto queda exento del freshness gate en vez de congelar las entradas de todos); posiciones abiertas conservan sus salidas tras la remocion; tapes que terminan dentro del fold cierran DELISTED a la ultima barra (OPTIMISTA declarado). asOf pinneado 2026-10-02T04:00Z (window.to 2026-08-06 es el tope efectivo, igual que el control). CRITERIO PRE-REGISTRADO: VALIDADO si outer PSR >= 0.95, no falla ningun gate que el control pase, y maxDD <= max(DD control + 5pp, 25%); se reporta dCAGR/dSharpe vs control. TRIAL ACCOUNTING: M2 declaro 314 y sumo +1 -> base 315. Este candidato es NUEVO: +1, total 316.",
+  "trialAccounting": {
+    "priorUniqueTrials": 315,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "XLE",
+      "XLF",
+      "XLI",
+      "XLP",
+      "XLV",
+      "SLV"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440,
+    "membership": {
+      "index": "sp500",
+      "exclude": [
+        "SPY",
+        "QQQ",
+        "IWM",
+        "GLD",
+        "AAPL",
+        "MSFT",
+        "NVDA",
+        "META",
+        "GOOGL",
+        "AMZN",
+        "SMH"
+      ]
+    }
+  },
+  "asOf": "2026-10-02T04:00:00Z",
+  "window": {
+    "from": "2018-01-01",
+    "to": "2026-08-06",
+    "outerFoldCount": 6,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 365
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 1,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "sp500pit-meanrev",
+      "cadenceMin": 1440,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "meanrev": {
+        "entryRsi": 5,
+        "smaLong": 200,
+        "smaExit": 5,
+        "timeStopDays": 10,
+        "maxPositions": 7,
+        "slotPct": 0.12
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0.5,
+    "maxDrawdown": 0.25,
+    "minTotalReturn": 0,
+    "minExcessSharpeVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 100,
+    "stressMinSharpe": 0,
+    "stressMaxDrawdown": 0.3,
+    "stressMinTotalReturn": -0.1,
+    "looMinSharpe": 0,
+    "looMaxDrawdown": 0.3,
+    "looMinTotalReturn": -0.1,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 3
+    },
+    "minBreakEvenSlippageBps": 10
+  }
+}

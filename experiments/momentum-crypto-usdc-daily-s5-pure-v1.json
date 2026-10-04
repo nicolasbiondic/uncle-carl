@@ -1,0 +1,118 @@
+{
+  "name": "momentum-crypto-usdc-daily-s5-pure-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTRO 2026-09-26 (U1 ronda 4b), escrito ANTES de correr, junto a ronda 4a (liquid5). REPLANTEO EN LA MISMA LINEA: MAS SLOTS CON HYSTERESIS — el mejor kernel diario de la ronda 3 (blend 63-126-252, MA200, slotHysteresis, stops k8) sobre las 13 bases pero con 5 slots x 0.20 (mismo bruto 1.0x). HIPOTESIS: el maxDD 56.9% de blend63 puro (37092597) viene de un libro de 3 posiciones x 33% con stops anchos de 5-30% — hasta 30% de perdida por nombre = 10pp de equity por posicion; 5 slots recortan el riesgo por nombre a 20% x stop y diversifican el blend diario que con 13 candidatos y horizonte largo produce mas de 3 senales validas simultaneas (en acciones el kernel diario valido con 8 slots; aqui 5 es el punto intermedio que el universo de 13 soporta sin forzar convicciones debiles). CASE-AGAINST (declarado): (1) los slots 4-5 son por construccion tendencias mas debiles del ranking y en crypto los slots extra correlacionan ~0.8 con los primeros: la diversificacion puede ser ilusoria mientras el libro gana friccion; (2) la ronda 1 horaria ya REFUTO el eje slots (s4 medDSR 0.0078 vs control 0.0247) — aunque el mecanismo alli era churn a 20 bps y aqui el turnover diario es ~12x/ano, el precedente va en contra; (3) mas posiciones simultaneas en el crash de 2022 = mas gap-through de los stops anchos. VENTANA/folds/costes/gates identicos a daily-v1. Cadena pura por construccion (1 candidato). CRITERIO: el de la ronda 3. TRIAL ACCOUNTING: +1 hipotesis nueva (5x0.2 diario sobre 13 bases nunca corrido). priorUniqueTrials=304 (tras liquid5, registrado antes en el mismo batch); pasa a 305. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 304,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1d",
+    "universe": [
+      "ADA/USD",
+      "AVAX/USD",
+      "BCH/USD",
+      "BNB/USD",
+      "BTC/USD",
+      "DOGE/USD",
+      "ETH/USD",
+      "LINK/USD",
+      "LTC/USD",
+      "NEAR/USD",
+      "SOL/USD",
+      "UNI/USD",
+      "XRP/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-26T00:00:00Z",
+  "window": {
+    "from": "2021-08-01",
+    "to": "2026-09-27",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 17,
+      "commissionBps": 3
+    },
+    "stress": {
+      "slippageBps": 60,
+      "commissionBps": 5
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "d13-s5-blend-63-126-252",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.2,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 5,
+      "maxShorts": 0,
+      "lookbackDaysList": [
+        63,
+        126,
+        252
+      ],
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

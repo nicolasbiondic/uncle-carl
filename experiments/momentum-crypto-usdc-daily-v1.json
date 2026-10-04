@@ -1,0 +1,114 @@
+{
+  "name": "momentum-crypto-usdc-daily-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTRO 2026-09-26 (U1 ronda 3, REPLANTEAMIENTO), escrito ANTES de correr. Las rondas 1-2 (redesign-v1/v2) mostraron que el fallo del sleeve USDC no es el sizing sino la ROTACION del kernel horario: el control puro (4b403501) rota 871 trades en 4.3 anos con break-even 4.2 bps frente a ~20 bps/lado de coste real medido, y todos los ajustes de sizing (vt35/vtcap/s4/mh) empeoraron el Sharpe. REPLANTEO = kernel DIARIO, el mismo patron que valido momentum_stocks (5m->diario subio Sharpe 0.68->0.98 sobre todo por menor rotacion; artefactos 77372b9c/cc2f5d69: turnover 15-23x/ano vs 135x del control USDC horario). VERIFICACION PREVIA DECLARADA: el replay soporta crypto 1d sin cambios de codigo — el bucle es generico (tick al cierre del dia UTC t=open+1440min; fill al open del bar siguiente via el path crypto timestamp===now con check de continuidad 24/7; applyFunding(prevT,t) acumula los 3 settlements diarios entre ticks; checkStops evalua el hard stop contra el H/L del bar diario cerrado con fill al nivel o al open si hay gap-through; validateBarDensity rama dailyEq barMinutes>=1440 && !rthOnly; annualizationPeriods crypto = 365/dia). KERNEL COMUN a ambos candidatos (los ejes ganadores del sleeve de acciones, trasplantados tal cual): cadencia 1440, 3 slots x 1/3 (bruto 1.0x como el control), entry +5 / exit -2, slotHysteresis TRUE (menos churn de desplazamiento — 66% de los cierres del control horario), trail + hard stop volScaled {kSigma 8, lookbackBars 20, minPct 5, maxPct 30} (el k8 ganador de momentum-stocks-daily-exits-v1/blend3), sharpeGate {30d, 0}, regimen ON (legacy), risk peakHalfLifeDays 30, leverage 2, equity 5000, mismas 13 bases proxy USDT mainnet y MISMOS COSTES REALES MEDIDOS del sleeve (base 17+3, stress 60+5). EJE = horizonte de la senal diaria multi-horizonte (blend de medias de retornos, Hurst/Ooi/Pedersen 2017): (1) d-blend-28-56-112 con MA 100 — la octava ~4-16 semanas, adaptada al ciclo mas rapido de crypto; (2) d-blend-63-126-252 con MA 200 — el kernel de acciones TAL CUAL (blend3 de 3/6/12 meses, Jegadeesh-Titman). VENTANA 2021-08-01 -> ultimo cierre comun 1d (asOf pinneado 2026-09-26T00:00Z): el fail-closed de warmup del replay exige max(lookback,MA)+11 = 263 barras diarias por simbolo ANTES de cada fold y NEAR (listado 2020-10-15) solo las tiene desde 2021-07-05 — la ventana se declara AQUI, antes de correr, y pierde el H1-2021 alcista (sesgo declarado: recorta el mejor tramo del control horario). Para la comparacion honesta control-vs-diario se pre-registra en el mismo batch momentum-crypto-usdc-control-w2-pure-v1 (el control horario EXACTO re-corrido en esta misma ventana/folds, identidad de ejecucion +0). 3x3 folds purgados 0.25y, warmup 420d. CASE-AGAINST (declarado antes de correr): (1) los horizontes de 3-12 meses llegan TARDE a los giros de crypto — el ciclo alt es de semanas; para cuando r63/r126/r252 confirman, el movimiento esta gastado y la salida por senal devuelve la mitad; (2) 13 nombres con correlacion ~0.8 a BTC: el blend diario produce un libro casi mono-factor y 3 slots concentran (maxConcentration/LOO fragiles); (3) 2022 esta entera en ventana: un kernel lento cabalga el crash completo hasta que la MA100/200 cruce (los stops anchos 5-30% son la unica proteccion rapida); (4) menos decisiones = menos observaciones efectivas y MinTRL mas exigente: con ~1500 dias OOS solo un Sharpe >= ~0.8 es certificable — un edge real pero menor sale UNDECIDABLE; (5) el patron 'diario gana' viene de ACCIONES; meanrev-crypto (REFUTADO 13/17) ya mostro que trasplantar kernels diarios de acciones a crypto no es gratis. CRITERIO DE VALIDADO (identico al del control + break-even): outer PSR >= 0.95, exceso > 0 vs BTC B&H, maxDD <= 45%, >= 2/3 folds con PSR > 0.5, break-even > 20 bps (el coste real), sin fallar gates que vt35-pure pasa (maxDisplacementShare = excepcion estructural declarada, aunque con slotHysteresis deberia colapsar). Si la cadena outer sale MEZCLADA se corre la pura del mejor (+0, regla estandar). Si NINGUNO valida: siguiente ronda pre-registrada en la misma linea (menos rotacion/coste: universo liquido de menor spread medido o mas slots con hysteresis) ANTES de concluir, y el cableado final es el diseno que MAS mejore al control-w2 en Sharpe Y maxDD con break-even mas alto, declarando honestamente que no certifica. TRIAL ACCOUNTING: +2 hipotesis nuevas (primer kernel diario sobre crypto en el repo; ninguno es identidad de nada previo). priorUniqueTrials=301 (total tras usdc-control-and-redesign-2026-09-26); el total pasa a 303. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 301,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1d",
+    "universe": [
+      "ADA/USD",
+      "AVAX/USD",
+      "BCH/USD",
+      "BNB/USD",
+      "BTC/USD",
+      "DOGE/USD",
+      "ETH/USD",
+      "LINK/USD",
+      "LTC/USD",
+      "NEAR/USD",
+      "SOL/USD",
+      "UNI/USD",
+      "XRP/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-26T00:00:00Z",
+  "window": {
+    "from": "2021-08-01",
+    "to": "2026-09-27",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 17,
+      "commissionBps": 3
+    },
+    "stress": {
+      "slippageBps": 60,
+      "commissionBps": 5
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "d-blend-28-56-112",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.3333333333333333,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 3,
+      "maxShorts": 0,
+      "lookbackDaysList": [28, 56, 112],
+      "maLengthDays": 100,
+      "slotHysteresis": true,
+      "hardStop": { "mode": "volScaled", "kSigma": 8, "lookbackBars": 20, "minPct": 5, "maxPct": 30 },
+      "tsmTrail": { "kSigma": 8, "lookbackBars": 20, "minPct": 5, "maxPct": 30 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "d-blend-63-126-252",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.3333333333333333,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 3,
+      "maxShorts": 0,
+      "lookbackDaysList": [63, 126, 252],
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": { "mode": "volScaled", "kSigma": 8, "lookbackBars": 20, "minPct": 5, "maxPct": 30 },
+      "tsmTrail": { "kSigma": 8, "lookbackBars": 20, "minPct": 5, "maxPct": 30 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

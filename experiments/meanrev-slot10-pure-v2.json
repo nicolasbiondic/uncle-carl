@@ -1,0 +1,65 @@
+{
+  "name": "meanrev-slot10-pure-v2",
+  "sleeve": "meanrev",
+  "description": "PRE-REGISTERED (2026-09-27) as the CONTROL of the slot-size axis for meanrev_stocks. Live invests only 39.7% of its own capital on average despite the sleeve being the most consistently-live edge in the system (meanrev-breadth7-pure-v1, rerun 2026-09-25 on the gap-stop-fixed replay, artifact 03382972...: +57.5%/Sharpe 0.76/maxDD 14.5%/PSR 0.978, ~6.4%/yr CAGR on half the Alpaca account). HYPOTHESIS: return-per-unit-of-exposure is good and the bottleneck is position size, not signal quality — scaling slotPct should scale stitched return and maxDD roughly linearly while leaving Sharpe roughly flat, up to the point where the 7 simultaneous entries concentrate too much notional into the SAME crash day. CASE-AGAINST (pre-registered, applies to the whole axis): (a) maxDD should scale PROPORTIONALLY with slotPct, not sub-linearly, because the 7 slots fill together off the same RSI2<5-on-SMA200 signal — a broad market selloff triggers all 7 entries on (near) the same day, so bigger slots concentrate the crash-day loss rather than diversifying it away; (b) the hard stop (volScaled {3,20,2,12}, i.e. 2-12% distance) is a FIXED FRACTION of each position's notional, so as slotPct rises the dollar loss per stopped-out slot grows in lockstep with slotPct — a run of stops in a single session (all 7 slots hit near-simultaneously) hits the equity curve harder than the same run at a smaller slotPct, which is exactly the mechanism that could break the Sharpe/DD linearity the hypothesis assumes. THIS manifest isolates the EXACT live config (7 slots x 0.10 = 0.70x gross cap) re-run verbatim on the refreshed historical.db (asOf latest, same window/folds/costs/gates as meanrev-breadth7-pure-v1.json) as the control point of the axis. TRIAL ACCOUNTING (honest): breadth-7x10 at slotPct=0.10 is NOT a new hypothesis — it is the exact live config, already counted as one of meanrev-breadth-v1's pre-registered candidates and re-verified in meanrev-breadth7-pure-rerun-2026-09-25 (ledger batch id, +0 both times). Re-running it again here (same candidate, same cost tiers, same fold geometry, only the underlying DB snapshot refreshed via asOf=latest) is an EXECUTION IDENTITY, +0 new hypotheses. priorUniqueTrials=307 (the ledger's last recorded running total, from usdc-daily-replant-2026-09-26), stays 307 after this manifest.",
+  "trialAccounting": { "priorUniqueTrials": 307, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "ABBV", "AVGO", "BAC", "CAT", "COST", "CVX", "DIS", "GE", "HD", "HON",
+      "JNJ", "JPM", "KO", "LLY", "MA", "MCD", "MRK", "NFLX", "NKE", "ORCL",
+      "PG", "QCOM", "UNH", "V", "WMT", "XLE", "XLF", "XLI", "XLP", "XLV",
+      "XOM", "SLV"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2018-01-01",
+    "to": "2026-08-06",
+    "outerFoldCount": 6,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 365
+  },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0 },
+    "stress": { "slippageBps": 5, "commissionBps": 2 }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 1,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "slot10-control",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "volScaled", "kSigma": 3, "lookbackBars": 20, "minPct": 2, "maxPct": 12 },
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 7, "slotPct": 0.10 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0.5,
+    "maxDrawdown": 0.25,
+    "minTotalReturn": 0,
+    "minExcessSharpeVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 100,
+    "stressMinSharpe": 0,
+    "stressMaxDrawdown": 0.3,
+    "stressMinTotalReturn": -0.1,
+    "looMinSharpe": 0,
+    "looMaxDrawdown": 0.3,
+    "looMinTotalReturn": -0.1,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": { "threshold": 0.5, "count": 3 },
+    "minBreakEvenSlippageBps": 10
+  }
+}

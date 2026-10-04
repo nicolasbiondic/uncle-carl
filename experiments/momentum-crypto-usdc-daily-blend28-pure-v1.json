@@ -1,0 +1,118 @@
+{
+  "name": "momentum-crypto-usdc-daily-blend28-pure-v1",
+  "sleeve": "crypto",
+  "description": "Cadena PURA de d-blend-28-56-112, candidato declarado y corrido en momentum-crypto-usdc-daily-v1 (artefacto 92576830, cadena MEZCLADA: d-blend-63-126-252 gano la seleccion inner de los folds 0 y 1, d-blend-28-56-112 la del 2). Es el segundo candidato declarado (gano la seleccion del fold 2, el mas reciente); su cadena pura se corre en el MISMO batch para la atribucion completa que exige el criterio de cableado pre-declarado de la ronda 3 (el diseno que MAS mejore al control-w2 en Sharpe Y maxDD con break-even mas alto). Identidad de ejecucion (+0 trials, regla estandar de cadena mezclada). Misma data/ventana/folds/costes/gates que daily-v1; el veredicto de la ronda 3 se evalua sobre estas cadenas puras contra el baseline momentum-crypto-usdc-control-w2-pure-v1 (control horario, misma ventana). priorUniqueTrials=303 (301 + 2 de daily-v1). complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 303,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1d",
+    "universe": [
+      "ADA/USD",
+      "AVAX/USD",
+      "BCH/USD",
+      "BNB/USD",
+      "BTC/USD",
+      "DOGE/USD",
+      "ETH/USD",
+      "LINK/USD",
+      "LTC/USD",
+      "NEAR/USD",
+      "SOL/USD",
+      "UNI/USD",
+      "XRP/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-26T00:00:00Z",
+  "window": {
+    "from": "2021-08-01",
+    "to": "2026-09-27",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 17,
+      "commissionBps": 3
+    },
+    "stress": {
+      "slippageBps": 60,
+      "commissionBps": 5
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "d-blend-28-56-112",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.3333333333333333,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 3,
+      "maxShorts": 0,
+      "lookbackDaysList": [
+        28,
+        56,
+        112
+      ],
+      "maLengthDays": 100,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

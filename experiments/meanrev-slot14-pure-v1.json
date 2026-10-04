@@ -1,0 +1,65 @@
+{
+  "name": "meanrev-slot14-pure-v1",
+  "sleeve": "meanrev",
+  "description": "PRE-REGISTERED (2026-09-27), slot-size axis for meanrev_stocks, candidate #3 of 3 (see meanrev-slot10-pure-v2 for the full hypothesis/case-against, identical here). ONE candidate, pure chain by construction: same RSI2 Cutler<5/SMA200/exitSMA5/timeStop10/hardStop volScaled k3-20-2-12/7 slots as the live config, ONLY slotPct raised 0.10 -> 0.14 (gross cap 7x0.14 = 0.98x of the sleeve's own $50k baseUsd, the ceiling under the owner's <=1.0x-of-own-capital, no-margin rule — this is the largest slotPct this axis can test without breaching it). Same universe/window/folds/costs/gates as meanrev-slot10-pure-v2/meanrev-breadth7-pure-v1 (asOf latest, same refreshed historical.db). CASE-AGAINST (pre-registered): at 0.98x gross, a single crash day that fills or stops all 7 slots is nearly a fully-invested sleeve taking the FULL hard-stop distance (2-12%) on effectively all of baseUsd at once — this is where the hypothesized linear scaling of return/DD with slotPct is most likely to break down into a genuine Sharpe hit, not just a bigger but proportional drawdown. TRIAL ACCOUNTING (honest): slotPct=0.14 has never been run before in this ledger — it is a NEW hypothesis. priorUniqueTrials=308 (base = the running total after meanrev-slot12-pure-v1's +1). This candidate adds +1, bringing the running total to 309. Batch total for the slot-size axis (meanrev-slot10-pure-v2 + meanrev-slot12-pure-v1 + meanrev-slot14-pure-v1): +2 new hypotheses over the ledger's prior 307.",
+  "trialAccounting": { "priorUniqueTrials": 308, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "ABBV", "AVGO", "BAC", "CAT", "COST", "CVX", "DIS", "GE", "HD", "HON",
+      "JNJ", "JPM", "KO", "LLY", "MA", "MCD", "MRK", "NFLX", "NKE", "ORCL",
+      "PG", "QCOM", "UNH", "V", "WMT", "XLE", "XLF", "XLI", "XLP", "XLV",
+      "XOM", "SLV"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2018-01-01",
+    "to": "2026-08-06",
+    "outerFoldCount": 6,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 365
+  },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0 },
+    "stress": { "slippageBps": 5, "commissionBps": 2 }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 1,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "slot14",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "volScaled", "kSigma": 3, "lookbackBars": 20, "minPct": 2, "maxPct": 12 },
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 7, "slotPct": 0.14 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0.5,
+    "maxDrawdown": 0.25,
+    "minTotalReturn": 0,
+    "minExcessSharpeVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 100,
+    "stressMinSharpe": 0,
+    "stressMaxDrawdown": 0.3,
+    "stressMinTotalReturn": -0.1,
+    "looMinSharpe": 0,
+    "looMaxDrawdown": 0.3,
+    "looMinTotalReturn": -0.1,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": { "threshold": 0.5, "count": 3 },
+    "minBreakEvenSlippageBps": 10
+  }
+}

@@ -1,0 +1,112 @@
+{
+  "name": "momentum-stocks-horizon-2024w-h126-pure-v1",
+  "sleeve": "stocks",
+  "description": "Cadena PURA de h126-ma200 en la ventana del control vivo (2024-01-01..2026-07-15), registrada 2026-09-24 tras el run de 3 candidatos momentum-stocks-horizon-2024w-v1 (artefacto 99ca1c0a: la seleccion inner sobre folds internos de ~2-3 meses eligio h14-ma30 3/3 y esa cadena PIERDE contra SPY -20.1pp — ventana corta infrapotenciada, certifiable 1.20). Proposito declarado ANTES de mirar: manzanas-con-manzanas del ganador de la ventana larga contra el control 5m vivo en LAS MISMAS fechas de fold; si h126-ma200 tambien pierde contra SPY aqui, el excedente de la ventana 2017-2026 vive en la era pre-2024 y la activacion en vivo queda SIN respaldo reciente — ese hallazgo bloquea el cableado, no se relativiza post-hoc. Candidato IDENTICO (identidad de ejecucion, 0 hipotesis nuevas). priorUniqueTrials=269. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 269,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2024-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "h126-ma200",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.25,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "lookbackDays": 126,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "tsmTrail": {
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

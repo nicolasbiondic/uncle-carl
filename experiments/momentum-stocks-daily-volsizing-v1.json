@@ -1,0 +1,186 @@
+{
+  "name": "momentum-stocks-daily-volsizing-v1",
+  "sleeve": "stocks",
+  "description": "Eje TAMANO POR VOLATILIDAD INVERSA (volSizing, Moskowitz-Ooi-Pedersen 2012; Barroso & Santa-Clara 2015), pre-registrado 2026-09-25 ANTES de correr, misma data/ventana/costes/gates que el control vivo k8-s8 (momentum-stocks-daily-k8s8-pure-v1, artefacto 5a5a9577: +307.6% / Sharpe 1.14 / maxDD 21.2% / PSR 0.997 / foldPSR .954/.991/.821 / LOO peor 1.07 / 135 trades). Candidatos: control (identidad de ejecucion, +0 trials), iv60 (lookback 60 barras diarias, clamp 0.5-2.0) e iv20 (lookback 20, clamp 0.5-2.0): notional de entrada = equity x 0.125 x clamp(sigma_ref/sigma_i, 0.5, 2.0), sigma_ref = mediana de sigma del universo en el tick; solo entradas, tope bruto 1.0x intacto. Hipotesis: igualar la contribucion de riesgo por slot (GLD ~15%/yr vs NVDA ~50%/yr a igual notional) mejora Sharpe y recorta los crashes (DD). Case-against declarado: los nombres de alta vol (NVDA, SMH) aportaron la cola derecha del control; si al agrandar los slots de baja vol el tope bruto 1.0x se alcanza antes, bloquea entradas de alta conviccion. Criterio de ganador ROBUSTO declarado de antemano: la cadena PURA del alternativo mejora al control en Sharpe Y maxDD, no falla ningun gate que el control pasa, foldPSR no peor (ningun fold >0.02 por debajo del correspondiente .954/.991/.821) y LOO peor >= 1.07. Si la cadena sale mezclada se corre la cadena pura del mejor alternativo (+0 trials). +2 hipotesis (288->290).",
+  "trialAccounting": {
+    "priorUniqueTrials": 288,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-24",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "control-k8s8",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.125,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 0,
+      "lookbackDays": 126,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "iv60",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.125,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 0,
+      "lookbackDays": 126,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "volSizing": {
+        "lookbackBars": 60,
+        "minScale": 0.5,
+        "maxScale": 2.0
+      }
+    },
+    {
+      "name": "iv20",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.125,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 0,
+      "lookbackDays": 126,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "volSizing": {
+        "lookbackBars": 20,
+        "minScale": 0.5,
+        "maxScale": 2.0
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

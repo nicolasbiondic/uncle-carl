@@ -1,0 +1,86 @@
+{
+  "name": "momentum-crypto-sizing-v1",
+  "sleeve": "crypto",
+  "description": "Inverse-vol slot sizing (volTarget) for the TSM crypto sleeve, pre-registered 2026-09-02 BEFORE any run, owner-approved from the external-stacks research (riskfolio/TSM literature: scale notional by sigma^-1). Weakness attacked: since the 2026-08-28 vol-stop override the stop DISTANCE is vol-scaled but the slot NOTIONAL is fixed (equity x 0.375), so dollar-risk-per-trade = notional x stopPct GROWS with symbol vol — DOGE systematically carries more $ risk per slot than BTC. Hypothesis: normalizing risk-$ (volTargetScale = clamp((annualizedPct/100)/realizedVol, minScale, maxScale) on the notional, the engine's own long-wired formula) improves risk-adjusted return AND compresses the DD tail (the axis the sleeve keeps failing). Declared case AGAINST: the sleeve's OOS return is concentrated in exactly the high-vol trends volTarget would downsize; the clamp caps quiet-asset upsizing at maxScale so net gross usually FALLS — return may fall with it and the excess-vs-BTC gate (+263pp at incumbent) has room but the DD gates bind at 49.2/59.4/63.6 vs 45/55/55. EVERYTHING except the volTarget axis is FROZEN to experiments/momentum-crypto-v1.json: same 8-symbol universe, window 2021-01-01..2026-07-15 asOf-pinned, 3x3 purged folds, same costs, real settled funding, BTC B&H benchmark, same acceptance gates. Declared scope cut: lookbackBars fixed at 720 (30d of 1h bars, the trail/sharpe-gate convention); a lookback sweep is a future manifest only if this axis survives. 3 candidates declared up front, none trimmed after results: incumbent-fixed (no volTarget — execution-identity rerun, adds 0 new hypotheses), vt-50 {annualizedPct 50, clamp 0.5..1.5}, vt-35 {annualizedPct 35, clamp 0.33..1.5}. priorUniqueTrials=259: 257 declared by momentum-crypto-shorts-v1 plus its 2 long/short variants. The 2 volTarget variants here are new hypotheses. Inventory incomplete, so complete=false and approval stays blocked by protocol regardless of gates.",
+  "trialAccounting": { "priorUniqueTrials": 259, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": { "slippageBps": 5, "commissionBps": 4 },
+    "stress": { "slippageBps": 10, "commissionBps": 8 }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent-fixed",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "vt-50",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": { "annualizedPct": 50, "lookbackBars": 720, "minScale": 0.5, "maxScale": 1.5 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "vt-35",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": { "annualizedPct": 35, "lookbackBars": 720, "minScale": 0.33, "maxScale": 1.5 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3
+  }
+}

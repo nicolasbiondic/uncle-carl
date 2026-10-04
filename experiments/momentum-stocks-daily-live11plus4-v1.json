@@ -1,0 +1,116 @@
+{
+  "name": "momentum-stocks-daily-live11plus4-v1",
+  "sleeve": "stocks",
+  "description": "Eje UNIVERSO (R5, pre-registrado 2026-09-25 ANTES de correr, junto a etf15-v1). Segundo punto del eje: en vez de reemplazar el universo vivo, lo AMPLIA con 4 clases de activos ausentes (bonos largos TLT, HY credit HYG, equity internacional desarrollado EFA, emergente EEM) manteniendo los 11 simbolos actuales (SPY/QQQ/IWM/GLD/SMH + AAPL/MSFT/NVDA/META/GOOGL/AMZN). Mismo kernel identico al control (experiments/momentum-stocks-horizon-h126-pure-v1.json, artefacto puro 77372b9c...: +306.3%/Sharpe 1.07/DD 24.1%/PSR 0.997): 4x0.25, slotHysteresis, +5/-2, sharpeGate 30d, trail+hardStop volScaled diarios {3,20,2..12}, cadencia 1440. Proposito: separar el efecto 'diversificar clases de activos' del efecto 'quitar las megacaps supervivientes' (ver momentum-stocks-daily-etf15-v1, que hace ambas cosas a la vez) -- si live11plus4 mejora Sharpe Y DD frente al control, la ganancia viene de anadir bonos/intl/credit, no de soltar las megacaps. Cobertura alpaca_wide/1d verificada 2016-01-04..2026-09-24 para los 15 simbolos (2697 barras c/u). Disjuncion con MEANREV_UNIVERSE verificada (XLE/XLF/XLI/XLP/XLV/SLV quedan fuera). Hipotesis: anadir bonos/credit/intl reduce el DD (diversifica el riesgo de cola de las megacaps concentradas) sin penalizar mucho el Sharpe, porque el motor de retorno (megacaps) sigue intacto. Caso en contra (declarado antes de correr): (a) 2022 castigo bonos y acciones a la vez (TLT ~-30%), por lo que anadir TLT pudo empeorar el fold 1 en vez de diversificarlo; (b) mas slots candidatos con el mismo maxLongs=4 puede DESPLAZAR nombres de alto momentum (megacaps) por bonos/intl de menor momentum en ciertos regimenes, reduciendo el retorno sin compensacion clara; (c) EFA/EEM anaden exposicion FX no cubierta que el kernel no modela distinto de equity US. Criterio pre-declarado: live11plus4 GANA solo si mejora Sharpe Y DD frente al control (ambos, no uno solo). +1 hipotesis nueva (universo nuevo): priorUniqueTrials=269 -> 270 tras este manifest (etf15-v1 se pre-registra en el mismo batch y ya consume el primer +1, de 268 a 269).",
+  "trialAccounting": {
+    "priorUniqueTrials": 269,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "SMH",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "TLT",
+      "HYG",
+      "EFA",
+      "EEM"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-25",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "h126-ma200-live11plus4",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.25,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "lookbackDays": 126,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "tsmTrail": {
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

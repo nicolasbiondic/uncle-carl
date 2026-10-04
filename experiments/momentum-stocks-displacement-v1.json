@@ -1,0 +1,81 @@
+{
+  "name": "momentum-stocks-displacement-v1",
+  "sleeve": "stocks",
+  "description": "Slot-displacement/hysteresis axis for the TSM stocks sleeve — the twin of momentum-crypto-displacement-v1, pre-registered 2026-09-07 BEFORE any run, universe and window FROZEN to experiments/momentum-stocks-v1.json (10 symbols, 2024-01-01..2026-07-15 asOf-pinned, 3x3 purged folds, costs base 2/0 stress 5/2, SPY B&H benchmark, vol trail tsmTrail 3sigma incumbent). Weakness attacked: the stocks book shows the churn class at LARGER scale than crypto — GLD 5 entries in 14 days, NVDA re-entered the day after a -$621 trail stop (both documented at cooldown-v1 registration) — and this sleeve already FAILED its protocol runs on minExcessReturnVsBench (stop-sizing-v1: +16.48% vs SPY +31.15%), so every point of friction matters more here, not less. Hypothesis: slotHysteresis=true cuts displacement churn and recovers part of the benchmark shortfall. Declared case AGAINST: a 10-symbol stock universe rotates slower than crypto and displacement fires less often, so the effect may be too small to move the excess-return gate at all — a null result on this axis is expected and will be recorded as such; and in strong sector rotations hysteresis holds losers longer. Evidence gates (same rationale as the crypto twin, thresholds re-derived for this sleeve, all declared before any run): minOuterPsr 0.95, minFoldsPsrAbove {0.5, 2} of 3 outer folds, minBreakEvenSlippageBps 20 (10x the 2 bps base — megacap US equity fills are tight, so a strategy that cannot survive 20 bps has no live margin of safety), maxDisplacementShare 0.35, maxTurnoverAnnual 200 declared as HYPOTHESIS: gross cap is 2.0x equity (4 slots x 0.5), one full book rotation per week = 2 x 2.0 x 52 = 208x/yr, rounded to 200 — the fastest cadence compatible with the multi-week TSM thesis; deliberately NOT derived from the incumbent's own measured turnover (a self-anchored gate is vacuous) and the incumbent may fail it, which would itself be a pre-registered finding. trialAccounting arithmetic, documented in full: 259 = 251 (legacy v7 grid, inventoried in experiments/historical-hypothesis-ledger-v1.json) + 1 (momentum-stocks-v1 incumbent) + 4 (momentum-stop-sizing-v1's candidates) + 0 (momentum-stop-sizing-v2 re-ran those same configs on a longer window, adds 0 per the ledger identity rule) + 3 (momentum-timestop-v1's three time barriers; its incumbent-unlimited was a rerun). This manifest introduces 1 new hypothesis (no-displacement); incumbent is an execution-identity rerun. Inventory incomplete, so complete=false and approval stays blocked by protocol regardless of gates.",
+  "trialAccounting": { "priorUniqueTrials": 259, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_split",
+    "timeframe": "5m",
+    "universe": ["SPY", "QQQ", "IWM", "GLD", "AAPL", "MSFT", "NVDA", "META", "GOOGL", "AMZN"],
+    "refSymbol": "SPY",
+    "rthOnly": true,
+    "funding": false,
+    "barMinutes": 5,
+    "barMinutesEq": 18.4615384615
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2024-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 60
+  },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0 },
+    "stress": { "slippageBps": 5, "commissionBps": 2 }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "tsmTrail": { "kSigma": 3, "lookbackBars": 78, "minPct": 2, "maxPct": 8 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "no-displacement",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "slotHysteresis": true,
+      "tsmTrail": { "kSigma": 3, "lookbackBars": 78, "minPct": 2, "maxPct": 8 },
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": { "threshold": 0.5, "count": 2 },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

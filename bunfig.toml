@@ -1,0 +1,3 @@
+# [test].preload runs before every `bun test` file (never affects `bun run`).
+[test]
+preload = ["./src/test-setup.ts"]

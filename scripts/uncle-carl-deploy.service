@@ -1,0 +1,14 @@
+[Unit]
+Description=Uncle Carl auto-deploy (poll origin/master, gate on typecheck+tests, restart)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=__REPO__
+ExecStart=__REPO__/scripts/auto-deploy.sh
+# Append to the same logs/ dir the bot + backups use (logrotate-managed).
+StandardOutput=append:__REPO__/logs/deploy.log
+StandardError=append:__REPO__/logs/deploy.log
+# A deploy (install + typecheck + tests + restart) should never run long.
+TimeoutStartSec=300

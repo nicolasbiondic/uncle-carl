@@ -1,0 +1,118 @@
+{
+  "name": "momentum-crypto-usdc-daily-s6-pure-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTRO 2026-09-26 (U1 ronda 5), escrito ANTES de correr, junto a su gemelo del mismo eje. La ronda 4b (d13-s5, artefacto 752767ae) mostro el eje de AMPLITUD monotono y fuerte sobre el kernel diario blend63: 3 slots x 1/3 -> 103.3%/Sharpe 0.61/DD 56.9/PSR 0.887 y 5 slots x 0.2 -> 328.4%/1.03/52.4/0.979 con turnover 10.4x/ano, desplazamiento 0 y curva de costes plana (1.02-1.06 en 0-30 bps); s5 falla solo maxDD (52.4>45) y exceso vs BTC (-24.4pp). Esta ronda extiende el MISMO eje declarado un paso mas: s6 = 6 slots x 1/6. priorUniqueTrials=305 (total tras la ronda 4); pasa a 306 (mismo bruto 1.0x, mismo kernel blend 63-126-252/MA200/slotHysteresis/stops k8, mismas 13 bases, misma ventana/folds/costes/gates que daily-v1). HIPOTESIS: si la monotonia 3->5 continua, mas amplitud diversifica el libro diario lo bastante para recortar el maxDD hacia <=45 y sostener o subir el Sharpe (en acciones el kernel diario valido con 8x0.125); el exceso vs BTC (-24pp con s5) puede volverse positivo con mas retorno compuesto. CASE-AGAINST (declarado): (1) en 13 nombres, 6-8 slots = 46-62% del universo — el ranking se ve forzado a sostener las tendencias 6a-8a, por definicion las mas debiles; en acciones habia 11 nombres de calidad homogenea, aqui la cola (BCH/LTC/BNB) es estructuralmente distinta; (2) la correlacion media ~0.8 con BTC limita el beneficio marginal de cada slot extra; (3) el precedente horario refuto el eje slots (aunque el mecanismo era churn de costes, no aplica al diario con turnover ~10x). CRITERIO: el de la ronda 3 (validado = PSR>=0.95, exceso>0, maxDD<=45, >=2/3 folds PSR>0.5, BE>20); el cableado final es el diseno que MAS mejore al control-w2 (aaa0bcca: 176.0%/0.76/70.8) en Sharpe Y maxDD con BE mas alto, declarando honestamente si no certifica. TRIAL ACCOUNTING: +1 hipotesis nueva. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 305,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1d",
+    "universe": [
+      "ADA/USD",
+      "AVAX/USD",
+      "BCH/USD",
+      "BNB/USD",
+      "BTC/USD",
+      "DOGE/USD",
+      "ETH/USD",
+      "LINK/USD",
+      "LTC/USD",
+      "NEAR/USD",
+      "SOL/USD",
+      "UNI/USD",
+      "XRP/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-26T00:00:00Z",
+  "window": {
+    "from": "2021-08-01",
+    "to": "2026-09-27",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 17,
+      "commissionBps": 3
+    },
+    "stress": {
+      "slippageBps": 60,
+      "commissionBps": 5
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "d13-s6-blend-63-126-252",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.16666666666666666,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 6,
+      "maxShorts": 0,
+      "lookbackDaysList": [
+        63,
+        126,
+        252
+      ],
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

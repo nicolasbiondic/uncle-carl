@@ -1,0 +1,115 @@
+{
+  "name": "momentum-crypto-sizing-v3",
+  "sleeve": "crypto",
+  "description": "Cadena PURA de vt-35 vs cadena PURA del incumbent, pre-registrada 2026-09-21. Motivo: el 2026-09-20 se descubrio que NINGUN stitched citado hasta hoy era una cadena limpia: en sizing-v2 el fold 1 outer lo gano vt-50 (no vt-35), y en profitlock-v1 el fold 0 lo gano lock-breakeven-arm10 (no el incumbent; breakeven NO es un no-op a nivel de trade: exits profit_lock reales). La cadena pura del incumbent (a04c88d3, 25-ago) es 386.4%/0.98/648 trades/outerPSR 0.971. No existe artefacto con la cadena pura de vt-35. Con solo 2 candidatos, el ganador inner de cada fold produce por construccion una cadena pura del que gane. Condicion del quorum del 2026-09-20 (3 jueces) para cablear vt-35: si su cadena pura pasa minOuterPsr>=0.95 y los gates de DD, es PROMOCION POR PROTOCOLO (no 4o override); si falla PSR, la decision vuelve al dueno con el trade-off honesto: vt-35 excede a BTC B&H en solo +7.6pp (130 vs 123) mientras el incumbent puro lo excede en +263pp con DD 49%; a cambio vt-35 reduce ~60% los bloqueos por soft drawdown (gateBlocks: 1536/4728/1128 vs 5616/6840/5254 por fold). 0 hipotesis nuevas (ambos candidatos ya contados). priorUniqueTrials=284: 283 + 1 (sharpe-off de sharpegate-v1). complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 284,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "vt-35",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

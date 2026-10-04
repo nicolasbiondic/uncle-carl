@@ -1,0 +1,117 @@
+{
+  "name": "momentum-stocks-slot20-pure-v1",
+  "sleeve": "stocks",
+  "description": "EJE TAMANO DE SLOT a tope bruto IDENTICO (R6, pre-registrado 2026-09-27 ANTES de correr, junto a slot125-pure-v2 y slot167-pure-v1). Mismo contexto e hipotesis que slot167-pure-v1 (exposicion media OOS del control ~0.53-0.78x por capital ocioso cuando califican menos de 8 nombres): este candidato lleva el mismo eje un paso mas lejos, notionalPctPerSlot=0.20 (de 0.125), maxLongs=8, maxGrossExposureMult=1.0 AGREGADO explicitamente (8*0.20=1.6x nominal > 1.0x real, el tope hace mas trabajo aqui que en slot167: con solo 5 nombres calificando ya se toca el 1.0x exacto, y con 6-8 el tope recorta 1-3 de los de menor ranking). CASO EN CONTRA (declarado antes de correr, identico en naturaleza a slot167-pure-v1 pero mas severo en magnitud): (a) CONCENTRACION MAXIMA — con 3-4 nombres calificando (frecuente en el universo de 11 simbolos fuera de tendencias amplias) cada slot de 20% del equity con stop volScaled hasta 30% implica hasta ~6pp de equity por mecha de un solo nombre, el doble que el control (3.75pp); (b) el mismo problema de timing que slot167: la concentracion maxima coincide con el regimen mas debil (menos nombres calificando = mercado mas selectivo/adverso); (c) LOO sin NVDA se agrava monotonicamente con el tamano del slot por la misma logica que slot167, y aqui el efecto es mayor; (d) con el tope de 1.0x mordiendo desde 5 nombres calificados en vez de desde 7 (slot167) o nunca (control), el candidato pasa MAS tiempo con entradas bloqueadas por el cap que slot167 — si el bloqueo cae sistematicamente sobre los nombres de MENOR momentum del blend (los de peor calidad marginal), el efecto neto en Sharpe puede ser POSITIVO (funciona como filtro de calidad forzado); si cae sobre nombres que habrian sido ganadores, es puro costo de oportunidad — este manifest no asume cual de los dos domina, lo mide. Todo lo demas FROZEN al control (mismo universo 11 simbolos, misma ventana/asOf latest/window.to 2026-12-31, mismos folds/costes/gates, mismo blend/MA/hysteresis/stops/sharpeGate/risk). TRIAL ACCOUNTING: +1 hipotesis nueva (slot 0.20 con tope 1.0x nunca corrido). priorUniqueTrials=308 (307 base + 1 de slot167-pure-v1, registrado en el mismo batch antes de correr) -> 309 tras este manifest.",
+  "trialAccounting": {
+    "priorUniqueTrials": 308,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "slot20",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.20,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 0,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "maxGrossExposureMult": 1.0,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "lookbackDaysList": [
+        63,
+        126,
+        252
+      ]
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

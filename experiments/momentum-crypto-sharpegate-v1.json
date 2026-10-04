@@ -1,0 +1,105 @@
+{
+  "name": "momentum-crypto-sharpegate-v1",
+  "sleeve": "crypto",
+  "description": "Ablacion del gate de Sharpe rolling {lookbackDays:30, minSharpe:0} del sleeve crypto, pre-registrada 2026-09-21 ANTES de correr. Es la ULTIMA hipotesis abierta con senal positiva tras 8 ejes: en gates-v1 (2026-09-13) sharpe-off dio inner Sharpe mediano 1.28 vs 0.88 del incumbent, pero ese manifest tenia 4 candidatos (regime-off/sharpe-off/both-off) y la seleccion outer se mezclo por fold; no se puede aprobar ni refutar sin un manifest LIMPIO de 2 candidatos. TODO congelado al incumbent salvo la ausencia de sharpeGate. A FAVOR: el gate bloquea entradas con Sharpe30d<0 — tras un crash, justo cuando el momentum arranca; el audit del modelo (09-06) midio que en crypto los entrantes bloqueados rinden -2.2% vs +1.4% (a favor del gate) pero con n pequeno e in-sample. EN CONTRA (declarado): si el gate protege en OOS como lo hizo el de regimen (regime-off subio el DD 4.6pp), quitarlo empeora DD y queda refutado como los otros 6; y sharpe-off puede ganar inner por folds cortos y perder outer (el patron de breakers-v1). Prediccion falsable: si el gate es peso muerto, sharpe-off iguala o mejora Sharpe outer SIN empeorar maxDD/stress/LOO; si empeora DD, el gate se queda. 1 hipotesis nueva. priorUniqueTrials=283: 281 + 2 (profit-lock crypto). complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 283,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "sharpe-off",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

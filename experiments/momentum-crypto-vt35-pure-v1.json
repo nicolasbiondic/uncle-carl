@@ -1,0 +1,99 @@
+{
+  "name": "momentum-crypto-vt35-pure-v1",
+  "sleeve": "crypto",
+  "description": "Evaluacion OOS de la cadena PURA de vt-35 (1 candidato: sin seleccion inner, los 3 folds outer corren vt-35 por construccion), pre-registrada 2026-09-21 tras sizing-v3, donde con 2 candidatos el fold 1 lo gano el incumbent (mediana DSR inner 0.88 vs 0.73) y la cadena volvio a salir mezclada (555%/1.17/PSR 0.991 con fold 1 = incumbent heredando el RiskState de vt-35). Hallazgo de sizing-v3: vt-35 tiene mejor Sharpe inner que el incumbent en solo 2/9 folds (0/1 y 2/2); la afirmacion \"domina 9/9\" del veredicto de sizing-v2 no se sostiene en comparacion directa. Este artefacto es el numero comparable con la cadena pura del incumbent (a04c88d3: 386.4%/0.98/648/outerPSR 0.971/DD 49.2): mismo dataHash, mismo asOf, mismas ventanas. 0 hipotesis nuevas. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 284,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt-35",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

@@ -1,0 +1,153 @@
+{
+  "name": "momentum-crypto-ddscale-v1",
+  "sleeve": "crypto",
+  "description": "Eje ESCALADO CONTINUO POR DRAWDOWN de las entradas nuevas (risk.ddScale — Grossman & Zhou 1993, control optimo bajo restriccion de drawdown: exposicion proporcional al colchon sobre el piso), pre-registrado 2026-09-25 ANTES de correr. Motivacion: el soft-DD es BINARIO (10% bajo un pico que decae con vida media 30d => pausa 24h que se RE-ARMA continuamente; con el libro plano la equity no se recupera y la pausa dura lo que tarde el pico en decaer — 47 pausas en el OOS 2021-26, p50 2d / p90 13d / max 34d, 216 dias = 14.3% del OOS; momentum_crypto plano desde el 10-sep-2026). RELAJAR el umbral esta refutado (breakers-v1, 2026-09-13: 0.15/0.30, 0.20/0.40 y no-soft destruyeron 2022 OOS); el gate de mercado BTC<SMA200 como sustituto fue refutado por fold-robustez (marketgate, 2026-09-24: 1/3 folds PSR>=0.5). Hipotesis: sustituir la pausa binaria por escalado LINEAL del tamano de entradas — scale = clamp(1 - (DD - startPct)/(endPct - startPct), minScale, 1), multiplicando el escalado vt-35 existente; con ddScale activo la pausa soft se ignora; hard-DD 20%, daily cap y loss-streak INTACTOS; posiciones existentes no se tocan. A diferencia de relajar el umbral, el freno sigue actuando en TODO el rango 5-20% (de-risking progresivo), y a diferencia de la pausa no hay lockout path-dependent: la primera senal tras el DD entra (pequena) y reconstruye equity-path. TODO congelado al incumbente vivo vt-35 (vt35-pure-v1, 8b673e8a) salvo el eje: mismo dataHash-objetivo (asOf 2026-07-15 pinned), mismas ventanas/costes/ledger/gates. 3 candidatos: vt-35 (control = incumbente vivo exacto), vt35-dd5-20 (startPct 0.05, endPct 0.20, minScale 0 — de-risking temprano), vt35-dd10-20 (startPct 0.10, endPct 0.20, minScale 0 — mismo umbral de disparo que el soft-DD actual). Prediccion falsable: si el valor del soft-DD esta en CORTAR el tamano y no en la pausa, dd10-20 conserva la proteccion 2022 (fold 0 >= +6.0% del control, maxDD en gate) y recupera los rebotes que la pausa se pierde. CRITERIO DE ROBUSTEZ (declarado de antemano): la cadena pura del ganador debe mejorar el Sharpe de vt-35 puro (0.985) SIN peor maxDD (36.9%), PASAR minFoldsPsrAbove (lo que el gate de mercado no logro) y el fold 0 (2022-23) no puede quedar por debajo del +6.0% del control. EN CONTRA (declarado): (1) en 2022, con DD 12-18%, ddScale sigue operando a 0.1-0.5x donde la pausa operaba a 0 — cada entrada escalada en un rally bajista PIERDE dinero que hoy no se pierde; (2) las pausas en promedio PROTEGIERON: durante ellas el universo EW8 cayo -5.9% (research-softdd-lockout, R3) — el coste de oportunidad historico neto del lockout es NEGATIVO, la premisa operativa del eje es debil en agregado y vive solo en la cola p90 (sept-2026); (3) breakers-v1 enseno que TOCAR el soft-DD destruye 2022 — el escalado es una forma de tocarlo y puede heredar la refutacion; (4) son mas trials sobre una ventana que solo certifica Sharpe >= 0.81 (certifiableSharpeAtPsr95), riesgo de mineria reconocido. 2 hipotesis nuevas (vt35-dd5-20, vt35-dd10-20); el control es identidad de ejecucion (+0). priorUniqueTrials=286 (base marketgate: 284 + 2). complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 286,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt-35",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "vt35-dd5-20",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30,
+        "ddScale": {
+          "startPct": 0.05,
+          "endPct": 0.2,
+          "minScale": 0
+        }
+      }
+    },
+    {
+      "name": "vt35-dd10-20",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30,
+        "ddScale": {
+          "startPct": 0.1,
+          "endPct": 0.2,
+          "minScale": 0
+        }
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

@@ -1,0 +1,117 @@
+{
+  "name": "momentum-crypto-thresholds-v1",
+  "sleeve": "crypto",
+  "description": "Entry/exit threshold sweep for the TSM crypto sleeve (momentum_crypto), pre-registered 2026-08-08 BEFORE any run, in response to the owner's live re-promotion of the sleeve. Hypothesis under test (NOT assumed): the incumbent +5% entry systematically arrives late in 2-3%-magnitude moves and the -2% exit ejects on normal retracement, producing repeated small losses (observed live: USDC sibling sleeve 15 closes / WR 27% / -$271 in 30d; ADA +28.7% captured only in its tail). EVERYTHING except the entryPct/exitPct axis is FROZEN to experiments/momentum-crypto-v1.json: same universe/window (2021-01-01..2026-07-15, asOf pinned), same 3x3 purged folds, same costs, real settled mainnet funding, same BTC buy-and-hold benchmark and the same acceptance gates INCLUDING minExcessReturnVsBench 0 (which the frozen v1 artifact predates — this run is the first crypto run where it binds; gates NOT relaxed). 6 candidates declared up front, none to be trimmed after results: incumbent e5x2 (+5/-2), e3x2 (+3/-2 faster entry), e2x2 (+2/-2 fastest entry), e5x4 (+5/-4 tolerant exit), e3x4 (+3/-4 the combined-hypothesis point), and e8x2 (+8/-2 strictly SLOWER entry — anti-hypothesis control so the sweep does not point only where the hypothesis does). Declared scope cut (before running): exit -6 variants and a full entry x exit grid are omitted to respect the 3-5-variant cap; the legacy 251-trial v7 grid already swept tsmExit -1/-2/-4 and tsmEntry 3/5/8 at slower cadences (240/720/1440min), so this manifest revisits the axis at the production 60min cadence only. priorUniqueTrials=252: the 251 inventoried legacy v7 hypotheses + momentum-crypto-v1's incumbent. The incumbent here is an execution-identity rerun (adds 0 new hypotheses); the 5 variants are new. Inventory incomplete, so complete=false and approval stays blocked by protocol regardless of gates.",
+  "trialAccounting": { "priorUniqueTrials": 252, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": { "slippageBps": 5, "commissionBps": 4 },
+    "stress": { "slippageBps": 10, "commissionBps": 8 }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent-e5x2",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "fast-entry-e3x2",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 3,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "fastest-entry-e2x2",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 2,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "tolerant-exit-e5x4",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -4,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "combined-e3x4",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 3,
+      "exitPct": -4,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    },
+    {
+      "name": "slow-entry-e8x2",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 8,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3
+  }
+}

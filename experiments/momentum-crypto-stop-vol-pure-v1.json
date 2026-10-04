@@ -1,0 +1,100 @@
+{
+  "name": "momentum-crypto-stop-vol-pure-v1",
+  "sleeve": "crypto",
+  "description": "EJE hardStop en momentum_crypto, candidato #3 de 4 (batch crypto-stop-axis-2026-09-28; ver momentum-crypto-stop-control-pure-v2 para contexto/motivo/criterio de ganador, identicos aqui). TODO congelado al control salvo el UNICO eje: hardStop {mode:'volScaled', kSigma:3, lookbackBars:24, minPct:6, maxPct:20} — formula de produccion trailPctFromVol (src/strategies/momentum/MomentumEngine.ts), IMPORTADA no copiada: distancia = kSigma x stdev(log-returns de las ultimas lookbackBars closes horarias) x sqrt(barsPerDay=24) x 100, clamp [minPct,maxPct], resuelta SOLO con historia decision-time (sin lookahead a la barra de ejecucion) y fail-open a maxPct si la historia es corta/degenerada. PARAMETRIZACION RAZONADA Y DECLARADA ANTES DE CORRER (sonda directa sobre data/historical.db, 1h binance_futures, los 8 majors del universo, vol diaria realizada con lookback de 24 barras/1 dia rodante): mediana por simbolo 2.25% (BTC) .. 4.35% (AVAX), p90 4.58% (BTC) .. 9.19% (AVAX), p99 hasta 22.9% (DOGE). Con kSigma=3 y lookbackBars=24 (1 dia horario, mismo criterio '1 sesion' que el trail de stocks 78 barras de 5m = 1 dia RTH), la distancia MEDIANA por simbolo cae en 6.75%(BTC)-13.05%(AVAX) — dentro del rango 4-20% pedido — y el piso 6%/techo 20% solo muerden en los extremos (BTC en dias de vol muy baja, DOGE/SOL en dias de vol extrema). lookbackBars=24 en vez de 48/720 (mas largo, como el volTarget de 720h del propio vt-35) para que el stop reaccione al REGIMEN RECIENTE de cada nombre en vez de a un promedio de 30 dias — un ancla de entrada fija no debe usar una vol mas lenta que la que el trader ve al momento de entrar. HIPOTESIS: un stop que escala con la vol propia de cada nombre evita el error simetrico del 4% fijo (demasiado ancho para BTC en calma, demasiado angosto para SOL/AVAX/DOGE en vol alta) sin ensanchar uniformemente como fixed8. CASO EN CONTRA (declarado, comparte el nucleo del caso-en-contra de fixed8): (a) en regimen de vol ALTA (justo cuando el book de 8 nombres correlacionados mas se beneficiaria de un stop ajustado) el clamp a maxPct=20% deja correr las mismas mechas grandes que fixed8 — si los crashes ocurren en dias de vol alta (lo usual), volScaled converge al comportamiento de un stop ancho fijo exactamente cuando mas duele; (b) en vol BAJA el stop se aprieta hacia minPct=6% (mas ajustado que fixed8), lo que puede reproducir el problema del 4% (sacar posiciones sanas por ruido) si minPct=6% sigue siendo angosto para el whipsaw real observado en vivo; (c) el lookbackBars corto (24h) hace el stop MAS REACTIVO a un salto reciente de vol — una sola mecha grande infla la vol medida y ensancha el stop de la SIGUIENTE entrada del mismo nombre, lo que puede encadenar perdidas mas grandes en rachas. Prediccion falsable: si volScaled bate a fixed8 en Sharpe Y en maxDD simultaneamente, la escala por vol domina sobre el ancho fijo; si fixed8 iguala o supera a volScaled en ambos, la ganancia viene solo de ensanchar el stop en general y no de escalarlo por nombre. TRIAL ACCOUNTING: hardStop volScaled en momentum_crypto NUNCA se corrio en este ledger (el eje volScaled solo existe probado en stocks, kSigma/lookback distintos: momentum-stop-sizing-v1/v2). +1 hipotesis nueva. Base = 310 (momentum-crypto-stop-fixed8-pure-v1 arriba, +1 desde 309) -> 311 tras este manifest.",
+  "trialAccounting": {
+    "priorUniqueTrials": 310,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt-35-volstop",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "hardStop": { "mode": "volScaled", "kSigma": 3, "lookbackBars": 24, "minPct": 6, "maxPct": 20 },
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

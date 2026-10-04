@@ -1,0 +1,100 @@
+{
+  "name": "momentum-crypto-stop-fixed8-pure-v1",
+  "sleeve": "crypto",
+  "description": "EJE hardStop en momentum_crypto, candidato #2 de 4 (batch crypto-stop-axis-2026-09-28; ver momentum-crypto-stop-control-pure-v2 para el contexto/motivo/criterio completo, identicos aqui). TODO congelado al control (vt-35: 8 majors USDT-perp, cadencia horaria, volTarget 35% vt-35, sharpeGate 30d/0, peakHalfLifeDays 30, mismo universo/ventana/asOf latest/folds/costes/gates) salvo el UNICO eje: hardStop {mode:'fixed', pct:0.08} en vez del fijo 4% heredado (ledger.hardStopPct queda en 0.04 solo como valor legado del schema; con hardStop presente en el candidato el replay usa SIEMPRE stopFrac=0.08, el ledger.hardStopPct no se lee — ver SimBroker.openPosition/closeAt en scripts/backtest-momentum-wf.ts). HIPOTESIS: duplicar la distancia (4%->8%, ancla fija desde la entrada, SIN ratchet) reduce el numero de stops que cortan la cola izquierda de nombres que luego el modelo recompra casi al mismo precio (ver ADA 28-sep: stop 4% a las 06:00 UTC -$36.56, recompra 07:00 casi al mismo precio) sin dejar correr los crashes lo suficiente como para perder mas de lo que ahorra en whipsaw. CASO EN CONTRA (declarado ANTES de correr, no se relativiza post-hoc): (a) en un book 2x con 8 nombres CORRELACIONADOS (todo cripto se mueve junto en un crash), un stop mas ancho no diversifica el riesgo de cola — deja correr LA MISMA mecha en los 8 nombres a la vez, así que el 8% puede costar el doble por posicion en el dia exacto en que mas duele (fold 0, 2022-23, es la prueba: si el 8% pierde ahi frente al control, el caso-en-contra se confirma); (b) el 4% corta pronto la cola izquierda por diseño — ensancharlo mecanicamente empeora el peor dia individual aunque mejore el promedio; (c) menos stops implica menos rotacion (turnover mas bajo, gate maxTurnoverAnnual mas facil de pasar) pero mas tiempo con el capital atado a una posicion perdedora antes de que el trail/sharpeGate/exitPct la cierre, lo que puede subir maxDD sin subir Sharpe. Prediccion falsable: si el 8% gana Sharpe Y maxDD sube menos de 5pp sobre el control, el caso-en-contra queda refutado para este universo/periodo; si maxDD sube mas de 5pp o el fold 0 pierde retorno frente al control, el caso-en-contra domina y el 8% no gana pese a cualquier mejora de Sharpe agregado. TRIAL ACCOUNTING: hardStop fixed 0.08 en momentum_crypto NUNCA se corrio en este ledger (el eje hardStop solo existe probado en stocks: momentum-stop-sizing-v1/v2). +1 hipotesis nueva. Base = 309 (momentum-crypto-stop-control-pure-v2 arriba, +0) -> 310 tras este manifest.",
+  "trialAccounting": {
+    "priorUniqueTrials": 309,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt-35-fixed8",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "hardStop": { "mode": "fixed", "pct": 0.08 },
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

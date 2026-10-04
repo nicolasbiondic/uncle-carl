@@ -1,0 +1,36 @@
+Third-party fixtures under this directory (response/, request/, markets/)
+are copied verbatim from the ccxt/ccxt repository:
+
+    https://github.com/ccxt/ccxt
+    Path: ts/src/test/static/{response,request,markets}/{alpaca,binance}.json
+
+These are ccxt's own recorded real exchange HTTP responses/requests used by
+ccxt's static test suite (real Alpaca/Binance API payloads, not hand-written
+mocks). Downloaded 2026-07-29 from the `master` branch via
+raw.githubusercontent.com for use as REAL-DATA fixtures in this repo's own
+test suite (src/executor/*.ccxt-real.test.ts) — never executed against a
+live exchange, read-only inputs to our own parsing code.
+
+ccxt is MIT licensed:
+
+Copyright © 2024 Igor Kroitor
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+The full license text is also kept verbatim in LICENSE.txt in this directory.

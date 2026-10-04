@@ -1,0 +1,105 @@
+{
+  "name": "momentum-crypto-2026w-multihorizon-pure-v1",
+  "sleeve": "crypto",
+  "description": "C2 MULTI-HORIZONTE del batch crypto-redesign-2026-09-26, pre-registrado 2026-09-26 ANTES de correr (contexto y criterio de ganador: ver momentum-crypto-2026w-control-pure-v1). HIPOTESIS (Hurst/Ooi/Pedersen 2017: promediar horizontes es mas robusto que cualquier lookback unico; precedente interno: blend3 63/126/252 GANO en momentum_stocks y esta cableado en vivo desde 2026-09-25): sustituir el lookback unico de 14d por la MEDIA de los retornos a 7/14/28 dias (lookbackDaysList, MA 30 intacta) suaviza el whipsaw del 14d puro — el sleeve entra tarde y sale en retrocesos normales, la clase de perdida repetida del tramo jul-sep 2026. Kernel y universo IDENTICOS a vt-35 en todo lo demas. CASO EN CONTRA (declarado antes de correr): (a) en crypto el momentum decae mas rapido que en acciones — anadir 28d puede diluir la senal que paga (7-14d) en vez de estabilizarla; (b) el 7d anade ruido de alta frecuencia y puede SUBIR el turnover (maxTurnoverAnnual 150 decide); (c) el blend gano en stocks con horizontes 3-12 MESES, no dias — la analogia puede no transferir. TRIAL ACCOUNTING: +1 hipotesis nueva (primera vez que lookbackDaysList se corre en crypto). Base=295 (batch compartido, +3 total). priorUniqueTrials=295. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 295,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt35-mh71428",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "lookbackDaysList": [
+        7,
+        14,
+        28
+      ],
+      "maLengthDays": 30
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

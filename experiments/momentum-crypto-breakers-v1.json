@@ -1,0 +1,146 @@
+{
+  "name": "momentum-crypto-breakers-v1",
+  "sleeve": "crypto",
+  "description": "Eje del breaker de drawdown del RiskGuard (softDrawdownPct/hardDrawdownPct), pre-registrado 2026-09-12 ANTES de correr, en respuesta a 3 dias de ambos sleeves crypto cerrados a entradas por soft-DD 12.2%/11.7% vs umbral 10% con re-armado diario y pico decayendo a 30d (~9 dias de lockout por cada disparo). Los umbrales actuales (0.10/0.20/24h) son constantes declaradas en julio, nunca validadas; el maxDD OOS del sleeve es 49% (43% con vt-35), asi que un soft-DD del 10% dispara con volatilidad ordinaria. TODO congelado al incumbent de momentum-crypto-v1 salvo risk.{softDrawdownPct,hardDrawdownPct}. 4 candidatos declarados: incumbent (0.10/0.20), 0.15/0.30, 0.20/0.40, y no-soft (soft=1.0 = desactivado, hard 0.20 intacto) como control de ablacion. Motivacion A FAVOR: el breaker resta dias desplegados sin evidencia de que ahorre DD neto. EN CONTRA (declarado): el breaker existe para el crash de 2022 (-53% BTC); relajarlo puede subir maxDD/stressMaxDrawdown, que ya fallan — un candidato que mejore retorno empeorando DD NO es una victoria; el gate maxDrawdown 0.45 decide. Prediccion falsable: no-soft y 0.20/0.40 suben trades y retorno; si maxDrawdown supera 0.45 en alguno, ese candidato queda refutado aunque gane en Sharpe. 3 hipotesis nuevas. priorUniqueTrials=275 (ver sizing-v2; sizing-v2 es identidad, +0). complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 275,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent-soft10-hard20",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "soft15-hard30",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30,
+        "softDrawdownPct": 0.15,
+        "hardDrawdownPct": 0.3
+      }
+    },
+    {
+      "name": "soft20-hard40",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30,
+        "softDrawdownPct": 0.2,
+        "hardDrawdownPct": 0.4
+      }
+    },
+    {
+      "name": "no-soft-hard20",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30,
+        "softDrawdownPct": 1
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

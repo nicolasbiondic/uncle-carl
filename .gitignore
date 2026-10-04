@@ -1,0 +1,19 @@
+node_modules/
+dist/
+# Top-level data/ directory (DBs, backups, historical bars) — but
+# `src/data/` (fetchers + HistoricalStore source) MUST be tracked.
+/data/
+# .env* (not just .env): an operator's `cp .env .env.bak-<ts>` before an edit
+# is a good habit, but an untracked file in the repo root makes the working
+# tree dirty, and auto-deploy.sh REFUSES to deploy a dirty tree — on
+# 2026-08-07 two such backups silently blocked every deploy for ~2h.
+.env*
+!.env.example
+*.bak-*
+*.db
+*.db-wal
+*.db-shm
+logs/
+# Top-level reports/ directory (audit dumps, baselines, etc) — but
+# `src/reports/` (the DailyReporter source) MUST be tracked.
+/reports/

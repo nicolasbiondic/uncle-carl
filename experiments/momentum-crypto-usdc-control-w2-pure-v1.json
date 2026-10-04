@@ -1,0 +1,93 @@
+{
+  "name": "momentum-crypto-usdc-control-w2-pure-v1",
+  "sleeve": "crypto",
+  "description": "Baseline de comparacion para la ronda 3 (U1), pre-registrado en el mismo batch que momentum-crypto-usdc-daily-v1: el CONTROL horario EXACTO de momentum-crypto-usdc-control-pure-v1 (misma config viva byte a byte: 13 bases proxy USDT, 60min, 3x1/3, entry 5/exit -2, sharpeGate 30/0, regimen ON, sin volTarget, leverage 2, hard stop 4%, costes reales 17+3 / 60+5) re-corrido en la VENTANA de los candidatos diarios (2021-08-01 -> asOf 2026-09-26T00:00Z, 3x3 purge 0.25y, warmup 45d) — la ventana diaria empieza mas tarde porque el fail-closed de warmup del kernel 252d/MA200 exige 263 barras diarias pre-fold y NEAR solo las tiene desde 2021-07-05. Sin este rerun la comparacion control-vs-diario mezclaria ventanas distintas (el control original 4b403501 incluye el H1-2021 alcista que la ventana diaria no ve) y el criterio de cableado de la ronda 3 ('el diseno que MAS mejore al control en Sharpe Y maxDD con break-even mas alto') seria deshonesto. TRIAL ACCOUNTING: identidad de ejecucion del candidato usdc-control ya contado (rerun en ventana distinta = identidad, regla del ledger): +0. priorUniqueTrials=303 (301 + 2 de daily-v1, registrado antes en el mismo batch). complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 303,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "ADA/USD",
+      "AVAX/USD",
+      "BCH/USD",
+      "BNB/USD",
+      "BTC/USD",
+      "DOGE/USD",
+      "ETH/USD",
+      "LINK/USD",
+      "LTC/USD",
+      "NEAR/USD",
+      "SOL/USD",
+      "UNI/USD",
+      "XRP/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-09-26T00:00:00Z",
+  "window": {
+    "from": "2021-08-01",
+    "to": "2026-09-27",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 17,
+      "commissionBps": 3
+    },
+    "stress": {
+      "slippageBps": 60,
+      "commissionBps": 5
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "usdc-control",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.3333333333333333,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 3,
+      "maxShorts": 0,
+      "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+      "risk": { "peakHalfLifeDays": 30 }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

@@ -1,0 +1,176 @@
+{
+  "name": "momentum-stocks-horizon-v1",
+  "sleeve": "stocks",
+  "description": "Eje de HORIZONTE de la senal TSM stocks sobre BARRAS DIARIAS alpaca_wide/1d (hipotesis #4 del mapa, pre-registrado 2026-09-24 ANTES de correr). Tesis a priori (de literatura, NO minada de estos datos): el horizonte vivo de 14 dias con MA30 es un default HEREDADO de crypto; en acciones individuales el horizonte ~1 mes es de REVERSION (Jegadeesh 1990, Lehmann 1990 — exactamente lo que explota el sleeve meanrev) y la continuacion documentada vive en 3-12 meses (Jegadeesh-Titman 1993; Moskowitz-Ooi-Pedersen 2012); ademas la decision diaria tras el cierre con fill al open siguiente elimina de raiz los dos bugs de paridad del sleeve 5m (corte SIP -16min y fase :35 vs :00 — hallazgos C#1/C#2). UN SOLO EJE (lookbackDays/maLengthDays via el soporte sim commit cad8278); TODO lo demas identico en los 3 candidatos y calcado del kernel vivo: 4 slots x 0.25 (1.0x), slotHysteresis true, entry +5/exit -2, sharpeGate {30d,0}, trail Y hard stop vol-scaled DIARIOS {kSigma 3, lookbackBars 20, minPct 2, maxPct 12} (la parametrizacion diaria ya validada en meanrev-stop-sizing/vivida en meanrev, porque 78 barras de 5m no existen en diario; igual para los tres candidatos), cadencia 1440. Candidatos declarados, ninguno se recorta despues: h14-ma30 (CONTROL: el horizonte vivo trasladado a barras diarias — es config NUEVA, no comparable 1:1 con el control 5m momentum-stocks-live-control-v1 registrado el mismo dia, que es la vara de 'manzanas con manzanas'), h126-ma200 (6 meses/MA200, el punto Jegadeesh-Titman), h252-ma200 (12 meses/MA200, el punto MOP-2012). Umbrales entry/exit NO se barren (+5% sobre un retorno de 126/252d esta casi siempre activo en megacaps alcistas — el ranking por r y el MA-filter hacen el trabajo; se declara y se acepta). Universo = los 11 simbolos VIVOS incl. SMH (cobertura diaria verificada completa 2016-01-04..2026-09-23 para los 11). Ventana lo mas larga posible: 2017-06-01..2026-09-24 (asOf pinned; el from deja 420d de warmup calendario ~289 sesiones >= las 263 barras que exige h252-ma200; la base 1d NO llega antes de 2016). 3x3 purged folds (purge 0.25y), costes stocks estandar base 2/0 stress 5/2, benchmark SPY B&H (minExcessReturnVsBench 0 SIN relajar); se reporta ademas el B&H equiponderado del universo (outerTests[].result.bench). CASO EN CONTRA declarado: (a) 2022 esta dentro del fold outer ~1 — un TSM de 6-12 meses entra tarde y sale tarde en un bear rapido y puede destruir Sharpe/DD; (b) whipsaw en laterales: MA200 con re-entradas +5% puede churnear en 2018/2025-planos; (c) SESGO DE SUPERVIVENCIA estructural: el universo son los 11 megacaps/ETFs de HOY congelados hacia 2017 — un TSM largo sobre supervivientes es optimista por construccion, el signo del sesgo se declara y NO se corrige aqui; (d) dependencia NVDA/META: la continuacion multi-anio de 2 nombres puede cargar todo el resultado — lo mide el gate LOO; (e) el RegimeFilter con barMinutes 1440 queda estructuralmente INERTE (shortWindow 24h = 1 barra => volRatio/correlacion no computables) — identico en los 3 candidatos, se declara como limite del kernel diario, NO se recalibra post-hoc. Prediccion falsable: si la tesis de literatura transfiere, h126/h252 baten al control h14-ma30 en Sharpe outer y PSR con DD comparable; si h14-ma30 gana, el eje queda refutado y el default heredado se queda. trialAccounting: cadena stocks 264 previos + 1 (live-control-v1, registrado antes hoy) = 265; este manifest introduce 3 hipotesis nuevas (los TRES candidatos son configs diarias nunca corridas, incluido el control h14-ma30). complete=false (inventario pre-protocolo incompleto, aprobacion bloqueada por protocolo).",
+  "trialAccounting": {
+    "priorUniqueTrials": 265,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-24",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "h14-ma30",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.25,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "lookbackDays": 14,
+      "maLengthDays": 30,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "tsmTrail": {
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "h126-ma200",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.25,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "lookbackDays": 126,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "tsmTrail": {
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "h252-ma200",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.25,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "lookbackDays": 252,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "tsmTrail": {
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

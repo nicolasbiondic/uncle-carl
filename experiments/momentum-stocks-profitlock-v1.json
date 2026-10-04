@@ -1,0 +1,155 @@
+{
+  "name": "momentum-stocks-profitlock-v1",
+  "sleeve": "stocks",
+  "description": "Eje PROFIT-LOCK (tercer mecanismo de salida: ni trail ni hard stop fijo), pre-registrado 2026-09-15 ANTES de correr, en respuesta a una lectura de broker-truth: el no-realizado del sistema (+$2,728) son DOS posiciones — META +$2,398 (momentum_stocks, protegida por un trail que historicamente devuelve: GLD +1.8% → -3.5%) y UNI/USDC +$776 (+46% a 2x, protegida solo por el hard stop a entry-4% = 35% bajo el mark). Mecanismo: cuando la ganancia peak-vs-entry supera armAtPct, el stop sube a breakeven (mode breakeven) o a peak-lockPct% (mode peakMinus, ratchet monotono) y nunca baja; el hard stop de entrada sigue vigente por debajo. TODO congelado al incumbent salvo profitLock. 3 candidatos declarados: incumbent (sin lock), lock-breakeven-arm10 (armAt 10%, lockPct 0), lock-peakminus8-arm15 (armAt 15%, peak-8%). A FAVOR: convierte ganancias no realizadas en piso realizado sin amputar la subida antes de armarse. EN CONTRA (declarado): el trail en crypto fue REFUTADO por amputar colas gordas — un lock peakMinus es un trail que solo se activa tarde, y puede sufrir el mismo defecto atenuado; en stocks el trail YA existe y el lock puede ser redundante o pelearse con el (el nivel efectivo es el max de ambos). Prediccion falsable: breakeven sube el WR y baja el retorno medio por trade; peakMinus-8 mejora DD sin hundir el retorno SOLO si las colas gordas ocurren antes del arm. Si ambos pierden vs incumbent en inner, el eje queda refutado como el cooldown. Gemelo stocks: el incumbent aqui lleva tsmTrail {k3,78,2-8%} (nunca validado por protocolo); el lock se prueba ENCIMA de el, que es la config real. 2 hipotesis nuevas. priorUniqueTrials=260: 259 + 1 (no-displacement de stocks-displacement-v1). complete=false. NOTA: el incumbent de este manifest es slotHysteresis=false (identidad con momentum-stocks-v1); produccion corre slotHysteresis=true desde 2026-09-10 por override — este manifest mide el lock sobre la base validada, no sobre el override.",
+  "trialAccounting": {
+    "priorUniqueTrials": 260,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_split",
+    "timeframe": "5m",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": true,
+    "funding": false,
+    "barMinutes": 5,
+    "barMinutesEq": 18.4615384615
+  },
+  "asOf": "2026-07-15",
+  "window": {
+    "from": "2024-01-01",
+    "to": "2026-07-15",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 60
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "incumbent",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "tsmTrail": {
+        "kSigma": 3,
+        "lookbackBars": 78,
+        "minPct": 2,
+        "maxPct": 8
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    },
+    {
+      "name": "lock-breakeven-arm10",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "tsmTrail": {
+        "kSigma": 3,
+        "lookbackBars": 78,
+        "minPct": 2,
+        "maxPct": 8
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "profitLock": {
+        "armAtPct": 10,
+        "mode": "breakeven",
+        "lockPct": 0
+      }
+    },
+    {
+      "name": "lock-peakminus8-arm15",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "tsmTrail": {
+        "kSigma": 3,
+        "lookbackBars": 78,
+        "minPct": 2,
+        "maxPct": 8
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "profitLock": {
+        "armAtPct": 15,
+        "mode": "peakMinus",
+        "lockPct": 8
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}
