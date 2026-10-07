@@ -260,11 +260,17 @@ if ! bash -c "$GATE_TYPECHECK_CMD" >/tmp/uc-deploy-typecheck.log 2>&1; then
   page_gate_fail "typecheck" "$REMOTE"
   exit 1
 fi
-if ! bash -c "$GATE_TEST_CMD" >/tmp/uc-deploy-test.log 2>&1; then
+# The suite creates temp dirs (state files, envelopes) it does not always
+# remove: run it under a private TMPDIR deleted afterwards, or every deploy
+# leaves dozens of them in /tmp (121 dirs, 37 MB by 2026-10-07).
+GATE_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/uc-gate.XXXXXX")"
+if ! TMPDIR="$GATE_TMPDIR" bash -c "$GATE_TEST_CMD" >/tmp/uc-deploy-test.log 2>&1; then
+  rm -rf "$GATE_TMPDIR"
   log "GATE FAIL: tests — NOT restarting (see /tmp/uc-deploy-test.log)"
   page_gate_fail "test" "$REMOTE"
   exit 1
 fi
+rm -rf "$GATE_TMPDIR"
 rm -f "$GATEFAIL_PAGED_FILE" 2>/dev/null || true
 
 # 5. Deploy: restart via the canonical entrypoint (systemd-managed).

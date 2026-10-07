@@ -3,8 +3,10 @@
 // realised-pnl anchor (every restart lost a loss-streak period) and
 // entryMarks (a time stop would restart its clock).
 
-import { beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "fs";
+// The repo's stale @types/node lacks rmSync (same workaround as telegram/outbox.test.ts).
+const { rmSync } = require("fs") as { rmSync: (p: string, o?: any) => void };
 import { tmpdir } from "os";
 import { join } from "path";
 import { fileStatePersistence } from "./index";
@@ -12,6 +14,7 @@ import { EQUITY_SEMANTICS, INITIAL_RISK_STATE } from "./strategies/momentum/Risk
 
 let dir: string;
 beforeAll(() => { dir = mkdtempSync(join(tmpdir(), "uc-envelope-")); });
+afterAll(() => { rmSync(dir, { recursive: true, force: true }); });
 
 const store = (path: string) => fileStatePersistence(path, 50_000, 50_000, EQUITY_SEMANTICS.SLEEVE_LEDGER);
 

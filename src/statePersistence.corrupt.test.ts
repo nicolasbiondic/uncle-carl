@@ -8,8 +8,10 @@
 // ERROR_BURST pages ops. A genuinely missing file stays the quiet
 // fresh-install path.
 
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
+// The repo's stale @types/node lacks rmSync (same workaround as telegram/outbox.test.ts).
+const { rmSync } = require("fs") as { rmSync: (p: string, o?: any) => void };
 import { tmpdir } from "os";
 import { join } from "path";
 import { fileStatePersistence } from "./index";
@@ -19,6 +21,7 @@ import { captureBursts } from "./test-support/events";
 let dir: string;
 
 beforeAll(() => { dir = mkdtempSync(join(tmpdir(), "uc-state-")); });
+afterAll(() => { rmSync(dir, { recursive: true, force: true }); });
 afterEach(() => { for (const f of readdirSync(dir)) { try { unlinkSync(join(dir, f)); } catch {} } });
 
 function store(path: string) {
