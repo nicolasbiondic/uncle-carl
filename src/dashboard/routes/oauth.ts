@@ -37,6 +37,7 @@ import {
 } from "../../platform/instance";
 import type { GithubOAuthConfig, GoogleOAuthConfig } from "../../platform/instance";
 import { rateLimiter } from "../middleware/rateLimiter";
+import { getClientIp } from "../dashboard-utils";
 import { createLogger } from "../../utils/logger";
 
 const log = createLogger("Dashboard");
@@ -93,7 +94,7 @@ function failLogin(res: express.Response, reason: string): void {
 }
 
 /** Create the SAME session a successful password login creates. */
-function createOwnerSession(res: express.Response, username: string, displayName: string): void {
+function createOwnerSession(req: express.Request, res: express.Response, username: string, displayName: string): void {
   const sid = crypto.randomBytes(32).toString("hex");
   const session: Session = {
     id: sid,
@@ -105,6 +106,9 @@ function createOwnerSession(res: express.Response, username: string, displayName
     csrfToken: crypto.randomBytes(24).toString("hex"),
     rememberMe: false,
     settings: { viewId: "consolidated" },
+    // Device metadata for the Ajustes → Sessions list (routes/platform.ts).
+    userAgent: String(req.headers["user-agent"] ?? ""),
+    ip: getClientIp(req),
   };
   sessions.set(sid, session);
   res.cookie("sid", sid, {
@@ -285,7 +289,7 @@ export function registerOAuthRoutes(app: express.Application): void {
           return failLogin(res, `github: account id ${user.id} ("${user.login}") is not the allowed owner (${gh.allowedId})`);
         }
         log.info(`🔑 Login (github): ${user.login} (#${user.id})`);
-        return createOwnerSession(res, ownerUsername ?? `github:${user.login.toLowerCase()}`, user.name || user.login || "Owner");
+        return createOwnerSession(req, res, ownerUsername ?? `github:${user.login.toLowerCase()}`, user.name || user.login || "Owner");
       } else {
         const gg = cfg as GoogleOAuthConfig;
         const user = await exchangeGoogle(gg, code, pending.redirectUri, pending.codeVerifier!, pending.nonce!);
@@ -293,7 +297,7 @@ export function registerOAuthRoutes(app: express.Application): void {
           return failLogin(res, `google: ${user.email} is not the allowed owner email`);
         }
         log.info(`🔑 Login (google): ${user.email}`);
-        return createOwnerSession(res, ownerUsername ?? user.email, user.name || user.email);
+        return createOwnerSession(req, res, ownerUsername ?? user.email, user.name || user.email);
       }
     } catch (e: any) {
       return failLogin(res, `${provider}: ${e?.message ?? e}`);

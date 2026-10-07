@@ -26,6 +26,10 @@ export interface Session {
   csrfToken: string;
   rememberMe: boolean;
   settings: { viewId: string };
+  /** Device metadata captured at login (platform sessions UI). Optional:
+   *  pre-existing sessions/tests without them stay valid. */
+  userAgent?: string;
+  ip?: string;
 }
 
 export interface LoginAttemptState {

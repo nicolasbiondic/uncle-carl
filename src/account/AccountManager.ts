@@ -395,6 +395,8 @@ export class AccountManager {
   /** Per-executor REST reconnect state (see RECONNECT_* constants above).
    *  Entry exists only while that executor is disconnected. */
   private reconnectStates = new Map<string, ReconnectState>();
+  /** Set by the first completed updateAllStates (logAlpacaAccountGrossExposure). */
+  private statesLoaded = false;
   private checkingStopLoss = false; // reentrancy guard for the 15s SL loop
   private refreshingBinanceTotal = false; // reentrancy guard for the fire-and-forget account-total refresh
 
@@ -1315,6 +1317,8 @@ export class AccountManager {
       } catch (e: any) { log.error(`State update ${id}: ${e.message}`); }
     }
 
+    this.statesLoaded = true;
+
     // Refresh Alpaca WS stock subscriptions after positions are loaded/updated.
     // Bounded to the IEX 30-symbol cap; held stocks always win. Crypto is
     // always passed through unchanged.
@@ -1404,6 +1408,11 @@ export class AccountManager {
     // explain. See isActive/getActiveProfileIds.
     for (const id of this.getActiveProfileIds()) {
       const acc = this.accounts.get(id)!;
+      // Not before its first sync this process: until then the tracker holds
+      // the frozen accounts-table value (EquityTracker.synced). The
+      // null→valid binance_main write in refreshBinanceAccountTotal can fire
+      // during start() before the Alpaca ledger sync lands.
+      if (!acc.equity.synced) continue;
       safeSnap(id, acc.equity.equity, acc.equity.cash, acc.positions.size);
     }
     if (this.alpacaMainTruth && isBrokerTruthAvailable("alpaca")) {
@@ -1435,6 +1444,9 @@ export class AccountManager {
   // AlpacaMomentumAdapter.sharedAccountGuard.test.ts).
   private logAlpacaAccountGrossExposure(): void {
     if (!this.alpacaMainTruth || !isBrokerTruthAvailable("alpaca")) return;
+    // Before the first updateAllStates the sleeves' stocksValue is the empty
+    // default: the line read "$0 … (0.0%)" at every boot.
+    if (!this.statesLoaded) return;
     const accountEquity = this.alpacaMainTruth.equity;
     if (!(accountEquity > 0)) return;
     const stocks = this.accounts.get("momentum_stocks");

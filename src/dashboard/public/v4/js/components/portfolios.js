@@ -11,7 +11,6 @@
 import { api } from "../api.js";
 import { t } from "../store.js";
 import { esc, icon } from "../ui.js";
-import { trapFocus } from "../focus-trap.js";
 import { num } from "../fmt.js";
 
 export function templateLabel(tpl) {
@@ -255,47 +254,42 @@ export function renderEditFormHtml(p, state) {
 
 // ── stateful UI ──────────────────────────────────────────────────────────
 
-let root = null;         // slideover backdrop
+let root = null;         // the page body element (#pageBody) the view is mounted in
 let createModal = null;  // "new portfolio" modal
 let editModal = null;    // edit-row modal
 let escHandler = null;
-let release = null;
 let meta = EMPTY_META;
 let items = null;
 let createState = { source: "preset" };
 
-function msgEl(container, id) { return container?.querySelector(`#${id}`); }
-
 async function reload(el) {
   items = await api.platformPortfolios();
+  if (!el.isConnected) return;
   const body = el.querySelector("#pfBody");
   if (body) body.innerHTML = renderPortfoliosBody(items, meta);
 }
 
-export async function openPortfolios() {
-  close();
-  const el = root = document.createElement("div");
-  root.className = "so-backdrop";
-  root.innerHTML = `<aside class="so" role="dialog" aria-modal="true" aria-label="${t("Portfolios", "Portafolios")}" style="min-width:min(900px,92vw)">
-    <div class="so-head"><b>${t("Portfolios", "Portafolios")}</b><button class="icn" data-pfclose aria-label="${t("Close", "Cerrar")}">${icon("x")}</button></div>
-    <div class="so-body" id="pfBody"><div class="muted">…</div></div></aside>`;
-  document.body.appendChild(root);
-  root.addEventListener("pointerdown", (e) => { if (e.target === root) close(); });
-  root.addEventListener("click", onPanelClick);
-  escHandler = (e) => { if (e.key === "Escape") { if (editModal) closeEdit(); else if (createModal) closeCreate(); else close(); } };
+/** Mounts the "Portafolios" page into `host` (a fresh #pageBody element).
+ *  Replaces the old slideover (2026-10-06 portfolio-manager nav). */
+export async function mountPortfolios(host) {
+  closeCreate();
+  closeEdit();
+  if (escHandler) { document.removeEventListener("keydown", escHandler); escHandler = null; }
+  root = host;
+  host.innerHTML = `<div id="pfBody"><div class="muted">…</div></div>`;
+  host.addEventListener("click", onPanelClick);
+  escHandler = (e) => { if (e.key === "Escape") { if (editModal) closeEdit(); else if (createModal) closeCreate(); } };
   document.addEventListener("keydown", escHandler);
-  release = trapFocus(root);
   try {
     meta = await api.platformPortfoliosMeta();
   } catch {
     meta = EMPTY_META;
   }
-  if (root !== el || !el.isConnected) return;
-  await reload(el).catch(() => {});
+  if (root !== host || !host.isConnected) return;
+  await reload(host).catch(() => {});
 }
 
 function onPanelClick(e) {
-  if (e.target.closest("[data-pfclose]")) return close();
   if (e.target.closest("[data-pf-new]")) return openCreate();
   const edit = e.target.closest("[data-pf-edit]");
   if (edit) return openEdit(edit.dataset.pfEdit);
@@ -460,11 +454,4 @@ function closeEdit() {
   editingId = null;
 }
 
-function close() {
-  closeCreate();
-  closeEdit();
-  if (escHandler) { document.removeEventListener("keydown", escHandler); escHandler = null; }
-  if (release) { release(); release = null; }
-  root?.remove();
-  root = null;
-}
+

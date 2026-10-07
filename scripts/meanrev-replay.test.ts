@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runMeanRevReplay } from "./meanrev-replay";
-import { hashReplayConfig, type ReplayConfig } from "./backtest-momentum-wf";
+import { hashReplayConfig, type ReplayConfig, type SeedPosition } from "./backtest-momentum-wf";
 import { trailPctFromVol } from "../src/strategies/momentum/MomentumEngine";
 
 // Every test here builds a historical DB and runs a full replay (16 tests,
@@ -541,5 +541,90 @@ describe("meanrev replay — RSI2 audit passthrough (rsiMethod/deterministicTieB
     expect(tieBreakHash).not.toBe(legacy);
     expect(cutlerExplicitHash).not.toBe(legacy); // explicit "cutler" ≠ absent — same convention as hardStop's explicit "fixed"
     expect(new Set([legacy, wilderHash, tieBreakHash, cutlerExplicitHash]).size).toBe(4);
+  }));
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// OPEN.md P2 — "el libro del sim arranca vacío en el epoch": seedPositions
+// through the REAL MeanRevEngine (the KO-carried-over scenario).
+// ═══════════════════════════════════════════════════════════════════════
+describe("meanrev replay — seedPositions (a live position already open at the epoch)", () => {
+  test("a seeded position occupies its slot from DAY 1 — a fresh signal on another symbol is blocked exactly as if the engine had opened it itself", () => withTmp(async dir => {
+    // AAA: seeded, perfectly flat (no gains/losses ever, so RSI2 never
+    // signals its OWN fresh entry) — the only reason it's ever in the book
+    // is the seed; it just sits in the one maxPositions=1 slot throughout.
+    const aaaFlat: Row[] = [...flatRows([...WARMUP_DATES, ...WINDOW_DATES], 90)];
+    // BBB: the SAME shape as the standalone "entry" test's AAA (RSI2=0 < 5,
+    // close 96 > SMA5 94.8 on the Jan 19 signal bar) — WITHOUT the seed it
+    // enters fresh on Jan 22's open.
+    const bbb: Row[] = [...warmupRows(), ["2024-01-22", 95, 96, 94.5, 95], ...flatRows(WINDOW_DATES.slice(1), 95)];
+    const dbPath = makeDb(dir, { AAA: aaaFlat, BBB: bbb, REF: refRows() });
+    const cfg = cfgFor(dbPath, { universe: ["AAA", "BBB"] }, { maxPositions: 1, timeStopDays: 30 });
+    const seed: SeedPosition[] = [{ symbol: "AAA", side: "buy", qty: 50, entryPrice: 90, entryAt: Date.parse("2024-01-17T05:00:00Z") }];
+
+    const r = await runMeanRevReplay(cfg, WIN, undefined, seed);
+    expect(r).not.toBeNull();
+    // BBB never entered — the slot was held by the seeded AAA from tick 1.
+    expect(r!.tradesBySymbol.BBB.trades).toBe(0);
+    // AAA was never "re-opened" by the engine (no duplicate open) — it rides
+    // to fold_end, inherited and managed, not decided.
+    const aaaTrades = r!.closedTrades.filter(t => t.symbol === "AAA");
+    expect(aaaTrades).toHaveLength(1);
+    expect(aaaTrades[0].reason).toBe("fold_end");
+    expect(aaaTrades[0].entryAt).toBe(seed[0].entryAt);
+
+    // Control: WITHOUT the seed, the slot is free and BBB enters normally.
+    const unseeded = await runMeanRevReplay({ ...cfg }, WIN);
+    expect(unseeded!.tradesBySymbol.BBB.trades).toBeGreaterThan(0);
+  }));
+
+  test("the seed's PERSISTED stop price is honored exactly — not the sleeve's fixed hardStopPct recomputed from entryPrice", () => withTmp(async dir => {
+    // entryPrice 90 → fixed 4% would stop at 86.4; the seed's REAL persisted
+    // stop is 88 (the live row's actual stop, resolved once at the
+    // position's TRUE entry — not re-derivable from this replay's data).
+    const aaa: Row[] = [
+      ...warmupRows(),
+      ["2024-01-22", 90, 90, 87, 89], // low 87 breaches 88, NOT the fixed 86.4
+      ...flatRows(WINDOW_DATES.slice(1), 90),
+    ];
+    const dbPath = makeDb(dir, { AAA: aaa, REF: refRows() });
+    const seed: SeedPosition[] = [{ symbol: "AAA", side: "buy", qty: 50, entryPrice: 90, entryAt: Date.parse("2024-01-10T05:00:00Z"), stopPrice: 88 }];
+
+    const r = await runMeanRevReplay(cfgFor(dbPath, {}, { timeStopDays: 30 }), WIN, undefined, seed);
+    expect(r!.trades).toBe(1);
+    expect(r!.closedTrades[0].reason).toBe("STOP_LOSS");
+    expect(r!.closedTrades[0].pnl).toBeCloseTo((88 - 90) * 50, 6); // fill honors the persisted 88, open 90 > 88 (not a gap)
+  }));
+
+  test("the TIME STOP counts from the seed's TRUE entry date, not from the epoch — fires on day 1 of the window when the true hold already exceeds timeStopDays", () => withTmp(async dir => {
+    // Entered 2024-01-17 (inside warmup, well before the window). With
+    // timeStopDays=3: by the morning of Jan 22 (window day 1), the
+    // completed-bar count after Jan 17 (Jan18, Jan19) + 1 = 3 ≥ 3 → fires
+    // IMMEDIATELY on day 1 — a naive epoch-anchored clock would instead
+    // start counting from Jan 22 and fire on Jan 24.
+    // Perfectly flat tape: RSI2 never signals a fresh entry of its own, so
+    // the single TIME_STOP close below cannot be followed by a same-day
+    // re-entry (the real production SLOT_DISPLACED-class churn that WOULD
+    // otherwise legitimately happen if AAA still signaled after its slot
+    // freed — a confound this fixture deliberately avoids).
+    const aaa: Row[] = [...flatRows([...WARMUP_DATES, ...WINDOW_DATES], 90)];
+    const dbPath = makeDb(dir, { AAA: aaa, REF: refRows() });
+    const seed: SeedPosition[] = [{ symbol: "AAA", side: "buy", qty: 50, entryPrice: 90, entryAt: Date.parse("2024-01-17T05:00:00Z") }];
+
+    const r = await runMeanRevReplay(cfgFor(dbPath, {}, { timeStopDays: 3 }), WIN, undefined, seed);
+    expect(r!.trades).toBe(1);
+    expect(r!.closedTrades[0].reason).toBe("TIME_STOP");
+    expect(r!.closedTrades[0].exitAt).toBe(Date.parse(WINDOW_DATES[0] + "T05:00:00Z")); // fires on day 1, not day 3
+  }));
+
+  test("a non-'buy' seed is dropped (meanrev is long-only) — declared limitation, never hit by the sleeves this fix targets", () => withTmp(async dir => {
+    // Perfectly flat tape (no gains/losses ever) — RSI2 never satisfies the
+    // entryRsi<5 condition on its own, so the ONLY way AAA could appear in
+    // closedTrades is via the (dropped) seed.
+    const aaa: Row[] = [...flatRows([...WARMUP_DATES, ...WINDOW_DATES], 100)];
+    const dbPath = makeDb(dir, { AAA: aaa, REF: refRows() });
+    const seed: SeedPosition[] = [{ symbol: "AAA", side: "sell", qty: 50, entryPrice: 90, entryAt: Date.parse("2024-01-17T05:00:00Z") }];
+    const r = await runMeanRevReplay(cfgFor(dbPath, {}, { timeStopDays: 30 }), WIN, undefined, seed);
+    expect(r!.trades).toBe(0); // dropped — never seeded, never later force-closed
   }));
 });

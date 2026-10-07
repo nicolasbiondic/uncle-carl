@@ -9,11 +9,15 @@ import {
   latestCommonAsOf,
   liquidateAtFoldEnd,
   runWithConfig,
+  seedStopFraction,
+  seedTrailMark,
   SimBroker,
   SLEEVES,
   type ReplayConfig,
+  type SeedPosition,
 } from "./backtest-momentum-wf";
 import { INITIAL_RISK_STATE } from "../src/strategies/momentum/RiskGuard";
+import { TRAIL_STOP_CLOSE_REASON } from "../src/strategies/momentum/MomentumEngine";
 import type { OHLCV } from "../src/utils/types";
 import { Database } from "bun:sqlite";
 import { mkdirSync, rmSync, mkdtempSync } from "node:fs";
@@ -1321,3 +1325,199 @@ describe("A3 + B2 through the real replay loop (runWithConfig)", () => {
     }
   }, 30_000);
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// OPEN.md P2 — "el libro del sim arranca vacío en el epoch": the seed for
+// the replay's book. Pure helpers (seedStopFraction/seedTrailMark),
+// SimBroker.seedPositions, and one full runWithConfig wiring check.
+// ═══════════════════════════════════════════════════════════════════════
+describe("seedStopFraction — entry-anchored stop distance for a seeded position", () => {
+  const FIXED: ReplayConfig["hardStop"] = { mode: "fixed", pct: 0.04 };
+  const NONE: ReplayConfig["hardStop"] = { mode: "none" };
+
+  test("a persisted stop price is preferred over the sleeve's fixed fallback — long and short", () => {
+    expect(seedStopFraction({ side: "buy", entryPrice: 100, stopPrice: 92 }, FIXED!, 0.04)).toBeCloseTo(0.08, 12);
+    expect(seedStopFraction({ side: "sell", entryPrice: 100, stopPrice: 108 }, FIXED!, 0.04)).toBeCloseTo(0.08, 12);
+  });
+
+  test("a stop on the WRONG side of entry (malformed data) is treated as absent — falls back", () => {
+    expect(seedStopFraction({ side: "buy", entryPrice: 100, stopPrice: 110 }, FIXED!, 0.04)).toBeCloseTo(0.04, 12);
+  });
+
+  test("no persisted price: mode \"none\" seeds truly unprotected; any other mode falls back to the fixed pct", () => {
+    expect(seedStopFraction({ side: "buy", entryPrice: 100, stopPrice: null }, NONE!, 0.04)).toBeNull();
+    expect(seedStopFraction({ side: "buy", entryPrice: 100, stopPrice: undefined }, FIXED!, 0.04)).toBeCloseTo(0.04, 12);
+  });
+
+  test("a zero/negative price is treated as absent (defensive)", () => {
+    expect(seedStopFraction({ side: "buy", entryPrice: 100, stopPrice: 0 }, FIXED!, 0.04)).toBeCloseTo(0.04, 12);
+    expect(seedStopFraction({ side: "buy", entryPrice: 100, stopPrice: -5 }, FIXED!, 0.04)).toBeCloseTo(0.04, 12);
+  });
+});
+
+describe("seedTrailMark — reconstructs the trail watermark from entry to the epoch", () => {
+  test("long: the watermark is the PEAK close between entry and the epoch, not the entry price", () => {
+    const bars = [
+      bar(0, 100), bar(60_000, 110), bar(120_000, 130), bar(180_000, 125), // peak 130
+      bar(240_000, 90), // AFTER the epoch — must be excluded
+    ];
+    const mark = seedTrailMark({ side: "buy", entryPrice: 100, entryAt: 0 }, bars, 240_000);
+    // lastTs always advances to the LAST scanned bar (even one that didn't
+    // set a new peak) — matches MomentumEngine.applyTrailStops' own
+    // accumulation (state.lastTs = the latest bar seen, win or not).
+    expect(mark).toEqual({ mark: 130, lastTs: 180_000 });
+  });
+
+  test("short: the watermark is the TROUGH close between entry and the epoch", () => {
+    const bars = [bar(0, 100), bar(60_000, 90), bar(120_000, 70), bar(180_000, 85)];
+    const mark = seedTrailMark({ side: "sell", entryPrice: 100, entryAt: 0 }, bars, 180_000);
+    expect(mark).toEqual({ mark: 70, lastTs: 120_000 });
+  });
+
+  test("no bars in (entryAt, epoch) falls back to the entry itself — declared limitation for a seed older than the loaded history", () => {
+    const bars = [bar(-60_000, 999)]; // only a bar BEFORE entryAt
+    const mark = seedTrailMark({ side: "buy", entryPrice: 100, entryAt: 0 }, bars, 60_000);
+    expect(mark).toEqual({ mark: 100, lastTs: 0 });
+  });
+
+  test("a peak that never beats the entry price still anchors at the entry price (long never trails below it)", () => {
+    const bars = [bar(0, 100), bar(60_000, 95), bar(120_000, 90)];
+    const mark = seedTrailMark({ side: "buy", entryPrice: 100, entryAt: 0 }, bars, 180_000);
+    expect(mark.mark).toBe(100);
+  });
+});
+
+describe("SimBroker.seedPositions", () => {
+  const seed: SeedPosition = { symbol: "KO", side: "buy", qty: 50, entryPrice: 60, entryAt: 123, stopPrice: 55.2 };
+
+  test("pushes a position with the persisted stop distance, zero entry commission, and no cash debit", () => {
+    const candles = new Map([["KO", [bar(0, 60), bar(60_000, 60)]]]);
+    const broker = new SimBroker(10_000, candles, 0, 0, 60_000, { leverage: 1, maintRate: 0.25 }, 0.04, undefined, true, { mode: "fixed", pct: 0.04 });
+    broker.seedPositions([seed]);
+    expect(broker.positions).toHaveLength(1);
+    const p = broker.positions[0];
+    expect(p).toMatchObject({ symbol: "KO", side: "buy", qty: 50, entryPrice: 60, entryAt: 123, entryCommission: 0, fundingCashDelta: 0, peakPrice: 60, lockLevel: null });
+    expect(p.stopFrac).toBeCloseTo((60 - 55.2) / 60, 12); // the REAL persisted stop, not the fixed 4% (which would be 0.04)
+    expect(p.entryMargin).toBeCloseTo((50 * 60) / 1, 6);
+    expect(broker.cash).toBe(10_000); // entry already happened before this replay — no debit here
+  });
+
+  test("the seeded position's margin occupies headroom — a competing open can be rejected exactly as if the engine had opened it itself", async () => {
+    const candles = new Map([["KO", [bar(0, 60), bar(60_000, 60)]], ["XLF", [bar(0, 40), bar(60_000, 40)]]]);
+    const broker = new SimBroker(5_000, candles, 0, 0, 60_000, { leverage: 1, maintRate: 0.25 }, 0.04, undefined, true, { mode: "fixed", pct: 0.04 });
+    broker.seedPositions([{ symbol: "KO", side: "buy", qty: 50, entryPrice: 60, entryAt: 0 }]); // margin used: $3,000
+    broker.now = 60_000;
+    const res = await broker.openPosition({ symbol: "XLF", side: "buy", notionalUsd: 2_500 }); // needs $2,500 more than the $2,000 headroom
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("margin_insufficient");
+  });
+
+  test("checkStops fires the seed's OWN persisted stop level — never the sleeve's fixed hardStopPct", () => {
+    // entryPrice 60, persisted stop 55.2 (−8%); the sleeve's fixed hardStopPct
+    // is 4% (stop 57.6) — if seedPositions ignored the persisted price, this
+    // bar's low (56) would ALSO breach 57.6 and fire at the wrong level.
+    const candles = new Map([["KO", [bar(0, 60)]]]);
+    const broker = new SimBroker(10_000, candles, 0, 0, 60_000, { leverage: 1, maintRate: 0.25 }, 0.04, undefined, true, { mode: "fixed", pct: 0.04 });
+    broker.seedPositions([{ ...seed, entryAt: 0 }]); // checkStops skips a bar older than entryAt — anchor it at the test's bar
+    broker.now = 0;
+    broker.checkStops(new Map([["KO", bar(0, 60, 60, 54, 56)]])); // low 54 breaches 55.2; 56 does not
+    expect(broker.positions).toHaveLength(0);
+    expect(broker.closed[0].reason).toBe("stop_loss");
+    expect(broker.closed[0].pnl).toBeCloseTo((55.2 - 60) * 50, 6);
+  });
+
+  test("a seed with no persisted stop falls back to the sleeve's fixed hardStopPct", () => {
+    const candles = new Map([["KO", [bar(0, 60)]]]);
+    const broker = new SimBroker(10_000, candles, 0, 0, 60_000, { leverage: 1, maintRate: 0.25 }, 0.04, undefined, true, { mode: "fixed", pct: 0.04 });
+    broker.seedPositions([{ symbol: "KO", side: "buy", qty: 50, entryPrice: 60, entryAt: 0 }]); // no stopPrice
+    expect(broker.positions[0].stopFrac).toBeCloseTo(0.04, 12);
+  });
+});
+
+describe("runWithConfig — seedPositions wiring (full replay, real engine)", () => {
+  const H = 3_600_000;
+
+  /** Hourly tape for a single symbol: flat warmup, then a hand-placed rally
+   *  to a PEAK well before the epoch, then a pullback that lands exactly at
+   *  the epoch — the bar whose close time equals `epochMs` (timestamp =
+   *  epochMs − 1h) is the first one the engine's trail check ever reads
+   *  (applyTrailStops prices off the last CLOSED bar at the tick's `now`). */
+  function seedPeakThenPullbackTape(dbPath: string, epochMs: number, warmupDays: number) {
+    mkdirSync(join(dbPath, ".."), { recursive: true });
+    const db = new Database(dbPath);
+    try {
+      db.run(`CREATE TABLE historical_bars (
+        symbol TEXT, timeframe TEXT, source TEXT, timestamp INTEGER,
+        open REAL, high REAL, low REAL, close REAL, volume INTEGER,
+        PRIMARY KEY(symbol, timeframe, source, timestamp)
+      )`);
+      const stmt = db.prepare("INSERT OR REPLACE INTO historical_bars VALUES (?,?,?,?,?,?,?,?,?)");
+      const path: Array<[number, number]> = [
+        [epochMs - 6 * H, 100], [epochMs - 5 * H, 116], [epochMs - 4 * H, 132],
+        [epochMs - 3 * H, 140], // PEAK
+        [epochMs - 2 * H, 135], [epochMs - 1 * H, 130], // last pre-epoch close — tick 1's price
+        [epochMs, 126], [epochMs + H, 120], [epochMs + 2 * H, 115], [epochMs + 3 * H, 110],
+      ];
+      db.transaction(() => {
+        const loadFrom = epochMs - warmupDays * 86_400_000;
+        for (let t = loadFrom; t < epochMs - 6 * H; t += H) {
+          stmt.run("AAA", "1h", "synthetic", t, 100, 100.1, 99.9, 100, 1);
+        }
+        for (const [t, close] of path) {
+          stmt.run("AAA", "1h", "synthetic", t, close, close + 0.1, close - 0.1, close, 1);
+        }
+      })();
+    } finally {
+      db.close();
+    }
+  }
+
+  const EPOCH = Date.parse("2024-03-01T00:00:00Z");
+
+  function cfg(dbPath: string): ReplayConfig {
+    return {
+      sleeve: "crypto", universe: ["AAA"], timeframe: "1h", source: "synthetic",
+      refSymbol: "AAA", rthOnly: false, funding: false, barMinutes: 60, barMinutesEq: 60,
+      slippageBps: 0, commissionBps: 0, initialEquity: 10_000, leverage: 1, hardStopPct: 0.04,
+      hardStop: { mode: "none" }, // isolate the TRAIL as the only possible stop
+      cadenceMin: 60, notionalPctPerSlot: 0.25, entryPct: 5, exitPct: -2, maxLongs: 1, maxShorts: 0,
+      lookbackDays: 1, maLengthDays: 1, // minimal history requirement for this fixture
+      shortFunding: "credit",
+      tsmTrail: { kSigma: 1, lookbackBars: 5, minPct: 5, maxPct: 5 }, // pinned 5% distance
+      warmupDays: 5,
+      dbPath,
+    };
+  }
+
+  test("the seeded trail watermark (the PRE-epoch peak) fires on the very FIRST tick — a freshly-initialized mark mathematically cannot", () => withTmp(async dir => {
+    const dbPath = join(dir, "historical.db");
+    seedPeakThenPullbackTape(dbPath, EPOCH, 5);
+    const win = { label: "t", from: new Date(EPOCH).toISOString(), to: new Date(EPOCH + 4 * H).toISOString() };
+    const seed: SeedPosition[] = [{ symbol: "AAA", side: "buy", qty: 1, entryPrice: 100, entryAt: EPOCH - 10 * 86_400_000 }];
+
+    const seeded = await runWithConfig(cfg(dbPath), win, undefined, seed);
+    expect(seeded).not.toBeNull();
+    // Peak 140 (seeded) × 0.95 = 133 ≥ tick-1 price 130 → fires immediately.
+    expect(seeded!.closedTrades.length).toBeGreaterThan(0);
+    const first = seeded!.closedTrades[0];
+    expect(first.symbol).toBe("AAA");
+    expect(first.engineCloseReason).toBe(TRAIL_STOP_CLOSE_REASON);
+    expect(first.exitAt).toBeLessThanOrEqual(EPOCH + H + 1); // fired at (or immediately after) the very first decision tick
+    // Proof it's the INHERITED seed being managed, not a coincidental fresh
+    // open-then-trail: the closed trade's entryAt is the seed's true (far
+    // pre-epoch) entry time, never anything the replay itself could produce.
+    expect(first.entryAt).toBe(seed[0].entryAt);
+
+    // Control: without seeding, the book starts EMPTY — whatever the engine
+    // does post-epoch (open fresh, or not), it can only ever inherit an
+    // entryAt the REPLAY produced (at/after fromMs) — never the seed's.
+    const unseeded = await runWithConfig(cfg(dbPath), win);
+    expect(unseeded).not.toBeNull();
+    for (const t of unseeded!.closedTrades) expect(t.entryAt).toBeGreaterThanOrEqual(EPOCH);
+  }));
+});
+
+function withTmp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
+  const dir = mkdtempSync(join(tmpdir(), "backtest-momentum-wf-seed-"));
+  return fn(dir).finally(() => rmSync(dir, { recursive: true, force: true }));
+}

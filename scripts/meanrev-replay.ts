@@ -120,7 +120,7 @@ import { trailPctFromVol, type MomentumStatePersistence } from "../src/strategie
 import { INITIAL_RISK_STATE, type RiskState } from "../src/strategies/momentum/RiskGuard";
 import { getETDateKey } from "../src/db/database";
 import type { OHLCV } from "../src/utils/types";
-import { FundingBook, hashReplayConfig, type ClosedTrade, type HardStopSpec, type ReplayConfig, type ReplayResult } from "./backtest-momentum-wf";
+import { FundingBook, grossCapDiag, hashReplayConfig, seedStopFraction, type ClosedTrade, type HardStopSpec, type ReplayConfig, type ReplayResult, type SeedPosition } from "./backtest-momentum-wf";
 import { isMemberAt, loadMembership, topNByDollarVolume } from "./lib/membership";
 import { getPreviousTradingDay } from "../src/utils/marketHours";
 
@@ -315,6 +315,15 @@ export class SimMeanRevBroker implements MeanRevBrokerAdapter {
   }
 
   async openPosition(a: { symbol: string; side: "buy" | "sell"; notionalUsd: number }): Promise<{ ok: boolean; reason?: string }> {
+    // Gross-exposure diagnostic (observer only — see grossCapDiag in
+    // backtest-momentum-wf.ts): the live meanrev cap compares
+    // Σ|getOpenPositions().notional| + new against baseUsd × mult, with the
+    // book marked at the last COMPLETED close — record exactly those terms.
+    if (grossCapDiag.onOpenAttempt) {
+      let gross = 0;
+      for (const p of this.positions) gross += Math.abs(p.qty * (this.lastCompletedClose(p.symbol) ?? p.mark));
+      grossCapDiag.onOpenAttempt({ t: this.dayTs, grossBefore: gross, newNotional: a.notionalUsd, denom: this.cfg.initialEquity });
+    }
     const i = this.todayIndex(a.symbol);
     if (i === undefined || i === 0) return { ok: false, reason: "no execution bar today" };
     const item = this.series.get(a.symbol)!;
@@ -338,6 +347,29 @@ export class SimMeanRevBroker implements MeanRevBrokerAdapter {
         : trailPctFromVol(item.closes.slice(0, i), this.stopSpec, 1) / 100;
     this.positions.push({ symbol: a.symbol, qty, entryPrice, entryTime: this.dayTs, entryFee, mark: entryPrice, stopFrac, fundingCost: 0 });
     return { ok: true };
+  }
+
+  /**
+   * Seed the book with positions the LIVE sleeve already held at the
+   * replay epoch (OPEN.md P2 "el libro del sim arranca vacío en el
+   * epoch"): pushed directly as SimPositions, so maxPositions/slot
+   * occupancy, the time stop (reads entryTime straight off
+   * getOpenPositions — no persisted anchor needed, unlike momentum's
+   * trail) and both stop phases manage them exactly like a position the
+   * engine opened itself. meanrev is long-only: a non-"buy" seed is
+   * dropped (declared limitation — never hit by the two sleeves this fix
+   * targets). No fee is charged and no cash moves (the entry already
+   * happened before this replay window).
+   */
+  seedPositions(seeds: SeedPosition[]): void {
+    for (const s of seeds) {
+      if (s.side !== "buy") continue;
+      const stopFrac = seedStopFraction(s, this.stopSpec, this.cfg.hardStopPct);
+      this.positions.push({
+        symbol: s.symbol, qty: s.qty, entryPrice: s.entryPrice, entryTime: s.entryAt,
+        entryFee: 0, mark: s.entryPrice, stopFrac, fundingCost: 0,
+      });
+    }
   }
 
   /**
@@ -488,6 +520,10 @@ export async function runMeanRevReplay(
   cfg: ReplayConfig,
   win: { label: string; from: string; to: string },
   initialRiskState?: RiskState,
+  /** Live positions already open at the replay epoch (win.from) — see
+   *  SeedPosition / SimMeanRevBroker.seedPositions. Absent/empty = the
+   *  exact legacy behavior (empty book at the epoch). */
+  seedPositions?: SeedPosition[],
 ): Promise<ReplayResult | null> {
   const p = cfg.meanrev;
   if (!p) throw new Error("meanrev replay requires cfg.meanrev params");
@@ -571,6 +607,11 @@ export async function runMeanRevReplay(
 
     // ── the REAL engine over the sim adapter ─────────────────────────────
     const broker = new SimMeanRevBroker(cfg, series, stopSpec, fundingBook, isCrypto);
+    // Seed the book with live positions already open at the epoch (OPEN.md
+    // P2) — BEFORE the day loop starts, so maxPositions/stops see them
+    // from day 1. Absent/empty seedPositions = byte-identical legacy
+    // empty-book behavior.
+    if (seedPositions && seedPositions.length > 0) broker.seedPositions(seedPositions);
 
     // PIT entry-eligibility hook (membership mode): a member is eligible at
     // the current session iff it is a member at the sim clock, has smaLong+1
@@ -618,7 +659,10 @@ export async function runMeanRevReplay(
         return liquid.has(symbol);
       };
     }
-    const silent = { info: () => {}, warn: () => {}, error: () => {} };
+    // "silent" still forwards warns to the diagnostic hook (null → no-op):
+    // the engine's gross-cap veto only exists as a warn line + report entry,
+    // and replays otherwise discard it (see grossCapDiag docstring).
+    const silent = { info: () => {}, warn: (m: string) => { grossCapDiag.onWarn?.(m); }, error: () => {} };
     // Risk continuity shim (same pattern as runWithConfig): load() seeds the
     // prior fold's RiskGuard state; engine.getRiskState() below is the
     // authoritative final state. save() is a no-op — nothing outlives the run.
@@ -649,6 +693,13 @@ export async function runMeanRevReplay(
         // the module augmentation above and MeanRevEngineConfig's docstrings).
         rsiMethod: p.rsiMethod,
         deterministicTieBreak: p.deterministicTieBreak,
+        // Gross-cap passthrough (G batch, 2026-10-05): ReplayConfig top-level
+        // key, same as the momentum runner (runWithConfig). undefined = OFF —
+        // the engine default and every legacy hash (canonicalJson drops it).
+        // Live meanrev_stocks runs 0.84× of baseUsd (src/index.ts); the
+        // authoritative chains never carried it — this is what lets the
+        // diagnostic measure that gap.
+        maxGrossExposureMult: cfg.maxGrossExposureMult,
       },
       broker,
       silent,

@@ -1394,6 +1394,26 @@ export function getBotStartedAt(): number {
  * getHourlyAnalytics already are — getBotStartedAt itself is untouched
  * (syntheticSnapshots.test.ts pins its exact unfiltered semantics).
  */
+/** Start of the dashboard's "All" window and of every display "since start"
+ *  (dashboard, Telegram): DISPLAY_HISTORY_START, a YYYY-MM-DD date (its ET
+ *  day start) or an ISO instant. Earlier rows stay stored, they are only left
+ *  out of the display. Unset or invalid = 0, the whole history — fresh
+ *  installs and forks see everything. An installation that replaced an older
+ *  system sets it to that system's end, so its flat history no longer takes
+ *  over the "All" chart. */
+export function getDisplayHistoryStart(): number {
+  const raw = (process.env.DISPLAY_HISTORY_START ?? "").trim();
+  if (!raw) return 0;
+  const ms = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? getETDayStart(Date.parse(`${raw}T12:00:00Z`)) : Date.parse(raw);
+  if (!Number.isFinite(ms)) {
+    if (!warnedDisplayHistoryStart) log.warn(`DISPLAY_HISTORY_START "${raw}" is not a YYYY-MM-DD date or ISO instant — showing the whole history`);
+    warnedDisplayHistoryStart = true;
+    return 0;
+  }
+  return ms;
+}
+let warnedDisplayHistoryStart = false;
+
 export function getV8StartedAt(): number {
   const snap = db.prepare(`SELECT MIN(snapshot_time) as t FROM equity_snapshots WHERE synthetic = 0 AND profile_id IN ${V8_ACCOUNTS_SQL}`).get() as any;
   const trade = db.prepare(`SELECT MIN(entry_time) as t FROM trades WHERE account_id IN ${V8_ACCOUNTS_SQL}`).get() as any;
@@ -2024,7 +2044,7 @@ export function getDisplayEquitySeries(profileId: string): DisplayEquityRow[] {
  *  `days<=0` means all-time (epoch 0), matching the dashboard's `period=0`
  *  "All" window. */
 export function getEquityHistoryDisplay(profileId: string, days = 30): DisplayEquityRow[] {
-  const since = days <= 0 ? 0 : days <= 1 ? getETDayStart() : getETDayStart(Date.now() - (days - 1) * 86_400_000);
+  const since = days <= 0 ? getDisplayHistoryStart() - 1 : days <= 1 ? getETDayStart() : getETDayStart(Date.now() - (days - 1) * 86_400_000);
   return getDisplayEquitySeries(profileId).filter(r => r.snapshot_time > since);
 }
 
@@ -2038,7 +2058,7 @@ export function getEquityHistoryByRangeDisplay(profileId: string, range: string)
     case "1d": since = now - 24 * 60 * 60_000; break;
     case "1w": since = now - 7 * 24 * 60 * 60_000; break;
     case "1m": since = now - 30 * 24 * 60 * 60_000; break;
-    case "all": since = 0; break;
+    case "all": since = getDisplayHistoryStart() - 1; break;
     default:   since = now - 24 * 60 * 60_000;
   }
   return getDisplayEquitySeries(profileId).filter(r => r.snapshot_time > since);
@@ -2063,7 +2083,8 @@ export function getEquityPnlDisplay(profileId: string, periodDays = 1): { pnl: n
 
   let startRow: DisplayEquityRow | undefined;
   if (periodDays === 0) {
-    startRow = series[0];
+    const start = getDisplayHistoryStart();
+    startRow = series.find(r => r.snapshot_time >= start) ?? series[0];
   } else {
     const todayStart = getETDayStart();
     const periodStart = periodDays <= 1 ? todayStart : getETDayStart(Date.now() - (periodDays - 1) * 86_400_000);
@@ -2092,7 +2113,8 @@ export function getEquityPnlDisplay(profileId: string, periodDays = 1): { pnl: n
 export function getEquityDisplayStart(profileId: string): { equity: number; rebased: boolean } | null {
   const series = getDisplayEquitySeries(profileId);
   if (series.length === 0) return null;
-  const first = series[0];
+  const start = getDisplayHistoryStart();
+  const first = series.find(r => r.snapshot_time >= start) ?? series[0];
   return { equity: first.equity, rebased: first.rebased };
 }
 

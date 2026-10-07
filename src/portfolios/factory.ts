@@ -15,6 +15,9 @@
  */
 import type { MomentumEngineConfig } from "../strategies/momentum/MomentumEngine";
 import { DEFAULT_MEANREV_CONFIG } from "../strategies/meanrev/MeanRevEngine";
+// Neutral module (no index.ts back-edge): the same measured headroom both
+// wiring paths multiply into the gross backstop — see its docstring.
+import { GROSS_CAP_HEADROOM } from "../config/grossCap";
 import { DEFAULT_ADAPTER_CONFIG as DEFAULT_BINANCE_ADAPTER_CONFIG } from "../strategies/momentum/BinanceMomentumAdapter";
 import { DEFAULT_ALPACA_ADAPTER_CONFIG } from "../strategies/momentum/AlpacaMomentumAdapter";
 import type {
@@ -91,11 +94,15 @@ function buildMomentumPlan(def: PortfolioDefinition, nowMs: number): MomentumPor
     ...(p.volTarget ? { volTarget: { ...p.volTarget } } : {}),
     risk: { equitySemantics: p.equitySemantics },
     ...(p.modelVersion ? { modelVersion: p.modelVersion } : {}),
-    // The runtime gross backstop is the slot×count product by construction
-    // (the "never binds" premise locked in scripts/liveSleeveConfigs.test.ts).
-    maxGrossExposureMult: p.notionalPctPerSlot * p.maxLongs,
+    // The runtime gross backstop is the slot×count product × measured
+    // headroom (G diagnostic, docs/reports/G-gross-cap.md, applied
+    // 2026-10-07): at the bare product it blocked validated-size entries
+    // exactly in trends (locked in scripts/liveSleeveConfigs.test.ts).
+    maxGrossExposureMult: p.notionalPctPerSlot * p.maxLongs * GROSS_CAP_HEADROOM,
     ...(p.capacityGuard ? { capacityGuard: { ...p.capacityGuard } } : {}),
-    ...(reunderwriteBefore !== undefined ? { reunderwriteBefore } : {}),
+    ...(reunderwriteBefore !== undefined
+      ? { reunderwriteBefore, ...(p.cutover?.symbols ? { reunderwriteSymbols: [...p.cutover.symbols] } : {}) }
+      : {}),
   };
 
   let adapter: AdapterSpec;
@@ -181,9 +188,10 @@ function buildMeanRevPlan(def: PortfolioDefinition): MeanRevPortfolioPlan {
       heartbeatName: p.heartbeatName,
       risk: { equitySemantics: p.equitySemantics },
       // DEFAULT_MEANREV_CONFIG is the single source for slotPct/maxPositions;
-      // the backstop is their product (same derivation as index.ts's
-      // MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT — identical FP result).
-      maxGrossExposureMult: DEFAULT_MEANREV_CONFIG.slotPct * DEFAULT_MEANREV_CONFIG.maxPositions,
+      // the backstop is their product × measured headroom (same derivation as
+      // index.ts's MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT — identical FP
+      // result; G diagnostic, applied 2026-10-07).
+      maxGrossExposureMult: DEFAULT_MEANREV_CONFIG.slotPct * DEFAULT_MEANREV_CONFIG.maxPositions * GROSS_CAP_HEADROOM,
       volStop: { ...p.volStop },
       ...(p.capacityGuard ? { capacityGuard: { ...p.capacityGuard } } : {}),
     },

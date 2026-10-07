@@ -13,10 +13,12 @@ import {
   compareDailyHoldings,
   compareDecisions,
   extractLiveDecisions,
+  extractSeedPositions,
   extractSimDecisions,
   heldSymbolsAt,
   isoInstant,
   normalizeLiveDecisions,
+  normalizeSeedPositions,
   PARITY_EPOCHS,
   renderSummary,
   clampToFundingTail,
@@ -25,7 +27,7 @@ import {
   utcDayCloses,
   type SleeveDecisions,
 } from "./parity-check";
-import type { ClosedTrade } from "./backtest-momentum-wf";
+import type { ClosedTrade, SeedPosition } from "./backtest-momentum-wf";
 import { getETDayBounds } from "../src/db/database";
 
 // ── fixture helpers ───────────────────────────────────────────────────────
@@ -40,15 +42,20 @@ function at(dateKey: string): number {
 
 function makeTradingDb(rows: Array<{
   symbol: string; entry: string; exit?: string; status?: string; account?: string;
+  side?: string; entryPrice?: number; quantity?: number; stopLoss?: number | null;
 }>): Database {
   const db = new Database(":memory:");
   db.run(`CREATE TABLE trades (
     id TEXT PRIMARY KEY, account_id TEXT, symbol TEXT, side TEXT,
+    entry_price REAL, quantity REAL, stop_loss REAL,
     entry_time INTEGER, exit_time INTEGER, status TEXT, close_reason TEXT
   )`);
-  const ins = db.prepare("INSERT INTO trades (id, account_id, symbol, side, entry_time, exit_time, status) VALUES (?,?,?,?,?,?,?)");
+  const ins = db.prepare(
+    "INSERT INTO trades (id, account_id, symbol, side, entry_price, quantity, stop_loss, entry_time, exit_time, status) VALUES (?,?,?,?,?,?,?,?,?,?)",
+  );
   rows.forEach((r, i) => ins.run(
-    `t${i}`, r.account ?? "meanrev_stocks", r.symbol, "buy",
+    `t${i}`, r.account ?? "meanrev_stocks", r.symbol, r.side ?? "buy",
+    r.entryPrice ?? 100, r.quantity ?? 10, r.stopLoss ?? null,
     at(r.entry), r.exit ? at(r.exit) : null, r.status ?? (r.exit ? "closed" : "open"),
   ));
   return db;
@@ -60,9 +67,9 @@ function simTrade(symbol: string, entry: string, exit: string, reason: string): 
 
 // ── extraction ────────────────────────────────────────────────────────────
 describe("extractLiveDecisions", () => {
-  test("pre-epoch positions and their exits are ignored; open rows become holdings", () => {
+  test("a pre-epoch position's ENTRY is ignored (nothing decided it this window), but its exit/holding is NOT (OPEN.md P2 fix)", () => {
     const db = makeTradingDb([
-      { symbol: "XLE", entry: "2026-09-23", exit: "2026-09-29" },      // pre-epoch → ignored entirely
+      { symbol: "XLE", entry: "2026-09-23", exit: "2026-09-29" },      // pre-epoch, exited IN-window → exit counts, no entry
       { symbol: "KO", entry: "2026-09-25" },                            // in-window, still open → holding
       { symbol: "MRK", entry: "2026-09-25", exit: "2026-09-30" },       // in-window round trip
     ]);
@@ -71,8 +78,26 @@ describe("extractLiveDecisions", () => {
       { symbol: "KO", date: "2026-09-25" },
       { symbol: "MRK", date: "2026-09-25" },
     ]);
-    expect(live.exits).toEqual([{ symbol: "MRK", date: "2026-09-30" }]);
+    expect(live.exits).toEqual([
+      { symbol: "XLE", date: "2026-09-29" },
+      { symbol: "MRK", date: "2026-09-30" },
+    ]);
     expect(live.endHoldings).toEqual(["KO"]);
+  });
+
+  test("a pre-epoch position STILL open at the epoch is a holding, exactly like a seed (extractSeedPositions shares this exact row set)", () => {
+    const db = makeTradingDb([{ symbol: "KO", entry: "2026-09-20" }]); // open before AND through the epoch
+    const live = extractLiveDecisions(db, "meanrev_stocks", EPOCH_START, WINDOW_END);
+    expect(live.entries).toEqual([]); // no in-window decision opened it
+    expect(live.endHoldings).toEqual(["KO"]);
+  });
+
+  test("a pre-epoch position that ALSO exited before the epoch is invisible (irrelevant by the epoch — nothing to seed or compare)", () => {
+    const db = makeTradingDb([{ symbol: "XLE", entry: "2026-09-10", exit: "2026-09-20" }]); // fully closed before EPOCH_START
+    const live = extractLiveDecisions(db, "meanrev_stocks", EPOCH_START, WINDOW_END);
+    expect(live.entries).toEqual([]);
+    expect(live.exits).toEqual([]);
+    expect(live.endHoldings).toEqual([]);
   });
 
   test("an exit AFTER the window end keeps the symbol as a holding", () => {
@@ -86,6 +111,92 @@ describe("extractLiveDecisions", () => {
     const db = makeTradingDb([{ symbol: "KO", entry: "2026-09-25", account: "momentum_stocks" }]);
     const live = extractLiveDecisions(db, "meanrev_stocks", EPOCH_START, WINDOW_END);
     expect(live.entries).toEqual([]);
+  });
+
+  test("a carried-in row closed by MODEL_CUTOVER is fully invisible; its FRESH in-window reopen is a normal entry (2026-10-05 live incident: AAPL/META)", () => {
+    const db = new Database(":memory:");
+    db.run(`CREATE TABLE trades (
+      id TEXT PRIMARY KEY, account_id TEXT, symbol TEXT, side TEXT,
+      entry_time INTEGER, exit_time INTEGER, status TEXT, close_reason TEXT
+    )`);
+    const ins = db.prepare(
+      "INSERT INTO trades (id, account_id, symbol, side, entry_time, exit_time, status, close_reason) VALUES (?,?,?,?,?,?,?,?)",
+    );
+    ins.run("old", "momentum_stocks", "META", "buy", at("2026-09-04"), at("2026-09-28") + 1000, "closed", "MODEL_CUTOVER");
+    ins.run("new", "momentum_stocks", "META", "buy", at("2026-09-28") + 2000, null, "open", null);
+    const live = extractLiveDecisions(db, "momentum_stocks", EPOCH_START, WINDOW_END);
+    expect(live.entries).toEqual([{ symbol: "META", date: "2026-09-28" }]); // only the fresh reopen
+    expect(live.exits).toEqual([]); // the cutover close is NOT a comparable decision
+    expect(live.endHoldings).toEqual(["META"]); // from the fresh row only
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// OPEN.md P2 — "el libro del sim arranca vacío en el epoch": the seed for
+// the replay's book (extractSeedPositions), and its USDC symbol mapping.
+// ═══════════════════════════════════════════════════════════════════════
+describe("extractSeedPositions", () => {
+  test("a position open AT the epoch (pre-epoch entry, still open or exited at/after it) is seeded; a fully pre-epoch round trip is not", () => {
+    const db = makeTradingDb([
+      { symbol: "KO", entry: "2026-09-20", entryPrice: 61.5, quantity: 40, stopLoss: 58.2 },           // still open at the epoch
+      { symbol: "XLF", entry: "2026-09-22", exit: "2026-09-29" },                                       // exited exactly at the epoch — still relevant
+      { symbol: "OLD", entry: "2026-09-10", exit: "2026-09-18" },                                       // fully closed before the epoch — irrelevant
+      { symbol: "FRESH", entry: "2026-09-25" },                                                         // entered AT/after the epoch — not a seed, a normal in-window decision
+    ]);
+    const seeds = extractSeedPositions(db, "meanrev_stocks", EPOCH_START);
+    expect(seeds.map(s => s.symbol).sort()).toEqual(["KO", "XLF"]);
+    const ko = seeds.find(s => s.symbol === "KO")!;
+    expect(ko).toEqual({ symbol: "KO", side: "buy", qty: 40, entryPrice: 61.5, entryAt: at("2026-09-20"), stopPrice: 58.2 });
+  });
+
+  test("other accounts' rows are invisible", () => {
+    const db = makeTradingDb([{ symbol: "KO", entry: "2026-09-20", account: "momentum_stocks" }]);
+    expect(extractSeedPositions(db, "meanrev_stocks", EPOCH_START)).toEqual([]);
+  });
+
+  test("a NULL stop_loss seeds stopPrice: null (SimBroker/SimMeanRevBroker fall back to the sleeve's fixed hardStopPct)", () => {
+    const db = makeTradingDb([{ symbol: "KO", entry: "2026-09-20" }]); // stopLoss defaults to null
+    expect(extractSeedPositions(db, "meanrev_stocks", EPOCH_START)[0].stopPrice).toBeNull();
+  });
+
+  test("side is carried through verbatim (momentum sleeves can hold shorts)", () => {
+    const db = makeTradingDb([{ symbol: "BTC/USD", entry: "2026-09-25", side: "sell", account: "momentum_crypto" }]);
+    const seeds = extractSeedPositions(db, "momentum_crypto", Date.parse("2026-09-26T19:00:00Z"));
+    expect(seeds[0].side).toBe("sell");
+  });
+
+  test("a MODEL_CUTOVER close is excluded — it's a one-shot re-underwrite (old row closed, fresh row reopened IN-window), not a continuing position (2026-10-05: seeding it saturated momentum_stocks' gross-exposure cap and blocked every entry)", () => {
+    const db = new Database(":memory:");
+    db.run(`CREATE TABLE trades (
+      id TEXT PRIMARY KEY, account_id TEXT, symbol TEXT, side TEXT,
+      entry_price REAL, quantity REAL, stop_loss REAL,
+      entry_time INTEGER, exit_time INTEGER, status TEXT, close_reason TEXT
+    )`);
+    const epoch = at("2026-09-28");
+    db.prepare(
+      "INSERT INTO trades (id, account_id, symbol, side, entry_price, quantity, entry_time, exit_time, status, close_reason) VALUES (?,?,?,?,?,?,?,?,?,?)",
+    ).run("old", "momentum_stocks", "META", "buy", 607.5, 40, at("2026-09-04"), epoch + 1000, "closed", "MODEL_CUTOVER");
+    // A genuine carried-in position (e.g. a real STOP_LOSS/TIME_STOP exit
+    // within the window) is NOT excluded — only MODEL_CUTOVER is special.
+    db.prepare(
+      "INSERT INTO trades (id, account_id, symbol, side, entry_price, quantity, entry_time, exit_time, status, close_reason) VALUES (?,?,?,?,?,?,?,?,?,?)",
+    ).run("real", "momentum_stocks", "XLE", "buy", 90, 10, at("2026-09-20"), epoch + 2000, "closed", "TRAIL_STOP");
+    const seeds = extractSeedPositions(db, "momentum_stocks", epoch);
+    expect(seeds.map(s => s.symbol)).toEqual(["XLE"]);
+  });
+});
+
+describe("normalizeSeedPositions", () => {
+  test("momentum_crypto_usdc: BASE/USDC → BASE/USD, matching normalizeLiveDecisions' mapping", () => {
+    const seeds: SeedPosition[] = [{ symbol: "LINK/USDC", side: "buy", qty: 10, entryPrice: 20, entryAt: 0, stopPrice: 18 }];
+    expect(normalizeSeedPositions("momentum_crypto_usdc", seeds)).toEqual([
+      { symbol: "LINK/USD", side: "buy", qty: 10, entryPrice: 20, entryAt: 0, stopPrice: 18 },
+    ]);
+  });
+
+  test("other sleeves keep their symbols verbatim (same identity, not just equal value)", () => {
+    const seeds: SeedPosition[] = [{ symbol: "SOL/USD", side: "buy", qty: 1, entryPrice: 1, entryAt: 0 }];
+    expect(normalizeSeedPositions("momentum_crypto", seeds)).toBe(seeds);
   });
 });
 
@@ -105,6 +216,25 @@ describe("extractSimDecisions", () => {
       [{ symbol: "KO", side: "buy", pnl: 0, exitAt: at("2026-09-30"), reason: "SMA_EXIT" }],
       WINDOW_END,
     )).toThrow(/entryAt/);
+  });
+
+  // ── OPEN.md P2: a seeded (inherited) position's entry is suppressed ────
+  test("a closedTrade matching a seed's (symbol, side, entryAt) exactly contributes NO entry event — it was inherited, not decided this window", () => {
+    const seeds: SeedPosition[] = [{ symbol: "KO", side: "buy", qty: 40, entryPrice: 61.5, entryAt: at("2026-09-20") }];
+    const sim = extractSimDecisions([
+      { symbol: "KO", side: "buy", pnl: 10, exitAt: at("2026-09-30"), reason: "fold_end", entryAt: at("2026-09-20") }, // seed → no entry
+      simTrade("MRK", "2026-09-25", "2026-09-28", "SMA_EXIT"), // genuine in-window entry → counts normally
+    ], WINDOW_END, undefined, seeds);
+    expect(sim.entries).toEqual([{ symbol: "MRK", date: "2026-09-25" }]); // KO's inherited entry is absent
+    expect(sim.endHoldings).toEqual(["KO"]); // but its holding (fold_end) is still tracked
+  });
+
+  test("exact-identity matching: a DIFFERENT entryAt for the same symbol+side is NOT suppressed (e.g. a re-entry after the seed exited)", () => {
+    const seeds: SeedPosition[] = [{ symbol: "KO", side: "buy", qty: 40, entryPrice: 61.5, entryAt: at("2026-09-20") }];
+    const sim = extractSimDecisions([
+      simTrade("KO", "2026-09-26", "2026-09-30", "SMA_EXIT"), // a fresh re-entry, different entryAt — a real decision
+    ], WINDOW_END, undefined, seeds);
+    expect(sim.entries).toEqual([{ symbol: "KO", date: "2026-09-26" }]);
   });
 });
 
@@ -333,8 +463,8 @@ describe("utcDayCloses / heldSymbolsAt / compareDailyHoldings (momentum_crypto's
 });
 
 describe("momentum_crypto_usdc parity — live BASE/USDC vs the replay's BASE/USD proxies", () => {
-  test("the sleeve is monitored from the first daily pass whose MODEL_CUTOVER actually fired (09-29; the 09-27 pass skipped it)", () => {
-    expect(PARITY_EPOCHS.momentum_crypto_usdc).toBe("2026-09-29T00:00:00Z");
+  test("the sleeve is monitored from the owner's realign decision (10-08 00:00 UTC, UNI closed by its MODEL_CUTOVER)", () => {
+    expect(PARITY_EPOCHS.momentum_crypto_usdc).toBe("2026-10-08T00:00:00Z");
   });
 
   test("live USDC symbols are normalized to the proxy universe, so identical decisions match", () => {

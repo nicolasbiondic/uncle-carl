@@ -31,10 +31,16 @@ import { BinanceCoinMMomentumAdapter, COINM_INTERNAL_SYMBOL } from "./strategies
 import { AlpacaMomentumAdapter } from "./strategies/momentum/AlpacaMomentumAdapter";
 import { DEFAULT_TSM_CONFIG } from "./strategies/momentum/TimeSeriesMomentum";
 import { BinanceExecutor } from "./executor/binance-executor";
+import { isTransientBrokerFailure } from "./executor/transientFailure";
+import { setRuntimeLinkedAccounts } from "./platform/accounts/runtimeLinks";
 import { BinanceCoinMExecutor } from "./executor/binance-coinm-executor";
 import { USDC_SYMBOL_MAP } from "./executor/binance/quoteAsset";
 import { MeanRevEngine, MeanRevRetryController, DEFAULT_MEANREV_CONFIG, type MeanRevReport } from "./strategies/meanrev/MeanRevEngine";
 import { MOMENTUM_STOCKS_UNIVERSE, MOMENTUM_CRYPTO_UNIVERSE, RISK_PROFILES } from "./config/riskProfiles";
+// Measured gross-backstop headroom (G diagnostic, applied 2026-10-07): the
+// five *_MAX_GROSS_EXPOSURE_MULT below are slot×count × this factor — see
+// src/config/grossCap.ts for the evidence and the rollback (set it to 1.0).
+import { GROSS_CAP_HEADROOM } from "./config/grossCap";
 import { getETDateKey, getETDayStart, insertActivity, getOpenTrades, getDB } from "./db/database";
 import { liveBandReadings, type BandReading } from "./portfolio/scorecard";
 import { eventBus, EVENTS } from "./utils/events";
@@ -274,7 +280,7 @@ export const MOMENTUM_STOCKS_MAX_LONGS = 8;
 // measures the gross axis on the pre-09-10 kernel. The sleeve still fails
 // 4 gates (bench, PSR, displacement, break-even) at any gross.
 export const MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT = 0.125; // 0.25 until 2026-09-25 (see MAX_LONGS above)
-export const MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT = MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT * MOMENTUM_STOCKS_MAX_LONGS; // 1.0×
+export const MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT = MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT * MOMENTUM_STOCKS_MAX_LONGS * GROSS_CAP_HEADROOM; // 1.15× (1.0× hasta 2026-10-07 — G gross-cap)
 
 /**
  * OPT-IN daily-horizon mode for momentum_stocks (R2 research 2026-09-24,
@@ -380,18 +386,40 @@ export function momentumStocksDailyTickDue(nowMs: number, lastRunKey: string): b
  * leaving it set is harmless but noisy in intent.
  * See MomentumEngineConfig.reunderwriteBefore for the mechanism.
  */
-// ACTIVATED 2026-09-25 (director): META/AAPL (entered 09-04/09-11 by the 5m
-// kernel at 0.5/slot) are re-underwritten on the next daily pass (Mon 09-28)
-// under 8 × 0.125. Set back to null once that pass has landed.
-export const MOMENTUM_STOCKS_CUTOVER_AT: number | null = Date.UTC(2026, 8, 26);
+// History: the 2026-09-26 cutover re-underwrote META/AAPL on the 09-28 pass.
+// ACTIVE 2026-10-06 (owner: "alinéalo"): GOOGL only. Its 10-02 exit, which
+// the model took, bounced 403 (stop-cancel race, fixed 55bdae1); on 10-05
+// slotHysteresis kept it, so live held a position the model does not. The
+// 10-07 pass closes it through the normal path (MODEL_CUTOVER) and re-ranks it
+// as not held. MOMENTUM_STOCKS_CUTOVER_SYMBOLS keeps the rest of the book out.
+export const MOMENTUM_STOCKS_CUTOVER_AT: number | null = Date.UTC(2026, 9, 6, 5);
+export const MOMENTUM_STOCKS_CUTOVER_SYMBOLS: string[] | undefined = ["GOOGL"];
 /** The cutover is only wired into an engine built BEFORE this instant, so a
  *  forgotten constant cannot re-underwrite anything later (e.g. an adopted
- *  orphan carrying an old broker timestamp). Monday 09-28's pass is the only
- *  one it is meant for. */
-export const MOMENTUM_STOCKS_CUTOVER_EXPIRES_AT = Date.UTC(2026, 9, 3);
+ *  orphan carrying an old broker timestamp). The window leaves room for a
+ *  retry pass if the first close bounces; one-shot by entry time anyway. */
+export const MOMENTUM_STOCKS_CUTOVER_EXPIRES_AT = Date.UTC(2026, 9, 9);
 
 /** reunderwriteBefore for a momentum_stocks engine built at `nowMs`:
  *  the boundary while the cutover window is open, otherwise undefined. */
+/** Boot decision when a venue sleeve's executor cannot connect (preflight or
+ *  init). No exposure → the sleeve stays off. Exposure + a configuration
+ *  problem → refuse to boot: trading a misconfigured account is worse than
+ *  not running. Exposure + a transient venue/network failure → attach the
+ *  unconnected executor: the 60s sync's reconnector brings it up with backoff
+ *  and the positions keep their exchange-native stops meanwhile. Refusing to
+ *  boot there took every OTHER venue down too, leaving ALL exposure unmanaged
+ *  (2026-10-06: Binance demo -1007 on every signed read, systemd restarting
+ *  the whole bot every ~10s). `reason` null = init() failed right after a
+ *  passed preflight — the venue, not the configuration. */
+export function venueBootActionOnConnectFailure(
+  hasExposure: boolean,
+  reason: string | null,
+): "stay_off" | "fail_boot" | "attach_degraded" {
+  if (!hasExposure) return "stay_off";
+  return reason === null || isTransientBrokerFailure(reason) ? "attach_degraded" : "fail_boot";
+}
+
 export function momentumStocksCutoverFor(nowMs: number): number | undefined {
   if (MOMENTUM_STOCKS_CUTOVER_AT === null) return undefined;
   return nowMs < MOMENTUM_STOCKS_CUTOVER_EXPIRES_AT ? MOMENTUM_STOCKS_CUTOVER_AT : undefined;
@@ -410,7 +438,7 @@ export const MOMENTUM_CRYPTO_NOTIONAL_PCT_PER_SLOT = 0.375;
  *  re-anchor on change — MomentumEngineConfig.modelVersion). Bump it only
  *  when the wired model itself changes. */
 export const MOMENTUM_CRYPTO_MODEL_VERSION = "vt35-2026-09-23";
-export const MOMENTUM_CRYPTO_MAX_GROSS_EXPOSURE_MULT = MOMENTUM_CRYPTO_NOTIONAL_PCT_PER_SLOT * MOMENTUM_CRYPTO_MAX_LONGS; // 1.5×
+export const MOMENTUM_CRYPTO_MAX_GROSS_EXPOSURE_MULT = MOMENTUM_CRYPTO_NOTIONAL_PCT_PER_SLOT * MOMENTUM_CRYPTO_MAX_LONGS * GROSS_CAP_HEADROOM; // 1.725× (1.5× hasta 2026-10-07 — G gross-cap)
 
 // ══════════════════════════════════════════════
 // momentum_crypto_usdc DAILY kernel (U1 round 3-5, 2026-09-26).
@@ -441,7 +469,7 @@ export const MOMENTUM_CRYPTO_MAX_GROSS_EXPOSURE_MULT = MOMENTUM_CRYPTO_NOTIONAL_
 // ══════════════════════════════════════════════
 export const MOMENTUM_USDC_MAX_LONGS = 5;
 export const MOMENTUM_USDC_NOTIONAL_PCT_PER_SLOT = 0.2;
-export const MOMENTUM_USDC_MAX_GROSS_EXPOSURE_MULT = MOMENTUM_USDC_NOTIONAL_PCT_PER_SLOT * MOMENTUM_USDC_MAX_LONGS; // 1.0×
+export const MOMENTUM_USDC_MAX_GROSS_EXPOSURE_MULT = MOMENTUM_USDC_NOTIONAL_PCT_PER_SLOT * MOMENTUM_USDC_MAX_LONGS * GROSS_CAP_HEADROOM; // 1.15× (1.0× hasta 2026-10-07 — G gross-cap; 8 bloqueos LTC/AVAX en prod)
 /** Daily TSM blend (mean of 63/126/252-day returns, MA200 trend filter) —
  *  same shape as MOMENTUM_STOCKS_DAILY_HORIZON, validated per artifact
  *  752767ae… above. Always-on for this sleeve (no 1h fallback: the hourly
@@ -457,21 +485,23 @@ export const MOMENTUM_USDC_DAILY_VOL_STOP = { kSigma: 8, lookbackBars: 20, minPc
  *  kernel must not inherit the hourly model's drawdown peak (one-shot
  *  re-anchor on change — MomentumEngineConfig.modelVersion). */
 export const MOMENTUM_USDC_MODEL_VERSION = "daily-s5-blend3-2026-09-26";
-/** One-shot MODEL_CUTOVER for the hourly model's positions (UNI, NEAR, BCH
- *  on 2026-09-26 — ~0.9× of equity at the hourly slot size, which would fill
- *  the daily kernel's 1.0× cap and block its entries). Entries before this
- *  instant are closed at the first daily decision (00:00:15 UTC 09-27) and
- *  re-bought at 5 × 0.20 only if the daily kernel ranks them. Expires on its
- *  own: engines built after MOMENTUM_USDC_CUTOVER_EXPIRES_AT never get it. */
-export const MOMENTUM_USDC_CUTOVER_AT = Date.UTC(2026, 8, 27);
-export const MOMENTUM_USDC_CUTOVER_EXPIRES_AT = Date.UTC(2026, 9, 4);
+/** One-shot MODEL_CUTOVER. History: 2026-09-27 re-underwrote the hourly
+ *  model's UNI/NEAR/BCH under the daily kernel. ACTIVE 2026-10-06 (owner:
+ *  "alinéalo"): UNI/USDC only — that cutover's simultaneous re-rank bought
+ *  UNI where the model (re-ranking from its own book) does not hold it. The
+ *  10-08 daily decision (00:00:15 UTC) closes it and re-ranks it as not
+ *  held. Expires on its own: engines built after
+ *  MOMENTUM_USDC_CUTOVER_EXPIRES_AT never get it. */
+export const MOMENTUM_USDC_CUTOVER_AT = Date.UTC(2026, 9, 6, 5);
+export const MOMENTUM_USDC_CUTOVER_SYMBOLS: string[] | undefined = ["UNI/USDC"];
+export const MOMENTUM_USDC_CUTOVER_EXPIRES_AT = Date.UTC(2026, 9, 9);
 export function momentumUsdcCutoverFor(nowMs: number): number | undefined {
   return nowMs < MOMENTUM_USDC_CUTOVER_EXPIRES_AT ? MOMENTUM_USDC_CUTOVER_AT : undefined;
 }
 
 export const MOMENTUM_BTC_MAX_LONGS = 1;
 export const MOMENTUM_BTC_NOTIONAL_PCT_PER_SLOT = 1;
-export const MOMENTUM_BTC_MAX_GROSS_EXPOSURE_MULT = MOMENTUM_BTC_NOTIONAL_PCT_PER_SLOT * MOMENTUM_BTC_MAX_LONGS; // 1.0×
+export const MOMENTUM_BTC_MAX_GROSS_EXPOSURE_MULT = MOMENTUM_BTC_NOTIONAL_PCT_PER_SLOT * MOMENTUM_BTC_MAX_LONGS * GROSS_CAP_HEADROOM; // 1.15× (1.0× hasta 2026-10-07 — G gross-cap, no medido: 1 slot)
 
 // meanrev_stocks doesn't override slotPct/maxPositions below — it inherits
 // MeanRevEngine's own DEFAULT_MEANREV_CONFIG, which is ALREADY the single
@@ -479,7 +509,7 @@ export const MOMENTUM_BTC_MAX_GROSS_EXPOSURE_MULT = MOMENTUM_BTC_NOTIONAL_PCT_PE
 // account-level exposure sum (see AccountManager) and the test lock have one
 // place to read every sleeve's cap from.
 export const MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT =
-  DEFAULT_MEANREV_CONFIG.slotPct * DEFAULT_MEANREV_CONFIG.maxPositions; // 0.7× since 2026-09-24 (was 0.5×)
+  DEFAULT_MEANREV_CONFIG.slotPct * DEFAULT_MEANREV_CONFIG.maxPositions * GROSS_CAP_HEADROOM; // 0.966× desde 2026-10-07 (G gross-cap; 0.84× antes, 0.7× desde 09-24, 0.5× antes)
 
 /**
  * OPT-IN idle-cash treasury sweep for the shared Alpaca account (S3 research
@@ -665,7 +695,9 @@ export function momentumUsdcPortfolioPlan(): MomentumPortfolioPlan {
       // New model → own risk state, and the hourly model's positions are
       // re-underwritten at the daily kernel's slot size (see constants).
       modelVersion: MOMENTUM_USDC_MODEL_VERSION,
-      ...(momentumUsdcCutoverFor(Date.now()) !== undefined ? { reunderwriteBefore: momentumUsdcCutoverFor(Date.now()) } : {}),
+      ...(momentumUsdcCutoverFor(Date.now()) !== undefined
+        ? { reunderwriteBefore: momentumUsdcCutoverFor(Date.now()), ...(MOMENTUM_USDC_CUTOVER_SYMBOLS ? { reunderwriteSymbols: [...MOMENTUM_USDC_CUTOVER_SYMBOLS] } : {}) }
+        : {}),
     },
     statePersistence: { path: "data/momentum-state-usdc.json", currentBase: 5_000, legacyBase: 5_000, equitySemantics: EQUITY_SEMANTICS.BINANCE_USDC_MARGIN },
     scheduler: { kind: "engine-start" },
@@ -803,7 +835,9 @@ export function momentumStocksPortfolioPlan(): MomentumPortfolioPlan {
       capacityGuard: { maxAdvPct: 1, lookbackBars: 20, mode: "observe" },
       // One-shot legacy-position re-underwrite (null = absent = OFF) — see
       // MOMENTUM_STOCKS_CUTOVER_AT's docstring above main().
-      ...(momentumStocksCutoverFor(Date.now()) !== undefined ? { reunderwriteBefore: momentumStocksCutoverFor(Date.now()) } : {}),
+      ...(momentumStocksCutoverFor(Date.now()) !== undefined
+        ? { reunderwriteBefore: momentumStocksCutoverFor(Date.now()), ...(MOMENTUM_STOCKS_CUTOVER_SYMBOLS ? { reunderwriteSymbols: [...MOMENTUM_STOCKS_CUTOVER_SYMBOLS] } : {}) }
+        : {}),
     },
     statePersistence: { path: "data/momentum-state-stocks.json", currentBase: 50_000, legacyBase: 100_000, equitySemantics: EQUITY_SEMANTICS.SLEEVE_LEDGER },
     // index.ts owns this loop (engine.start() not called) so main() registers
@@ -1074,6 +1108,11 @@ async function main() {
     // keys still sitting in .env — unlinked must mean not trading.
     executorOptions.alpacaCredentials = registryAlpacaCreds ?? unlinkedAlpacaCredentials();
     executorOptions.binanceCredentials = registryBinanceCreds ?? unlinkedBinanceCredentials();
+    // The dashboard must not let the owner remove what this process signs with.
+    setRuntimeLinkedAccounts([
+      resolution.alpaca.linked ? resolution.alpaca.account.id : null,
+      resolution.binance.linked ? resolution.binance.account.id : null,
+    ]);
 
     // Abandoned-exposure guard (same doctrine as the USDC/COIN-M blocks
     // below): an unlinked venue with OPEN DB rows means positions nobody
@@ -1170,14 +1209,29 @@ async function main() {
         ...(registryBinanceCreds ? { credentials: registryBinanceCreds } : {}),
       });
       const pf = await candidate.preflight();
+      // Exposure + a transient venue failure: boot anyway with the executor
+      // attached unconnected (venueBootActionOnConnectFailure docstring).
+      const attachDegraded = (what: string) => {
+        usdcExecutor = candidate;
+        accountManager.attachUsdcExecutor(candidate, { live: enabled });
+        const msg = `momentum_crypto_usdc: ${what} — Binance unreachable at boot with open positions: booting anyway; they keep their exchange stops and the executor reconnects in the background (30s→5min backoff)`;
+        log.error(`🚫 ${msg}`);
+        insertActivity(null, "circuit", msg);
+      };
       if (!pf.ok) {
-        if (hasExposure) throw new Error(`momentum_crypto_usdc: open DB exposure exists but preflight FAILED (${pf.reason}) — refusing to boot with abandoned exposure`);
-        log.error(`🚫 momentum_crypto_usdc preflight FAILED — sleeve stays OFF: ${pf.reason}`);
-        insertActivity(null, "circuit", `momentum_crypto_usdc preflight failed: ${pf.reason}`);
+        const action = venueBootActionOnConnectFailure(hasExposure, pf.reason ?? "");
+        if (action === "fail_boot") throw new Error(`momentum_crypto_usdc: open DB exposure exists but preflight FAILED (${pf.reason}) — refusing to boot with abandoned exposure`);
+        if (action === "attach_degraded") attachDegraded(`preflight FAILED (${pf.reason})`);
+        else {
+          log.error(`🚫 momentum_crypto_usdc preflight FAILED — sleeve stays OFF: ${pf.reason}`);
+          insertActivity(null, "circuit", `momentum_crypto_usdc preflight failed: ${pf.reason}`);
+        }
       } else if (!(await candidate.init())) {
-        if (hasExposure) throw new Error("momentum_crypto_usdc: open DB exposure exists but executor.init() failed — refusing to boot with abandoned exposure");
-        log.error("🚫 momentum_crypto_usdc init failed after preflight passed — sleeve stays OFF");
-        insertActivity(null, "circuit", "momentum_crypto_usdc init failed after preflight passed");
+        if (venueBootActionOnConnectFailure(hasExposure, null) === "attach_degraded") attachDegraded("executor.init() failed after preflight passed");
+        else {
+          log.error("🚫 momentum_crypto_usdc init failed after preflight passed — sleeve stays OFF");
+          insertActivity(null, "circuit", "momentum_crypto_usdc init failed after preflight passed");
+        }
       } else {
         usdcExecutor = candidate;
         accountManager.attachUsdcExecutor(candidate, { live: enabled });
@@ -1380,6 +1434,12 @@ async function main() {
         retry.recordAttempt(todayKey, Date.now());
         const report = await run({ skipEntries: decision.skipEntries });
         for (const err of report.errors) momentumLog.warn(`${label}: ${err}`);
+        // Why the pass failed: an error, the terminal reason, or the first
+        // failed close/open (a blocked open carries no error — the warning
+        // used to print an empty reason).
+        const failedAction = report.closes.find((c) => !c.ok) ?? report.opens.find((o) => !o.ok);
+        const failureWhy = report.errors[0] ?? report.terminalReason
+          ?? (failedAction ? `${failedAction.symbol}: ${failedAction.detail ?? "failed"}` : undefined);
 
         if (report.status === "terminal_action_failure") {
           retry.markTerminal(todayKey, report.terminalReason ?? "unknown", Date.now());
@@ -1403,7 +1463,7 @@ async function main() {
         if (report.status === "incomplete_data" || report.status === "action_failure") {
           if (decision.skipEntries) {
             // Exhausted retries; mark the day failed so we don't resubmit all day.
-            const reason = report.errors[0] ?? report.terminalReason ?? `${report.status} after retries`;
+            const reason = failureWhy ?? `${report.status} after retries`;
             retry.markTerminal(todayKey, reason, Date.now());
             const msg = `${label} daily run FAILED after retries: ${reason} — manual review required`;
             momentumLog.error(msg);
@@ -1417,7 +1477,7 @@ async function main() {
               lastAt: Date.now(),
             });
           } else {
-            momentumLog.warn(`${label} daily run ${report.status}: ${report.errors[0] ?? report.terminalReason ?? ""} — will retry`);
+            momentumLog.warn(`${label} daily run ${report.status}: ${failureWhy ?? ""} — will retry`);
           }
           return;
         }

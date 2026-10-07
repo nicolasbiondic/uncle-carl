@@ -10,7 +10,6 @@
 import { api } from "../api.js";
 import { t } from "../store.js";
 import { esc, icon } from "../ui.js";
-import { trapFocus } from "../focus-trap.js";
 
 // ── pure helpers (unit-tested) ───────────────────────────────────────────
 
@@ -28,7 +27,36 @@ export function envLabel(env) {
 export function statusInfo(status) {
   if (status === "verified") return { cls: "ok", label: t("Verified", "Verificada") };
   if (status === "error") return { cls: "err", label: "Error" };
+  if (status === "revoked") return { cls: "warn", label: t("Revoked", "Revocada") };
   return { cls: "warn", label: t("Unverified", "Sin verificar") };
+}
+
+export function authTypeLabel(a) {
+  return a === "oauth" ? "OAuth" : a === "api_key" ? t("API keys", "Claves API") : String(a || "?");
+}
+
+/** Providers with MORE than one verified account and no runtime link on any
+ *  of them: the next boot cannot pick one by itself (runtime.ts refuses to
+ *  guess). Returns provider labels to warn about. */
+export function multiVerifiedUnlinked(accounts) {
+  const byProvider = new Map();
+  for (const a of accounts || []) {
+    if (a.status !== "verified") continue;
+    const e = byProvider.get(a.provider) || { count: 0, linked: false };
+    e.count++;
+    if (a.runtimeLinked) e.linked = true;
+    byProvider.set(a.provider, e);
+  }
+  return [...byProvider.entries()].filter(([, e]) => e.count > 1 && !e.linked).map(([p]) => providerLabel(p));
+}
+
+export function multiVerifiedWarningHtml(accounts) {
+  const providers = multiVerifiedUnlinked(accounts);
+  if (!providers.length) return "";
+  return `<div class="acc-setup" role="alert" style="margin-bottom:var(--s3)">⚠ ${t(
+    `More than one verified ${providers.join(", ")} account and no explicit link — the next start would not know which one to use. Set RUNTIME_ACCOUNT_* (or instance.json runtimeAccounts) to the account id.`,
+    `Hay más de una cuenta verificada de ${providers.join(", ")} sin vínculo explícito — el próximo arranque no sabría cuál usar. Fija RUNTIME_ACCOUNT_* (o runtimeAccounts en instance.json) con el id de la cuenta.`,
+  )}</div>`;
 }
 
 export function fmtWhen(ts) {
@@ -66,12 +94,19 @@ export function oauthResultMessage(result) {
 
 export function renderAccountRow(a) {
   const st = statusInfo(a.status);
+  const linkedReason = a.runtimeLinked
+    ? t("In use by the bot — link another account and restart before removing this one", "En uso por el bot — vincula otra cuenta y reinicia antes de quitar esta")
+    : "";
+  const dis = a.runtimeLinked ? `disabled title="${esc(linkedReason)}"` : "";
+  const revoked = a.status === "revoked";
   return `<div class="acc-row" data-acc-id="${esc(a.id)}">
     <div class="acc-main">
       <b>${esc(a.label)}</b>
       <span class="chip">${esc(providerLabel(a.provider))}</span>
       <span class="chip">${esc(envLabel(a.environment))}</span>
+      <span class="chip">${esc(authTypeLabel(a.authType))}</span>
       <span class="acc-status ${st.cls}">${esc(st.label)}</span>
+      ${a.runtimeLinked ? `<span class="acc-status ok" title="${esc(linkedReason)}">${t("In use by the bot", "En uso por el bot")}</span>` : ""}
     </div>
     <div class="acc-sub muted">
       ${a.accountRef ? `${t("Account", "Cuenta")} <code>${esc(a.accountRef)}</code> · ` : ""}
@@ -79,10 +114,30 @@ export function renderAccountRow(a) {
       ${a.lastError ? `<div class="acc-err">${esc(a.lastError)}</div>` : ""}
     </div>
     <div class="acc-actions">
-      <button class="acc-btn" data-acc-verify="${esc(a.id)}">${t("Verify", "Verificar")}</button>
-      <button class="acc-btn danger" data-acc-del="${esc(a.id)}">${t("Remove", "Quitar")}</button>
+      <button class="acc-btn" data-acc-view="${esc(a.id)}">${t("View", "Ver")}</button>
+      <button class="acc-btn" data-acc-verify="${esc(a.id)}" ${revoked ? `disabled title="${esc(t("Revoked — reconnect the account to verify it", "Revocada — reconecta la cuenta para verificarla"))}"` : ""}>${t("Verify", "Verificar")}</button>
+      ${revoked ? "" : `<button class="acc-btn danger" data-acc-revoke="${esc(a.id)}" ${dis}>${t("Revoke", "Revocar")}</button>`}
+      <button class="acc-btn danger" data-acc-del="${esc(a.id)}" ${dis}>${t("Remove", "Quitar")}</button>
     </div>
   </div>`;
+}
+
+/** Read-only detail (no secrets exist to show — only the redacted record). */
+export function renderAccountDetail(a) {
+  const st = statusInfo(a.status);
+  const row = (l, v) => `<div class="set-row"><span>${esc(l)}</span><span class="set-v">${v}</span></div>`;
+  return row("Id", `<code>${esc(a.id)}</code>`)
+    + row(t("Label", "Etiqueta"), esc(a.label))
+    + row(t("Provider", "Proveedor"), esc(providerLabel(a.provider)))
+    + row(t("Environment", "Entorno"), esc(envLabel(a.environment)))
+    + row(t("Auth", "Autenticación"), esc(authTypeLabel(a.authType)))
+    + row(t("Status", "Estado"), `<span class="acc-status ${st.cls}">${esc(st.label)}</span>`)
+    + row(t("Account number", "Nº de cuenta"), a.accountRef ? `<code>${esc(a.accountRef)}</code>` : "—")
+    + row(t("Last verified", "Última verificación"), esc(fmtWhen(a.lastVerifiedAt)))
+    + row(t("Created", "Creada"), esc(fmtWhen(a.createdAt)))
+    + row(t("In use by the bot", "En uso por el bot"), a.runtimeLinked ? t("Yes", "Sí") : "No")
+    + (a.lastError ? row("Error", `<span class="acc-err">${esc(a.lastError)}</span>`) : "")
+    + `<div class="muted acc-note">${t("Credentials are sealed and never displayed.", "Las credenciales están cifradas y nunca se muestran.")}</div>`;
 }
 
 export function renderAccountsList(data) {
@@ -94,7 +149,7 @@ export function renderAccountsList(data) {
     )}</div>`;
   }
   const rows = (data.accounts || []).map(renderAccountRow).join("");
-  return rows || `<div class="muted">${t("No broker accounts yet.", "Aún no hay cuentas de broker.")}</div>`;
+  return multiVerifiedWarningHtml(data.accounts) + (rows || `<div class="muted">${t("No broker accounts yet.", "Aún no hay cuentas de broker.")}</div>`);
 }
 
 export function renderBinanceSecurityTips() {
@@ -146,11 +201,15 @@ export function renderAddModal(data, provider) {
 
 // ── stateful UI ──────────────────────────────────────────────────────────
 
-let root = null;       // slideover backdrop
+let root = null;       // the page body element (#pageBody) the view is mounted in
 let modal = null;      // add-account modal backdrop
 let escHandler = null;
-let release = null;
 let data = null;       // last GET /api/platform/accounts payload
+let pendingOauthResult = null; // parsed OAuth redirect result → banner on next mount
+
+/** main.js stores the OAuth round-trip result here before navigating to
+ *  #/cuentas, so the banner shows on the page mount. One-shot. */
+export function setPendingOauthResult(result) { pendingOauthResult = result; }
 
 function noticeHtml(text, ok) {
   return text ? `<div class="acc-msg ${ok ? "ok" : "err"}">${esc(text)}</div>` : "";
@@ -158,58 +217,94 @@ function noticeHtml(text, ok) {
 
 async function reload(el) {
   data = await api.platformAccounts();
+  if (!el.isConnected) return;
   const list = el.querySelector("#accList");
   if (list) list.innerHTML = renderAccountsList(data);
   const add = el.querySelector("[data-acc-open-add]");
   if (add) add.disabled = !data || data.configured === false;
 }
 
-/** Opens the "Cuentas" slideover. `oauthResult` (optional) = the parsed
- *  redirect result to surface as a banner. */
-export async function openAccounts(oauthResult) {
-  closeAccounts();
-  const el = root = document.createElement("div");
-  root.className = "so-backdrop";
-  root.innerHTML = `<aside class="so" role="dialog" aria-modal="true" aria-label="${t("Broker accounts", "Cuentas de broker")}">
-    <div class="so-head"><b>${t("Broker accounts", "Cuentas de broker")}</b>
-      <button class="icn" data-acc-close aria-label="${t("Close", "Cerrar")}">${icon("x")}</button></div>
-    <div class="so-body">
-      ${noticeHtml(oauthResultMessage(oauthResult), !!(oauthResult && oauthResult.ok))}
-      <div id="accList" class="acc-list"><div class="muted">…</div></div>
-      <button class="acc-btn primary" data-acc-open-add style="margin-top:var(--s4)">${t("Add account", "Añadir cuenta")}</button>
-      <div class="muted acc-note">${t(
-        "Registry only: the trading engines keep using the .env accounts until portfolios adopt these.",
-        "Solo registro: los motores siguen usando las cuentas del .env hasta que los portafolios adopten estas.",
-      )}</div>
-    </div></aside>`;
-  document.body.appendChild(root);
-  root.addEventListener("pointerdown", (e) => { if (e.target === root) closeAccounts(); });
-  root.addEventListener("click", onSlideoverClick);
-  escHandler = (e) => { if (e.key === "Escape") { if (modal) closeModal(); else closeAccounts(); } };
+/** Mounts the "Cuentas" page into `host` (a fresh #pageBody element).
+ *  Replaces the old slideover (2026-10-06 portfolio-manager nav). */
+export async function mountAccounts(host) {
+  closeModal();
+  if (escHandler) { document.removeEventListener("keydown", escHandler); escHandler = null; }
+  const oauthResult = pendingOauthResult;
+  pendingOauthResult = null;
+  root = host;
+  host.innerHTML = `
+    ${noticeHtml(oauthResultMessage(oauthResult), !!(oauthResult && oauthResult.ok))}
+    <div id="accList" class="acc-list"><div class="muted">…</div></div>
+    <button class="acc-btn primary" data-acc-open-add style="margin-top:var(--s4)">${t("Connect account", "Conectar cuenta")}</button>
+    <div class="muted acc-note">${t(
+      "Credentials are encrypted at rest and never shown again. The bot only signs with the account linked at startup.",
+      "Las credenciales se cifran en reposo y no vuelven a mostrarse. El bot solo firma con la cuenta vinculada al arrancar.",
+    )}</div>`;
+  host.addEventListener("click", onPanelClick);
+  escHandler = (e) => { if (e.key === "Escape" && modal) closeModal(); };
   document.addEventListener("keydown", escHandler);
-  release = trapFocus(root);
-  try { await reload(el); } catch { /* renderAccountsList(null) already says it */ }
+  try { await reload(host); } catch { /* renderAccountsList(null) already says it */ }
 }
 
-function onSlideoverClick(e) {
-  if (e.target.closest("[data-acc-close]")) return closeAccounts();
+function onPanelClick(e) {
   if (e.target.closest("[data-acc-open-add]")) return openAddModal();
+  const view = e.target.closest("[data-acc-view]");
+  if (view) return openDetail(view.dataset.accView);
   const verify = e.target.closest("[data-acc-verify]");
   if (verify) return doVerify(verify.dataset.accVerify, verify);
+  const revoke = e.target.closest("[data-acc-revoke]");
+  if (revoke) return doRevoke(revoke.dataset.accRevoke);
   const del = e.target.closest("[data-acc-del]");
   if (del) return doDelete(del.dataset.accDel);
 }
 
+function accountById(id) {
+  return (data?.accounts || []).find((a) => a.id === id) || null;
+}
+
+function openDetail(id) {
+  const a = accountById(id);
+  if (!a) return;
+  closeModal();
+  const el = modal = document.createElement("div");
+  modal.className = "cm-backdrop";
+  modal.innerHTML = `<div class="cm acc-modal" role="dialog" aria-modal="true" aria-label="${esc(a.label)}">
+    <div class="cm-head"><b>${esc(a.label)}</b><span style="flex:1"></span>
+      <button class="icn" data-acc-mclose aria-label="${t("Close", "Cerrar")}">${icon("x")}</button></div>
+    <div class="acc-mbody">${renderAccountDetail(a)}</div></div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener("pointerdown", (ev) => { if (ev.target === el) closeModal(); });
+  modal.addEventListener("click", (ev) => { if (ev.target.closest("[data-acc-mclose]")) closeModal(); });
+}
+
 async function doVerify(id, btn) {
   btn.disabled = true;
-  try { await api.verifyPlatformAccount(id); } catch {}
+  try { await api.verifyPlatformAccount(id); }
+  catch (err) { alert(err?.message || t("Verification failed", "Falló la verificación")); }
+  if (root) await reload(root).catch(() => {});
+}
+
+async function doRevoke(id) {
+  const a = accountById(id);
+  const oauthNote = a?.authType === "oauth"
+    ? t(" The OAuth grant also lives at the broker: revoke the app's access from your Alpaca account settings too.",
+        " El permiso OAuth también vive en el broker: revoca además el acceso de la app desde los ajustes de tu cuenta de Alpaca.")
+    : "";
+  const sure = confirm(t(
+    `Revoke account '${id}'? The stored credentials are deleted and the bot can no longer use it; the record stays. To use it again you must reconnect it.${oauthNote}`,
+    `¿Revocar la cuenta '${id}'? Se eliminan las credenciales guardadas y el bot deja de poder usarla; el registro se conserva. Para usarla de nuevo tendrás que reconectarla.${oauthNote}`,
+  ));
+  if (!sure) return;
+  try { await api.revokePlatformAccount(id); }
+  catch (err) { alert(err?.message || t("Revoke failed", "Falló la revocación")); }
   if (root) await reload(root).catch(() => {});
 }
 
 async function doDelete(id) {
   const sure = confirm(t(`Remove account '${id}'? The stored credentials are deleted.`, `¿Quitar la cuenta '${id}'? Se eliminan las credenciales guardadas.`));
   if (!sure) return;
-  try { await api.deletePlatformAccount(id); } catch {}
+  try { await api.deletePlatformAccount(id); }
+  catch (err) { alert(err?.message || t("Remove failed", "Falló la eliminación")); }
   if (root) await reload(root).catch(() => {});
 }
 
@@ -265,11 +360,4 @@ function openAddModal() {
 
 function closeModal() {
   if (modal) { modal.remove(); modal = null; }
-}
-
-export function closeAccounts() {
-  closeModal();
-  if (escHandler) { document.removeEventListener("keydown", escHandler); escHandler = null; }
-  release?.(); release = null;
-  if (root) { root.remove(); root = null; }
 }

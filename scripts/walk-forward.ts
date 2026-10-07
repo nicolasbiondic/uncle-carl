@@ -141,9 +141,12 @@ export interface CandidateConfig {
    *  verbatim (merged over the engine's injected barMinutes — see
    *  runWithConfig). Momentum sleeves only. Absent = legacy (filter on). */
   regime?: { enabled?: boolean; [k: string]: unknown } | "off";
-  /** Aggregate gross-exposure cap multiplier (ReplayConfig
-   *  passthrough → MomentumEngineConfig). Momentum sleeves only. Absent =
-   *  engine default (legacy hash). */
+  /** Aggregate gross-exposure cap multiplier (ReplayConfig passthrough →
+   *  MomentumEngineConfig / MeanRevEngineConfig). Valid on EVERY sleeve
+   *  since 2026-10-05 (G gross-cap diagnostic): the meanrev runner now
+   *  forwards it to the real MeanRevEngine (cap = baseUsd × mult, the live
+   *  semantics), the momentum runners always did (cap = equity × mult).
+   *  Absent = OFF — engine default AND the legacy candidate hash. */
   maxGrossExposureMult?: number;
   /** Meanrev RSI computation method: Cutler (SMA — the incumbent) vs
    *  Wilder (smoothed — the Connors-literature convention). Meanrev sleeve
@@ -416,7 +419,10 @@ export function validateCandidate(c: unknown): CandidateConfig {
     // Meanrev candidate: the Connors params are the whole strategy surface.
     // Momentum-only knobs are FORBIDDEN (they would be silently ignored by
     // the meanrev runner, i.e. config that changes nothing).
-    const forbidden = ["entryPct", "exitPct", "maxLongs", "maxShorts", "notionalPctPerSlot", "volTarget", "volSizing", "tsmTrail", "sharpeGate", "timeStop", "marketTrend", "risk", "cooldownBarsAfterStop", "slotHysteresis", "regime", "maxGrossExposureMult", "profitLock", "lookbackDays", "maLengthDays", "lookbackDaysList"]
+    // maxGrossExposureMult left this list 2026-10-05: runMeanRevReplay now
+    // forwards it to MeanRevEngine (it is no longer config that changes
+    // nothing on meanrev) — see the G gross-cap diagnostic.
+    const forbidden = ["entryPct", "exitPct", "maxLongs", "maxShorts", "notionalPctPerSlot", "volTarget", "volSizing", "tsmTrail", "sharpeGate", "timeStop", "marketTrend", "risk", "cooldownBarsAfterStop", "slotHysteresis", "regime", "profitLock", "lookbackDays", "maLengthDays", "lookbackDaysList"]
       .filter(k => obj[k] !== undefined);
     if (forbidden.length > 0) {
       throw new Error(`meanrev CandidateConfig must not set momentum-only keys: ${forbidden.join(", ")}`);

@@ -1,0 +1,119 @@
+{
+  "name": "momentum-crypto-usdc-daily-s5-grosscap100-diag-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTRO 2026-10-05 (G gross-cap, DIAGNOSTICO de fidelidad vivo<->modelo, NO candidato a cablear). Los motores vivos aplican maxGrossExposureMult en cada entrada nueva (valor de MERCADO del libro + entrada nueva) pero los artefactos autoritativos se corrieron SIN ese tope (los manifests no llevan la clave; scripts/liveSleeveConfigs.test.ts lo declara 'live-only backstop que nunca se activa' y prod lo desmintio: desde el 2026-09-26 el sleeve USDC bloqueo 8 entradas por el tope con 4/5 posiciones llenas). Este manifest es copia byte a byte de momentum-crypto-usdc-daily-s5-pure-v1 salvo: candidate.maxGrossExposureMult = 1.0 \u2014 el valor vivo de momentum_crypto_usdc (1.0x = notionalPctPerSlot 0.20 x maxLongs 5 (MOMENTUM_USDC_MAX_GROSS_EXPOSURE_MULT, src/index.ts) \u2014 el tope que prod activo 8 veces desde el 2026-09-26 (4x LTC, 4x AVAX)). Misma ventana/asOf/folds/costes/gates; cadena pura de 1 candidato. Se corre sobre la MISMA base cuyo dataHash reproduce el artefacto autoritativo (hist-sp500.db). REGLA PRE-DECLARADA (antes de correr, mision G): si en algun sleeve |dSharpe| >= 0.05, |dCAGR| >= 1pp, o el tope se activa en >= 2% de las decisiones de entrada de la cadena OOS, se recomienda CAMBIAR el tope vivo (holgura H tal que se active en <1% de las decisiones validadas, o degradarlo a alerta); la propuesta va en docs/reports/G-gross-cap.md, nada se cablea desde aqui. TRIAL ACCOUNTING: tope 1.0 sobre esta cadena nunca corrido = +1 hipotesis (diagnostica). priorUniqueTrials=321; pasa a 322. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 321,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1d",
+    "universe": [
+      "ADA/USD",
+      "AVAX/USD",
+      "BCH/USD",
+      "BNB/USD",
+      "BTC/USD",
+      "DOGE/USD",
+      "ETH/USD",
+      "LINK/USD",
+      "LTC/USD",
+      "NEAR/USD",
+      "SOL/USD",
+      "UNI/USD",
+      "XRP/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-26T00:00:00Z",
+  "window": {
+    "from": "2021-08-01",
+    "to": "2026-09-27",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 17,
+      "commissionBps": 3
+    },
+    "stress": {
+      "slippageBps": 60,
+      "commissionBps": 5
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "d13-s5-blend-63-126-252-cap1.0",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.2,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 5,
+      "maxShorts": 0,
+      "lookbackDaysList": [
+        63,
+        126,
+        252
+      ],
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "maxGrossExposureMult": 1.0
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

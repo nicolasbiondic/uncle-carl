@@ -24,6 +24,33 @@ function makeEngine(adapter: FakeAdapter, universe: string[], extra: any = {}) {
 makeTestDb();
 
 describe("MeanRevEngine gross-exposure guard", () => {
+  test("a position closed earlier in the same pass no longer counts against the cap (2026-10-05 KO class)", async () => {
+    const adapter = new FakeAdapter();
+    const universe: string[] = [];
+    // 7 held × $6,000 = $42,000 = the whole 0.84× cap. EXIT0 fires SMA_EXIT
+    // (rising tail); HELD1..6 stay (flat: close = SMA5, far from the time stop).
+    adapter.setCandles("EXIT0", daily(flatThen(100, [100, 101, 102, 103, 104, 105])));
+    adapter.positions.push({ symbol: "EXIT0", side: "buy", quantity: 60, notional: 6_000, entryTime: ANCHOR - 2 * DAY });
+    universe.push("EXIT0");
+    for (let i = 1; i <= 6; i++) {
+      const sym = `HELD${i}`;
+      adapter.setCandles(sym, daily(flatThen(100, [100, 100, 100])));
+      adapter.positions.push({ symbol: sym, side: "buy", quantity: 60, notional: 6_000, entryTime: ANCHOR - 2 * DAY });
+      universe.push(sym);
+    }
+    adapter.setCandles("NEW", daily(flatThen(100, [150, 150.1, 150.1 - 12])));
+    universe.push("NEW");
+    const engine = makeEngine(adapter, universe, { maxGrossExposureMult: MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT });
+
+    const report = await engine.runDaily();
+
+    expect(adapter.closed.map((c) => c.symbol)).toEqual(["EXIT0"]);
+    // 6 still held ($36,000) + NEW ($6,000) = $42,000 — fits exactly; counting
+    // the sold EXIT0 too ($48,000) blocked it before the fix.
+    expect(adapter.opened.map((o) => o.symbol)).toEqual(["NEW"]);
+    expect(report.status).toBe("ok");
+  });
+
   test("today's real cap (0.84x = 7 slots x 0.12) opens all 7 signalling candidates, none blocked", async () => {
     const adapter = new FakeAdapter();
     const universe: string[] = [];
@@ -53,16 +80,16 @@ describe("MeanRevEngine gross-exposure guard", () => {
     }
     const engine = makeEngine(adapter, universe, {
       slotPct: 0.15, // ESCALATED from production's 0.12 — nobody touched maxPositions or the cap
-      maxGrossExposureMult: MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT, // still 0.84x (unchanged)
+      maxGrossExposureMult: MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT, // still 0.966x (unchanged; 0.84 x GROSS_CAP_HEADROOM since 2026-10-07)
     });
 
     await engine.runDaily();
 
-    // Each slot now wants $7,500 (0.15 x 50k). Cap is $42,000: 5 slots
-    // ($37.5k) fit, a 6th ($45k) does not.
-    expect(adapter.opened.length).toBe(5);
+    // Each slot now wants $7,500 (0.15 x 50k). Cap is $48,300 (0.966x since
+    // 2026-10-07 — G diagnostic): 6 slots ($45k) fit, a 7th ($52.5k) does not.
+    expect(adapter.opened.length).toBe(6);
     const totalNotional = adapter.opened.reduce((s, o) => s + o.notionalUsd, 0);
-    expect(totalNotional).toBeLessThanOrEqual(42_000);
+    expect(totalNotional).toBeLessThanOrEqual(50_000 * MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT);
   });
 
   test("never force-closes an already-held position — the guard only blocks NEW opens", async () => {

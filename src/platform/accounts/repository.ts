@@ -148,6 +148,18 @@ export class BrokerAccountsRepository {
     `).run(v.status, v.accountRef ?? null, v.lastVerifiedAt ?? null, v.lastError, v.updatedAt, id);
   }
 
+  /** Revoke: DELETE the sealed credentials (set to ''), mark the row
+   *  'revoked'. The row survives as a record; verify then requires a
+   *  reconnect (service.ts). */
+  revoke(id: string, at: number): boolean {
+    const res = db().prepare(`
+      UPDATE platform_broker_accounts
+      SET status = 'revoked', credentials_enc = '', last_error = NULL, updated_at = ?
+      WHERE id = ?
+    `).run(at, id);
+    return (res as any).changes > 0;
+  }
+
   remove(id: string): boolean {
     const res = db().prepare(`DELETE FROM platform_broker_accounts WHERE id = ?`).run(id);
     return (res as any).changes > 0;

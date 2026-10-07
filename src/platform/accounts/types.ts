@@ -34,8 +34,11 @@ export type BrokerAuthType = "api_key" | "oauth";
 /** 'verified' = last verification call succeeded; 'error' = it failed (the
  *  row is kept so the owner can see WHY and re-verify or delete). Rows are
  *  only ever INSERTED after a successful verification, so 'unverified' can
- *  only appear transiently (schema default) — never through the service. */
-export type BrokerAccountStatus = "verified" | "error" | "unverified";
+ *  only appear transiently (schema default) — never through the service.
+ *  'revoked' (2026-10-06) = the owner revoked access: the stored credentials
+ *  are DELETED, the row stays as a record; verification demands reconnecting
+ *  and the runtime never auto-links it (runtime.ts filters 'verified'). */
+export type BrokerAccountStatus = "verified" | "error" | "unverified" | "revoked";
 
 /** What gets sealed into credentials_enc. NEVER returned by any API. */
 export type BrokerCredentials =

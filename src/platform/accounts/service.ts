@@ -129,6 +129,13 @@ export class BrokerAccountsService {
   async verifyAccount(id: string): Promise<AddAccountResult & { ok: boolean }> {
     const existing = this.repo.get(id);
     if (!existing) throw new AccountsError("not_found", `No account '${id}'`, 404);
+    if (existing.status === "revoked") {
+      throw new AccountsError(
+        "conflict",
+        `Account '${id}' was revoked — its stored credentials were deleted. Reconnect it (add the account again) to use it`,
+        409,
+      );
+    }
     const box = this.requireBox();
     const sealed = this.repo.getCredentialsEnc(id);
     if (!sealed) throw new AccountsError("not_found", `No credentials for '${id}'`, 404);
@@ -157,6 +164,18 @@ export class BrokerAccountsService {
 
   remove(id: string): boolean {
     return this.repo.remove(id);
+  }
+
+  /** Revoke: delete the stored credentials, keep the row as a 'revoked'
+   *  record. Idempotent — revoking a revoked account is a no-op success.
+   *  (Alpaca documents no server-side OAuth token revocation endpoint for
+   *  Connect apps, so the UI also tells the owner to revoke app access on
+   *  the broker's side.) */
+  revoke(id: string): BrokerAccountRecord {
+    const existing = this.repo.get(id);
+    if (!existing) throw new AccountsError("not_found", `No account '${id}'`, 404);
+    if (existing.status !== "revoked") this.repo.revoke(id, this.now());
+    return this.repo.get(id)!;
   }
 
   // ── internals ────────────────────────────────────────────────────────────

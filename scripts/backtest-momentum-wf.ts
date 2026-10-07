@@ -41,12 +41,12 @@
 
 import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
-import { MomentumEngine, trailPctFromVol, type MarketTrendGateConfig, type MomentumBrokerAdapter, type MomentumStatePersistence, type TimeStopConfig, type TrailStopConfig, type VolSizingConfig, type VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
+import { MomentumEngine, trailPctFromVol, type MarketTrendGateConfig, type MomentumBrokerAdapter, type MomentumStatePersistence, type TimeStopConfig, type TrailMark, type TrailStopConfig, type VolSizingConfig, type VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
 import type { CurrentPosition } from "../src/strategies/momentum/Rebalancer";
 import { DEFAULT_TSM_CONFIG, type TSMConfig } from "../src/strategies/momentum/TimeSeriesMomentum";
 import type { OHLCV } from "../src/utils/types";
 import { RISK_PROFILES } from "../src/config/riskProfiles";
-import type { RiskGuardConfig, RiskState } from "../src/strategies/momentum/RiskGuard";
+import { INITIAL_RISK_STATE, type RiskGuardConfig, type RiskState } from "../src/strategies/momentum/RiskGuard";
 import { getETDateKey } from "../src/db/database";
 import { isMarketOpen } from "../src/utils/marketHours";
 import { TestClock } from "../src/utils/clock";
@@ -162,6 +162,80 @@ export function entryStopFraction(spec: HardStopSpec, closes: number[], barsPerD
   if (spec.mode === "none") return null;
   if (spec.mode === "fixed") return spec.pct;
   return trailPctFromVol(closes, spec, barsPerDay) / 100;
+}
+
+/**
+ * A live position already open at the replay EPOCH (scripts/parity-check.ts
+ * — OPEN.md P2 "el libro del sim arranca vacío en el epoch"), extracted
+ * from trading.db by parity-check's extractSeedPositions. Fed to
+ * runWithConfig/runMeanRevReplay so the sim's book starts with exactly the
+ * positions live already held, instead of empty — the sim then manages
+ * them (exits, slot occupancy, gross-exposure headroom, time stops, trail
+ * marks) exactly like a position it opened itself.
+ */
+export interface SeedPosition {
+  symbol: string;
+  side: "buy" | "sell";
+  qty: number;
+  entryPrice: number;
+  /** epoch ms (trades.entry_time). */
+  entryAt: number;
+  /** trades.stop_loss — the position's REAL persisted stop price. null/
+   *  undefined = the row never got one (see seedStopFraction's fallback). */
+  stopPrice?: number | null;
+}
+
+/**
+ * Entry-anchored stop DISTANCE (fraction) for a seeded position. Prefers
+ * the row's own persisted stop PRICE — the live position's actual stop,
+ * which may differ from what a fresh entry would compute today (a
+ * volScaled distance is resolved ONCE, at entry, from signal-time history
+ * this function does not have for a position opened before the replay's
+ * loaded window). A stop on the wrong side of entry (malformed data) is
+ * treated as absent. Absent a usable price: mode "none" seeds truly
+ * unprotected (matches a fresh "none" entry); any other mode falls back to
+ * the sleeve's FIXED hardStopPct — the same fallback
+ * AccountManager.checkAllStopLoss applies to a stop-less live row
+ * (AGENTS.md "row stop first, profile stopLossPct as fallback") — rather
+ * than re-deriving a volScaled distance it has no data for.
+ */
+export function seedStopFraction(
+  seed: Pick<SeedPosition, "side" | "entryPrice" | "stopPrice">,
+  spec: HardStopSpec,
+  legacyFallbackPct: number,
+): number | null {
+  if (seed.stopPrice !== undefined && seed.stopPrice !== null && seed.stopPrice > 0 && seed.entryPrice > 0) {
+    const frac = seed.side === "buy"
+      ? (seed.entryPrice - seed.stopPrice) / seed.entryPrice
+      : (seed.stopPrice - seed.entryPrice) / seed.entryPrice;
+    if (frac > 0) return frac;
+  }
+  return spec.mode === "none" ? null : legacyFallbackPct;
+}
+
+/**
+ * Reconstructs a TSM trail watermark for a position seeded mid-hold: the
+ * best close since entry (peak for longs, trough for shorts), walked
+ * across every bar strictly between `entryAt` and the replay epoch
+ * (`epochMs`) — the SAME accumulation MomentumEngine.applyTrailStops
+ * performs tick-to-tick, computed in one pass up front because the sim's
+ * book is empty before the epoch and never ticked through that history.
+ * Falls back to `{ mark: entryPrice, lastTs: entryAt }` when no bars fall
+ * in range (the position's entry predates the replay's own loaded
+ * history) — a DECLARED limitation: understates the true trail for such a
+ * seed (rare: both sleeves this fix targets carry positions only days
+ * before their epoch, well inside the replay's multi-month warmup).
+ */
+export function seedTrailMark(seed: Pick<SeedPosition, "side" | "entryPrice" | "entryAt">, bars: OHLCV[], epochMs: number): TrailMark {
+  const long = seed.side === "buy";
+  let mark = seed.entryPrice;
+  let lastTs = seed.entryAt;
+  for (const b of bars) {
+    if (b.timestamp <= seed.entryAt || b.timestamp >= epochMs) continue;
+    if (long ? b.close > mark : b.close < mark) mark = b.close;
+    lastTs = b.timestamp;
+  }
+  return { mark, lastTs };
 }
 
 export interface Sleeve {
@@ -701,6 +775,23 @@ export function computeTurnoverAnnual(
   return turnoverNotional / avgEquity / years;
 }
 
+/**
+ * Gross-exposure diagnostic hooks (G batch, 2026-10-05 — docs/reports/
+ * G-gross-cap.md). Both null by default = zero behavior change on every
+ * existing chain (and no candidate/config hash is touched: this is observer
+ * instrumentation, not config). Set ONLY by scripts/diag-gross-cap.ts:
+ *  - onOpenAttempt fires at the TOP of every sim openPosition attempt with
+ *    the book's current marked gross notional, the attempted new notional
+ *    and the denominator the live cap uses (mark-to-market equity on the
+ *    momentum SimBroker; fixed baseUsd on the meanrev sim).
+ *  - onWarn receives every engine warn line (replays otherwise run silent),
+ *    so capped diagnostic chains can count "BLOCKED by gross exposure cap".
+ */
+export const grossCapDiag: {
+  onOpenAttempt: ((s: { t: number; grossBefore: number; newNotional: number; denom: number }) => void) | null;
+  onWarn: ((msg: string) => void) | null;
+} = { onOpenAttempt: null, onWarn: null };
+
 export class SimBroker implements MomentumBrokerAdapter {
   cash: number;
   positions: SimPosition[] = [];
@@ -800,6 +891,14 @@ export class SimBroker implements MomentumBrokerAdapter {
   }
 
   async openPosition(a: { symbol: string; side: "buy" | "sell"; notionalUsd: number }) {
+    // Gross-exposure diagnostic (observer only — see grossCapDiag): the
+    // engine's cap compares Σ|getOpenPositions().notional| + new against
+    // equity × mult, so record exactly those terms at attempt time.
+    if (grossCapDiag.onOpenAttempt) {
+      let gross = 0;
+      for (const p of this.positions) gross += Math.abs(p.qty * this.price(p.symbol, this.now));
+      grossCapDiag.onOpenAttempt({ t: this.now, grossBefore: gross, newNotional: a.notionalUsd, denom: this.equityNow() });
+    }
     // Post-stop cooldown (B2): entries blocked until the decision-tick
     // counter reaches the mark armed by a "stop_loss" close. The map is
     // empty when the axis is off, so the legacy path is untouched.
@@ -840,6 +939,30 @@ export class SimBroker implements MomentumBrokerAdapter {
     }
     this.positions.push({ symbol: a.symbol, side: a.side, qty, entryPrice: slip, entryAt: this.now, entryMargin: need, entryCommission: fee, fundingCashDelta: 0, stopFrac, peakPrice: slip, lockLevel: null });
     return { ok: true };
+  }
+
+  /**
+   * Seed the book with positions the LIVE sleeve already held at the
+   * replay epoch (OPEN.md P2 "el libro del sim arranca vacío en el
+   * epoch"). Called ONCE, before the tick loop starts: every seed becomes
+   * a normal SimPosition so slot occupancy, gross-exposure headroom, hard
+   * stops AND the engine's own trail/time stops all see it exactly like a
+   * position the engine opened itself. No commission is charged and cash
+   * is untouched (the entry already happened, before this replay window;
+   * `entryMargin` is bookkeeping-only — see openPosition, which never
+   * debits it from cash either, only `equityNow()` vs. the margin total).
+   */
+  seedPositions(seeds: SeedPosition[]): void {
+    for (const s of seeds) {
+      const entryMargin = (s.qty * s.entryPrice) / this.margin.leverage;
+      const stopFrac = this.hardStopSpec
+        ? seedStopFraction(s, this.hardStopSpec, this.hardStopPct)
+        : undefined; // legacy path: no stop-axis override configured — same sentinel as a fresh open's checkStops fallback.
+      this.positions.push({
+        symbol: s.symbol, side: s.side, qty: s.qty, entryPrice: s.entryPrice, entryAt: s.entryAt,
+        entryMargin, entryCommission: 0, fundingCashDelta: 0, stopFrac, peakPrice: s.entryPrice, lockLevel: null,
+      });
+    }
   }
 
   async closePosition(a: { symbol: string; side: "buy" | "sell"; closeReason?: string }) {
@@ -1470,6 +1593,10 @@ export async function runWithConfig(
   cfg: ReplayConfig,
   win: { label: string; from: string; to: string },
   initialRiskState?: RiskState,
+  /** Live positions already open at the replay epoch (win.from) — see
+   *  SeedPosition / SimBroker.seedPositions. Absent/empty = the exact
+   *  legacy behavior (empty book at the epoch). */
+  seedPositions?: SeedPosition[],
 ): Promise<ReplayResult | null> {
   const fromMs = Date.parse(win.from);
   const toMs = Date.parse(win.to);
@@ -1625,6 +1752,11 @@ export async function runWithConfig(
       cfg.shortFunding,
       cfg.profitLock,
     );
+    // Seed the book with live positions already open at the epoch (OPEN.md
+    // P2) — BEFORE the tick loop starts, so slots/exposure/stops see them
+    // from tick 0. Absent/empty seedPositions = byte-identical legacy
+    // empty-book behavior.
+    if (seedPositions && seedPositions.length > 0) broker.seedPositions(seedPositions);
     // Market-trend gate data: the gate symbol's own bars, loaded with
     // maDays(+slack) of EXTRA history before the fold start so the very
     // first decision tick already sees a full SMA window — never lookahead
@@ -1642,7 +1774,10 @@ export async function runWithConfig(
       }
       broker.marketTrendDaily = { symbol: gateSym, dayEndMs: daily.dayEndMs, closes: daily.closes };
     }
-    const silent = { info: () => {}, warn: () => {}, error: () => {} };
+    // "silent" still forwards warns to the diagnostic hook (null → no-op):
+    // the engine's gross-cap veto only exists as a warn line, and replays
+    // otherwise discard it (see grossCapDiag docstring).
+    const silent = { info: () => {}, warn: (m: string) => { grossCapDiag.onWarn?.(m); }, error: () => {} };
     // In-memory RiskGuard persistence: load() seeds continuity from the prior
     // fold (walk-forward chains); save() is captured so finalRiskState below
     // is exact even if a fold runs zero ticks (engine.getRiskState() is the
@@ -1654,8 +1789,30 @@ export async function runWithConfig(
     // fold's watermarks describe positions that don't exist (and would be
     // pruned against live positions on the first tick anyway).
     let persistedRiskState: RiskState | undefined = initialRiskState;
+    // Seed trail watermarks (cfg.tsmTrail only) + time-stop entry anchors
+    // for every seeded position — see SeedPosition / seedTrailMark. The
+    // watermark is reconstructed from the ALREADY-LOADED candles (the
+    // replay's own multi-month warmup easily covers the few days a carried
+    // position predates its epoch by, both sleeves this fix targets); the
+    // entry anchor is always the real entry time, so a time stop (if
+    // configured) counts the position's true hold, not time-since-epoch.
+    const seedTrailMarks: Record<string, TrailMark> = {};
+    const seedEntryMarks: Record<string, number> = {};
+    for (const s of seedPositions ?? []) {
+      const key = `${s.symbol}|${s.side}`;
+      seedEntryMarks[key] = s.entryAt;
+      if (cfg.tsmTrail) seedTrailMarks[key] = seedTrailMark(s, candles.get(s.symbol) ?? [], fromMs);
+    }
+    const hasSeedState = Object.keys(seedTrailMarks).length > 0 || Object.keys(seedEntryMarks).length > 0;
     const statePersistence: MomentumStatePersistence = {
-      load: () => persistedRiskState ? { v: 1, risk: persistedRiskState } : null,
+      load: () => (persistedRiskState || hasSeedState)
+        ? {
+            v: 1,
+            risk: persistedRiskState ?? { ...INITIAL_RISK_STATE },
+            ...(Object.keys(seedTrailMarks).length > 0 ? { trailMarks: seedTrailMarks } : {}),
+            ...(Object.keys(seedEntryMarks).length > 0 ? { entryMarks: seedEntryMarks } : {}),
+          }
+        : null,
       save: (s) => { persistedRiskState = s.risk; },
     };
     // Sim clock, injected into the engine (src/utils/clock.ts seam). This

@@ -2,8 +2,9 @@
 #
 # Uncle Carl — the ONE way to read logs.
 #
-# Why this exists: `logs/` holds five independent streams (bot, watchdog,
-# deploy, backup, refresh-historical), each with its own rotated archives.
+# Why this exists: `logs/` holds independent streams (bot, watchdog, deploy,
+# backup, refresh-historical, parity-check — `-l` lists them), each with its
+# own rotated archives.
 # Reading them by hand is a trap, and it sprung on 2026-08-14: logrotate's
 # legacy names run bot.log.1.gz … bot.log.7.gz with `.1` the NEWEST, while
 # shell globs expand NUMERICALLY. So
@@ -144,4 +145,10 @@ if [ "$ALL_HISTORY" -eq 1 ]; then
   cat "$OUT_TMP"
 else
   tail -n "$LINES" "$OUT_TMP"
+  # Say so on stderr when lines were left out: counting errors "today" over
+  # the default tail once reported 0 of 108 (2026-10-05).
+  total="$(wc -l < "$OUT_TMP")"
+  if [ "$total" -gt "$LINES" ]; then
+    echo "(logs.sh: last $LINES of $total lines — -a for the whole history, -n for more)" >&2
+  fi
 fi

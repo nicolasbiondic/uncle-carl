@@ -18,6 +18,7 @@ import {
   ALPACA_OAUTH_SCOPE, alpacaAuthorizeUrl, exchangeAlpacaCode,
 } from "../../platform/accounts/providers/alpaca";
 import type { AccountsDeps } from "../../platform/accounts/types";
+import { isRuntimeLinked, runtimeLinkReason } from "../../platform/accounts/runtimeLinks";
 import { createLogger } from "../../utils/logger";
 
 const log = createLogger("PlatformAccounts");
@@ -97,7 +98,9 @@ export function registerPlatformAccountsRoutes(
       res.json({
         configured: service.isConfigured(),
         alpacaOAuth: !!deps.alpacaOAuth() && !!deps.publicBaseUrl(),
-        accounts: service.list(),
+        // runtimeLinked: the bot depends on it (runtimeLinks.ts) — the UI
+        // marks it and the API refuses to remove it.
+        accounts: service.list().map((a) => ({ ...a, runtimeLinked: isRuntimeLinked(a.id) })),
       });
     } catch (e) { sendError(res, e); }
   });
@@ -119,9 +122,22 @@ export function registerPlatformAccountsRoutes(
     } catch (e) { sendError(res, e); }
   });
 
+  // ── POST /api/platform/accounts/:id/revoke — delete creds, keep record ──
+  app.post("/api/platform/accounts/:id/revoke", (req, res) => {
+    try {
+      const linked = runtimeLinkReason(req.params.id);
+      if (linked) return res.status(409).json({ error: linked, code: "runtime_linked" });
+      const account = service.revoke(req.params.id);
+      log.info(`broker account revoked: ${req.params.id} (credentials deleted)`);
+      res.json({ ok: true, account });
+    } catch (e) { sendError(res, e); }
+  });
+
   // ── DELETE /api/platform/accounts/:id ────────────────────────────────────
   app.delete("/api/platform/accounts/:id", (req, res) => {
     try {
+      const linked = runtimeLinkReason(req.params.id);
+      if (linked) return res.status(409).json({ error: linked, code: "runtime_linked" });
       if (!service.remove(req.params.id)) {
         return res.status(404).json({ error: `No account '${req.params.id}'`, code: "not_found" });
       }

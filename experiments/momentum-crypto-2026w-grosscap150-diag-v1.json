@@ -1,0 +1,100 @@
+{
+  "name": "momentum-crypto-2026w-grosscap150-diag-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTRO 2026-10-05 (G gross-cap, DIAGNOSTICO de fidelidad vivo<->modelo, NO candidato a cablear). Los motores vivos aplican maxGrossExposureMult en cada entrada nueva (valor de MERCADO del libro + entrada nueva) pero los artefactos autoritativos se corrieron SIN ese tope (los manifests no llevan la clave; scripts/liveSleeveConfigs.test.ts lo declara 'live-only backstop que nunca se activa' y prod lo desmintio: desde el 2026-09-26 el sleeve USDC bloqueo 8 entradas por el tope con 4/5 posiciones llenas). Este manifest es copia byte a byte de momentum-crypto-2026w-control-pure-v1 salvo: candidate.maxGrossExposureMult = 1.5 \u2014 el valor vivo de momentum_crypto (1.5x = notionalPctPerSlot 0.375 x maxLongs 4 (MOMENTUM_CRYPTO_MAX_GROSS_EXPOSURE_MULT, src/index.ts); OJO: volTarget maxScale 1.5 permite entradas de hasta 0.5625x equity, 4 slots = 2.25x > 1.5x \u2014 el tope SI puede morder por construccion). Misma ventana/asOf/folds/costes/gates; cadena pura de 1 candidato. Se corre sobre la MISMA base cuyo dataHash reproduce el artefacto autoritativo (hist-sp500.db). REGLA PRE-DECLARADA (antes de correr, mision G): si en algun sleeve |dSharpe| >= 0.05, |dCAGR| >= 1pp, o el tope se activa en >= 2% de las decisiones de entrada de la cadena OOS, se recomienda CAMBIAR el tope vivo (holgura H tal que se active en <1% de las decisiones validadas, o degradarlo a alerta); la propuesta va en docs/reports/G-gross-cap.md, nada se cablea desde aqui. TRIAL ACCOUNTING: tope 1.5 sobre esta cadena nunca corrido = +1 hipotesis (diagnostica). priorUniqueTrials=322; pasa a 323. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 322,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt-35-cap1.5",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "maxGrossExposureMult": 1.5
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

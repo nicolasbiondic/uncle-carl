@@ -51,6 +51,8 @@ export interface PortfolioGovernorSpec {
 export interface PortfolioCutoverSpec {
   at: number;
   expiresAt: number;
+  /** Only these symbols (MomentumEngineConfig.reunderwriteSymbols); absent = all. */
+  symbols?: string[];
 }
 
 /** Daily TSM horizon (same shape as index.ts's MomentumStocksDailyHorizon). */

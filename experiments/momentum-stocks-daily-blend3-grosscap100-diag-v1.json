@@ -1,0 +1,117 @@
+{
+  "name": "momentum-stocks-daily-blend3-grosscap100-diag-v1",
+  "sleeve": "stocks",
+  "description": "PRE-REGISTRO 2026-10-05 (G gross-cap, DIAGNOSTICO de fidelidad vivo<->modelo, NO candidato a cablear). Los motores vivos aplican maxGrossExposureMult en cada entrada nueva (valor de MERCADO del libro + entrada nueva) pero los artefactos autoritativos se corrieron SIN ese tope (los manifests no llevan la clave; scripts/liveSleeveConfigs.test.ts lo declara 'live-only backstop que nunca se activa' y prod lo desmintio: desde el 2026-09-26 el sleeve USDC bloqueo 8 entradas por el tope con 4/5 posiciones llenas). Este manifest es copia byte a byte de momentum-stocks-daily-blend3-pure-v1 salvo: candidate.maxGrossExposureMult = 1.0 \u2014 el valor vivo de momentum_stocks (1.0x = notionalPctPerSlot 0.125 x maxLongs 8 (MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT, src/index.ts)). Misma ventana/asOf/folds/costes/gates; cadena pura de 1 candidato. Se corre sobre la MISMA base cuyo dataHash reproduce el artefacto autoritativo (hist-sp500.db). REGLA PRE-DECLARADA (antes de correr, mision G): si en algun sleeve |dSharpe| >= 0.05, |dCAGR| >= 1pp, o el tope se activa en >= 2% de las decisiones de entrada de la cadena OOS, se recomienda CAMBIAR el tope vivo (holgura H tal que se active en <1% de las decisiones validadas, o degradarlo a alerta); la propuesta va en docs/reports/G-gross-cap.md, nada se cablea desde aqui. TRIAL ACCOUNTING: tope 1.0 sobre esta cadena nunca corrido = +1 hipotesis (diagnostica). priorUniqueTrials=319; pasa a 320. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 319,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-24",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "blend-63-126-252-cap1.0",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.125,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 0,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "lookbackDaysList": [
+        63,
+        126,
+        252
+      ],
+      "maxGrossExposureMult": 1.0
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

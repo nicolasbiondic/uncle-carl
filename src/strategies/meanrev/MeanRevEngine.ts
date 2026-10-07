@@ -736,9 +736,14 @@ export class MeanRevEngine {
         }
         const [dayStart, dayEnd] = getETDayBounds(todayKey);
         // Gross-exposure guard bookkeeping (see maxGrossExposureMult
-        // docstring): local running total seeded from this pass's held
-        // positions, updated in lockstep as opens execute below.
-        let liveGrossNotional = positions.reduce((s, p) => s + Math.abs(p.notional), 0);
+        // docstring): local running total seeded from the positions STILL
+        // held after the exits above, updated in lockstep as opens execute
+        // below. Seeding from the pre-exit snapshot counted what this pass
+        // had just sold: 2026-10-05 KO was blocked at "live $40984" right
+        // after QCOM and ABBV closed, and only entered on the retry pass.
+        let liveGrossNotional = positions
+          .filter((p) => held.has(p.symbol))
+          .reduce((s, p) => s + Math.abs(p.notional), 0);
         let attempted = 0;
         for (const cand of cands) {
           if (attempted >= slots) break;

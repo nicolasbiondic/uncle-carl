@@ -10,6 +10,7 @@ import {
   SESSION_TTL, REMEMBER_ME_TTL,
 } from "../auth-store";
 import { renderLoginPage } from "../login-page";
+import { getClientIp } from "../dashboard-utils";
 import { loadInstanceConfig, cookieSecure } from "../../platform/instance";
 import { needsFirstRunSetup } from "./setup";
 import { createLogger } from "../../utils/logger";
@@ -75,6 +76,9 @@ export function registerAuthRoutes(app: express.Application, _am: AccountManager
       csrfToken: crypto.randomBytes(24).toString("hex"),
       rememberMe: remember,
       settings: { viewId: "consolidated" },
+      // Device metadata for the Ajustes → Sessions list (routes/platform.ts).
+      userAgent: String(req.headers["user-agent"] ?? ""),
+      ip: getClientIp(req),
     };
     sessions.set(sid, session);
 

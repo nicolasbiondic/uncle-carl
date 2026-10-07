@@ -8,6 +8,8 @@ import {
 import { getSymbolsByBroker } from "../../config/symbols";
 import { toBoundedInt } from "../dashboard-utils";
 import { BROKER_SNAPSHOT_MAX_AGE_MS, isMainSeriesApplicable } from "../../portfolio/truth";
+import { RISK_PROFILES, type RiskProfileId } from "../../config/riskProfiles";
+import { displayBucketMs, resampleEquityForDisplay, windowDays } from "../equityResample";
 
 export function registerStrategyRoutes(app: express.Application, _am: AccountManager): void {
   // 2026-07-22 route audit: removed /api/strategies and
@@ -29,6 +31,10 @@ export function registerStrategyRoutes(app: express.Application, _am: AccountMan
   app.get("/api/equity/history", (req, res) => {
     const profileId = (req.query.profile_id as string) || (req.query.account as string) || "";
     const range     = req.query.range as string;
+    // One cadence per window, and only the US session for stock-only series
+    // beyond "Today" (equityResample.ts: why raw points looked flat).
+    const days = windowDays(req.query.days === undefined ? undefined : toBoundedInt(req.query.days, 30, 0, 365), range);
+    const bucketMs = displayBucketMs(days);
 
     // Consolidated: aggregate equity from broker totals (alpaca_main + binance_main
     // [+ binance_coinm_main once DAPI is applicable]). These rows are written by
@@ -113,10 +119,13 @@ export function registerStrategyRoutes(app: express.Application, _am: AccountMan
         }
       }
 
-      return res.json(result);
+      return res.json(resampleEquityForDisplay(result, bucketMs));
     }
 
-    if (range) res.json(getEquityHistoryByRangeDisplay(profileId, range));
-    else res.json(getEquityHistoryDisplay(profileId, toBoundedInt(req.query.days, 30, 0, 365)));
+    const rows = range
+      ? getEquityHistoryByRangeDisplay(profileId, range)
+      : getEquityHistoryDisplay(profileId, toBoundedInt(req.query.days, 30, 0, 365));
+    const stockOnly = profileId === "alpaca_main" || RISK_PROFILES[profileId as RiskProfileId]?.broker === "alpaca";
+    res.json(resampleEquityForDisplay(rows, bucketMs, stockOnly && days !== 1));
   });
 }

@@ -90,6 +90,28 @@ describe("MomentumEngine model cutover (reunderwriteBefore)", () => {
     expect(broker.opened).toEqual([]);
   });
 
+  test("reunderwriteSymbols limits the cutover to those symbols; the rest of the book keeps its stay-privilege (2026-10-06 GOOGL realign)", async () => {
+    const broker = new FakeBroker();
+    broker.setCandles("GOOGL", ramp(100, 108));
+    broker.setCandles("META", ramp(100, 130));
+    broker.positions = [
+      { symbol: "GOOGL", side: "buy", quantity: 19, notional: 2_500, entryTime: LEGACY_ENTRY },
+      { symbol: "META", side: "buy", quantity: 10, notional: 2_500, entryTime: LEGACY_ENTRY },
+    ];
+    const engine = new MomentumEngine({
+      universe: ["GOOGL", "META"],
+      notionalPctPerSlot: 0.25,
+      tsm: { slotHysteresis: true },
+      reunderwriteBefore: BOUNDARY,
+      reunderwriteSymbols: ["GOOGL"],
+    }, broker, silentLogger);
+
+    const report = await engine.tick();
+
+    expect(broker.closed).toEqual([{ symbol: "GOOGL", side: "buy", closeReason: MODEL_CUTOVER_CLOSE_REASON }]);
+    expect(report.unchanged).toContain("META"); // same entry age, not listed → untouched
+  });
+
   test("a failed cutover close leaves the position held; the next tick retries and completes", async () => {
     const broker = new FakeBroker();
     broker.setCandles("META", ramp(100, 130));

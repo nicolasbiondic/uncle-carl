@@ -26,46 +26,63 @@ import {
 } from "../index";
 import { RISK_PROFILES } from "./riskProfiles";
 import { DEFAULT_MEANREV_CONFIG } from "../strategies/meanrev/MeanRevEngine";
+import { GROSS_CAP_HEADROOM } from "./grossCap";
 
+// Since 2026-10-07 every runtime backstop is slot×count × GROSS_CAP_HEADROOM
+// (measured 1.15 — G diagnostic, docs/reports/G-gross-cap.md): at the bare
+// product the cap blocked validated-size entries exactly in trends (27-31% of
+// OOS entry decisions on the two 1.0x sleeves; 8 live USDC blocks the week of
+// 2026-09-26). The SIZING products below stay locked unchanged — the headroom
+// multiplies the backstop only, never the per-slot notional.
 describe("sleeve max gross-exposure caps (locked against REAL production wiring, not duplicated literals)", () => {
-  test("momentum_stocks: 0.125 x 8 = 1.0x — since 2026-09-25 (k8-s8 pure chain 5a5a9577; 0.25 x 4 from 09-23, 0.5 x 4 = 2.0x before)", () => {
+  test("GROSS_CAP_HEADROOM is the measured 1.15 (G diagnostic; rollback = 1.0)", () => {
+    expect(GROSS_CAP_HEADROOM).toBe(1.15);
+  });
+
+  test("momentum_stocks: sizing 0.125 x 8 = 1.0x — since 2026-09-25 (k8-s8 pure chain 5a5a9577); backstop 1.15x since 2026-10-07", () => {
     expect(MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT).toBe(0.125);
     expect(MOMENTUM_STOCKS_MAX_LONGS).toBe(8);
     expect(MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT * MOMENTUM_STOCKS_MAX_LONGS).toBe(1.0);
-    expect(MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT).toBe(1.0);
+    expect(MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT).toBeCloseTo(1.15, 10);
   });
 
-  test("momentum_crypto: 0.375 x 4 = 1.5x", () => {
+  test("momentum_crypto: sizing 0.375 x 4 = 1.5x; backstop 1.725x since 2026-10-07", () => {
     expect(MOMENTUM_CRYPTO_NOTIONAL_PCT_PER_SLOT).toBe(0.375);
     expect(MOMENTUM_CRYPTO_MAX_LONGS).toBe(4);
-    expect(MOMENTUM_CRYPTO_MAX_GROSS_EXPOSURE_MULT).toBeCloseTo(1.5, 10);
+    expect(MOMENTUM_CRYPTO_NOTIONAL_PCT_PER_SLOT * MOMENTUM_CRYPTO_MAX_LONGS).toBeCloseTo(1.5, 10);
+    expect(MOMENTUM_CRYPTO_MAX_GROSS_EXPOSURE_MULT).toBeCloseTo(1.725, 10);
   });
 
-  test("momentum_crypto_usdc: 0.20 x 5 = 1.0x (daily kernel, U1 artifact 752767ae…)", () => {
+  test("momentum_crypto_usdc: sizing 0.20 x 5 = 1.0x (daily kernel, U1 artifact 752767ae…); backstop 1.15x since 2026-10-07 (the sleeve prod blocked 8x)", () => {
     expect(MOMENTUM_USDC_NOTIONAL_PCT_PER_SLOT).toBe(0.2);
     expect(MOMENTUM_USDC_MAX_LONGS).toBe(5);
-    expect(MOMENTUM_USDC_MAX_GROSS_EXPOSURE_MULT).toBeCloseTo(1.0, 10);
+    expect(MOMENTUM_USDC_NOTIONAL_PCT_PER_SLOT * MOMENTUM_USDC_MAX_LONGS).toBeCloseTo(1.0, 10);
+    expect(MOMENTUM_USDC_MAX_GROSS_EXPOSURE_MULT).toBeCloseTo(1.15, 10);
   });
 
-  test("momentum_btc: 1 x 1 = 1.0x (single symbol IS the one slot)", () => {
+  test("momentum_btc: sizing 1 x 1 = 1.0x (single symbol IS the one slot); backstop 1.15x since 2026-10-07", () => {
     expect(MOMENTUM_BTC_NOTIONAL_PCT_PER_SLOT).toBe(1);
     expect(MOMENTUM_BTC_MAX_LONGS).toBe(1);
-    expect(MOMENTUM_BTC_MAX_GROSS_EXPOSURE_MULT).toBe(1.0);
+    expect(MOMENTUM_BTC_MAX_GROSS_EXPOSURE_MULT).toBeCloseTo(1.15, 10);
   });
 
-  test("meanrev_stocks: 0.12 x 7 = 0.84x since 2026-09-28 (slot12 pure chain 624d50e9; 0.10 x 7 = 0.7x from 09-24, 0.10 x 5 = 0.5x before) — DEFAULT_MEANREV_CONFIG, index.ts doesn't override slotPct/maxPositions", () => {
+  test("meanrev_stocks: sizing 0.12 x 7 = 0.84x since 2026-09-28 (slot12 pure chain 624d50e9); backstop 0.966x since 2026-10-07 — DEFAULT_MEANREV_CONFIG, index.ts doesn't override slotPct/maxPositions", () => {
     expect(DEFAULT_MEANREV_CONFIG.slotPct).toBe(0.12);
     expect(DEFAULT_MEANREV_CONFIG.maxPositions).toBe(7);
-    expect(MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT).toBeCloseTo(0.84, 10);
+    expect(DEFAULT_MEANREV_CONFIG.slotPct * DEFAULT_MEANREV_CONFIG.maxPositions).toBeCloseTo(0.84, 10);
+    expect(MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT).toBeCloseTo(0.966, 10);
   });
 
   test("the two Alpaca sleeves' caps fit inside the shared account without margin", () => {
-    // momentum_stocks 1.0x of its ledger + meanrev 0.7x of its base, both
-    // ledgers seeded at $50k: the theoretical max is 1.84 x $50k = $92k —
-    // below the ~$110k Alpaca paper equity, so neither sleeve's entries can
-    // be starved of cash by the other (Reg-T 2x is not needed). Locked to
-    // the exact sum so raising either cap forces a conscious re-check.
-    expect(MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT + MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT).toBeCloseTo(1.84, 10);
+    // momentum_stocks 1.15x of its ledger + meanrev 0.966x of its base, both
+    // ledgers seeded at $50k: the theoretical max is 2.116 x $50k = $105.8k —
+    // still below the ~$110k Alpaca paper equity (tighter than the pre-G
+    // 1.84x = $92k, re-checked consciously when applying the headroom), so
+    // neither sleeve's entries can be starved of cash by the other (Reg-T 2x
+    // is not needed; the shared-account guard in AlpacaMomentumAdapter is the
+    // belt for the residual overlap). Locked to the exact sum so raising
+    // either cap forces a conscious re-check.
+    expect(MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT + MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT).toBeCloseTo(2.116, 10);
   });
 
   test("would FAIL if momentum_stocks' theoretical cap silently escalated (e.g. maxLongs 8->9, or notionalPctPerSlot 0.125->0.25)", () => {
@@ -84,7 +101,8 @@ describe("sleeve max gross-exposure caps (locked against REAL production wiring,
     expect(MOMENTUM_STOCKS_MAX_LONGS * 0.25).not.toBe(declaredTheoreticalMax);
   });
 
-  test("RISK_PROFILES.momentum_stocks.leverage is no longer a lying field — matches its real 1.0x gross exposure", () => {
-    expect(RISK_PROFILES.momentum_stocks.leverage).toBe(MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT);
+  test("RISK_PROFILES.momentum_stocks.leverage is no longer a lying field — matches its real 1.0x SIZING gross (the backstop above it carries the measured headroom)", () => {
+    expect(RISK_PROFILES.momentum_stocks.leverage).toBe(MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT * MOMENTUM_STOCKS_MAX_LONGS);
+    expect(RISK_PROFILES.momentum_stocks.leverage * GROSS_CAP_HEADROOM).toBeCloseTo(MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT, 10);
   });
 });

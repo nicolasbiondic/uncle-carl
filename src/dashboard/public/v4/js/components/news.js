@@ -2,39 +2,25 @@ import { store, t } from "../store.js";
 import { byId, esc, icon } from "../ui.js";
 import { ago } from "../fmt.js";
 
-const FEEDS = {
-  en: ["https://cointelegraph.com/rss", "https://www.coindesk.com/arc/outboundfeeds/rss", "https://feeds.bloomberg.com/markets/news.rss"],
-  es: ["https://es.beincrypto.com/feed/"],
-};
+// News come from OUR server (GET /api/news — src/dashboard/routes/news.ts),
+// which aggregates the RSS/Atom feeds with an 8s per-feed timeout and a
+// 10-minute cache. The old client-side api.rss2json.com dependency (no
+// timeout, refetched on every 30s render until the third-party quota ran
+// out) is gone, and so is its CSP entry.
+//
+// Client contract: paint whatever is in memory INSTANTLY (never regress to
+// the "…" placeholder once we have items) and ask the server at most every
+// FETCH_EVERY_MS per language.
 
-// rss2json emits "YYYY-MM-DD HH:MM:SS" in UTC with no zone; parse as UTC so a
-// browser west of UTC doesn't land in the future → "just now" for everything.
-function newsDate(s) {
-  if (!s) return NaN;
-  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})$/.exec(String(s).trim());
-  return m ? Date.parse(m[1] + "T" + m[2] + "Z") : Date.parse(s);
-}
+const FETCH_EVERY_MS = 10 * 60_000;
+const memory = { en: { items: null, at: 0 }, es: { items: null, at: 0 } };
+
 const slug = (s) => { const x = (s || "").toLowerCase(); return x.includes("cointelegraph") ? "cointelegraph" : x.includes("coindesk") ? "coindesk" : x.includes("bloomberg") ? "bloomberg" : x.includes("beincrypto") ? "beincrypto" : ""; };
 
-let rotTimer = null, paused = false;
+let rotTimer = null, paused = false, inflight = null;
 
-export async function loadNews() {
-  if (!store.state.newsOpen) return; // collapsed by default — don't fetch what isn't shown
-  const el = byId("newsScroll");
-  if (!el) return;
-  const lang = store.state.lang;
-  const feeds = [...FEEDS.en.map((u) => ({ u, l: "EN" })), ...(lang === "es" ? FEEDS.es.map((u) => ({ u, l: "ES" })) : [])];
-  const res = await Promise.allSettled(feeds.map(async (f) => {
-    const d = await (await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(f.u)}`)).json();
-    return (d.items || []).map((i) => ({ ...i, lang: f.l, source: d.feed?.title || "News" }));
-  }));
-  let all = [];
-  for (const r of res) if (r.status === "fulfilled") all.push(...r.value);
-  const seen = new Set();
-  all = all.filter((n) => { const k = n.title?.slice(0, 40); if (!k || seen.has(k)) return false; seen.add(k); return true; })
-    .sort((a, b) => (newsDate(b.pubDate) || 0) - (newsDate(a.pubDate) || 0)).slice(0, 25);
-  if (!all.length) { el.innerHTML = `<div class="muted" style="padding:var(--s3)">${t("Couldn't reach news feeds", "No se pudo conectar a las fuentes")}</div>`; return; }
-  el.innerHTML = all.map((n) => {
+function cardsHtml(items) {
+  return items.map((n) => {
     const url = /^https?:\/\//.test(n.link || "") ? n.link : null;
     // No real link → render as a non-interactive div, not a dead "#" anchor
     // that steals a tab stop and does nothing on click.
@@ -43,9 +29,44 @@ export async function loadNews() {
     return `<${tag} class="news-card" ${attrs} data-src="${slug(n.source)}">
       <div class="n-src">${esc(n.source)} <span class="n-lang">${esc(n.lang)}</span></div>
       <div class="n-title">${esc(n.title || "")}</div>
-      <div class="n-time">${esc(ago(newsDate(n.pubDate)))}</div></${tag}>`;
+      <div class="n-time">${esc(n.pubDate ? ago(n.pubDate) : "")}</div></${tag}>`;
   }).join("");
-  startRotation();
+}
+
+function paint() {
+  const el = byId("newsScroll");
+  if (!el) return;
+  const items = memory[store.state.lang === "es" ? "es" : "en"].items;
+  if (items === null) return; // keep the "…" placeholder until the FIRST load resolves
+  el.innerHTML = items.length
+    ? cardsHtml(items)
+    : `<div class="muted" style="padding:var(--s3)">${t("Couldn't reach news feeds", "No se pudo conectar a las fuentes")}</div>`;
+  if (items.length) startRotation();
+}
+
+export async function loadNews() {
+  if (!store.state.newsOpen) return; // collapsed by default — don't fetch what isn't shown
+  const lang = store.state.lang === "es" ? "es" : "en";
+  paint(); // instant: whatever we already have (never back to "…")
+  const slot = memory[lang];
+  if (slot.items !== null && Date.now() - slot.at < FETCH_EVERY_MS) return;
+  if (inflight) return; // one request at a time
+  inflight = (async () => {
+    try {
+      const res = await fetch(`/api/news?lang=${lang}`, { credentials: "same-origin", headers: { Accept: "application/json" } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      slot.items = Array.isArray(data?.items) ? data.items : [];
+      slot.at = Date.now();
+    } catch {
+      // Keep the old items (if any); retry is allowed immediately next call.
+      if (slot.items === null) { slot.items = []; slot.at = 0; }
+    } finally {
+      inflight = null;
+    }
+    paint();
+  })();
+  await inflight;
 }
 
 function startRotation() {

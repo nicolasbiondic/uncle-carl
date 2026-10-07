@@ -438,6 +438,86 @@ describe("verify and delete", () => {
     } finally { h.server.close(); }
   });
 
+  test("DELETE refuses (409) an account the bot depends on — resolved at boot or the configured link — and the list marks it", async () => {
+    const { setRuntimeLinkedAccounts, resetRuntimeLinksForTests } = await import("../../platform/accounts/runtimeLinks");
+    const { resetInstanceConfigForTests } = await import("../../platform/instance");
+    const h = makeHarness();
+    try {
+      await h.post("/api/platform/accounts", goodAlpacaBody);
+      setRuntimeLinkedAccounts(["my-alpaca-paper", null]);
+      const listed = await (await h.call("/api/platform/accounts")).json();
+      expect(listed.accounts[0].runtimeLinked).toBe(true);
+      const res = await h.call("/api/platform/accounts/my-alpaca-paper", { method: "DELETE" });
+      expect(res.status).toBe(409);
+      expect((await res.json()).code).toBe("runtime_linked");
+      expect((await (await h.call("/api/platform/accounts")).json()).accounts).toHaveLength(1);
+
+      resetRuntimeLinksForTests();
+      process.env.RUNTIME_ACCOUNT_ALPACA = "my-alpaca-paper"; // the next boot would look for it
+      resetInstanceConfigForTests(); // the instance config is read once and cached
+      try {
+        expect((await h.call("/api/platform/accounts/my-alpaca-paper", { method: "DELETE" })).status).toBe(409);
+      } finally {
+        delete process.env.RUNTIME_ACCOUNT_ALPACA;
+        resetInstanceConfigForTests();
+      }
+      const freed = await h.call("/api/platform/accounts/my-alpaca-paper", { method: "DELETE" });
+      expect((await freed.json()).ok).toBe(true);
+    } finally {
+      resetRuntimeLinksForTests();
+      h.server.close();
+    }
+  });
+
+  test("POST /:id/revoke deletes the stored credentials, keeps a 'revoked' record; verify then demands reconnecting (409); DELETE still works", async () => {
+    const h = makeHarness();
+    try {
+      await h.post("/api/platform/accounts", goodAlpacaBody);
+      const r = await h.post("/api/platform/accounts/my-alpaca-paper/revoke", {});
+      expect(r.status).toBe(200);
+      const body = await r.json();
+      expect(body.ok).toBe(true);
+      expect(body.account.status).toBe("revoked");
+      expect(JSON.stringify(body)).not.toContain(GOOD_ALPACA_SECRET);
+
+      // credentials are GONE from the row
+      const { BrokerAccountsRepository } = await import("../../platform/accounts/repository");
+      expect(new BrokerAccountsRepository().getCredentialsEnc("my-alpaca-paper")).toBe("");
+
+      // verify demands a reconnect
+      const v = await h.post("/api/platform/accounts/my-alpaca-paper/verify", {});
+      expect(v.status).toBe(409);
+      expect((await v.json()).error).toMatch(/[Rr]econnect/);
+
+      // idempotent revoke
+      expect((await h.post("/api/platform/accounts/my-alpaca-paper/revoke", {})).status).toBe(200);
+
+      // removing the record afterwards still works
+      expect((await h.call("/api/platform/accounts/my-alpaca-paper", { method: "DELETE" })).status).toBe(200);
+    } finally { h.server.close(); }
+  });
+
+  test("revoke refuses (409 runtime_linked) an account the bot signs with; unknown id → 404", async () => {
+    const { setRuntimeLinkedAccounts, resetRuntimeLinksForTests } = await import("../../platform/accounts/runtimeLinks");
+    const h = makeHarness();
+    try {
+      await h.post("/api/platform/accounts", goodAlpacaBody);
+      setRuntimeLinkedAccounts(["my-alpaca-paper"]);
+      const res = await h.post("/api/platform/accounts/my-alpaca-paper/revoke", {});
+      expect(res.status).toBe(409);
+      expect((await res.json()).code).toBe("runtime_linked");
+      // still verified, credentials intact
+      const list = await (await h.call("/api/platform/accounts")).json();
+      expect(list.accounts[0].status).toBe("verified");
+
+      resetRuntimeLinksForTests();
+      expect((await h.post("/api/platform/accounts/nope/revoke", {})).status).toBe(404);
+    } finally {
+      resetRuntimeLinksForTests();
+      h.server.close();
+    }
+  });
+
   test("DELETE removes the row; a second DELETE is a 404", async () => {
     const h = makeHarness();
     try {

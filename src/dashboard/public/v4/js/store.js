@@ -2,7 +2,7 @@
 // Persisted keys survive reloads. Components read store.state and subscribe to
 // re-render on change.
 
-const PERSIST = ["view", "period", "lang", "theme", "tab", "newsOpen"];
+const PERSIST = ["view", "period", "lang", "theme", "tab", "newsOpen", "page"];
 const load = (k, d) => { try { const v = localStorage.getItem("uc4_" + k); return v == null ? d : JSON.parse(v); } catch { return d; } };
 
 export const store = {
@@ -15,11 +15,17 @@ export const store = {
     // Market News card: closed by default (2026-09-24 audit fix — it used to
     // always render open, eating ~20% of the viewport before first paint).
     newsOpen: load("newsOpen", false),
+    // portfolio-manager navigation (2026-10-06): the active page. The hash
+    // (#/resumen…) is the source of truth on load; this remembers the last
+    // page for hash-less visits. See router in main.js.
+    page: load("page", "resumen"),
     // live data (not persisted)
     dashboard: null,
     profiles: [],
     connections: {},
     daysRunning: 0,
+    me: null,          // /api/auth/me payload (set at boot)
+    platformMe: null,  // /api/platform/me payload (account identity; may be null)
   },
   _subs: new Set(),
   subscribe(fn) { this._subs.add(fn); return () => this._subs.delete(fn); },

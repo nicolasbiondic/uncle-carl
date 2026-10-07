@@ -59,17 +59,55 @@ export function renderHeader() {
   `;
 }
 
-/** Right-side icon actions — split out of renderHeader so the KPI strip can sit
- *  between the broker pills and these buttons on ONE merged top row (#topbar). */
+/** Right-side actions — split out of renderHeader so the KPI strip can sit
+ *  between the broker pills and these buttons on ONE merged top row (#topbar).
+ *  Every button carries a VISIBLE label on desktop (.icn-l, collapsed to the
+ *  icon on narrow screens by app.css) plus an aria-label always. */
+export function actionButton(act, iconName, label, extraCls = "") {
+  return `<button class="icn lbl${extraCls ? " " + extraCls : ""}" data-act="${act}" aria-label="${esc(label)}" title="${esc(label)}">${icon(iconName)}<span class="icn-l">${esc(label)}</span></button>`;
+}
+
+/** User chip (owner identity) + menu: Settings / Log out. Shows displayName
+ *  and, once GET /api/platform/me resolves, the short account id. */
+export function renderUserChip() {
+  const me = store.state.me;
+  const pm = store.state.platformMe;
+  const name = me?.displayName || me?.username || t("Account", "Cuenta");
+  const shortId = pm?.accountId ? pm.accountId.replace(/^acct_/, "").slice(0, 6) : "";
+  return `<div class="uchip-wrap">
+    <button class="icn lbl uchip" data-act="user-menu" aria-haspopup="menu" aria-expanded="false" aria-label="${esc(name)}">
+      ${icon("user")}<span class="icn-l">${esc(name)}${shortId ? ` <span class="uchip-id">#${esc(shortId)}</span>` : ""}</span>
+    </button>
+    <div class="umenu" id="umenu" hidden role="menu" aria-label="${esc(name)}">
+      <a role="menuitem" class="umenu-item" href="#/ajustes" data-act="user-menu-close">${icon("settings")} ${t("Settings", "Ajustes")}</a>
+      <button role="menuitem" class="umenu-item danger" data-act="logout">${icon("logout")} ${t("Log out", "Salir")}</button>
+    </div>
+  </div>`;
+}
+
 export function renderActions() {
   return `
-    <button class="icn" data-act="lang" title="${t("Language", "Idioma")}">${icon("globe")}</button>
-    <button class="icn" data-act="theme" title="${t("Theme", "Tema")}">${icon("moon")}</button>
-    <button class="icn" data-act="accounts" title="${t("Broker accounts", "Cuentas de broker")}">${icon("box")}</button>
-    <button class="icn" data-act="portfolios" title="${t("Portfolios", "Portafolios")}">${icon("trend")}</button>
-    <button class="icn" data-act="settings" title="${t("Settings", "Ajustes")}">${icon("settings")}</button>
-    <button class="icn danger" data-act="logout" title="${t("Log out", "Salir")}">${icon("logout")}</button>
+    ${actionButton("lang", "globe", t("Language", "Idioma"))}
+    ${actionButton("theme", "moon", t("Theme", "Tema"))}
+    ${renderUserChip()}
   `;
+}
+
+/** Persistent portfolio-manager navigation. Labels ALWAYS visible (the owner
+ *  asked for named sections, not icon-guessing); aria-current marks the page. */
+export const NAV_PAGES = () => [
+  ["resumen", "home", t("Overview", "Resumen")],
+  ["portafolios", "briefcase", t("Portfolios", "Portafolios")],
+  ["cuentas", "box", t("Accounts", "Cuentas")],
+  ["actividad", "list", t("Activity", "Actividad")],
+  ["ajustes", "settings", t("Settings", "Ajustes")],
+];
+
+export function renderNav() {
+  const cur = store.state.page;
+  return NAV_PAGES().map(([id, ic, label]) =>
+    `<a class="nav-link${cur === id ? " on" : ""}" href="#/${id}"${cur === id ? ' aria-current="page"' : ""}>${icon(ic)}<span>${esc(label)}</span></a>`
+  ).join("");
 }
 
 export function tickClock() {

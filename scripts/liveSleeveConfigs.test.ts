@@ -35,6 +35,7 @@ import {
 import { validateCandidate, type CandidateConfig, type ExperimentManifest } from "./walk-forward";
 import { DEFAULT_MEANREV_CONFIG } from "../src/strategies/meanrev/MeanRevEngine";
 import { MOMENTUM_STOCKS_DAILY_HORIZON, MOMENTUM_STOCKS_DAILY_VOL_STOP, dailyHorizonMaxLookback } from "../src/index";
+import { GROSS_CAP_HEADROOM } from "../src/config/grossCap";
 import { DEFAULT_TSM_CONFIG } from "../src/strategies/momentum/TimeSeriesMomentum";
 
 const ROOT = join(import.meta.dir, "..");
@@ -54,25 +55,26 @@ const DECLARED_KEY_EXCEPTIONS: Record<LiveSleeveId, Record<string, string>> = {
     name: "identity label only — no execution semantics",
     risk: "compared as the EFFECTIVE RiskGuardConfig below; live additionally sets equitySemantics (selects WHICH broker ledger the equity read uses — the sim broker hands equity to the engine directly, nothing to model)",
     maxGrossExposureMult:
-      "live-only runtime BACKSTOP (1.0×): at the validated sizing notionalPctPerSlot×maxLongs the sim can never exceed it by construction; live it exists to catch legacy-sized books (the 2026-09-25 META/AAPL cutover incident class). Its value is locked to the product below.",
+      "live-only runtime BACKSTOP (1.15× = product × GROSS_CAP_HEADROOM since 2026-10-07): the bare 1.0× product DID bind on the validated book marked to market (31% of OOS entry decisions, −1.5pp CAGR — G diagnostic, docs/reports/G-gross-cap.md); at the measured headroom activation is 0 on the validated chain while legacy-sized books (the 2026-09-25 META/AAPL cutover class, ~2× product) still trip it. Locked to product × headroom below.",
   },
   meanrev_stocks: {
     name: "identity label only — no execution semantics",
     // (meanrev candidates carry no risk/maxGross keys in the manifest and
-    // the live candidate adds none: the 0.84× backstop is engine-level, see
-    // the dedicated backstop assertion below.)
+    // the live candidate adds none: the engine-level backstop is 0.966× =
+    // 0.84 product × GROSS_CAP_HEADROOM since 2026-10-07 — see the dedicated
+    // backstop assertion below and docs/reports/G-gross-cap.md.)
   },
   momentum_crypto: {
     name: "identity label only — no execution semantics",
     risk: "compared as the EFFECTIVE RiskGuardConfig below; live adds equitySemantics (see momentum_stocks)",
     maxGrossExposureMult:
-      "live-only runtime BACKSTOP (1.5× = 0.375×4): never binds at validated sizing; catches drift of held notional after entry. Locked to the product below.",
+      "live-only runtime BACKSTOP (1.725× = 0.375×4 × GROSS_CAP_HEADROOM since 2026-10-07): the bare 1.5× product bound on 0.24% of validated OOS entry decisions (max marked ratio 1.554, volTarget maxScale reaches 2.25× theoretical — G diagnostic, docs/reports/G-gross-cap.md); at the measured headroom activation is 0. Locked to product × headroom below.",
   },
   momentum_crypto_usdc: {
     name: "identity label only — no execution semantics",
     risk: "compared as the EFFECTIVE RiskGuardConfig below; live adds equitySemantics (see momentum_stocks)",
     maxGrossExposureMult:
-      "live-only runtime BACKSTOP (1.0× = ⅓×3): never binds at authoritative sizing; catches drift of held notional after entry. Locked to the product below.",
+      "live-only runtime BACKSTOP (1.15× = 0.20×5 × GROSS_CAP_HEADROOM since 2026-10-07): the bare 1.0× product blocked 8 prod entries the week of 2026-09-26 (4× LTC, 4× AVAX, 4/5 positions filled) and cost the authoritative chain −14.4pp CAGR / −0.174 Sharpe when imposed (27.4% of OOS entry decisions — G diagnostic, docs/reports/G-gross-cap.md); at the measured headroom activation is 0. Locked to product × headroom below.",
   },
 };
 
@@ -207,13 +209,13 @@ describe("index.ts wiring literals ↔ module constants", () => {
 
 // ── structural sanity the derivations rely on ────────────────────────────
 describe("derivation invariants", () => {
-  test("backstops equal slot×count products (the 'never binds' premise)", () => {
+  test("backstops equal slot×count products × GROSS_CAP_HEADROOM (the bare product DID bind on validated books — G diagnostic, docs/reports/G-gross-cap.md, applied 2026-10-07)", () => {
     const stocks = liveSleeveConfig("momentum_stocks").candidate;
-    expect(stocks.maxGrossExposureMult).toBeCloseTo(stocks.notionalPctPerSlot! * stocks.maxLongs!, 10);
+    expect(stocks.maxGrossExposureMult).toBeCloseTo(stocks.notionalPctPerSlot! * stocks.maxLongs! * GROSS_CAP_HEADROOM, 10);
     const crypto = liveSleeveConfig("momentum_crypto").candidate;
-    expect(crypto.maxGrossExposureMult).toBeCloseTo(crypto.notionalPctPerSlot! * crypto.maxLongs!, 10);
+    expect(crypto.maxGrossExposureMult).toBeCloseTo(crypto.notionalPctPerSlot! * crypto.maxLongs! * GROSS_CAP_HEADROOM, 10);
     const usdc = liveSleeveConfig("momentum_crypto_usdc").candidate;
-    expect(usdc.maxGrossExposureMult).toBeCloseTo(usdc.notionalPctPerSlot! * usdc.maxLongs!, 10);
+    expect(usdc.maxGrossExposureMult).toBeCloseTo(usdc.notionalPctPerSlot! * usdc.maxLongs! * GROSS_CAP_HEADROOM, 10);
     expect(DEFAULT_MEANREV_CONFIG.slotPct * DEFAULT_MEANREV_CONFIG.maxPositions).toBeCloseTo(0.84, 10);
   });
 

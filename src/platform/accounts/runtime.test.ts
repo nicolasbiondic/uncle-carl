@@ -131,6 +131,21 @@ describe("linking — explicit link and auto-link", () => {
     expect(r.alpaca.linked).toBe(false);
   });
 
+  test("a REVOKED account never auto-links — only 'verified' is eligible", () => {
+    seedAccount({ id: "a1", provider: "alpaca", environment: "paper", creds: { kind: "api_key", apiKey: "K1", apiSecret: "S1" } });
+    repo.revoke("a1", Date.now());
+    const r = resolve();
+    expect(r.alpaca.linked).toBe(false);
+    if (r.alpaca.linked) throw new Error("unreachable");
+    expect(r.alpaca.reason).toMatch(/no verified alpaca account/);
+  });
+
+  test("an EXPLICIT link to a revoked account aborts resolution (fail closed) — its credentials were deleted, the bot never boots over it", () => {
+    seedAccount({ id: "a1", provider: "alpaca", environment: "paper", creds: { kind: "api_key", apiKey: "K1", apiSecret: "S1" } });
+    repo.revoke("a1", Date.now());
+    expect(() => resolve({ links: { alpaca: "a1", binance: null } })).toThrow(/credentials_enc row missing/);
+  });
+
   test("link to a missing id / wrong provider → UNLINKED with the id named", () => {
     seedAccount({ id: "bd", provider: "binance_usdm", environment: "demo", creds: { kind: "api_key", apiKey: "BK", apiSecret: "BS" } });
     const r = resolve({ links: { alpaca: "bd", binance: "ghost" } });

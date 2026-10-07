@@ -445,6 +445,14 @@ export interface MomentumEngineConfig {
    */
   reunderwriteBefore?: number;
   /**
+   * Restricts the reunderwriteBefore cutover to these symbols (engine/internal
+   * names). Absent = every universe position older than the boundary. Used to
+   * realign single positions held against the model (2026-10-06: GOOGL kept
+   * after its 10-02 exit bounced 403, UNI/USDC re-ranked differently by the
+   * 09-29 cutover) without re-underwriting the rest of the book.
+   */
+  reunderwriteSymbols?: string[];
+  /**
    * OPT-IN model-version key for the persisted RiskState (undefined = OFF,
    * byte-identical current behavior). When set, a LOADED state whose
    * `modelVersion` differs (or is absent — every pre-key state) arms a
@@ -1086,7 +1094,9 @@ export class MomentumEngine {
     const cutoverActions: RebalanceAction[] = [];
     if (this.cfg.reunderwriteBefore !== undefined) {
       const boundary = this.cfg.reunderwriteBefore;
+      const only = this.cfg.reunderwriteSymbols ? new Set(this.cfg.reunderwriteSymbols) : null;
       for (const p of universePositions) {
+        if (only && !only.has(p.symbol)) continue;
         if (!(typeof p.entryTime === "number" && p.entryTime > 0 && p.entryTime < boundary)) continue;
         const reason = `model cutover: entry ${new Date(p.entryTime).toISOString()} predates re-underwrite boundary ${new Date(boundary).toISOString()}`;
         try {

@@ -5,9 +5,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { store } from "../store.js";
 import {
-  providerLabel, envLabel, statusInfo, fmtWhen,
-  oauthResultFromSearch, oauthResultMessage,
-  renderAccountRow, renderAccountsList, renderBinanceSecurityTips, renderAddModal,
+  providerLabel, envLabel, statusInfo, fmtWhen, authTypeLabel,
+  oauthResultFromSearch, oauthResultMessage, multiVerifiedUnlinked,
+  renderAccountRow, renderAccountsList, renderAccountDetail, renderBinanceSecurityTips, renderAddModal,
 } from "./accounts.js";
 
 const originalLang = store.state.lang;
@@ -91,6 +91,53 @@ describe("renderAccountsList", () => {
   test("null payload degrades to a could-not-load note", () => {
     store.state.lang = "en";
     expect(renderAccountsList(null)).toContain("Could not load");
+  });
+});
+
+describe("portfolio-manager account rows (2026-10-06)", () => {
+  test("statusInfo knows 'revoked'; authTypeLabel maps both auth kinds", () => {
+    store.state.lang = "en";
+    expect(statusInfo("revoked")).toEqual({ cls: "warn", label: "Revoked" });
+    expect(authTypeLabel("oauth")).toBe("OAuth");
+    expect(authTypeLabel("api_key")).toBe("API keys");
+  });
+
+  test("a runtime-linked row shows the in-use badge and disables Revoke/Remove with the reason", () => {
+    store.state.lang = "en";
+    const html = renderAccountRow({ ...acc, runtimeLinked: true });
+    expect(html).toContain("In use by the bot");
+    expect(html).toMatch(/data-acc-revoke="my-alpaca" disabled title="[^"]+"/);
+    expect(html).toMatch(/data-acc-del="my-alpaca" disabled title="[^"]+"/);
+    expect(html).toContain('data-acc-view="my-alpaca"');
+  });
+
+  test("a revoked row hides Revoke, disables Verify with a reconnect hint, keeps Remove", () => {
+    store.state.lang = "en";
+    const html = renderAccountRow({ ...acc, status: "revoked", runtimeLinked: false });
+    expect(html).toContain("Revoked");
+    expect(html).not.toContain("data-acc-revoke");
+    expect(html).toMatch(/data-acc-verify="my-alpaca" disabled/);
+    expect(html).toContain('data-acc-del="my-alpaca"');
+  });
+
+  test("multiVerifiedUnlinked flags a provider with >1 verified and no link; a link or a single account silences it", () => {
+    const a = (id, over = {}) => ({ ...acc, id, runtimeLinked: false, ...over });
+    expect(multiVerifiedUnlinked([a("x"), a("y")])).toEqual(["Alpaca"]);
+    expect(multiVerifiedUnlinked([a("x"), a("y", { runtimeLinked: true })])).toEqual([]);
+    expect(multiVerifiedUnlinked([a("x")])).toEqual([]);
+    expect(multiVerifiedUnlinked([a("x"), a("y", { status: "revoked" })])).toEqual([]);
+    const html = renderAccountsList({ configured: true, accounts: [a("x"), a("y")] });
+    expect(html).toContain("role=\"alert\"");
+  });
+
+  test("renderAccountDetail shows the redacted record and never a secret-shaped field", () => {
+    store.state.lang = "en";
+    const html = renderAccountDetail({ ...acc, createdAt: 1750000000000, runtimeLinked: true });
+    expect(html).toContain("my-alpaca");
+    expect(html).toContain("PA3TESTNUM");
+    expect(html).toContain("In use by the bot");
+    expect(html.toLowerCase()).not.toContain("secret");
+    expect(html).toContain("never displayed");
   });
 });
 

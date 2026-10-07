@@ -37,27 +37,33 @@ describe("MomentumEngine gross-exposure guard", () => {
     expect(totalNotional).toBeCloseTo(10_000, 0); // exactly 1.0x of 10k equity
   });
 
-  test("blocks the next escalation: bumping maxLongs to 9 (unchanged notionalPctPerSlot/cap) still caps gross exposure at 1.0x", async () => {
+  test("blocks the next escalation: bumping maxLongs to 10 (unchanged notionalPctPerSlot/cap) still caps gross exposure at the 1.15x backstop", async () => {
+    // Since 2026-10-07 the backstop carries the measured headroom (1.15x =
+    // product × GROSS_CAP_HEADROOM — G diagnostic, docs/reports/
+    // G-gross-cap.md), so a maxLongs 8→9 bump (1.125x) now fits INSIDE it by
+    // design (that is exactly the organic mark-to-market drift the headroom
+    // exists for). The escalation the guard still blocks is 10 slots (1.25x).
     const broker = new FakeBroker(); // equity = 10_000
     const universe: string[] = [];
-    for (let i = 1; i <= 9; i++) { universe.push(`UP${i}`); broker.setCandles(`UP${i}`, ramp(100, 210 - 10 * i)); }
+    for (let i = 1; i <= 10; i++) { universe.push(`UP${i}`); broker.setCandles(`UP${i}`, ramp(100, 215 - 10 * i)); }
     const engine = new MomentumEngine({
       universe,
       notionalPctPerSlot: MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT, // 0.125 — unchanged
-      tsm: { maxLongs: 9 }, // ESCALATED from production's 8 — nobody updated the cap
-      maxGrossExposureMult: MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT, // still 1.0 (unchanged)
-      scorer: { topLongs: 9, minLongScore: 0.001 },
+      tsm: { maxLongs: 10 }, // ESCALATED from production's 8 — nobody updated the cap
+      maxGrossExposureMult: MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT, // still 1.15 (unchanged)
+      scorer: { topLongs: 10, minLongScore: 0.001 },
       regime: { minSymbolsForCorrelation: 100 },
     }, broker, silentLogger);
 
     await engine.tick();
 
-    // TSM itself would happily open all 9 (9 x 0.125 = 1.125x) — the guard is
-    // the only thing stopping it, blocking the weakest-ranked (9th) candidate.
-    expect(broker.opened.length).toBe(8);
-    expect(broker.opened.map(a => a.symbol).sort()).toEqual(universe.slice(0, 8).sort());
+    // TSM itself would happily open all 10 (10 x 0.125 = 1.25x) — the guard
+    // is the only thing stopping it: 9 x $1,250 = $11,250 fits the $11,500
+    // cap, the weakest-ranked (10th) candidate does not.
+    expect(broker.opened.length).toBe(9);
+    expect(broker.opened.map(a => a.symbol).sort()).toEqual(universe.slice(0, 9).sort());
     const totalNotional = broker.opened.reduce((s, a) => s + a.notionalUsd, 0);
-    expect(totalNotional).toBeLessThanOrEqual(10_000); // never exceeds the 1.0x cap
+    expect(totalNotional).toBeLessThanOrEqual(10_000 * MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT); // never exceeds the 1.15x cap
   });
 
   test("blocks the next escalation: bumping notionalPctPerSlot to 0.375 (unchanged maxLongs/cap)", async () => {
@@ -70,18 +76,19 @@ describe("MomentumEngine gross-exposure guard", () => {
       universe: ["UP1", "UP2", "UP3", "UP4"],
       notionalPctPerSlot: 0.375, // ESCALATED from production's 0.125 — "3x per slot"
       tsm: { maxLongs: MOMENTUM_STOCKS_MAX_LONGS }, // 8 — unchanged
-      maxGrossExposureMult: MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT, // still 1.0 (unchanged)
+      maxGrossExposureMult: MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT, // still 1.15 (unchanged)
       scorer: { topLongs: 4, minLongScore: 0.001 },
       regime: { minSymbolsForCorrelation: 100 },
     }, broker, silentLogger);
 
     await engine.tick();
 
-    // Each slot now wants $3,750 (0.375 x 10k). Cap is $10,000: 2 slots ($7.5k)
-    // fit, a 3rd ($11.25k) does not — the guard blocks it and the 4th.
-    expect(broker.opened.length).toBe(2);
+    // Each slot now wants $3,750 (0.375 x 10k). Cap is $11,500 (1.15x since
+    // 2026-10-07): 3 slots ($11.25k) fit, a 4th ($15k) does not — the guard
+    // blocks it.
+    expect(broker.opened.length).toBe(3);
     const totalNotional = broker.opened.reduce((s, a) => s + a.notionalUsd, 0);
-    expect(totalNotional).toBeLessThanOrEqual(10_000);
+    expect(totalNotional).toBeLessThanOrEqual(10_000 * MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT);
   });
 
   test("never force-closes an already-held position — the guard only blocks NEW opens", async () => {

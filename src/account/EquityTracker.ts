@@ -127,6 +127,7 @@ export class EquityTracker {
   private _equity: number;
   private _cash: number;
   private _initialEquity: number;
+  private _synced = false;
 
   constructor(accountId: string) {
     this.accountId = accountId;
@@ -160,6 +161,13 @@ export class EquityTracker {
   get initialEquity(): number { return this._initialEquity; }
   get totalPnl(): number { return this._equity - this._initialEquity; }
   get totalPnlPct(): number { return this._initialEquity > 0 ? (this.totalPnl / this._initialEquity) * 100 : 0; }
+  /** True once a broker reading (syncBrokerTruth) or a ledger valuation
+   *  (syncLedger) has replaced the value loaded at construction. That value
+   *  comes from the accounts table, frozen since persist() left the hot path,
+   *  so a snapshot written before the first sync records it as a real
+   *  reading: 2026-10-06, a −9% / −4% spike on the stock sleeves' curves at
+   *  every restart (57 rows), which squashed the real moves on the chart. */
+  get synced(): boolean { return this._synced; }
 
   /** Broker = truth: called by the 60s sync loops with the wallet reading.
    *  v8: IN-MEMORY ONLY. The deprecated accounts.equity/cash columns are no
@@ -176,6 +184,7 @@ export class EquityTracker {
     }
     this._equity = equity;
     this._cash = cash;
+    this._synced = true;
   }
 
   /** Ledger = truth for shared-wallet sleeves (both Alpaca books): values come
@@ -193,6 +202,7 @@ export class EquityTracker {
     }
     this._equity = equity;
     this._cash = Number.isFinite(cash) ? cash : 0;
+    this._synced = true;
   }
 
   // NOTE for the orchestrator: persist() still routes through db.saveAccount,

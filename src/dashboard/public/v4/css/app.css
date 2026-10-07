@@ -48,7 +48,44 @@ button { font-family: inherit; cursor: pointer; }
 .icn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: var(--r1); border: 1px solid var(--border); background: var(--bg-1); color: var(--text-2); }
 .icn:hover { color: var(--text); border-color: var(--border-2); }
 .icn.danger:hover { color: var(--down); border-color: var(--down); }
+/* labeled variant (header actions): icon + visible text on desktop; the text
+   collapses on narrow screens, the aria-label/title stays either way. */
+.icn.lbl { width: auto; padding: 0 10px; gap: 6px; font: 600 var(--t-xs) var(--sans); }
+.icn.lbl .icn-l { white-space: nowrap; }
+@media (max-width: 1500px) { .icn.lbl { width: 32px; padding: 0; } .icn.lbl .icn-l { display: none; } }
 /* version switch removed — v4 is the only dashboard, served at / and /v4 */
+
+/* ── portfolio-manager navigation (2026-10-06) ─────────────────────────── */
+.nav { display: flex; align-items: center; gap: var(--s2); overflow-x: auto; scrollbar-width: none; }
+.nav::-webkit-scrollbar { display: none; }
+.nav-link { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; color: var(--muted); font-weight: 600; font-size: var(--t-sm); border-bottom: 2px solid transparent; white-space: nowrap; }
+.nav-link:hover { color: var(--text-2); }
+.nav-link.on { color: var(--text); border-bottom-color: var(--accent); }
+.nav-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--r1); }
+
+/* user chip + dropdown menu */
+.uchip-wrap { position: relative; }
+.uchip .uchip-id { color: var(--muted); font-family: var(--mono); font-weight: 500; }
+.umenu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 300; min-width: 180px; background: var(--bg-1); border: 1px solid var(--border-2); border-radius: var(--r2); box-shadow: var(--shadow-2); padding: var(--s1); display: flex; flex-direction: column; }
+.umenu[hidden] { display: none; } /* display:flex would defeat the hidden attribute */
+.umenu-item { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3); border: none; background: none; color: var(--text-2); font: 600 var(--t-sm) var(--sans); border-radius: var(--r1); text-align: left; cursor: pointer; }
+.umenu-item:hover, .umenu-item:focus-visible { background: var(--accent-soft); color: var(--text); outline: none; }
+.umenu-item.danger:hover { color: var(--down); }
+
+/* Ajustes rows: label left, value/control right */
+.set-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); padding: var(--s2) 0; border-bottom: 1px solid var(--border); font-size: var(--t-sm); }
+.set-row:last-child { border-bottom: none; }
+.set-row > span:first-child { color: var(--text-2); }
+.set-row .set-v { display: inline-flex; align-items: center; gap: var(--s2); text-align: right; min-width: 0; word-break: break-all; }
+
+/* full pages (Portafolios / Cuentas / Actividad / Ajustes) */
+.page-card { margin-top: var(--s4); }
+.page-card > h3 { margin-bottom: var(--s3); }
+.page-body { min-height: 120px; }
+.page-note { font-size: var(--t-xs); margin-top: var(--s3); }
+.page-section { margin-top: var(--s5); }
+.page-section:first-child { margin-top: 0; }
+.page-section > .card-note { display: block; margin-bottom: var(--s2); }
 
 /* KPI bar */
 .kpis { display: flex; align-items: center; gap: 0; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; border-left: 1px solid var(--border); padding-left: var(--s5); }
@@ -251,9 +288,13 @@ code { font-family: var(--mono); background: var(--bg-2); padding: 1px 5px; bord
    .app column deficit squeezed the carousel first (to ~9px at 1720×900).
    Deficits must crush .content (min-height 0 by design), never the ticker. */
 .ticker { border-top: 1px solid var(--border); background: var(--bg-1); overflow: hidden; flex-shrink: 0; }
+/* duration is a JS-set inline override (sizeTicker in main.js): proportional
+   to the half's real width so the speed is ~40px/s on every viewport. */
 .ticker-in { display: flex; padding: var(--s2) 0; white-space: nowrap; animation: tick 80s linear infinite; }
 .ticker-half { display: flex; gap: var(--s5); padding-right: var(--s5); flex-shrink: 0; }
 .ticker .t { font-size: var(--t-xs); color: var(--text-2); }
+.ticker:hover .ticker-in { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) { .ticker-in { animation: none; } }
 @keyframes tick { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 .disclaimer { display: flex; align-items: center; justify-content: center; gap: var(--s2); color: var(--muted); font-size: 10px; padding: var(--s2) var(--s4); border-top: 1px solid var(--border); }
 .disclaimer svg { flex-shrink: 0; }
@@ -313,8 +354,12 @@ code { font-family: var(--mono); background: var(--bg-2); padding: 1px 5px; bord
   .cardbody { flex: 1 1 0; min-height: 0; overflow-y: auto; }
   /* 2026-07-05: .cardbody is the ONE scroller in lock mode. Inner .scroll
      wrappers (positions/trades tables, incl. the inline max-height:420px in
-     trades.js) were nesting a second scrollbar inside it — double scroll. */
-  .cardbody .scroll { max-height: none !important; overflow: visible; }
+     trades.js) were nesting a second scrollbar inside it — double scroll.
+     2026-10-06: overflow-x stays auto — `visible` let wide tables (the
+     Performance tab's P&L-source / scorecard tables) get CLIPPED by the
+     card's overflow:hidden with no way to reach the cut columns. Vertical
+     scrolling still belongs to .cardbody alone. */
+  .cardbody .scroll { max-height: none !important; overflow-x: auto; overflow-y: hidden; }
   /* Equity tab: the plot was a fixed 160px, so on viewports where content ran
      a few px past the card the whole tab scrolled pointlessly. Let the plot
      absorb the remaining card height instead (chart scales, no scrollbar).
@@ -325,6 +370,10 @@ code { font-family: var(--mono); background: var(--bg-2); padding: 1px 5px; bord
   #newsBar { flex-shrink: 0; }
   #newsBar .card { padding: var(--s3); }
   .news-scroll { padding-bottom: 0; }
+  /* full pages fill the viewport-locked column and scroll internally */
+  .page-card { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; margin-top: 0; }
+  .page-card > h3 { flex-shrink: 0; }
+  .page-body { flex: 1 1 0; min-height: 0; overflow-y: auto; }
 }
 
 /* responsive */
@@ -335,6 +384,14 @@ code { font-family: var(--mono); background: var(--bg-2); padding: 1px 5px; bord
   .hdr { order: 1; }
   .hdr-actions { order: 2; margin-left: auto; }
   .kpis { order: 3; flex-basis: 100%; border-left: none; padding-left: 0; }
+}
+/* Above that, the KPI strip never shrinks: with labeled actions (2026-10-07)
+   a squeezed strip scrolled "Abiertas"/"Trades" out of sight at 1769px. When
+   brand + KPIs + actions don't fit on one row, the actions wrap to their own
+   line, right-aligned. */
+@media (min-width: 1361px) {
+  .kpis { min-width: max-content; }
+  .hdr-actions { margin-left: auto; }
 }
 @media (max-width: 1100px) { .grid.cols-4 { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 980px) { .grid.cols-2 { grid-template-columns: 1fr; } .kpi .kv { font-size: var(--t-lg); } }

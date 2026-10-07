@@ -66,11 +66,17 @@ export const api = {
   tape: (symbol, limit = 24) => soft("/api/tape" + qs({ symbol, limit })),
   // admin
   configKeys: () => soft("/api/config/keys"),
+  // platform identity + sessions (src/dashboard/routes/platform.ts)
+  platformMe: () => soft("/api/platform/me", null),
+  platformSessions: () => soft("/api/platform/sessions", null),
+  revokeSession: (handle) => req(`/api/platform/sessions/${encodeURIComponent(handle)}`, { method: "DELETE" }),
+  revokeOtherSessions: () => req("/api/platform/sessions/revoke-others", { method: "POST", body: {} }),
   // platform broker-account registry (src/dashboard/routes/accounts.ts)
   platformAccounts: () => soft("/api/platform/accounts", null),
   addPlatformAccount: (body) => req("/api/platform/accounts", { method: "POST", body }),
   verifyPlatformAccount: (id) => req(`/api/platform/accounts/${encodeURIComponent(id)}/verify`, { method: "POST", body: {} }),
   deletePlatformAccount: (id) => req(`/api/platform/accounts/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  revokePlatformAccount: (id) => req(`/api/platform/accounts/${encodeURIComponent(id)}/revoke`, { method: "POST", body: {} }),
   platformPortfolios: () => soft("/api/platform/portfolios", null), // F3c platform registry (soft: null until the route is mounted)
   platformPortfoliosMeta: () => soft("/api/platform/portfolios/meta", { writable: false, presets: [], accounts: [] }),
   createPlatformPortfolio: (body) => req("/api/platform/portfolios", { method: "POST", body }),

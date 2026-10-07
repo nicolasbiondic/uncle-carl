@@ -28,6 +28,8 @@ import { registerAnalyticsRoutes } from "./routes/analytics";
 import { registerAdminRoutes } from "./routes/admin";
 import { registerHealthRoutes } from "./routes/health";
 import { registerCandlesRoutes } from "./routes/candles";
+import { registerNewsRoutes } from "./routes/news";
+import { registerPlatformRoutes } from "./routes/platform";
 import { registerPlatformAccountsRoutes, PLATFORM_ACCOUNTS_PUBLIC_PATHS } from "./routes/accounts";
 import { registerPlatformPortfoliosRoutes } from "./routes/portfolios";
 import { loadPlatformPortfolioRows, resolvePortfoliosSource, insertPlatformPortfolio, updatePlatformPortfolio } from "../portfolios/store";
@@ -142,7 +144,9 @@ export class DashboardServer {
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
         "font-src 'self' https://fonts.gstatic.com data:",
         "img-src 'self' data: https:",
-        "connect-src 'self' ws: wss: https://api.rss2json.com https://api.binance.com https://api.alternative.me",
+        // News feeds are proxied by GET /api/news (routes/news.ts) — the old
+        // direct api.rss2json.com client dependency is gone from the CSP.
+        "connect-src 'self' ws: wss: https://api.binance.com https://api.alternative.me",
         "frame-ancestors 'none'",
         "base-uri 'self'",
         "form-action 'self'",
@@ -278,6 +282,12 @@ export class DashboardServer {
     registerAdminRoutes(this.app, this.am);
     registerHealthRoutes(this.app, this.am);
     registerCandlesRoutes(this.app, this.am);
+    // Server-side news aggregation (10-min cache, 8s per-feed timeout) — the
+    // v4 news bar reads /api/news instead of hitting rss2json client-side.
+    registerNewsRoutes(this.app);
+    // Platform identity + sessions (Ajustes page): /api/platform/me,
+    // /api/platform/sessions[…]. Behind the wall; CSRF covers the mutations.
+    registerPlatformRoutes(this.app);
     // Broker-account registry (platform F2): the secret box needs the
     // installation's master key — without it the Accounts view says "run
     // bun run setup". Not read by the trading engines yet.

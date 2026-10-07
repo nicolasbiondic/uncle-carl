@@ -82,7 +82,8 @@ export function builtinPortfolios(): PortfolioDefinition[] {
         modelVersion: "daily-s5-blend3-2026-09-26",
         // Expired one-shot (self-expiring window; kept for byte-parity with
         // MOMENTUM_USDC_CUTOVER_AT/_EXPIRES_AT until index.ts retires them).
-        cutover: { at: Date.UTC(2026, 8, 27), expiresAt: Date.UTC(2026, 9, 4) },
+        // Owner realign 2026-10-06 (see MOMENTUM_USDC_CUTOVER_AT in index.ts).
+        cutover: { at: Date.UTC(2026, 9, 6, 5), expiresAt: Date.UTC(2026, 9, 9), symbols: ["UNI/USDC"] },
         heartbeatName: "momentum:crypto_usdc",
         loggerContext: "Momentum:usdc",
         state: { path: "data/momentum-state-usdc.json", currentBase: 5_000, legacyBase: 5_000 },
@@ -136,7 +137,8 @@ export function builtinPortfolios(): PortfolioDefinition[] {
         equitySemantics: EQUITY_SEMANTICS.SLEEVE_LEDGER,
         modelVersion: "daily-blend3-2026-09-28",
         // Expired one-shot (see MOMENTUM_STOCKS_CUTOVER_AT in index.ts).
-        cutover: { at: Date.UTC(2026, 8, 26), expiresAt: Date.UTC(2026, 9, 3) },
+        // Owner realign 2026-10-06 (see MOMENTUM_STOCKS_CUTOVER_AT in index.ts).
+        cutover: { at: Date.UTC(2026, 9, 6, 5), expiresAt: Date.UTC(2026, 9, 9), symbols: ["GOOGL"] },
         heartbeatName: "momentum:stocks",
         loggerContext: "Momentum:stocks",
         state: { path: "data/momentum-state-stocks.json", currentBase: 50_000, legacyBase: 100_000 },

@@ -26,7 +26,9 @@ import {
   momentumStocksCutoverFor,
   momentumUsdcCutoverFor,
   MOMENTUM_STOCKS_CUTOVER_EXPIRES_AT,
+  MOMENTUM_STOCKS_CUTOVER_SYMBOLS,
   MOMENTUM_USDC_CUTOVER_EXPIRES_AT,
+  MOMENTUM_USDC_CUTOVER_SYMBOLS,
 } from "../index";
 import { RISK_PROFILES, ALL_PROFILE_IDS, MOMENTUM_STOCKS_UNIVERSE, MOMENTUM_CRYPTO_UNIVERSE } from "../config/riskProfiles";
 import { USDC_SYMBOL_MAP } from "../executor/binance/quoteAsset";
@@ -118,20 +120,22 @@ describe("cutover windows — factory resolves the self-expiring one-shots exact
   test("momentum_stocks: cutoverReunderwriteBefore ≡ momentumStocksCutoverFor at open/expiry/later instants", () => {
     const def = builtinPortfolio("momentum_stocks");
     const cut = (def.params as MomentumTsmParams).cutover!;
-    for (const t of [Date.UTC(2026, 8, 28, 13, 35), MOMENTUM_STOCKS_CUTOVER_EXPIRES_AT, Date.UTC(2027, 0, 1)]) {
+    for (const t of [Date.UTC(2026, 9, 7, 13, 35), MOMENTUM_STOCKS_CUTOVER_EXPIRES_AT, Date.UTC(2027, 0, 1)]) {
       expect(cutoverReunderwriteBefore(cut, t)).toBe(momentumStocksCutoverFor(t)!);
       const plan = buildPortfolioPlan(def, t) as MomentumPortfolioPlan;
       expect(plan.engineConfig.reunderwriteBefore).toBe(momentumStocksCutoverFor(t)!);
+      expect(plan.engineConfig.reunderwriteSymbols).toEqual(momentumStocksCutoverFor(t) !== undefined ? MOMENTUM_STOCKS_CUTOVER_SYMBOLS : undefined);
     }
   });
 
   test("momentum_crypto_usdc: same lock against momentumUsdcCutoverFor", () => {
     const def = builtinPortfolio("momentum_crypto_usdc");
     const cut = (def.params as MomentumTsmParams).cutover!;
-    for (const t of [Date.UTC(2026, 8, 26, 21), MOMENTUM_USDC_CUTOVER_EXPIRES_AT, Date.UTC(2027, 0, 1)]) {
+    for (const t of [Date.UTC(2026, 9, 8, 0, 0, 15), MOMENTUM_USDC_CUTOVER_EXPIRES_AT, Date.UTC(2027, 0, 1)]) {
       expect(cutoverReunderwriteBefore(cut, t)).toBe(momentumUsdcCutoverFor(t)!);
       const plan = buildPortfolioPlan(def, t) as MomentumPortfolioPlan;
       expect(plan.engineConfig.reunderwriteBefore).toBe(momentumUsdcCutoverFor(t)!);
+      expect(plan.engineConfig.reunderwriteSymbols).toEqual(momentumUsdcCutoverFor(t) !== undefined ? MOMENTUM_USDC_CUTOVER_SYMBOLS : undefined);
     }
   });
 });

@@ -48,4 +48,5 @@ for (const k of [
   "ALPACA_OAUTH_CLIENT_ID", "ALPACA_OAUTH_CLIENT_SECRET",
   "PORTFOLIOS_SOURCE", // prod may flip it to "db"; tests pass the source explicitly
   "ACCOUNTS_SOURCE", "RUNTIME_ACCOUNT_ALPACA", "RUNTIME_ACCOUNT_BINANCE", // prod binds its accounts through these
+  "DISPLAY_HISTORY_START", // prod hides the pre-v8 era from "All"; tests pass it explicitly
 ]) delete process.env[k];

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { coinmSkipStartupStopReconcile, startupBrokerHealth } from "./index";
+import { coinmSkipStartupStopReconcile, startupBrokerHealth, venueBootActionOnConnectFailure } from "./index";
 
 // Wiring test for the momentum_btc/DAPI truth-only initialization line in
 // main(): `candidate.init({ skipStartupStopReconcile:
@@ -93,5 +93,23 @@ describe("assertRequiredConfig is invoked at bot startup", () => {
     expect(call).not.toBeNull();
     const dbInitAt = body.indexOf("initDatabase(");
     expect(dbInitAt).toBeGreaterThan(call!.index); // gate runs BEFORE any subsystem
+  });
+});
+
+describe("venueBootActionOnConnectFailure — a transient venue outage at boot never takes the other venues down (2026-10-06)", () => {
+  test("no exposure → the sleeve stays off, whatever the reason", () => {
+    expect(venueBootActionOnConnectFailure(false, "Timeout waiting for response from backend server")).toBe("stay_off");
+    expect(venueBootActionOnConnectFailure(false, "dualSidePosition must be false (one-way mode), got true")).toBe("stay_off");
+    expect(venueBootActionOnConnectFailure(false, null)).toBe("stay_off");
+  });
+  test("exposure + transient failure → boot with the executor attached unconnected (the reconnector brings it up)", () => {
+    expect(venueBootActionOnConnectFailure(true, "Binance /fapi/v2/account: Timeout waiting for response from backend server. Send status unknown; execution status unknown.")).toBe("attach_degraded");
+    expect(venueBootActionOnConnectFailure(true, "getaddrinfo ENOTFOUND demo-fapi.binance.com")).toBe("attach_degraded");
+    expect(venueBootActionOnConnectFailure(true, null)).toBe("attach_degraded"); // init() failed right after a passed preflight
+  });
+  test("exposure + configuration problem → refuse to boot (unchanged)", () => {
+    expect(venueBootActionOnConnectFailure(true, "dualSidePosition must be false (one-way mode), got true")).toBe("fail_boot");
+    expect(venueBootActionOnConnectFailure(true, `restBase "https://fapi.binance.com" is not a paper/testnet host — refusing to enable`)).toBe("fail_boot");
+    expect(venueBootActionOnConnectFailure(true, "API keys not configured")).toBe("fail_boot");
   });
 });

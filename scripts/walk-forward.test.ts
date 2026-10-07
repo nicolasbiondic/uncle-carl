@@ -2245,7 +2245,10 @@ describe("forward-compat candidate axes (slotHysteresis / regime / maxGrossExpos
     expect(() => validateCandidate({ ...momentumCand, deterministicTieBreak: true })).toThrow("meanrev-only");
     expect(() => validateCandidate({ ...meanrevCand, slotHysteresis: true })).toThrow("momentum-only");
     expect(() => validateCandidate({ ...meanrevCand, regime: "off" })).toThrow("momentum-only");
-    expect(() => validateCandidate({ ...meanrevCand, maxGrossExposureMult: 1.5 })).toThrow("momentum-only");
+    // maxGrossExposureMult is valid on meanrev since 2026-10-05: the runner
+    // forwards it to the real MeanRevEngine (G gross-cap diagnostic; the
+    // engine-level behavior is locked by meanrev-replay.grossCap.test.ts).
+    expect(() => validateCandidate({ ...meanrevCand, maxGrossExposureMult: 0.84 })).not.toThrow();
     expect(() => validateCandidate({ ...meanrevCand, rsiMethod: "wilder", deterministicTieBreak: true })).not.toThrow();
     expect(() => validateCandidate({ ...meanrevCand, rsiMethod: "sma3" as any })).toThrow("rsiMethod");
     // The original unknown-key rejection still holds.

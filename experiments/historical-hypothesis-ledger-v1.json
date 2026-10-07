@@ -730,6 +730,23 @@
       "resultsComplete": false,
       "hypothesisCount": 3,
       "evidence": "Re-adjudicacion post-fix del replay (f0c08c9, 2026-10-03: los cierres del motor se estampaban en el ancla exacta del P&L realizado de RiskGuard y getRealisedPnlSince los filtraba — la racha de perdidas del sim solo veia stops, nunca se reiniciaba, y pausaba tras cada 5 stops; el control vt-35 en la misma base paso de +363.6%/1.155/35.6% viejo d6c0cdbe a +509.8%/1.313/32.6% corregido 06e1a160). Batch pre-registrado en 50865e9 ANTES de correr, 5 cadenas puras de 1 candidato sobre el kernel vt-35 vivo, misma base (dataHash 50ad44f0, prod 2026-10-02 + S&P500), misma ventana/folds/costes/gates que momentum-crypto-2026w-control-pure-v1; control reutilizado 06e1a160 (+0, mismo configHash/dataHash/codeHash). Cascada: stop-fixed8 +0 y stop-vol +0 (identidades de los candidatos S4 2026-09-28, corridos entonces con el replay viejo), cooldown4 +1 (316->317), cooldown12 +1 (317->318), hysteresis +1 (318->319) — cooldown y hysteresis solo se habian probado sobre el incumbent pre-volTarget. Total del ledger: 316 + 3 = 319. RESULTADO (ver authoritativeArtifactCryptoFixedSim): REFUTADO — ningun candidato cumple el criterio pre-declarado (Sharpe >= control+0.05, maxDD <= control+3pp, PSR >= 0.95, sin gates nuevos fallados, peor LOO >= 1.0); el mas cercano, cooldown12 (+578.5%/Sharpe 1.371/DD 33.1%/PSR 0.998), cumple 4 de 5 pero su peor LOO 0.909 (sin XRP) queda bajo el liston 1.0. Los veredictos viejos del eje stop (S4) y de displacement quedan CONFIRMADOS con el sim corregido: el 4% fijo sigue dominando a fixed8/vol en Sharpe Y DD (y el margen del control CRECE al corregir, como predecia el mecanismo del bug), y la hysteresis sigue costando Sharpe (1.135 vs 1.313) aunque produce el primer artefacto crypto con 0 gates fallados (displacementShare 0.62 -> 0.000). El diseno vivo vt-35 queda como el mejor conocido, ahora validado con el simulador corregido. Diagnostico acompanante (no-trial, artefacto b195dd8d): sobre la ventana viva con la base prod del 10-04, anclado en el epoch de paridad 2026-09-26T19Z el sim corregido hace -4.14% vs vivo -3.33% (el vivo DENTRO del camino del modelo; la ejecucion testnet no es la fuga), y el -8.48% desde MODEL_START se descompone en ~-4.0pp del dia de transicion 09-23 (stops de posiciones heredadas del modelo anterior) + drawdown de regimen que el sim reproduce."
+    },
+    {
+      "id": "gross-cap-fidelity-diagnostic-2026-10-05",
+      "sourceCommit": "80a2b92 (rama research/gross-cap-diagnostic, pre-registro antes de correr)",
+      "sourcePaths": [
+        "experiments/momentum-stocks-daily-blend3-grosscap100-diag-v1.json",
+        "experiments/meanrev-slot12-grosscap084-diag-v1.json",
+        "experiments/momentum-crypto-usdc-daily-s5-grosscap100-diag-v1.json",
+        "experiments/momentum-crypto-2026w-grosscap150-diag-v1.json",
+        "scripts/diag-gross-cap.ts",
+        "docs/reports/G-gross-cap.md"
+      ],
+      "hypothesisCount": 4,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "DIAGNOSTICO de fidelidad vivo<->modelo (mision G, 2026-10-05), NO batch de candidatos a cablear: los 4 motores vivos aplican maxGrossExposureMult (stocks 1.0x, crypto 1.5x, USDC 1.0x, meanrev 0.84x de baseUsd) pero los 4 artefactos autoritativos del scorecard (5f03d68d/624d50e9/06e1a160/413ffb90) se corrieron SIN el tope; prod lo activo 8 veces desde el 2026-09-26 (USDC: 4x LTC, 4x AVAX bloqueados con 4/5 posiciones) pese a que liveSleeveConfigs.test.ts lo declaraba backstop que nunca se activa. Pre-registrado en 80a2b92 ANTES de correr: 4 cadenas puras = copia byte a byte del autoritativo + el tope vivo (+1 hipotesis diagnostica c/u, base 319 -> 323), sobre la MISMA base hist-sp500.db cuyo dataHash reproduce cada artefacto; regla pre-declarada: |dSharpe| >= 0.05, |dCAGR| >= 1pp o tope activo en >= 2% de las decisiones de entrada OOS -> recomendar cambiar el tope (holgura H con activacion <1% o degradar a alerta). Habilitador tecnico solo-scripts: passthrough del cap al MeanRevEngine real en runMeanRevReplay + hooks observador grossCapDiag (meanrev-replay.grossCap.test.ts). RESULTADOS: ver docs/reports/G-gross-cap.md."
     }
   ],
   "trialSensitivityFinding": {

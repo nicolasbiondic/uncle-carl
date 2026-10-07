@@ -91,7 +91,8 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { getETDateKey, getETDayBounds } from "../src/db/database";
 import { liveSleeveConfig, type LiveSleeveId } from "../src/config/liveSleeveConfigs";
-import { runWithConfig, type ClosedTrade, type ReplayResult } from "./backtest-momentum-wf";
+import { runWithConfig, type ClosedTrade, type ReplayResult, type SeedPosition } from "./backtest-momentum-wf";
+import { MODEL_CUTOVER_CLOSE_REASON } from "../src/strategies/momentum/MomentumEngine";
 import { runMeanRevReplay } from "./meanrev-replay";
 import { candidateToReplayConfig, type CandidateConfig, type ExperimentManifest } from "./walk-forward";
 
@@ -100,21 +101,23 @@ import { candidateToReplayConfig, type CandidateConfig, type ExperimentManifest 
 // sleeve here is the only wiring needed to check it (plus a dispatch arm in
 // main() if it needs a non-daily comparison shape, like momentum_crypto's).
 export const PARITY_EPOCHS: Partial<Record<LiveSleeveId, string>> = {
-  momentum_stocks: "2026-09-28",
+  // Re-anchored to the owner's realign pass (10-07): GOOGL (kept after its
+  // 10-02 exit bounced 403) is closed by that pass's MODEL_CUTOVER, which the
+  // extractors exclude, so the sim starts from the live book at the epoch.
+  // 09-28..10-06 compared clean apart from GOOGL (AUDITS 2026-10-06).
+  momentum_stocks: "2026-10-07",
   meanrev_stocks: "2026-09-29",
   // First pass after the 2026-09-26 vt-35 risk-state re-anchor
   // (MOMENTUM_CRYPTO_MODEL_VERSION) — live's book was emptied by that
   // re-anchor, so the sim's empty-at-epoch book is a true mirror.
   momentum_crypto: "2026-09-26T19:00:00Z",
-  // First daily pass whose MODEL_CUTOVER actually fired (00:00:15 UTC
-  // 09-29): the 09-27 pass skipped it (BinanceMomentumAdapter carried no
-  // entryTime, fixed f385ab5), so the 09-27 epoch re-reported that fixed
-  // bug every day. LINK/SOL (entered 09-27, after the cutover boundary)
-  // stay open across this epoch — see OPEN.md "parity monitor: empty sim
-  // book at the epoch". Live trades are BASE/USDC; the replay runs the
-  // BASE/USD USDT-perp proxies (declared in its manifest) —
-  // normalizeLiveDecisions.
-  momentum_crypto_usdc: "2026-09-29T00:00:00Z",
+  // Re-anchored to the owner's realign decision (00:00:15 UTC 10-08): its
+  // MODEL_CUTOVER closes UNI/USDC, which the 09-29 cutover's simultaneous
+  // re-rank had bought and the model does not hold. From the 09-29 epoch the
+  // only divergence left was that UNI (AUDITS 2026-10-06).
+  // Live trades are BASE/USDC; the replay runs the BASE/USD USDT-perp proxies
+  // (declared in its manifest) — normalizeLiveDecisions.
+  momentum_crypto_usdc: "2026-10-08T00:00:00Z",
 };
 
 /** Live symbols → the replay's universe symbols. momentum_crypto_usdc
@@ -128,6 +131,59 @@ export function normalizeLiveDecisions(sleeve: LiveSleeveId, d: SleeveDecisions)
     exits: d.exits.map(e => ({ ...e, symbol: n(e.symbol) })),
     endHoldings: [...new Set(d.endHoldings.map(n))].sort(),
   };
+}
+
+/** Same BASE/USDC → BASE/USD mapping as normalizeLiveDecisions, applied to
+ *  seed positions (extractSeedPositions) instead of decision events — the
+ *  replay's universe/book only ever knows the BASE/USD proxy symbols. */
+export function normalizeSeedPositions(sleeve: LiveSleeveId, seeds: SeedPosition[]): SeedPosition[] {
+  if (sleeve !== "momentum_crypto_usdc") return seeds;
+  return seeds.map(s => ({ ...s, symbol: s.symbol.replace(/\/USDC$/, "/USD") }));
+}
+
+/**
+ * Live positions already open at the replay EPOCH (OPEN.md P2 "el libro
+ * del sim arranca vacío en el epoch") — the seed for the sim's book (see
+ * SeedPosition). A row counts iff it was opened strictly BEFORE the epoch
+ * and was still open AT the epoch: status 'open', or an exit at/after it
+ * (a close exactly at the epoch instant belongs to the live pass the
+ * epoch marks, so the position existed through it — same boundary
+ * extractLiveDecisions uses for entries: `entry_time < epochMs`, mirrored
+ * here with the open side of the inequality flipped for exits).
+ *
+ * EXCLUDED: a row closed with MODEL_CUTOVER_CLOSE_REASON. That close is the
+ * engine's own one-shot re-underwrite (src/index.ts's reunderwriteBefore,
+ * verified live on momentum_stocks' AAPL/META and momentum_crypto_usdc's
+ * NEAR/UNI 2026-09-28/29) — it closes the OLD row and reopens a FRESH one
+ * (smaller notional, current sizing regime) in the SAME pass; the fresh
+ * row's own entry_time is >= epochMs and is already a normal in-window
+ * live entry. Seeding the OLD row instead would hand the sim a stale,
+ * abandoned-regime notional the replay has no mechanism to re-underwrite
+ * (reunderwriteBefore is deliberately NOT plumbed into
+ * ReplayConfig/CandidateConfig — it is a live-only migration event, not a
+ * strategy parameter) — verified live 2026-10-05: seeding momentum_stocks'
+ * pre-cutover AAPL+META (≈$49.2k, ~0.98× the sleeve's $50k equity, sized
+ * under the RETIRED 2× regime) alone saturated maxGrossExposureMult's 1.0×
+ * cap and blocked EVERY entry for the rest of the window — worse than the
+ * false divergence this fix targets, not better.
+ */
+export function extractSeedPositions(db: Database, accountId: string, epochMs: number): SeedPosition[] {
+  const rows = db.prepare(
+    `SELECT symbol, side, entry_time, entry_price, quantity, stop_loss FROM trades
+     WHERE account_id = ? AND entry_time < ? AND (status = 'open' OR exit_time >= ?)
+       AND (close_reason IS NULL OR close_reason != ?)
+     ORDER BY entry_time ASC`,
+  ).all(accountId, epochMs, epochMs, MODEL_CUTOVER_CLOSE_REASON) as Array<{
+    symbol: string; side: string; entry_time: number; entry_price: number; quantity: number; stop_loss: number | null;
+  }>;
+  return rows.map(r => ({
+    symbol: r.symbol,
+    side: r.side === "sell" ? "sell" as const : "buy" as const,
+    qty: r.quantity,
+    entryPrice: r.entry_price,
+    entryAt: r.entry_time,
+    stopPrice: r.stop_loss,
+  }));
 }
 
 /** Calendar-day slack when matching a sim decision to a live one. 3 covers
@@ -158,8 +214,22 @@ export interface SleeveDecisions {
  *  passes a full-precision ISO instant so the ±2h tolerance is meaningful. */
 export type DateKeyFn = (ms: number) => string;
 
-/** Live decisions from the trades table. Pre-epoch positions (and their
- *  exits) are ignored entirely. [epochMs, endMs) bounds both event kinds. */
+/** Live decisions from the trades table. A row's ENTRY counts only when it
+ *  falls inside [epochMs, endMs) — a genuine in-window decision. A row
+ *  opened BEFORE the epoch (entry_time < epochMs) contributes no entry
+ *  event (nothing decided it during this window — see extractSeedPositions,
+ *  the same carried-in row), but DOES still contribute its exit/holding
+ *  when that row is "live at the epoch" (status 'open', or exit_time at/
+ *  after epochMs) — OPEN.md P2: before this, a carried-in position's exit
+ *  or continued holding was invisible to the comparison entirely, which
+ *  (symmetrically with the sim's own pre-seeding blind book) hid real
+ *  divergences instead of just avoiding false "fresh entry" ones.
+ *
+ *  A carried-in row closed with MODEL_CUTOVER_CLOSE_REASON is excluded
+ *  from this widening (its own FRESH reopen row, entry_time >= epochMs,
+ *  is still a normal in-window entry) — same reasoning and verified live
+ *  incident as extractSeedPositions' identical exclusion: a one-shot
+ *  migration close is not a comparable decision on either side. */
 export function extractLiveDecisions(
   db: Database,
   accountId: string,
@@ -169,14 +239,18 @@ export function extractLiveDecisions(
 ): SleeveDecisions {
   const rows = db.prepare(
     `SELECT symbol, entry_time, exit_time, status FROM trades
-     WHERE account_id = ? AND entry_time >= ? AND entry_time < ?
+     WHERE account_id = ? AND entry_time < ?
+       AND (
+         entry_time >= ?
+         OR ((status = 'open' OR exit_time >= ?) AND (close_reason IS NULL OR close_reason != ?))
+       )
      ORDER BY entry_time ASC`,
-  ).all(accountId, epochMs, endMs) as Array<{ symbol: string; entry_time: number; exit_time: number | null; status: string }>;
+  ).all(accountId, endMs, epochMs, epochMs, MODEL_CUTOVER_CLOSE_REASON) as Array<{ symbol: string; entry_time: number; exit_time: number | null; status: string }>;
   const entries: DecisionEvent[] = [];
   const exits: DecisionEvent[] = [];
   const endHoldings: string[] = [];
   for (const r of rows) {
-    entries.push({ symbol: r.symbol, date: dateKeyFn(r.entry_time) });
+    if (r.entry_time >= epochMs) entries.push({ symbol: r.symbol, date: dateKeyFn(r.entry_time) });
     if (r.exit_time !== null && r.exit_time < endMs && r.status !== "open") {
       exits.push({ symbol: r.symbol, date: dateKeyFn(r.exit_time) });
     } else {
@@ -186,13 +260,34 @@ export function extractLiveDecisions(
   return { entries, exits, endHoldings: [...new Set(endHoldings)].sort() };
 }
 
+/** Exact identity of a seeded position (symbol+side+entryAt, verbatim —
+ *  never a timestamp-threshold guess, see extractSimDecisions): both
+ *  SimBroker.seedPositions and SimMeanRevBroker.seedPositions carry
+ *  `entryAt`/`entryTime` through to the eventual ClosedTrade unchanged. */
+function seedIdentity(symbol: string, side: string, entryAt: number): string {
+  return `${symbol}|${side}|${entryAt}`;
+}
+
 /** Sim decisions from a replay's closedTrades. "fold_end" closes are the
- *  positions still open at window end — holdings, not exits. */
+ *  positions still open at window end — holdings, not exits. A closedTrade
+ *  whose (symbol, side, entryAt) matches one of `seeds` verbatim contributes
+ *  NO entry event — it was INHERITED at the epoch (see SeedPosition /
+ *  checkSleeve's seeding), not decided during this window, so it has no
+ *  live counterpart to compare against (extractLiveDecisions excludes the
+ *  same row's entry for the same reason) — OPEN.md P2. Its exit/holding
+ *  IS still compared normally: the seed only silences the one event type
+ *  that was never a real decision. A plain timestamp cutoff (entryAt <
+ *  epoch) would also catch momentum_stocks' legitimate epoch-day entry,
+ *  whose replay-internal entryAt can land one bar before the ET epoch
+ *  boundary — exact identity avoids that false exclusion.
+ */
 export function extractSimDecisions(
   closedTrades: ClosedTrade[],
   endMs: number,
   dateKeyFn: DateKeyFn = getETDateKey,
+  seeds: SeedPosition[] = [],
 ): SleeveDecisions {
+  const seedKeys = new Set(seeds.map(s => seedIdentity(s.symbol, s.side, s.entryAt)));
   const entries: DecisionEvent[] = [];
   const exits: DecisionEvent[] = [];
   const endHoldings: string[] = [];
@@ -200,7 +295,9 @@ export function extractSimDecisions(
     if (t.entryAt === undefined) {
       throw new Error(`parity-check: sim trade for ${t.symbol} carries no entryAt — replay too old for this monitor`);
     }
-    entries.push({ symbol: t.symbol, date: dateKeyFn(t.entryAt) });
+    if (!seedKeys.has(seedIdentity(t.symbol, t.side, t.entryAt))) {
+      entries.push({ symbol: t.symbol, date: dateKeyFn(t.entryAt) });
+    }
     if (t.reason === "fold_end") endHoldings.push(t.symbol);
     else if (t.exitAt < endMs) exits.push({ symbol: t.symbol, date: dateKeyFn(t.exitAt) });
     else endHoldings.push(t.symbol);
@@ -422,17 +519,23 @@ export async function checkSleeve(
   };
 
   const cfg = candidateToReplayConfig(manifest, liveCfg.candidate as CandidateConfig, "base", histPath);
-  const result: ReplayResult | null = isMeanrev
-    ? await runMeanRevReplay(cfg, win)
-    : await runWithConfig(cfg, win);
-  if (!result) {
-    return { sleeve, status: "nothing_yet", epoch, lastSession: last.key, staleSymbols: last.stale, divergences: [] };
-  }
 
-  const sim = extractSimDecisions(result.closedTrades, endMs);
+  // Seed the sim's book with live positions already open AT THE EPOCH
+  // (OPEN.md P2 "el libro del sim arranca vacío en el epoch") — read from
+  // the same trading.db connection the live decisions come from, open for
+  // the rest of this function.
   const tradingDb = new Database(tradingDbPath, { readonly: true });
+  let sim: SleeveDecisions;
   let live: SleeveDecisions;
   try {
+    const seeds = extractSeedPositions(tradingDb, sleeve, epochStart);
+    const result: ReplayResult | null = isMeanrev
+      ? await runMeanRevReplay(cfg, win, undefined, seeds)
+      : await runWithConfig(cfg, win, undefined, seeds);
+    if (!result) {
+      return { sleeve, status: "nothing_yet", epoch, lastSession: last.key, staleSymbols: last.stale, divergences: [] };
+    }
+    sim = extractSimDecisions(result.closedTrades, endMs, getETDateKey, seeds);
     live = extractLiveDecisions(tradingDb, sleeve, epochStart, endMs);
   } finally {
     tradingDb.close();
@@ -511,15 +614,20 @@ export async function checkMomentumCryptoSleeve(
   };
 
   const cfg = candidateToReplayConfig(manifest, liveCfg.candidate as CandidateConfig, "base", histPath);
-  const result = await runWithConfig(cfg, win);
-  if (!result) {
-    return { sleeve, status: "nothing_yet", epoch, lastSession: new Date(last.ts).toISOString(), staleSymbols: last.stale, divergences: [] };
-  }
 
-  const sim = extractSimDecisions(result.closedTrades, endMs, isoInstant);
+  // Seed the sim's book with live positions already open AT THE EPOCH
+  // (OPEN.md P2) — normalized to the replay's BASE/USD proxy symbols for
+  // momentum_crypto_usdc, same as the live decisions below.
   const tradingDb = new Database(tradingDbPath, { readonly: true });
+  let sim: SleeveDecisions;
   let live: SleeveDecisions;
   try {
+    const seeds = normalizeSeedPositions(sleeve, extractSeedPositions(tradingDb, sleeve, epochMs));
+    const result = await runWithConfig(cfg, win, undefined, seeds);
+    if (!result) {
+      return { sleeve, status: "nothing_yet", epoch, lastSession: new Date(last.ts).toISOString(), staleSymbols: last.stale, divergences: [] };
+    }
+    sim = extractSimDecisions(result.closedTrades, endMs, isoInstant, seeds);
     live = normalizeLiveDecisions(sleeve, extractLiveDecisions(tradingDb, sleeve, epochMs, endMs, isoInstant));
   } finally {
     tradingDb.close();

@@ -8,6 +8,7 @@ import {
   MOMENTUM_USDC_MODEL_VERSION,
   MOMENTUM_USDC_CUTOVER_AT,
   MOMENTUM_USDC_CUTOVER_EXPIRES_AT,
+  MOMENTUM_USDC_CUTOVER_SYMBOLS,
   momentumUsdcCutoverFor,
 } from "./index";
 
@@ -19,9 +20,10 @@ describe("momentum_crypto_usdc daily-kernel cutover", () => {
     expect(src).toContain("reunderwriteBefore: momentumUsdcCutoverFor(Date.now())");
   });
 
-  test("the legacy-position cutover applies to the first daily pass and expires on its own", () => {
-    expect(MOMENTUM_USDC_CUTOVER_AT).toBe(Date.UTC(2026, 8, 27));
-    expect(momentumUsdcCutoverFor(Date.UTC(2026, 8, 26, 21))).toBe(MOMENTUM_USDC_CUTOVER_AT);
+  test("the one-shot cutover (owner realign 2026-10-06: UNI/USDC only) applies to the next daily pass and expires on its own", () => {
+    expect(MOMENTUM_USDC_CUTOVER_AT).toBe(Date.UTC(2026, 9, 6, 5));
+    expect(MOMENTUM_USDC_CUTOVER_SYMBOLS).toEqual(["UNI/USDC"]);
+    expect(momentumUsdcCutoverFor(Date.UTC(2026, 9, 8, 0, 0, 15))).toBe(MOMENTUM_USDC_CUTOVER_AT);
     expect(momentumUsdcCutoverFor(MOMENTUM_USDC_CUTOVER_EXPIRES_AT)).toBeUndefined();
     expect(momentumUsdcCutoverFor(Date.UTC(2027, 0, 1))).toBeUndefined();
   });
