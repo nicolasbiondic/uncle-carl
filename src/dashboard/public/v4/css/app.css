@@ -12,6 +12,10 @@ button { font-family: inherit; cursor: pointer; }
 .num { font-variant-numeric: tabular-nums; }
 .up { color: var(--up); } .down { color: var(--down); } .muted { color: var(--muted); }
 .hide { display: none !important; }
+/* The hidden attribute always wins: a component class that sets display
+   (.news-scroll's flex) silently overrode it, so the collapsed news card kept
+   showing its "…" placeholder and never loaded (2026-10-07). */
+[hidden] { display: none !important; }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
 
@@ -184,6 +188,19 @@ tfoot tr.totals .muted { font-weight: 500; }
   box-shadow: 1px 0 0 var(--border);
 }
 .postbl tfoot tr.totals td:first-child { background: var(--bg); }
+/* Positions/Trades: the column header and the totals row stay in view while
+   the rows scroll (owner, 2026-10-07). They stick inside the table's own box,
+   #opsBody > .scroll — the nearest scroll container of any cell, since its
+   overflow-x is never visible. Opaque backgrounds and a z-index above the
+   sticky symbol column (1); inset shadows instead of borders, because a
+   collapsed border does not travel with a stuck cell. */
+#opsBody thead th { position: sticky; top: 0; z-index: 2; background: var(--card); border-bottom: none; box-shadow: inset 0 -1px 0 var(--border); }
+#opsBody tfoot tr.totals td { z-index: 2; border-top: none; box-shadow: inset 0 1px 0 var(--border); }
+#opsBody thead th:first-child, #opsBody tfoot tr.totals td:first-child { z-index: 3; }
+/* Page-scrolling layouts (narrow or short screens): the table scrolls in its
+   own box so the header and totals have something to stick to. The
+   viewport-locked layout below lifts the cap and lets the box fill the card. */
+#opsBody > .scroll { max-height: min(70vh, 720px); }
 
 /* tabs */
 .tabs { display: flex; gap: var(--s4); flex-wrap: wrap; border-bottom: 1px solid var(--border); margin-bottom: var(--s3); }
@@ -275,6 +292,11 @@ tfoot tr.totals .muted { font-weight: 500; }
 .news-card[data-src="coindesk"] { border-left: 2px solid #f7931a; }
 .news-card[data-src="bloomberg"] { border-left: 2px solid #ff5c5c; }
 .news-card[data-src="beincrypto"] { border-left: 2px solid #2dd4a0; }
+.news-card[data-src="marketwatch"] { border-left: 2px solid #36b37e; }
+.news-card[data-src="seekingalpha"] { border-left: 2px solid #ff8a00; }
+.news-card[data-src="expansion"] { border-left: 2px solid #e0457b; }
+.news-card[data-src="bloomberglinea"] { border-left: 2px solid #8b5cf6; }
+.news-card[data-src="criptonoticias"] { border-left: 2px solid #14b8a6; }
 code { font-family: var(--mono); background: var(--bg-2); padding: 1px 5px; border-radius: 4px; font-size: .9em; }
 
 /* footer ticker + disclaimer.
@@ -360,6 +382,12 @@ code { font-family: var(--mono); background: var(--bg-2); padding: 1px 5px; bord
      card's overflow:hidden with no way to reach the cut columns. Vertical
      scrolling still belongs to .cardbody alone. */
   .cardbody .scroll { max-height: none !important; overflow-x: auto; overflow-y: hidden; }
+  /* The ops card is the exception: its table box is the one scroller (both
+     axes) so the header and totals rows can stick; the exposure chips above
+     it stay put. main.js keeps the box's scroll offset across re-renders. */
+  #opsBody { display: flex; flex-direction: column; overflow: hidden; }
+  #opsBody > * { flex-shrink: 0; }
+  #opsBody > .scroll { flex: 1 1 0; min-height: 0; overflow: auto; }
   /* Equity tab: the plot was a fixed 160px, so on viewports where content ran
      a few px past the card the whole tab scrolled pointlessly. Let the plot
      absorb the remaining card height instead (chart scales, no scrollbar).

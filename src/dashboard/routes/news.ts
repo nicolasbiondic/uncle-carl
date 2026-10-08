@@ -16,18 +16,38 @@ import { createLogger } from "../../utils/logger";
 
 const log = createLogger("Dashboard");
 
-export interface NewsFeedDef { url: string; lang: "EN" | "ES"; }
+/** `name` is the short label shown on the card (feed titles run long:
+ *  "CoinDesk: Bitcoin, Ethereum, XRP, Crypto News and Price Data"). */
+export interface NewsFeedDef { url: string; lang: "EN" | "ES"; name: string; }
 
-/** Same feeds the v4 news bar used client-side (components/news.js). */
+/** What the bot trades — US stocks/ETFs and crypto — in both languages
+ *  (2026-10-07: three of the four original feeds were crypto-only). Each one
+ *  checked on 2026-10-07: answers, parses, publishes within hours. Left out:
+ *  Investing.com (pubDates hours in the future), El Economista (403), Cinco
+ *  Días (404), Cointelegraph ES (410), MarketWatch MarketPulse (stale). */
 export const NEWS_FEEDS: Record<"en" | "es", NewsFeedDef[]> = {
   en: [
-    { url: "https://cointelegraph.com/rss", lang: "EN" },
-    { url: "https://www.coindesk.com/arc/outboundfeeds/rss", lang: "EN" },
-    { url: "https://feeds.bloomberg.com/markets/news.rss", lang: "EN" },
+    { url: "https://feeds.bloomberg.com/markets/news.rss", lang: "EN", name: "Bloomberg" },
+    { url: "https://feeds.content.dowjones.io/public/rss/mw_topstories", lang: "EN", name: "MarketWatch" },
+    { url: "https://seekingalpha.com/market_currents.xml", lang: "EN", name: "Seeking Alpha" },
+    { url: "https://cointelegraph.com/rss", lang: "EN", name: "Cointelegraph" },
+    { url: "https://www.coindesk.com/arc/outboundfeeds/rss", lang: "EN", name: "CoinDesk" },
   ],
-  // Spanish readers get the EN feeds PLUS the ES one (matches the old client).
-  es: [{ url: "https://es.beincrypto.com/feed/", lang: "ES" }],
+  // Spanish readers get these PLUS a taste of the EN feeds (NEWS_PER_SOURCE).
+  es: [
+    { url: "https://e00-expansion.uecdn.es/rss/mercados.xml", lang: "ES", name: "Expansión" },
+    { url: "https://www.bloomberglinea.com/arc/outboundfeeds/rss/?outputType=xml", lang: "ES", name: "Bloomberg Línea" },
+    { url: "https://es.beincrypto.com/feed/", lang: "ES", name: "BeInCrypto" },
+    { url: "https://www.criptonoticias.com/feed/", lang: "ES", name: "CriptoNoticias" },
+  ],
 };
+
+/** Items kept per source: the reader's language gets the room, the other one
+ *  a taste — and no prolific feed crowds out the rest (2026-10-07: newest-
+ *  first-then-cap left only Bloomberg and Cointelegraph on screen). */
+export const NEWS_PER_SOURCE = { own: 6, other: 2 } as const;
+/** A feed that stopped updating must not fill the bar with old news. */
+export const NEWS_MAX_AGE_MS = 72 * 3_600_000;
 
 export interface NewsItem {
   title: string;
@@ -40,7 +60,7 @@ export interface NewsItem {
 
 export const NEWS_CACHE_TTL_MS = 10 * 60_000;
 export const NEWS_FEED_TIMEOUT_MS = 8_000;
-const MAX_ITEMS = 25;
+const MAX_ITEMS = 30;
 
 interface CacheEntry { at: number; items: NewsItem[]; }
 const cache = new Map<string, CacheEntry>(); // key: "en" | "es"
@@ -72,7 +92,7 @@ async function fetchFeed(def: NewsFeedDef, fetchFn: typeof fetch): Promise<NewsI
   if (!parsed.items.length) throw new Error("no items parsed");
   return parsed.items.map((i) => ({
     title: i.title, link: i.link, pubDate: i.pubDate,
-    source: parsed.title || new URL(def.url).hostname,
+    source: def.name || parsed.title || new URL(def.url).hostname,
     lang: def.lang,
   }));
 }
@@ -90,11 +110,18 @@ export async function getNews(
 
   const feeds = lang === "es" ? [...NEWS_FEEDS.en, ...NEWS_FEEDS.es] : NEWS_FEEDS.en;
   const settled = await Promise.allSettled(feeds.map((f) => fetchFeed(f, fetchFn)));
+  const own = lang === "es" ? "ES" : "EN";
   const ok: NewsItem[][] = [];
   for (let i = 0; i < settled.length; i++) {
     const r = settled[i];
-    if (r.status === "fulfilled") ok.push(r.value);
-    else log.warn(`news feed failed: ${feeds[i].url} — ${(r.reason as any)?.message ?? r.reason}`);
+    if (r.status === "fulfilled") {
+      const fresh = r.value
+        .filter((n) => n.pubDate == null || now() - n.pubDate <= NEWS_MAX_AGE_MS)
+        .sort((a, b) => (b.pubDate ?? 0) - (a.pubDate ?? 0));
+      ok.push(fresh.slice(0, feeds[i].lang === own ? NEWS_PER_SOURCE.own : NEWS_PER_SOURCE.other));
+    } else {
+      log.warn(`news feed failed: ${feeds[i].url} — ${(r.reason as any)?.message ?? r.reason}`);
+    }
   }
 
   if (ok.length === 0) {

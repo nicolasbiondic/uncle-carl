@@ -299,3 +299,16 @@ describe("renderPositions — TP column + SL distance%", () => {
     expect(html).toContain('<td class="opt1">—</td>');
   });
 });
+
+describe("positions table: the column header and the totals row stay in view (owner, 2026-10-07)", () => {
+  const css = require("fs").readFileSync(require("path").join(import.meta.dir, "../../css/app.css"), "utf-8").replace(/\s+/g, " ");
+  test("header and totals rows stick inside the table box", () => {
+    expect(css).toContain("#opsBody thead th { position: sticky; top: 0;");
+    expect(css).toMatch(/tfoot tr\.totals td \{[^}]*position: sticky; bottom: 0;/);
+  });
+  test("viewport-locked layout: the table box (not the card body) is the scroller, so the sticky rows have something to stick to", () => {
+    const lock = css.slice(css.indexOf("@media (min-width: 981px) and (min-height: 660px)"));
+    expect(lock).toContain("#opsBody { display: flex; flex-direction: column; overflow: hidden; }");
+    expect(lock).toContain("#opsBody > .scroll { flex: 1 1 0; min-height: 0; overflow: auto; }");
+  });
+});

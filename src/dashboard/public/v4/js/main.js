@@ -101,6 +101,26 @@ function flashKpis() {
   prevKpi = { equity: k.equity, periodPnl: k.periodPnl };
 }
 
+/** The ops card's scroller: the table box when it scrolls, else the card
+ *  body (layouts where the box is capped or not a scroller). */
+function opsScroller() {
+  return document.querySelector("#opsBody > .scroll") || byId("opsBody");
+}
+/** Run a re-render of the ops card without yanking the reader back to the
+ *  top: the 30 s refresh rebuilds the page and WS price ticks rebuild the
+ *  table (2026-10-07: the table box became the scroller so its header and
+ *  totals rows can stick). A tab switch starts at the top. */
+function withOpsScroll(fn) {
+  const before = opsScroller();
+  const saved = before ? { tab: opsTab, top: before.scrollTop, left: before.scrollLeft } : null;
+  fn();
+  const after = opsScroller();
+  if (after && saved && saved.tab === opsTab) {
+    after.scrollTop = saved.top;
+    after.scrollLeft = saved.left;
+  }
+}
+
 // ── hash router (#/resumen · #/portafolios · #/cuentas · #/actividad ·
 // #/ajustes). The hash is the source of truth; the store remembers the last
 // page for hash-less loads (PERSIST). Back/forward work via hashchange. ──
@@ -136,11 +156,13 @@ function renderPage() {
     mountSettings(byId("pageBody"), (key) => { if (key === "period") refresh().then(render); else render(); });
   } else {
     // Resumen — the original monitor screen.
-    host.innerHTML = `<div class="grid cols-2 profiles-grid" id="profiles"></div>
-      <div class="main-area" id="mainArea"><div class="ops-wrap" id="opsWrap"></div><div class="an-col" id="analyticsCol"></div></div>
-      <div id="newsBar"></div>`;
-    byId("profiles").innerHTML = renderProfiles();
-    byId("opsWrap").innerHTML = renderOps();
+    withOpsScroll(() => {
+      host.innerHTML = `<div class="grid cols-2 profiles-grid" id="profiles"></div>
+        <div class="main-area" id="mainArea"><div class="ops-wrap" id="opsWrap"></div><div class="an-col" id="analyticsCol"></div></div>
+        <div id="newsBar"></div>`;
+      byId("profiles").innerHTML = renderProfiles();
+      byId("opsWrap").innerHTML = renderOps();
+    });
     byId("analyticsCol").innerHTML = `<div class="card" id="analyticsCard">${renderAnalyticsShell()}</div>`;
     byId("newsBar").innerHTML = renderNewsBar();
     loadProfileSparks();
@@ -228,7 +250,7 @@ function wireWS() {
       if (Number.isFinite(d.currentPrice)) p.currentPrice = d.currentPrice;
       if (Number.isFinite(d.unrealizedPnl)) p.unrealizedPnl = d.unrealizedPnl;
       if (Number.isFinite(d.unrealizedPnlPct)) p.unrealizedPnlPct = d.unrealizedPnlPct;
-      if (opsTab === "positions") { const b = byId("opsBody"); if (b) b.innerHTML = renderPositions(store.state, tradesCache); }
+      if (opsTab === "positions") { const b = byId("opsBody"); if (b) withOpsScroll(() => { b.innerHTML = renderPositions(store.state, tradesCache); }); }
     },
     trade_closed: debouncedRefresh,
     order: debouncedRefresh,

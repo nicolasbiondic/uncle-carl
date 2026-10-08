@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { getNews, mergeNewsItems, resetNewsCacheForTests, NEWS_CACHE_TTL_MS, type NewsItem } from "./news";
+import { getNews, mergeNewsItems, resetNewsCacheForTests, NEWS_CACHE_TTL_MS, NEWS_MAX_AGE_MS, NEWS_PER_SOURCE, type NewsItem } from "./news";
 
 const RSS = (title: string, items: Array<[string, string, string]>) => `<?xml version="1.0"?>
 <rss version="2.0"><channel><title>${title}</title>
@@ -38,9 +38,9 @@ describe("mergeNewsItems", () => {
     // Both long titles share the first 40 chars → only the first survives.
     expect(merged.map((m) => m.pubDate)).toEqual([300, 100]);
   });
-  test("caps at 25 items", () => {
+  test("caps at 30 items", () => {
     const many = Array.from({ length: 40 }, (_, i) => item(`headline number ${i}`, i));
-    expect(mergeNewsItems([many]).length).toBe(25);
+    expect(mergeNewsItems([many]).length).toBe(30);
   });
 });
 
@@ -94,6 +94,36 @@ describe("getNews", () => {
     const second = await getNews("en", f, () => t);
     expect(second.stale).toBe(true);
     expect(second.items).toEqual(first.items);
+  });
+
+  test("a prolific feed cannot crowd out the others: at most NEWS_PER_SOURCE.own items per source", async () => {
+    const DAY = Date.parse("Mon, 06 Oct 2026 12:00:00 GMT");
+    const many = Array.from({ length: 20 }, (_, i): [string, string, string] =>
+      [`Bloomberg story ${i}`, `https://bb.example/${i}`, new Date(DAY + i * 60_000).toUTCString()]);
+    const f = fakeFetch({ [BLOOMBERG]: RSS("Bloomberg", many), [COINDESK]: CD_XML });
+    const r = await getNews("en", f, () => DAY + 3_600_000);
+    expect(r.items.filter((i) => i.source === "Bloomberg").length).toBe(NEWS_PER_SOURCE.own);
+    expect(r.items.some((i) => i.source === "CoinDesk")).toBe(true); // older than every Bloomberg story, still shown
+  });
+
+  test("es: Spanish sources get the room, English ones a taste", async () => {
+    const DAY = Date.parse("Mon, 06 Oct 2026 12:00:00 GMT");
+    const rows = (prefix: string): Array<[string, string, string]> =>
+      Array.from({ length: 10 }, (_, i) => [`${prefix} ${i}`, `https://x.example/${prefix}/${i}`, new Date(DAY + i * 60_000).toUTCString()]);
+    const f = fakeFetch({ [BLOOMBERG]: RSS("Bloomberg", rows("Bloomberg EN")), [BEINCRYPTO]: RSS("BeInCrypto", rows("Cripto ES")) });
+    const r = await getNews("es", f, () => DAY + 3_600_000);
+    expect(r.items.filter((i) => i.lang === "ES").length).toBe(NEWS_PER_SOURCE.own);
+    expect(r.items.filter((i) => i.lang === "EN").length).toBe(NEWS_PER_SOURCE.other);
+  });
+
+  test("items older than NEWS_MAX_AGE_MS are dropped (a feed that stopped updating)", async () => {
+    const NOW = Date.parse("Mon, 06 Oct 2026 12:00:00 GMT");
+    const xml = RSS("CoinDesk", [
+      ["fresh", "https://cd.example/f", new Date(NOW - 3_600_000).toUTCString()],
+      ["stale", "https://cd.example/s", new Date(NOW - NEWS_MAX_AGE_MS - 3_600_000).toUTCString()],
+    ]);
+    const r = await getNews("en", fakeFetch({ [COINDESK]: xml }), () => NOW);
+    expect(r.items.map((i) => i.title)).toEqual(["fresh"]);
   });
 
   test("total failure with no cache: empty list, no throw", async () => {

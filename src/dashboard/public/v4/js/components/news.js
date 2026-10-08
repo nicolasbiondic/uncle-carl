@@ -15,7 +15,13 @@ import { ago } from "../fmt.js";
 const FETCH_EVERY_MS = 10 * 60_000;
 const memory = { en: { items: null, at: 0 }, es: { items: null, at: 0 } };
 
-const slug = (s) => { const x = (s || "").toLowerCase(); return x.includes("cointelegraph") ? "cointelegraph" : x.includes("coindesk") ? "coindesk" : x.includes("bloomberg") ? "bloomberg" : x.includes("beincrypto") ? "beincrypto" : ""; };
+const SOURCE_SLUGS = [
+  ["cointelegraph", "cointelegraph"], ["coindesk", "coindesk"], ["bloomberg línea", "bloomberglinea"],
+  ["bloomberg linea", "bloomberglinea"], ["bloomberg", "bloomberg"], ["beincrypto", "beincrypto"],
+  ["marketwatch", "marketwatch"], ["seeking alpha", "seekingalpha"], ["expansión", "expansion"],
+  ["expansion", "expansion"], ["criptonoticias", "criptonoticias"],
+];
+const slug = (s) => { const x = (s || "").toLowerCase(); return SOURCE_SLUGS.find(([k]) => x.includes(k))?.[1] ?? ""; };
 
 let rotTimer = null, paused = false, inflight = null;
 
@@ -45,7 +51,7 @@ function paint() {
 }
 
 export async function loadNews() {
-  if (!store.state.newsOpen) return; // collapsed by default — don't fetch what isn't shown
+  if (!store.state.newsShown) return; // collapsed by the owner — don't fetch what isn't shown
   const lang = store.state.lang === "es" ? "es" : "en";
   paint(); // instant: whatever we already have (never back to "…")
   const slot = memory[lang];
@@ -92,7 +98,7 @@ function startRotation() {
 }
 
 export function renderNewsBar() {
-  const open = !!store.state.newsOpen;
+  const open = !!store.state.newsShown;
   return `<div class="card" style="margin-top:var(--s4)">
     <h3>
       <button class="card-note" data-act="news-toggle" aria-expanded="${open}" aria-controls="newsScroll"
@@ -108,7 +114,7 @@ export function renderNewsBar() {
  *  PERSIST-listed keys), re-render just this card, and lazy-load the feeds
  *  the first time it's opened. Wired from main.js's [data-act] delegator. */
 export function toggleNews() {
-  store.set({ newsOpen: !store.state.newsOpen });
+  store.set({ newsShown: !store.state.newsShown });
   const bar = byId("newsBar");
   if (bar) bar.innerHTML = renderNewsBar();
   loadNews(); // no-op (early return) when this just closed it
