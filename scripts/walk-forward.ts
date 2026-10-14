@@ -52,6 +52,7 @@ import {
 import { minTrlObservations, probabilisticSharpe as psrFromMoments } from "../src/portfolio/trackRecord";
 import { computeSequenceRisk, type SequenceRiskSummary } from "./lib/sequenceRisk";
 import { expandDataPath } from "./lib/researchData";
+import { hashCloseSlices } from "./lib/closeSlices";
 import type { MarketTrendGateConfig, ShortStopSpec, TimeStopConfig, TrailStopConfig, VolSizingConfig, VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
 import type { RiskGuardConfig, RiskState } from "../src/strategies/momentum/RiskGuard";
 import { getETDateKey } from "../src/db/database";
@@ -439,6 +440,7 @@ const VALID_MEANREV_KEYS = new Set<keyof MeanRevSimParams>([
   "timeStopDays",
   "maxPositions",
   "slotPct",
+  "execution",
 ]);
 
 /**
@@ -517,6 +519,9 @@ export function validateCandidate(c: unknown): CandidateConfig {
     if (!Number.isInteger(mr.timeStopDays) || (mr.timeStopDays as number) < 1) throw new Error("meanrev.timeStopDays must be an integer >= 1");
     if (!Number.isInteger(mr.maxPositions) || (mr.maxPositions as number) < 1) throw new Error("meanrev.maxPositions must be an integer >= 1");
     if (!Number.isFinite(mr.slotPct) || (mr.slotPct as number) <= 0 || (mr.slotPct as number) > 1) throw new Error("meanrev.slotPct must be in (0, 1]");
+    if (mr.execution !== undefined && mr.execution !== "close1545") {
+      throw new Error('meanrev.execution only accepts "close1545" — omit the key for the legacy next-open execution');
+    }
     return obj as CandidateConfig;
   }
 
@@ -642,6 +647,11 @@ export interface DataConfig {
    *  exclusive with `membership`. Absent = legacy replays AND the legacy
    *  candidate hashes. */
   perpsMembership?: { topN: number; volLookbackDays: number; minDays: number; freshDays: number };
+  /** 15:45-slice database (§12-septies G0 — required when any candidate
+   *  sets meanrev.execution="close1545"). Runtime-only path like dbPath:
+   *  excluded from manifestIdentity; the slice ROWS enter the data identity
+   *  via hashCloseSlices in runWalkForward. Absent = legacy. */
+  sliceDb?: string;
 }
 
 export interface WindowConfig {
@@ -1025,6 +1035,7 @@ export const DEFAULT_CODE_FILES = [
     "bun.lock",
     "package.json",
     "scripts/backtest-momentum-wf.ts",
+    "scripts/lib/closeSlices.ts",
     "scripts/lib/membership.ts",
     "scripts/meanrev-replay.ts",
     "scripts/walk-forward.ts",
@@ -1206,6 +1217,20 @@ export function validateManifest(m: ExperimentManifest): ExperimentManifest {
       throw new Error(`Candidate ${i} (${(m.candidates[i] as any).name ?? "unnamed"}): ${(e as Error).message}`);
     }
   }
+  // §12-septies G0: the 15:45-slice DB and the close1545 execution mode come
+  // and go together (a slice DB no candidate reads would be config that
+  // changes nothing; a close1545 candidate without the DB fails the replay).
+  {
+    const wantsClose1545 = m.candidates.some(c => c.meanrev?.execution === "close1545");
+    if (wantsClose1545 && !m.data.sliceDb) {
+      throw new Error('meanrev.execution="close1545" requires data.sliceDb (the 15:45-slice database)');
+    }
+    if (m.data.sliceDb !== undefined) {
+      if (typeof m.data.sliceDb !== "string" || m.data.sliceDb.length === 0) throw new Error("data.sliceDb must be a non-empty path");
+      if (m.sleeve !== "meanrev" || m.data.source === "binance_futures") throw new Error("data.sliceDb is stocks-meanrev-only (close1545 execution)");
+      if (!wantsClose1545) throw new Error('data.sliceDb set but no candidate uses meanrev.execution="close1545" (config that changes nothing)');
+    }
+  }
   // Evidence-gate thresholds: strict shapes so a typo'd gate can't silently
   // evaluate as "always pass" (same philosophy as the candidate allowlist).
   const acc = m.acceptance ?? ({} as AcceptanceConfig);
@@ -1250,8 +1275,9 @@ export function loadManifest(path: string): ExperimentManifest {
   const m = validateManifest(JSON.parse(raw) as ExperimentManifest);
   // Datasets outside the repo are named "$UC_RESEARCH_DATA_DIR/…": resolved
   // here, before anything opens or records the path (manifestIdentity leaves
-  // dbPath out of the config hash anyway).
+  // dbPath — and sliceDb — out of the config hash anyway).
   m.data.dbPath = expandDataPath(m.data.dbPath);
+  if (m.data.sliceDb !== undefined) m.data.sliceDb = expandDataPath(m.data.sliceDb);
   return m;
 }
 
@@ -1412,6 +1438,9 @@ export function candidateToReplayConfig(
       : c.meanrev,
     warmupDays: m.window.warmupDays,
     dbPath: dbPathOverride ?? m.data.dbPath,
+    // §12-septies G0: runtime-only slice-DB path (excluded from
+    // hashReplayConfig alongside dbPath; absent = legacy).
+    sliceDbPath: m.data.sliceDb,
   };
 }
 
@@ -2182,7 +2211,10 @@ export function writeOutputs(
  */
 export function manifestIdentity(m: ExperimentManifest, preResolvedAsOfMs?: number): unknown {
   const { trialLedger, approved, ...rest } = m;
-  const { dbPath: _dbPath, ...semanticData } = rest.data;
+  // dbPath AND sliceDb are machine-local paths (runtime-only): both excluded.
+  // sliceDb was never set by any legacy manifest, so every pre-existing
+  // configHash is byte-identical.
+  const { dbPath: _dbPath, sliceDb: _sliceDb, ...semanticData } = rest.data;
 
   // Resolve asOf to exact epoch
   const asOfMs = preResolvedAsOfMs ?? resolveAsOf(m);
@@ -2237,7 +2269,7 @@ export async function runWalkForward(
     const folds = generateFolds(m.window, asOfMs);
     const sleeve = manifestToSleeve(m);
     const replayToMs = folds[folds.length - 1].test.toMs;
-    const dataHash = await hashDataSnapshot(
+    const barsDataHash = await hashDataSnapshot(
       snapshotPath,
       sleeve,
       Date.parse(m.window.from),
@@ -2245,6 +2277,12 @@ export async function runWalkForward(
       m.window.warmupDays,
       m.data.membership,
     );
+    // §12-septies G0: the 15:45-slice rows are consumed data, so they are
+    // part of the run's data identity. Legacy manifests (no sliceDb) keep
+    // dataHash = the bars hash, byte-identical.
+    const dataHash = m.data.sliceDb
+      ? hashString(canonicalJson({ bars: barsDataHash, closeSlices: hashCloseSlices(m.data.sliceDb) }))
+      : barsDataHash;
     // Data or code corrections must never overwrite evidence from an older run.
     const manifestHash = runIdentityHash(configHash, dataHash, codeHash);
     const outputDir = join("data", "backtests", manifestHash);

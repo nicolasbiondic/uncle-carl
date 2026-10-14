@@ -1,0 +1,57 @@
+{
+  "name": "crypto-drop-reversal-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTRO H, V-plan 12-septies @ 0394628, ANTES de correr. Compra idiosincratica horaria: z=ln(close_t/close_t-1)/sd muestral de retornos horarios en [t-720h,t), >=600 validos de horas consecutivas (t excluida); z<=-k y BTCUSDT z>-2 (benchmark fijo incluso en LOO). 5 slots largos, slot equity/5, sin stop ni resize, bruto <=1x: el ultimo slot se recorta al efectivo disponible despues de costes. Fill close_t con costes aditivos como A; salida close_t+h. Sin barra de salida, diferir al primer cierre fresco; delist al ultimo precio tras 24h sin barra (A), excepciones reportadas. No abrir si h termina fuera del fold. Funding fresco <=9h en la decision, settlement +60s (A); funding ausente mientras se mantiene=0 optimista (A/F). Campos: entryPct=k (3/4), exitPct=h horas (4/12), cadenceMin=60, lookbackDays=30, maxLongs=5, maxShorts=0, notionalPctPerSlot=0.2, ledger leverage/hardStopPct INERTES. Universo, ventana, asOf, folds, warmup, costes y bloque acceptance exactos de A. BTC invalido bloquea. Kernel scripts/crypto-drop-replay.ts opt-in del simulador A; driver scripts/crypto-drop-wf.ts reutiliza criterios de A. LOO completo como A. Capital 1600, priorUniqueTrials 380, 4 hipotesis ->384. Nada vivo.",
+  "trialAccounting": { "priorUniqueTrials": 380, "complete": false },
+  "data": {
+    "dbPath": "$UC_RESEARCH_DATA_DIR/hist-perps.db",
+    "source": "binance_vision_um",
+    "timeframe": "1h",
+    "universe": [
+      "1000BONKUSDT", "1000FLOKIUSDT", "1000LUNCUSDT", "1000PEPEUSDT", "1000RATSUSDT", "1000SATSUSDT", "1000SHIBUSDT", "1INCHUSDT", "1MBABYDOGEUSDT", "4USDT",
+      "AAVEUSDT", "ACEUSDT", "ACHUSDT", "ACTUSDT", "AERGOUSDT", "AEVOUSDT", "AGIXUSDT", "AI16ZUSDT", "AIAUSDT", "AIOTUSDT", "AIXBTUSDT", "AKEUSDT", "ALCHUSDT", "ALGOUSDT", "ALICEUSDT", "ALLOUSDT", "ALPACAUSDT", "ALPHAUSDT", "ALTUSDT", "ANIMEUSDT", "ANKRUSDT", "ANTUSDT", "APEUSDT", "API3USDT", "APRUSDT", "APTUSDT", "ARBUSDT", "ARCUSDT", "ARIAUSDT", "ARKUSDT", "ARPAUSDT", "ARUSDT", "ASTERUSDT", "ATOMUSDT", "AUCTIONUSDT", "AUDIOUSDT", "AVNTUSDT", "AXSUSDT",
+      "BABYUSDT", "BAKEUSDT", "BANANAS31USDT", "BANDUSDT", "BANKUSDT", "BARDUSDT", "BASEDUSDT", "BASUSDT", "BATUSDT", "BBUSDT", "BCHUSDT", "BEATUSDT", "BELUSDT", "BERAUSDT", "BICOUSDT", "BIGTIMEUSDT", "BILLUSDT", "BIOUSDT", "BLESSUSDT", "BLURUSDT", "BLZUSDT", "BNBUSDT", "BNTUSDT", "BNXUSDT", "BOMEUSDT", "BONDUSDT", "BREVUSDT", "BSBUSDT", "BTCUSDT", "BTRUSDT", "BTTUSDT", "BTWUSDT", "BULLAUSDT", "BUSDT", "BZRXUSDT",
+      "C98USDT", "CAKEUSDT", "CELOUSDT", "CELRUSDT", "CFXUSDT", "CHRUSDT", "CHZUSDT", "CKBUSDT", "CLOUSDT", "COAIUSDT", "COCOSUSDT", "COMPUSDT", "COTIUSDT", "CRVUSDT", "CTSIUSDT", "CYBERUSDT", "CYSUSDT",
+      "DASHUSDT", "DEGOUSDT", "DENTUSDT", "DEXEUSDT", "DIAUSDT", "DOGSUSDT", "DOTUSDT", "DUSKUSDT", "DYDXUSDT", "DYMUSDT",
+      "EDENUSDT", "EDGEUSDT", "EDUUSDT", "EGLDUSDT", "EIGENUSDT", "ENAUSDT", "ENJUSDT", "ENSOUSDT", "ENSUSDT", "EOSUSDT", "ESPORTSUSDT", "ETCUSDT", "ETHFIUSDT", "EVAAUSDT",
+      "FARTCOINUSDT", "FETUSDT", "FHEUSDT", "FIDAUSDT", "FILUSDT", "FLMUSDT", "FLOWUSDT", "FOGOUSDT", "FOLKSUSDT", "FRONTUSDT", "FTMUSDT", "FTTUSDT", "FUNUSDT",
+      "GALAUSDT", "GALUSDT", "GASUSDT", "GIGGLEUSDT", "GMTUSDT", "GOATUSDT", "GRTUSDT", "GTCUSDT", "GUNUSDT",
+      "HAEDALUSDT", "HBARUSDT", "HEIUSDT", "HEMIUSDT", "HIFIUSDT", "HIGHUSDT", "HIVEUSDT", "HNTUSDT", "HOMEUSDT", "HOOKUSDT", "HOTUSDT", "HUSDT", "HYPERUSDT", "HYPEUSDT",
+      "ICPUSDT", "ICXUSDT", "IDUSDT", "IMXUSDT", "INITUSDT", "INJUSDT", "IOSTUSDT", "IOTXUSDT", "IOUSDT", "IPUSDT",
+      "JASMYUSDT", "JELLYJELLYUSDT", "JTOUSDT", "JUPUSDT", "KAITOUSDT", "KATUSDT", "KAVAUSDT", "KEEPUSDT", "KGENUSDT", "KITEUSDT", "KLAYUSDT", "KNCUSDT", "KSMUSDT",
+      "LABUSDT", "LAUSDT", "LAYERUSDT", "LDOUSDT", "LENDUSDT", "LEVERUSDT", "LIGHTUSDT", "LINAUSDT", "LINEAUSDT", "LITUSDT", "LOOMUSDT", "LPTUSDT", "LQTYUSDT", "LRCUSDT", "LTCUSDT", "LUNA2USDT", "LUNAUSDT", "LYNUSDT",
+      "MAGICUSDT", "MANAUSDT", "MANTAUSDT", "MASKUSDT", "MATICUSDT", "MEMEUSDT", "MEUSDT", "MEWUSDT", "MINAUSDT", "MKRUSDT", "MMTUSDT", "MOODENGUSDT", "MOVEUSDT", "MTLUSDT", "MUSDT", "MYXUSDT",
+      "NEARUSDT", "NEIROETHUSDT", "NEIROUSDT", "NEOUSDT", "NIGHTUSDT", "NMRUSDT", "NOMUSDT", "NOTUSDT",
+      "OCEANUSDT", "OGNUSDT", "OMGUSDT", "OMUSDT", "ONDOUSDT", "ONEUSDT", "ONGUSDT", "ONTUSDT", "OPENUSDT", "OPUSDT", "ORCAUSDT", "ORDIUSDT",
+      "PENDLEUSDT", "PENGUUSDT", "PEOPLEUSDT", "PERPUSDT", "PIEVERSEUSDT", "PIPPINUSDT", "PIXELUSDT", "PLAYUSDT", "PNUTUSDT", "POLYXUSDT", "POPCATUSDT", "POWERUSDT", "POWRUSDT", "PROMPTUSDT", "PROMUSDT", "PROVEUSDT", "PUMPUSDT", "PYTHUSDT", "QTUMUSDT",
+      "RAREUSDT", "RAVEUSDT", "REDUSDT", "REEFUSDT", "RENUSDT", "RESOLVUSDT", "REUSDT", "RIFUSDT", "RIVERUSDT", "RLCUSDT", "RNDRUSDT", "ROBOUSDT", "ROSEUSDT", "RSRUSDT", "RUNEUSDT", "RVNUSDT",
+      "SAGAUSDT", "SAHARAUSDT", "SANDUSDT", "SEIUSDT", "SENTUSDT", "SFPUSDT", "SIGNUSDT", "SIRENUSDT", "SKLUSDT", "SKYAIUSDT", "SLXUSDT", "SNXUSDT", "SOMIUSDT", "SOONUSDT", "SPACEUSDT", "SPELLUSDT", "SPKUSDT", "SPXUSDT", "SRMUSDT", "STGUSDT", "STMXUSDT", "STORJUSDT", "STOUSDT", "STRAXUSDT", "STRKUSDT", "STXUSDT", "SUIUSDT", "SUNUSDT", "SUSHIUSDT", "SWARMSUSDT", "SXPUSDT", "SYNUSDT",
+      "TAOUSDT", "TAUSDT", "THETAUSDT", "TIAUSDT", "TLMUSDT", "TNSRUSDT", "TOMOUSDT", "TONUSDT", "TRBUSDT", "TROYUSDT", "TRUMPUSDT", "TRUUSDT", "TRXUSDT", "TSTUSDT", "TURBOUSDT", "TUTUSDT",
+      "UBUSDT", "UMAUSDT", "UNFIUSDT", "UNIUSDT", "USUALUSDT", "UXLINKUSDT", "VANRYUSDT", "VELVETUSDT", "VETUSDT", "VINEUSDT", "VIRTUALUSDT", "VOXELUSDT", "VVVUSDT",
+      "WAVESUSDT", "WCTUSDT", "WETUSDT", "WIFUSDT", "WLDUSDT", "WLFIUSDT", "WUSDT", "XAIUSDT", "XLMUSDT", "XMRUSDT", "XPLUSDT", "XTZUSDT", "XVGUSDT", "YFIIUSDT", "YFIUSDT", "YGGUSDT", "ZBTUSDT", "ZECUSDT", "ZENUSDT", "ZEREBROUSDT", "ZILUSDT", "ZKUSDT", "ZROUSDT", "ZRXUSDT"
+    ],
+    "refSymbol": "BTCUSDT", "rthOnly": false, "funding": true, "barMinutes": 60, "barMinutesEq": 60
+  },
+  "asOf": "2026-10-01T00:00:00Z",
+  "window": { "from": "2020-09-01", "to": "2026-10-01", "outerFoldCount": 3, "innerFoldCount": 3, "purgeYears": 0.25, "warmupDays": 60 },
+  "costs": { "base": { "slippageBps": 5, "commissionBps": 4 }, "stress": { "slippageBps": 10, "commissionBps": 8 } },
+  "ledger": { "initialEquity": 1600, "leverage": 2, "hardStopPct": 0.04 },
+  "candidates": [
+    { "name": "drop-k3-h4", "cadenceMin": 60, "lookbackDays": 30, "entryPct": 3, "exitPct": 4, "maxLongs": 5, "maxShorts": 0, "notionalPctPerSlot": 0.2 },
+    { "name": "drop-k3-h12", "cadenceMin": 60, "lookbackDays": 30, "entryPct": 3, "exitPct": 12, "maxLongs": 5, "maxShorts": 0, "notionalPctPerSlot": 0.2 },
+    { "name": "drop-k4-h4", "cadenceMin": 60, "lookbackDays": 30, "entryPct": 4, "exitPct": 4, "maxLongs": 5, "maxShorts": 0, "notionalPctPerSlot": 0.2 },
+    { "name": "drop-k4-h12", "cadenceMin": 60, "lookbackDays": 30, "entryPct": 4, "exitPct": 12, "maxLongs": 5, "maxShorts": 0, "notionalPctPerSlot": 0.2 }
+  ],
+  "acceptance": {
+    "minSharpe": 1.0, "maxDrawdown": 0.25, "minTotalReturn": 0, "maxConcentration": 0.6, "minTrades": 100,
+    "stressMinSharpe": 0.5, "stressMaxDrawdown": 0.35, "stressMinTotalReturn": -0.3,
+    "looMinSharpe": 0.5, "looMaxDrawdown": 0.3, "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95, "minFoldsPsrAbove": { "threshold": 0.5, "count": 2 }, "minBreakEvenSlippageBps": 23
+  },
+  "liveArtifacts": [
+    "5f03d68daed8572ebb73d5c283dfd80ec1064d5b47e8afb9c1f871d8537f091d",
+    "624d50e930d47ef55e42f16e6537e0e895dec847fb0b709c26b2ecd94ea37db7",
+    "06e1a160c3556102aa2fff769f9e4c2a3d27d09a6f3874841286426425faf6e4",
+    "413ffb90cd968bfdfe51f1b1eebc87612f262ce9ecb7d2ca82fd59383a704625"
+  ]
+}

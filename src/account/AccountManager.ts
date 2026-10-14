@@ -27,7 +27,6 @@
 //       market data, per-account views).
 // ══════════════════════════════════════════════
 
-import { v4 as uuid } from "uuid";
 import { getEnabledStocks, getEnabledCrypto } from "../config/symbols";
 import {
   RISK_PROFILES, ALL_PROFILE_IDS, MOMENTUM_STOCKS_UNIVERSE,
@@ -1861,7 +1860,7 @@ export class AccountManager {
           }
           const now = Date.now();
           insertTrade({
-            id: uuid(),
+            id: crypto.randomUUID(),
             symbol: bp.symbol,
             market: "stock",
             side: bp.side,

@@ -175,7 +175,7 @@ export class MeanRevRetryController {
       readFileSync: (p: string, enc: string) => string;
       writeFileSync: (p: string, data: string) => void;
       renameSync: (old: string, neu: string) => void;
-    } = { existsSync, readFileSync, writeFileSync, renameSync },
+    } = { existsSync, readFileSync: (p, enc) => readFileSync(p, enc as BufferEncoding), writeFileSync, renameSync },
   ) {
     this.policy = { ...DEFAULT_MEANREV_RETRY_POLICY, ...policy };
     this.state = this.load();

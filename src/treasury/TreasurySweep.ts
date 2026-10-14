@@ -48,7 +48,6 @@ import { isUnknownOrder, type UnknownOrderResult } from "../executor/executionPo
 import { isTreasurySymbol, TREASURY_SYMBOLS } from "./treasurySymbols";
 import type { Order, Signal } from "../utils/types";
 import { createLogger } from "../utils/logger";
-import { v4 as uuid } from "uuid";
 
 export { TREASURY_SYMBOLS, isTreasurySymbol };
 
@@ -169,7 +168,7 @@ export class TreasurySweep {
 
   private signal(side: "buy" | "sell", price: number, nowMs: number, reason: string): Signal {
     return {
-      id: uuid(),
+      id: crypto.randomUUID(),
       symbol: this.cfg.symbol,
       market: "stock",
       side,

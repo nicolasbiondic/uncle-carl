@@ -73,6 +73,24 @@ const MIN_ORDER_USD = 1;
 
 export type XslsReplayResult = ReplayResult & { orders: number; ordersPerDay: number };
 
+/** H-only execution overlay. Absent: A/F2's result and cash path are unchanged. */
+export interface HourlyDropSpec {
+  threshold: number;
+  holdHours: number;
+  zAt: (times: number[], closes: number[], index: number) => number | null;
+}
+
+export interface DropDiagnostics {
+  signals: number;
+  btcBlocked: number;
+  btcUnavailable: number;
+  fundingBlocked: number;
+  capacityBlocked: number;
+  boundaryBlocked: number;
+  delayedExits: number;
+  rebound: Array<{ hour: number; count: number; sum: number }>;
+}
+
 interface SymbolSeries {
   closeTimes: number[]; // bar close times (open_time + 1h), ascending
   closes: number[];
@@ -84,7 +102,10 @@ interface DataStore {
   series: Map<string, SymbolSeries>;
   membership: MonthMembership[];
   membershipByMonth: Map<string, string[]>;
+  dropSignals?: Map<HourlyDropSpec["zAt"], Map<number, Map<number, DropEntry[]>>>;
 }
+
+interface DropEntry { sym: string; z: number; price: number }
 
 const stores = new Map<string, DataStore>();
 
@@ -140,6 +161,38 @@ function idxAtOrBefore(arr: number[], t: number): number {
   return ans;
 }
 
+/** Full LOO reuses the same causal signals, not a billion duplicate z
+ * evaluations. Universe/positions/funding/costs remain replay-time filters.
+ * Building from loaded future rows is safe: zAt[i] is prefix-only and a
+ * candidate is indexed only at its own close time and PIT membership month.
+ */
+function dropSignals(dbPath: string, store: DataStore, spec: HourlyDropSpec): Map<number, DropEntry[]> {
+  const cache = store.dropSignals ??= new Map();
+  let byThreshold = cache.get(spec.zAt);
+  if (!byThreshold) { byThreshold = new Map(); cache.set(spec.zAt, byThreshold); }
+  let signals = byThreshold.get(spec.threshold);
+  if (signals) return signals;
+  signals = new Map();
+  for (const membership of store.membership) {
+    const date = new Date(membership.startMs);
+    const end = Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1);
+    for (const sym of membership.symbols) {
+      if (sym === "BTCUSDT") continue;
+      const s = loadSeries(dbPath, store, sym);
+      for (let i = idxAtOrBefore(s.closeTimes, membership.startMs - 1) + 1; i < s.closeTimes.length && s.closeTimes[i] < end; i++) {
+        const z = spec.zAt(s.closeTimes, s.closes, i);
+        if (z === null || z > -spec.threshold) continue;
+        const t = s.closeTimes[i];
+        const entries = signals.get(t) ?? [];
+        entries.push({ sym, z, price: s.closes[i] });
+        signals.set(t, entries);
+      }
+    }
+  }
+  byThreshold.set(spec.threshold, signals);
+  return signals;
+}
+
 interface Position {
   qty: number; // signed base quantity
   entryAt: number;
@@ -162,12 +215,19 @@ export async function runXslsReplay(
   cfg: ReplayConfig,
   win: { label: string; from: string; to: string },
   _initialRiskState?: RiskState, // no RiskGuard in this kernel — chain state is a no-op by design
-  opts?: { signal?: XslsSignal },
+  opts?: { signal?: XslsSignal; hourlyDrop?: HourlyDropSpec },
 ): Promise<ReplayResult | null> {
   const signal: XslsSignal = opts?.signal ?? "priceMomentum";
+  const drop = opts?.hourlyDrop;
+  const dropDiagnostics: DropDiagnostics | undefined = drop ? {
+    signals: 0, btcBlocked: 0, btcUnavailable: 0, fundingBlocked: 0,
+    capacityBlocked: 0, boundaryBlocked: 0, delayedExits: 0,
+    rebound: Array.from({ length: drop.holdHours }, (_, i) => ({ hour: i + 1, count: 0, sum: 0 })),
+  } : undefined;
   const fromMs = Date.parse(win.from);
   const toMs = Date.parse(win.to);
   const store = getStore(cfg.dbPath!);
+  const signals = drop ? dropSignals(cfg.dbPath!, store, drop) : undefined;
   const universe = new Set(cfg.universe);
   const k = Math.min(cfg.maxLongs, cfg.maxShorts);
   const lookbackMs = (cfg.lookbackDays ?? 7) * DAY;
@@ -314,6 +374,20 @@ export async function runXslsReplay(
         }
         fundingPtr.set(sym, p);
       }
+      if (drop && s.closeTimes[i] === t) {
+        const elapsed = (t - pos.entryAt) / HOUR;
+        const rebound = dropDiagnostics!.rebound[elapsed - 1];
+        if (rebound) {
+          rebound.count++;
+          rebound.sum += pos.lastPrice / pos.entryPrice - 1;
+        }
+        if (elapsed >= drop.holdHours) {
+          if (elapsed > drop.holdHours) dropDiagnostics!.delayedExits++;
+          fill(sym, -pos.qty, pos.lastPrice, t, "time_exit");
+          fundingPtr.delete(sym);
+          continue;
+        }
+      }
       // delisted while held?
       if (t - pos.lastBarClose >= DELIST_MS) {
         fill(sym, -pos.qty, pos.lastPrice, t, "delist");
@@ -340,6 +414,41 @@ export async function runXslsReplay(
     // 3) rebalance on the cadence grid
     if (t % cadenceMs !== 0) continue;
     const members = store.membershipByMonth.get(monthKey(t)) ?? [];
+    if (drop) {
+      // BTC is a fixed benchmark, not cfg.refSymbol (LOO may rewrite that).
+      const btc = loadSeries(cfg.dbPath!, store, "BTCUSDT");
+      const bi = idxAtOrBefore(btc.closeTimes, t);
+      const btcZ = bi >= 0 && btc.closeTimes[bi] === t ? drop.zAt(btc.closeTimes, btc.closes, bi) : null;
+      const entries: DropEntry[] = [];
+      for (const entry of signals!.get(t) ?? []) {
+        const { sym } = entry;
+        if (!universe.has(sym) || sym === "BTCUSDT" || positions.has(sym)) continue;
+        const s = loadSeries(cfg.dbPath!, store, sym);
+        dropDiagnostics!.signals++;
+        if (btcZ === null) { dropDiagnostics!.btcUnavailable++; continue; }
+        if (btcZ <= -2) { dropDiagnostics!.btcBlocked++; continue; }
+        // Freshness is fail-closed at entry only. Gaps while held retain
+        // A/F's optimistic zero-funding convention, not invented rates.
+        const fi = idxAtOrBefore(s.fundingTimes, t + FUNDING_EPS_MS);
+        if (cfg.funding && (fi < 0 || t - s.fundingTimes[fi] > 9 * HOUR)) {
+          dropDiagnostics!.fundingBlocked++;
+          continue;
+        }
+        if (t + drop.holdHours * HOUR >= toMs) { dropDiagnostics!.boundaryBlocked++; continue; }
+        entries.push(entry);
+      }
+      entries.sort((a, b) => a.z - b.z || a.sym.localeCompare(b.sym));
+      const free = Math.max(0, cfg.maxLongs - positions.size);
+      dropDiagnostics!.capacityBlocked += Math.max(0, entries.length - free);
+      const slot = equity * cfg.notionalPctPerSlot;
+      for (const entry of entries.slice(0, free)) {
+        // Long-only cash reserve also enforces gross <= equity AFTER fees;
+        // no leverage, resizing, early exits or lookahead cap liquidation.
+        const notional = Math.min(slot, Math.max(0, cash) / (1 + costPerSide));
+        fill(entry.sym, notional / entry.price, entry.price, t, "drop_entry");
+      }
+      continue;
+    }
     const ranked: Array<{ sym: string; ret: number }> = [];
     for (const sym of members) {
       if (!universe.has(sym)) continue;
@@ -477,5 +586,6 @@ export async function runXslsReplay(
     orders,
     ordersPerDay: orders / days,
   };
+  if (dropDiagnostics) Object.assign(result, { dropDiagnostics });
   return result;
 }

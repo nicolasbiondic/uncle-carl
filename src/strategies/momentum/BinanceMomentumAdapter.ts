@@ -30,7 +30,6 @@ import {
 } from "../../db/database";
 import { eventBus, EVENTS } from "../../utils/events";
 import { createLogger } from "../../utils/logger";
-import { v4 as uuid } from "uuid";
 
 const log = createLogger("BinanceMomentumAdapter");
 
@@ -210,7 +209,7 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
 
     // BinanceExecutor.placeOrder expects a Signal-like input. Build a minimal one.
     const signal = {
-      id: uuid(),
+      id: crypto.randomUUID(),
       symbol: action.symbol,
       market: "crypto" as const,
       side: action.side,

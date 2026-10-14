@@ -71,10 +71,17 @@ import {
 } from "./walk-forward";
 import { loadBars, type ReplayResult, type Sleeve } from "./backtest-momentum-wf";
 import { computeSequenceRisk } from "./lib/sequenceRisk";
-import { hashStConfig, runStReversalReplay, type StReversalConfig, type StReversalParams, type StReversalResult } from "./stocks-reversal-replay";
+import { expandDataPath } from "./lib/researchData";
+import { hashCloseSlices } from "./lib/closeSlices";
+import { hashStConfig, runStReversalReplay, type CloseReversalSpec, type StReversalConfig, type StReversalParams, type StReversalResult } from "./stocks-reversal-replay";
 
 // ── manifest schema ──────────────────────────────────────────────────────
-export interface StCandidate extends StReversalParams { name: string }
+export interface StCandidate extends StReversalParams {
+  name: string;
+  /** §12-septies line G (OPT-IN; absent = the exact line-B/B2 candidate AND
+   *  its legacy hash). See CloseReversalSpec in stocks-reversal-replay.ts. */
+  closeReversal?: CloseReversalSpec;
+}
 
 export interface StManifest {
   name: string;
@@ -90,6 +97,11 @@ export interface StManifest {
     membership: { index: string; exclude: string[] };
     corrLookbackSessions: number;
     sectorRefreshSessions: number;
+    /** 15:45-slice database (§12-septies G — required when any candidate
+     *  sets closeReversal). "$UC_RESEARCH_DATA_DIR/…" is expanded at use;
+     *  runtime-only (never hashed as a path — the slice ROWS enter the data
+     *  identity via hashCloseSlices). */
+    sliceDb?: string;
   };
   asOf: string; // pinned ISO timestamp (no "latest" — pre-registered identity)
   window: WindowConfig;
@@ -121,7 +133,46 @@ export interface StManifest {
   };
 }
 
-const CANDIDATE_KEYS = new Set(["name", "lookbackDays", "holdDays", "residual", "slotsPerSide"]);
+const CANDIDATE_KEYS = new Set(["name", "lookbackDays", "holdDays", "residual", "slotsPerSide", "closeReversal"]);
+
+/** Strict shape check for a CloseReversalSpec (§12-septies G) — an unknown
+ *  key would be silently dropped (config that changes nothing). */
+function validateCloseReversal(cr: unknown, name: string): void {
+  if (!cr || typeof cr !== "object" || Array.isArray(cr)) throw new Error(`candidate ${name}: closeReversal must be an object`);
+  const obj = cr as Record<string, unknown>;
+  const allowed = ["entryRsi", "smaLong", "minPrice", "minPriorCloses", "exit", "smaExit", "hardStop", "short"];
+  const unknown = Object.keys(obj).filter(k => !allowed.includes(k));
+  if (unknown.length > 0) throw new Error(`candidate ${name}: closeReversal has unknown keys: ${unknown.join(", ")}`);
+  if (!Number.isFinite(obj.entryRsi) || (obj.entryRsi as number) <= 0 || (obj.entryRsi as number) >= 100) throw new Error(`candidate ${name}: closeReversal.entryRsi must be in (0, 100)`);
+  if (!Number.isInteger(obj.smaLong) || (obj.smaLong as number) < 2) throw new Error(`candidate ${name}: closeReversal.smaLong must be an integer >= 2`);
+  if (!Number.isFinite(obj.minPrice) || (obj.minPrice as number) < 0) throw new Error(`candidate ${name}: closeReversal.minPrice must be >= 0`);
+  if (!Number.isInteger(obj.minPriorCloses) || (obj.minPriorCloses as number) < (obj.smaLong as number) + 1) {
+    throw new Error(`candidate ${name}: closeReversal.minPriorCloses must be an integer >= smaLong + 1`);
+  }
+  if (obj.exit !== "nextOpen" && obj.exit !== "nextClose" && obj.exit !== "sma5") throw new Error(`candidate ${name}: closeReversal.exit must be "nextOpen" | "nextClose" | "sma5"`);
+  if (obj.exit === "sma5") {
+    if (!Number.isInteger(obj.smaExit) || (obj.smaExit as number) < 1) throw new Error(`candidate ${name}: closeReversal.smaExit must be a positive integer with exit="sma5"`);
+  } else if (obj.smaExit !== undefined) {
+    throw new Error(`candidate ${name}: closeReversal.smaExit only applies to exit="sma5"`);
+  }
+  if (obj.hardStop !== undefined) {
+    const hs = obj.hardStop as Record<string, unknown>;
+    const hsKeys = ["kSigma", "lookbackBars", "minPct", "maxPct"];
+    const hsUnknown = Object.keys(hs).filter(k => !hsKeys.includes(k));
+    if (hsUnknown.length > 0) throw new Error(`candidate ${name}: closeReversal.hardStop has unknown keys: ${hsUnknown.join(", ")}`);
+    if (!Number.isFinite(hs.kSigma) || (hs.kSigma as number) <= 0) throw new Error(`candidate ${name}: closeReversal.hardStop.kSigma must be positive`);
+    if (!Number.isInteger(hs.lookbackBars) || (hs.lookbackBars as number) < 2) throw new Error(`candidate ${name}: closeReversal.hardStop.lookbackBars must be an integer >= 2`);
+    if (!Number.isFinite(hs.minPct) || (hs.minPct as number) <= 0) throw new Error(`candidate ${name}: closeReversal.hardStop.minPct must be positive (percent-units)`);
+    if (!Number.isFinite(hs.maxPct) || (hs.maxPct as number) < (hs.minPct as number)) throw new Error(`candidate ${name}: closeReversal.hardStop.maxPct must be >= minPct`);
+  }
+  if (obj.short !== undefined) {
+    const sh = obj.short as Record<string, unknown>;
+    const shUnknown = Object.keys(sh).filter(k => k !== "entryRsi");
+    if (shUnknown.length > 0) throw new Error(`candidate ${name}: closeReversal.short has unknown keys: ${shUnknown.join(", ")}`);
+    if (!Number.isFinite(sh.entryRsi) || (sh.entryRsi as number) <= 0 || (sh.entryRsi as number) >= 100) throw new Error(`candidate ${name}: closeReversal.short.entryRsi must be in (0, 100)`);
+    if (obj.exit !== "nextOpen") throw new Error(`candidate ${name}: closeReversal.short requires exit="nextOpen" (§12-septies G4)`);
+  }
+}
 
 export function validateStManifest(m: StManifest): StManifest {
   if (m.sleeve !== "streversal") throw new Error('sleeve must be "streversal"');
@@ -157,6 +208,19 @@ export function validateStManifest(m: StManifest): StManifest {
     if (!Number.isInteger(c.holdDays) || c.holdDays < 1) throw new Error(`candidate ${c.name}: holdDays must be a positive integer`);
     if (c.residual !== "sector" && c.residual !== "none") throw new Error(`candidate ${c.name}: residual must be "sector" or "none"`);
     if (!Number.isInteger(c.slotsPerSide) || c.slotsPerSide < 1) throw new Error(`candidate ${c.name}: slotsPerSide must be a positive integer`);
+    if (c.closeReversal !== undefined) {
+      validateCloseReversal(c.closeReversal, c.name);
+      // The kernel pins the legacy knobs to inert values in this mode.
+      if (c.residual !== "none") throw new Error(`candidate ${c.name}: closeReversal requires residual="none"`);
+      if (c.lookbackDays !== 1) throw new Error(`candidate ${c.name}: closeReversal requires lookbackDays=1 (inert)`);
+    }
+  }
+  // §12-septies G: the slice DB and the closeReversal mode come and go
+  // together (same philosophy as the walk-forward sliceDb check).
+  {
+    const wantsCr = m.candidates.some(c => c.closeReversal !== undefined);
+    if (wantsCr && !m.data.sliceDb) throw new Error("closeReversal candidates require data.sliceDb (the 15:45-slice database)");
+    if (m.data.sliceDb !== undefined && !wantsCr) throw new Error("data.sliceDb set but no candidate uses closeReversal (config that changes nothing)");
   }
   if (!Array.isArray(m.liveArtifacts) || m.liveArtifacts.length === 0) throw new Error("liveArtifacts must list the authoritative live chains");
   const a = m.acceptance;
@@ -199,6 +263,10 @@ export function candidateToStConfig(
     // (line B) stay byte-identical when the manifest doesn't set them.
     sizing: m.ledger.sizing,
     fractionalLongs: m.ledger.fractionalLongs || undefined,
+    // §12-septies G axis: undefined = legacy hash. sliceDbPath is runtime-
+    // only (hashStConfig excludes it) and expanded here.
+    closeReversal: c.closeReversal,
+    sliceDbPath: m.data.sliceDb !== undefined ? expandDataPath(m.data.sliceDb) : undefined,
   };
 }
 
@@ -301,6 +369,7 @@ export async function runStWalkForward(
     "bun.lock",
     "package.json",
     "scripts/backtest-momentum-wf.ts",
+    "scripts/lib/closeSlices.ts",
     "scripts/lib/membership.ts",
     "scripts/lib/sequenceRisk.ts",
     "scripts/stocks-reversal-replay.ts",
@@ -309,6 +378,8 @@ export async function runStWalkForward(
     "src/db/database.ts",
     "src/portfolio/trackRecord.ts",
     "src/reports/metrics.ts",
+    "src/strategies/meanrev/MeanRevEngine.ts",
+    "src/strategies/momentum/MomentumEngine.ts",
     "src/utils/marketHours.ts",
   ].sort());
 
@@ -329,9 +400,14 @@ export async function runStWalkForward(
       rthOnly: false,
       funding: false,
     } as unknown as Sleeve;
-    const dataHash = await hashDataSnapshot(
+    const barsDataHash = await hashDataSnapshot(
       snapshotPath, sleeveLike, Date.parse(m.window.from), replayToMs, m.window.warmupDays, m.data.membership,
     );
+    // §12-septies G: the 15:45-slice rows are consumed data — part of the
+    // run's data identity. Absent sliceDb = legacy dataHash, byte-identical.
+    const dataHash = m.data.sliceDb
+      ? hashString(canonicalJson({ bars: barsDataHash, closeSlices: hashCloseSlices(expandDataPath(m.data.sliceDb)) }))
+      : barsDataHash;
     const identity = (() => {
       const { ...rest } = m;
       return {

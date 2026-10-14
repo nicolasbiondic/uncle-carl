@@ -27,7 +27,6 @@ import { RISK_PROFILES, type RiskProfileId } from "../../config/riskProfiles";
 import { createLogger } from "../../utils/logger";
 import { eventBus, EVENTS } from "../../utils/events";
 import { isMarketOpen } from "../../utils/marketHours";
-import { v4 as uuid } from "uuid";
 
 const log = createLogger("AlpacaMomentumAdapter");
 
@@ -163,7 +162,7 @@ export class AlpacaMomentumAdapter implements MomentumBrokerAdapter {
     if (qty <= 0) return { ok: false, reason: "computed qty < 1 share" };
 
     const signal: Signal = {
-      id: uuid(),
+      id: crypto.randomUUID(),
       symbol: action.symbol,
       market: "stock",
       side: action.side,

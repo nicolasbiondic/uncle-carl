@@ -30,7 +30,6 @@ import { getDB, insertTrade, insertSignal, insertOrder, closeTradeExplicit, accu
 import { eventBus, EVENTS } from "../../utils/events";
 import { createLogger } from "../../utils/logger";
 import { fetchT } from "../../utils/timeout";
-import { v4 as uuid } from "uuid";
 
 const log = createLogger("BinanceCoinMMomentumAdapter");
 
@@ -129,7 +128,7 @@ export class BinanceCoinMMomentumAdapter implements MomentumBrokerAdapter {
     const contracts = computeContracts(action.notionalUsd, filters.contractSize);
     if (contracts <= 0) return { ok: false, reason: "computed contracts <= 0" };
 
-    const intentId = uuid();
+    const intentId = crypto.randomUUID();
     const signal = {
       id: intentId,
       symbol: action.symbol,
@@ -449,7 +448,7 @@ export class BinanceCoinMMomentumAdapter implements MomentumBrokerAdapter {
 
     const filters = await this.executor.getFilters(COINM_INTERNAL_SYMBOL);
     const contracts = Math.abs(live.positionAmt);
-    const intentId = uuid();
+    const intentId = crypto.randomUUID();
 
     // Snapshot the owned stop(s) actually protecting this position BEFORE
     // the close — the exact reconcile target for the post-close cleanup

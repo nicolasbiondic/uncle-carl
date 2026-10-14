@@ -1058,6 +1058,73 @@ describe("historical hypothesis ledger", () => {
     }
   });
 
+  test("line H claims preserve the closed preregistration and count exactly four trials (380->384)", () => {
+    const h = JSON.parse(readFileSync(join(root, "experiments/crypto-drop-reversal-v1.json"), "utf8"));
+    const a = JSON.parse(readFileSync(join(root, "experiments/crypto-xsls-v1.json"), "utf8"));
+    expect(h.trialAccounting).toEqual({ priorUniqueTrials: 380, complete: false });
+    expect(h.candidates.map((c: any) => `${c.entryPct}/${c.exitPct}`).sort()).toEqual(["3/12", "3/4", "4/12", "4/4"]);
+    for (const c of h.candidates) {
+      expect(c.maxLongs).toBe(5); expect(c.maxShorts).toBe(0);
+      expect(c.notionalPctPerSlot).toBe(0.2); expect(c.cadenceMin).toBe(60);
+    }
+    for (const k of ["data", "window", "costs", "acceptance", "asOf"]) expect(h[k]).toEqual(a[k]);
+    expect(h.ledger.initialEquity).toBe(1600);
+    const batch = ledger.batches.find((b: any) => b.id === "crypto-drop-reversal-linea-h-2026-10-14");
+    expect(batch).toMatchObject({ hypothesisCount: 4, priorUniqueTrials: 380, resultingUniqueTrials: 384,
+      inventoryComplete: false, resultsComplete: false, executionReported: true });
+    expect(batch.sourceCommit).toContain("5961abc");
+    const art = ledger.authoritativeArtifactCryptoDropReversal;
+    expect(art.verdict).toContain("REFUTADO"); expect(art.verdict).toContain("NO SE CABLEA");
+    expect(art.cryptoDropReversal.sharpe).toBeLessThan(0);
+    expect(art.cryptoDropReversal.stressSharpe).toBeLessThan(0);
+    expect(art.cryptoDropReversal.maxDrawdownPct).toBeGreaterThan(25);
+    expect(art.cryptoDropReversal.breakEvenSlippageBps).toBeLessThan(23);
+    expect(art.cryptoDropReversal.exTopDecileSharpe).toBeLessThan(0.5);
+  });
+
+  // Source DB (not artifact presence) gates the evidence check: deleting H's
+  // evidence on this research host must fail, while clean CI can skip it.
+  const withPerpsDb = existsSync(researchDataPath("hist-perps.db")) && researchDbExists ? test : test.skip;
+  withPerpsDb("line H artifact reproduces ledger numbers, BTC blocks and exact exit times", () => {
+    const art = ledger.authoritativeArtifactCryptoDropReversal;
+    const dir = join(root, art.path);
+    const s = JSON.parse(readFileSync(join(dir, "summary.json"), "utf8"));
+    const c = JSON.parse(readFileSync(join(dir, "lineH-criteria.json"), "utf8")).criteria;
+    const d = JSON.parse(readFileSync(join(dir, "lineH-diagnostics.json"), "utf8"));
+    expect({
+      outerFoldReturnsPct: s.outerTests.map((t: any) => round2(t.result.totalReturn * 100)),
+      stitchedReturnPct: round2(s.stitchedOos.totalReturn * 100), sharpe: round3(s.stitchedOos.sharpe),
+      stressSharpe: round3(s.acceptance.stressMinSharpe.value), maxDrawdownPct: round2(s.stitchedOos.maxDrawdown * 100),
+      outerPsr: round3(s.outerPsr), trades: s.stitchedOos.trades,
+      orders: c.c8_ordersPerDay.orders, ordersPerDayOos: round2(c.c8_ordersPerDay.ordersPerDay),
+      breakEvenSlippageBps: round2(s.breakEvenSlippageBps), corrVsCombined: round3(c.c5_correlation.corrVsCombined),
+      exTopDecileSharpe: round3(c.c7_robustness.exTopDecile.sharpe), maxYearPnlShare: round3(c.c7_robustness.maxYearShare),
+      signals: d.diagnostics.reduce((sum: number, p: any) => sum + p.signals, 0),
+      btcBlocked: d.diagnostics.reduce((sum: number, p: any) => sum + p.btcBlocked, 0),
+      delayedExits: d.diagnostics.reduce((sum: number, p: any) => sum + p.delayedExits, 0),
+      rebound12hPct: round3(d.rebound.find((r: any) => r.hour === 12).mean * 100),
+      gatesFailed: Object.values(s.acceptance).filter((g: any) => !g.pass).map((g: any) => g.gate).sort(),
+    }).toEqual(art.cryptoDropReversal);
+    expect(s.outerSelection.map((t: any) => t.candidateName)).toEqual(Array(3).fill("drop-k3-h12"));
+    expect(s.loo).toHaveLength(357);
+    expect(s.dataHash).toBe("faaf7c21db5103201801b0aeadc85e013519b2434ac32ef3ab47955bc840ffaf");
+    const records = readFileSync(join(dir, "runs.jsonl"), "utf8").trim().split("\n").map(l => JSON.parse(l));
+    const seen = new Set<string>();
+    let trades = 0;
+    for (const r of records) {
+      if (r.costTier !== "base" || !/^\d+\/test$/.test(r.foldPath) || seen.has(r.foldPath)) continue;
+      seen.add(r.foldPath);
+      for (const t of r.result.closedTrades) {
+        expect(t.exitAt - t.entryAt).toBe(12 * 3_600_000);
+        expect(t.reason).toBe("time_exit"); expect(t.symbol).not.toBe("BTCUSDT");
+        trades++;
+      }
+    }
+    expect(trades).toBe(2297);
+    const pnlSum = Object.values(d.pnlBySymbol).reduce((sum: number, p: any) => sum + p.netPnl, 0);
+    expect(pnlSum).toBeCloseTo(1600 * s.stitchedOos.totalReturn, 8);
+  });
+
   // Line C (intraday SPY/QQQ) reads its own external DB (hist-intraday.db in
   // the research data dir, outside the repo — scripts/lib/researchData.ts),
   // so it needs that DB AND, like every artifact check above, a checkout that
@@ -1100,5 +1167,80 @@ describe("historical hypothesis ledger", () => {
     const { stressSharpe, ...claimsWithoutStress } = claims;
     expect(normalized).toContainEqual(claimsWithoutStress);
     expect(ledger.authoritativeArtifactIntradaySpyQqq.verdict).toContain("REFUTADO");
+  });
+
+  test("lines G0/G close-reversal claims align with the two manifests and both batches (2026-10-14)", () => {
+    const g0 = JSON.parse(readFileSync(join(root, "experiments", "meanrev-close-exec-v1.json"), "utf8"));
+    const g = JSON.parse(readFileSync(join(root, "experiments", "stocks-close-reversal-v1.json"), "utf8"));
+    // Cascade pre-registered in V-plan §12-septies: base 375 (after lines
+    // S/S-bis) → G0 +1 = 376 → G +4 = 380.
+    expect(g0.trialAccounting).toEqual({ priorUniqueTrials: 375, complete: false });
+    expect(g0.candidates).toHaveLength(1);
+    expect(g0.candidates[0].meanrev.execution).toBe("close1545");
+    expect(g0.data.sliceDb).toBe("$UC_RESEARCH_DATA_DIR/hist-sp500-close.db");
+    expect(g.trialAccounting).toEqual({ priorUniqueTrials: 376, complete: false });
+    expect(g.candidates).toHaveLength(4);
+    expect(g.candidates.every((c: any) => c.closeReversal !== undefined)).toBe(true);
+    expect(g.candidates.map((c: any) => c.closeReversal.exit)).toEqual(["nextOpen", "nextClose", "sma5", "nextOpen"]);
+    expect(g.candidates[3].closeReversal.short).toEqual({ entryRsi: 95 });
+    for (const [id, n] of [["meanrev-close-exec-2026-10-14", 1], ["stocks-close-reversal-2026-10-14", 4]] as const) {
+      const batch = ledger.batches.find((b: any) => b.id === id);
+      expect(batch.hypothesisCount).toBe(n);
+      expect(batch.inventoryComplete).toBe(false);
+      expect(batch.resultsComplete).toBe(false);
+      expect(batch.executionReported).toBe(true);
+    }
+    // Verdicts stay honest: G0 flipped to a REFUTATION after the director's
+    // stop-ordering fidelity fix (intraday stops fire BEFORE the 15:45
+    // decision — conservative under unknown low timing): the conservative
+    // chain improves on the control (+0.061 Sharpe, −0.7pp DD) but misses
+    // the pre-registered +0.10 bar. The superseded optimistic chain (which
+    // credited the close to 8 stop-touched trades) passed all 5 — pinned so
+    // the sensitivity of the verdict to execution ordering stays recorded.
+    const g0a = ledger.authoritativeArtifactMeanrevCloseExec;
+    expect(g0a.verdict).toContain("REFUTADO");
+    expect(g0a.verdict).toContain("NO SE CABLEA");
+    const mce = g0a.meanrevCloseExec;
+    expect(mce.sharpe).toBeLessThan(mce.control.sharpe + 0.1); // the failed criterion 2
+    expect(mce.sharpe).toBeGreaterThan(mce.control.sharpe); // still an improvement, honestly short of the bar
+    expect(mce.maxDrawdownPct).toBeLessThanOrEqual(mce.control.maxDrawdownPct + 2);
+    expect(mce.stressSharpe).toBeGreaterThanOrEqual(mce.control.stressSharpe);
+    expect(mce.outerPsr).toBeGreaterThanOrEqual(0.95);
+    expect(mce.supersededOptimistic.sharpe).toBeGreaterThanOrEqual(mce.control.sharpe + 0.1);
+    const ga = ledger.authoritativeArtifactCloseReversal;
+    expect(ga.verdict).toContain("REFUTADO");
+    expect(ga.verdict).toContain("NO SE CABLEA");
+    expect(ga.closeReversal.nightPnlUsd).toBeGreaterThan(0);
+    expect(ga.closeReversal.dayPnlUsd).toBeLessThan(0);
+    expect(ga.closeReversal.g4InnerShortPnlUsd).toBeLessThan(0);
+  });
+
+  testWithDb("lines G0/G artifacts exist on disk and reproduce the ledger claims", () => {
+    const normalize = (s: any) => ({
+      outerFoldReturnsPct: s.outerTests.map((t: { result: { totalReturn: number } }) => round2(t.result.totalReturn * 100)),
+      stitchedReturnPct: round2(s.stitchedOos.totalReturn * 100),
+      sharpe: round3(s.stitchedOos.sharpe),
+      maxDrawdownPct: round2(s.stitchedOos.maxDrawdown * 100),
+      outerPsr: round3(s.outerPsr),
+      trades: s.stitchedOos.trades,
+      gatesFailed: Object.values(s.acceptance).filter((g: any) => !g.pass).map((g: any) => g.gate).sort(),
+    });
+    for (const [key, claimsKey] of [["authoritativeArtifactMeanrevCloseExec", "meanrevCloseExec"], ["authoritativeArtifactCloseReversal", "closeReversal"]] as const) {
+      const art = ledger[key];
+      const claims = art[claimsKey];
+      const expected = {
+        outerFoldReturnsPct: claims.outerFoldReturnsPct,
+        stitchedReturnPct: claims.stitchedReturnPct,
+        sharpe: claims.sharpe,
+        maxDrawdownPct: claims.maxDrawdownPct,
+        outerPsr: claims.outerPsr,
+        trades: claims.trades,
+        gatesFailed: [...claims.gatesFailed].sort(),
+      };
+      const normalized = artifactCandidates(art.path).flatMap(p => {
+        try { return [normalize(JSON.parse(readFileSync(p, "utf8")))]; } catch { return []; }
+      });
+      expect(normalized).toContainEqual(expected);
+    }
   });
 });

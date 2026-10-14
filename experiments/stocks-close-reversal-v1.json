@@ -1,0 +1,99 @@
+{
+  "name": "stocks-close-reversal-v1",
+  "sleeve": "streversal",
+  "description": "PRE-REGISTRADO (2026-10-14, linea G de V-plan SS12-septies, malla CERRADA de 4 por el dueno/director) ANTES de correr ningun trial. CARTERA NUEVA: reversion al cierre en el S&P 500 PIT (universo de B: miembros PIT menos los 43 vivos y los ETF de referencia — la misma lista exclude de stocks-streversal-b2-v1), con la senal Connors decidida a las 15:45 ET: RSI(2) Cutler sobre [cierres previos..., precio de las 15:45] < 5 Y precio de las 15:45 > media de los 200 cierres PREVIOS, precio >= $5, al menos 201 cierres previos; se compran los RSI mas bajos primero, maximo 10 nombres (desempate declarado: simbolo asc — el RSI(2) Cutler empata en 0 a menudo). ENTRADAS en la subasta de cierre del dia de la senal (MOC: fill = cierre +/- coste, acciones enteras fijadas a las 15:45 sobre el precio de las 15:45). TAMANO proporcional al patrimonio en cada decision (marcado al ultimo cierre completado, sin lookahead): slot = patrimonio x 2 / (2 x 10) = patrimonio/10, bruto 1x por lado. CAPITAL SS13: $7,800 libres en Alpaca. COSTES de B: 2 bps/lado base, 5 stress; prestamo de cortos 0.5%/ano base, 1% stress. VENTANA/FOLDS/PROTOCOLO de B2 (2017-01-01 -> 2026-10-01, 6 outer x 3 inner, purga 0.25a, asOf pinado). Datos 15:45: hist-sp500-close.db (raw SIP; p1545_adj = adjClose x raw1545/rawClose, coherencia probada en dias de split); un simbolo sin barra de 15:45 esa sesion no tiene senal esa sesion. MALLA CERRADA de 4 (eje opt-in closeReversal del kernel de B, byte-identico ausente — tests de identidad verdes): G1 'una noche' (compra al cierre, vende en la apertura siguiente); G2 'una sesion' (vende al cierre siguiente; si a las 15:45 sigue entre los 10 con senal se mantiene sin vender y recomprar, hasta 5 sesiones); G3 'salida Connors' (vende al cierre del primer dia cuyo precio de las 15:45 supera la media de 5 — 4 cierres previos + ese precio — o a las 10 sesiones; stop duro por volatilidad de meanrev k3/20d/2-12%, gap en la apertura, intradia al nivel, nunca en la sesion de entrada); G4 'las dos direcciones, una noche' (G1 mas el espejo corto: RSI(2) > 95 y precio < media de 200 vende al cierre y recompra en la apertura siguiente, 10 nombres por lado, prestamo de cortos). CRITERIOS: los comunes 1-8 de SS12 SIN cambios (mismos gates que stocks-streversal-b2-v1). Se reporta: ordenes/dia; reparto noche/dia del P&L en G2 y G3; P&L por pata en G4; senales por sesion (dias con los 10 huecos llenos). TRIAL ACCOUNTING: base 376 (tras G0); 4 candidatos nuevos -> 380. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 376,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/hist-sp500.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "refSymbol": "SPY",
+    "sectorEtfs": ["XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU", "XLV", "XLY"],
+    "membership": {
+      "index": "sp500",
+      "exclude": [
+        "SPY", "QQQ", "IWM", "GLD", "AAPL", "MSFT", "NVDA", "META", "GOOGL", "AMZN", "SMH",
+        "ABBV", "AVGO", "BAC", "CAT", "COST", "CVX", "DIS", "GE", "HD", "HON", "JNJ", "JPM",
+        "KO", "LLY", "MA", "MCD", "MRK", "NFLX", "NKE", "ORCL", "PG", "QCOM", "UNH", "V",
+        "WMT", "XLE", "XLF", "XLI", "XLP", "XLV", "XOM", "SLV"
+      ]
+    },
+    "corrLookbackSessions": 126,
+    "sectorRefreshSessions": 21,
+    "sliceDb": "$UC_RESEARCH_DATA_DIR/hist-sp500-close.db"
+  },
+  "asOf": "2026-10-08T00:00:00Z",
+  "window": {
+    "from": "2017-01-01",
+    "to": "2026-10-01",
+    "outerFoldCount": 6,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": { "perSideBps": 2, "shortBorrowAnnual": 0.005 },
+    "stress": { "perSideBps": 5, "shortBorrowAnnual": 0.01 }
+  },
+  "ledger": {
+    "initialEquity": 7800,
+    "maxGrossMult": 2,
+    "sizing": "equityProportional"
+  },
+  "candidates": [
+    {
+      "name": "g1-overnight",
+      "lookbackDays": 1,
+      "holdDays": 1,
+      "residual": "none",
+      "slotsPerSide": 10,
+      "closeReversal": { "entryRsi": 5, "smaLong": 200, "minPrice": 5, "minPriorCloses": 201, "exit": "nextOpen" }
+    },
+    {
+      "name": "g2-session",
+      "lookbackDays": 1,
+      "holdDays": 5,
+      "residual": "none",
+      "slotsPerSide": 10,
+      "closeReversal": { "entryRsi": 5, "smaLong": 200, "minPrice": 5, "minPriorCloses": 201, "exit": "nextClose" }
+    },
+    {
+      "name": "g3-connors",
+      "lookbackDays": 1,
+      "holdDays": 10,
+      "residual": "none",
+      "slotsPerSide": 10,
+      "closeReversal": {
+        "entryRsi": 5, "smaLong": 200, "minPrice": 5, "minPriorCloses": 201, "exit": "sma5", "smaExit": 5,
+        "hardStop": { "kSigma": 3, "lookbackBars": 20, "minPct": 2, "maxPct": 12 }
+      }
+    },
+    {
+      "name": "g4-bothsides",
+      "lookbackDays": 1,
+      "holdDays": 1,
+      "residual": "none",
+      "slotsPerSide": 10,
+      "closeReversal": { "entryRsi": 5, "smaLong": 200, "minPrice": 5, "minPriorCloses": 201, "exit": "nextOpen", "short": { "entryRsi": 95 } }
+    }
+  ],
+  "liveArtifacts": [
+    { "sleeve": "momentum_stocks", "path": "data/backtests/cb516547be365b7080cb56357a391ae73535aa3db3f83295fe9c935b7a7ed031", "capitalUsd": 50000 },
+    { "sleeve": "meanrev_stocks", "path": "data/backtests/624d50e930d47ef55e42f16e6537e0e895dec847fb0b709c26b2ecd94ea37db7", "capitalUsd": 50000 },
+    { "sleeve": "momentum_crypto", "path": "data/backtests/06e1a160c3556102aa2fff769f9e4c2a3d27d09a6f3874841286426425faf6e4", "capitalUsd": 5000 },
+    { "sleeve": "momentum_crypto_usdc", "path": "data/backtests/413ffb90cd968bfdfe51f1b1eebc87612f262ce9ecb7d2ca82fd59383a704625", "capitalUsd": 5000 }
+  ],
+  "acceptance": {
+    "minSharpe": 1.0,
+    "minOuterPsr": 0.95,
+    "stressMinSharpe": 0.5,
+    "minBreakEvenExtraBpsPerSide": 4,
+    "maxCorrVsLive": 0.30,
+    "maxDrawdown": 0.25,
+    "maxYearPnlShare": 0.50,
+    "exTopDecileMinSharpe": 0.5
+  }
+}

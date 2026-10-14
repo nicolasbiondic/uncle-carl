@@ -32,7 +32,6 @@
 // owns connectivity checks, reentrancy guards and heartbeats.
 // ══════════════════════════════════════════════
 
-import { v4 as uuid } from "uuid";
 import {
   getOpenTrades, closeTrade, closeTradeExplicit, insertTrade, insertActivity,
   updateTradeCloseReason, getDB, isSyncOwned, pnlOf,
@@ -393,7 +392,7 @@ export async function reconcileLinearBinanceSleeve(deps: LinearReconcileDeps, sp
 
     const now = Date.now();
     insertTrade({
-      id: uuid(), symbol: internal, market: "crypto", side, strategy: "SYNC_RECOVERY",
+      id: crypto.randomUUID(), symbol: internal, market: "crypto", side, strategy: "SYNC_RECOVERY",
       entryPrice: p.entryPrice, quantity, entryTime: now, status: "open",
     } as any, spec.accountId);
     acc.positions.set(internal, {

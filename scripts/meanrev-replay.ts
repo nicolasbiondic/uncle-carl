@@ -123,6 +123,7 @@ import type { OHLCV } from "../src/utils/types";
 import { FundingBook, grossCapDiag, hashReplayConfig, seedStopFraction, type ClosedTrade, type HardStopSpec, type ReplayConfig, type ReplayResult, type SeedPosition } from "./backtest-momentum-wf";
 import { isMemberAt, loadMembership, topNByDollarVolume } from "./lib/membership";
 import { getPreviousTradingDay } from "../src/utils/marketHours";
+import { loadCloseSlices, nextCalendarKey, noonEtMs } from "./lib/closeSlices";
 
 /**
  * RSI2-audit passthrough fields (2026-09), declared here via TS declaration
@@ -144,6 +145,36 @@ declare module "./backtest-momentum-wf" {
     /** Passthrough to MeanRevEngineConfig.deterministicTieBreak. Undefined/
      *  false = legacy stable-sort behavior (unchanged hash). */
     deterministicTieBreak?: boolean;
+    /**
+     * §12-septies G0 execution mode (OPT-IN; undefined = the exact legacy
+     * replay AND the legacy hash). "close1545":
+     *   - the SIGNAL series' last value is the session's 15:45 ET price
+     *     (adjusted via cfg.sliceDbPath — see scripts/lib/closeSlices.ts):
+     *     RSI(2), the SMA200 check and the SMA5 exit check all see it;
+     *   - ENTRY fills in the SIGNAL session's closing auction (that day's
+     *     close ± cost), whole shares fixed at 15:45 (floor(slot/p1545));
+     *   - EXITS (SMA_EXIT / TIME_STOP) fill at the decision session's close;
+     *   - the vol-scaled hard stop is unchanged (distance from completed
+     *     closes strictly before the entry session; gap stops at the next
+     *     open, intraday stops never on the entry session itself — the
+     *     position only exists from the close);
+     *   - a symbol with NO 15:45 slice that session has no signal that
+     *     session (entry-ineligible; held positions hold conservatively).
+     * Implemented by shifting the ENGINE clock one session forward so the
+     * synthetic 15:45 bar is the engine's "yesterday" — see runMeanRevReplay.
+     */
+    execution?: "close1545";
+  }
+}
+
+/** G0 output-only extras (declaration merging, additive — never hashed):
+ *  gross night-vs-day P&L split of the close1545 execution mode. */
+declare module "./backtest-momentum-wf" {
+  interface ReplayResult {
+    /** Gross P&L split (price legs only, pre-fee/slippage attribution):
+     *  night = close→next-open legs, day = open→close/exit legs. Present
+     *  only when meanrev.execution === "close1545". */
+    execSplit?: { nightPnl: number; dayPnl: number };
   }
 }
 
@@ -229,6 +260,24 @@ interface SimPosition {
   /** Net funding cash paid since entry (positive = long paid; negative =
    *  credit). Always 0 without a FundingBook — the legacy path. */
   fundingCost: number;
+  /** Session date of the entry fill (close1545 mode only — drives the
+   *  night/day P&L split; undefined on the legacy path and on seeds). */
+  entryDate?: string;
+  /** Real decision timestamp (15:45 ET of the entry session) — close1545
+   *  metadata for ClosedTrade.entryAt (entryTime carries the shifted ENGINE
+   *  clock, which drives the time stop). Undefined on the legacy path. */
+  entryRealTs?: number;
+}
+
+/** Fill context for the close1545 night/day split (see SimMeanRevBroker.book). */
+interface ExitInfo {
+  /** Session date the exit fill printed on. */
+  date: string;
+  /** Where in the session the fill happened: the open (gap stop), the
+   *  close (SMA/TIME/fold_end in close1545 mode), or intraday (stop level). */
+  kind: "open" | "close" | "intraday";
+  /** Raw (pre-slippage) fill price for the intraday kind. */
+  rawPx?: number;
 }
 
 /** Placeholder reason stamped by closePosition until the driver rewrites it
@@ -252,9 +301,14 @@ export class SimMeanRevBroker implements MeanRevBrokerAdapter {
   marginInterestPaid = 0;
   fundingBySymbol = new Map<string, number>();
   /** ET date currently being replayed and its sim timestamp (max in-window
-   *  bar timestamp for the date — same stamp the old replay used). */
+   *  bar timestamp for the date — same stamp the old replay used). In
+   *  close1545 mode dayTs is the ENGINE clock (noon ET of the NEXT session)
+   *  while currentDate stays the session being replayed. */
   currentDate = "";
   dayTs = 0;
+  /** close1545 gross night/day split accumulators (0 on the legacy path). */
+  nightPnl = 0;
+  dayPnl = 0;
 
   private slipIn: number;
   private slipOut: number;
@@ -268,6 +322,9 @@ export class SimMeanRevBroker implements MeanRevBrokerAdapter {
     private fundingBook?: FundingBook,
     /** Fractional sizing (crypto perps); false = whole-share floor (legacy). */
     private fractionalQty = false,
+    /** close1545 mode (§12-septies G0): symbol → session → adjusted 15:45
+     *  price + its bar-end timestamp. Absent = the exact legacy path. */
+    private p1545?: Map<string, Map<string, { px: number; ts: number }>>,
   ) {
     this.slipIn = 1 + cfg.slippageBps / 10_000;
     this.slipOut = 1 - cfg.slippageBps / 10_000;
@@ -311,6 +368,19 @@ export class SimMeanRevBroker implements MeanRevBrokerAdapter {
     const item = this.series.get(symbol);
     if (!item) return [];
     const cut = this.cutIndex(symbol);
+    // close1545 mode: the session's 15:45 price is appended as a synthetic
+    // LAST bar (dated the session being replayed, which is "yesterday" to
+    // the one-session-forward engine clock — never dropped as a partial
+    // bar). RSI(2)/SMA200/SMA5 all read closes, so the engine math is
+    // untouched: only the last value of the series changes.
+    const slice = this.p1545?.get(symbol)?.get(this.currentDate);
+    if (slice !== undefined) {
+      const out = item.bars.slice(Math.max(0, cut - (bars - 1)), cut).map(b => ({
+        open: b.open, high: b.high, low: b.low, close: b.close, volume: 0, timestamp: b.timestamp,
+      }));
+      out.push({ open: slice.px, high: slice.px, low: slice.px, close: slice.px, volume: 0, timestamp: slice.ts });
+      return out;
+    }
     return item.bars.slice(Math.max(0, cut - bars), cut).map(b => ({
       open: b.open, high: b.high, low: b.low, close: b.close, volume: 0, timestamp: b.timestamp,
     }));
@@ -329,6 +399,29 @@ export class SimMeanRevBroker implements MeanRevBrokerAdapter {
     const i = this.todayIndex(a.symbol);
     if (i === undefined || i === 0) return { ok: false, reason: "no execution bar today" };
     const item = this.series.get(a.symbol)!;
+    // close1545 mode: MOC entry in the SIGNAL session's closing auction —
+    // qty is fixed when the order is SENT (at 15:45, whole shares floored
+    // on the 15:45 price; declared), the fill prints at the close ± cost.
+    const slice1545 = this.p1545?.get(a.symbol)?.get(this.currentDate);
+    if (this.p1545 !== undefined) {
+      if (slice1545 === undefined) return { ok: false, reason: "no 15:45 slice today" };
+      const close = item.bars[i].close;
+      const qty = Math.floor(a.notionalUsd / slice1545.px);
+      if (qty <= 0) return { ok: false, reason: "computed qty < 1 share" };
+      const entryPrice = close * this.slipIn;
+      const entryFee = qty * entryPrice * this.commRate;
+      this.feesPaid += entryFee;
+      // "the live vol-scaled hard stop unchanged": distance from COMPLETED
+      // closes strictly before the session (same inputs as the legacy path;
+      // the 15:45 print deliberately does not enter the vol estimate).
+      const stopFrac = this.stopSpec.mode === "none"
+        ? null
+        : this.stopSpec.mode === "fixed"
+          ? this.stopSpec.pct
+          : trailPctFromVol(item.closes.slice(0, i), this.stopSpec, 1) / 100;
+      this.positions.push({ symbol: a.symbol, qty, entryPrice, entryTime: this.dayTs, entryFee, mark: entryPrice, stopFrac, fundingCost: 0, entryDate: this.currentDate, entryRealTs: slice1545.ts });
+      return { ok: true };
+    }
     const open = item.bars[i].open;
     // Whole shares floored on the RAW open (live Alpaca rounds to whole
     // shares; prior-replay parity keeps this axis out of the diff). Crypto
@@ -403,7 +496,14 @@ export class SimMeanRevBroker implements MeanRevBrokerAdapter {
     // close, the engine holds and retries next pass (live analog: order
     // can't execute against a halted/holed symbol).
     if (i === undefined || i === 0) return { ok: false, reason: "no execution bar today" };
-    const fill = this.series.get(a.symbol)!.bars[i].open * this.slipOut;
+    // close1545 mode: exits fill in the SAME session's closing auction (MOC
+    // at the decision session's close), not the next open.
+    const bar = this.series.get(a.symbol)!.bars[i];
+    if (this.p1545 !== undefined) {
+      this.book(p, bar.close * this.slipOut, PENDING_ENGINE_REASON, this.dayTs, { date: this.currentDate, kind: "close" });
+      return { ok: true };
+    }
+    const fill = bar.open * this.slipOut;
     this.book(p, fill, PENDING_ENGINE_REASON, this.dayTs);
     return { ok: true };
   }
@@ -466,8 +566,33 @@ export class SimMeanRevBroker implements MeanRevBrokerAdapter {
     return unread.filter(t => t.exitAt >= epochMs).reduce((s, t) => s + t.pnl, 0);
   }
 
+  /**
+   * close1545 night/day gross split: entry at close(entryDate), walk the
+   * symbol's daily bars to the exit session, splitting each held day into
+   * the overnight leg (prev close → open) and the intraday leg (open →
+   * close, or open → fill for intraday/open exits). Price legs only (raw
+   * closes/opens; slippage/fees are cost channels, reported separately).
+   */
+  private accumulateSplit(position: SimPosition, info: ExitInfo): void {
+    if (position.entryDate === undefined) return; // seeds / legacy path
+    const item = this.series.get(position.symbol);
+    if (!item) return;
+    const e = item.indexByDate.get(position.entryDate);
+    const x = item.indexByDate.get(info.date);
+    if (e === undefined || x === undefined || x <= e) return;
+    const q = position.qty;
+    for (let d = e + 1; d <= x; d++) {
+      this.nightPnl += q * (item.bars[d].open - item.bars[d - 1].close);
+      if (d < x) this.dayPnl += q * (item.bars[d].close - item.bars[d].open);
+    }
+    if (info.kind === "close") this.dayPnl += q * (item.bars[x].close - item.bars[x].open);
+    else if (info.kind === "intraday") this.dayPnl += q * ((info.rawPx ?? item.bars[x].close) - item.bars[x].open);
+    // kind "open": the exit IS the open print — no intraday leg.
+  }
+
   /** Book a close with the same accounting the prior replay used. */
-  book(position: SimPosition, price: number, reason: string, exitAt: number): void {
+  book(position: SimPosition, price: number, reason: string, exitAt: number, exitInfo?: ExitInfo): void {
+    if (this.p1545 !== undefined && exitInfo !== undefined) this.accumulateSplit(position, exitInfo);
     const gross = (price - position.entryPrice) * position.qty;
     const exitFee = position.qty * price * this.commRate;
     this.realizedGross += gross;
@@ -486,7 +611,10 @@ export class SimMeanRevBroker implements MeanRevBrokerAdapter {
     // (symbol|side|pnl|exitAt|reason), no metric or hash reads them.
     this.closed.push({
       symbol: position.symbol, side: "buy", pnl: netPnl, exitAt, reason,
-      entryAt: position.entryTime, entryPrice: position.entryPrice, exitPrice: price, qty: position.qty,
+      // close1545: entryAt carries the REAL 15:45 decision instant of the
+      // entry session (entryTime is the shifted engine clock). Legacy path:
+      // entryRealTs is undefined — byte-identical metadata.
+      entryAt: position.entryRealTs ?? position.entryTime, entryPrice: position.entryPrice, exitPrice: price, qty: position.qty,
     });
     this.positions.splice(this.positions.indexOf(position), 1);
   }
@@ -503,7 +631,7 @@ export class SimMeanRevBroker implements MeanRevBrokerAdapter {
       const bar = this.series.get(position.symbol)!.bars[i];
       const stop = position.entryPrice * (1 - position.stopFrac);
       if (bar.open > stop) continue; // not gapped through — phase 2 (intraday) territory
-      this.book(position, bar.open * this.slipOut, "STOP_LOSS", this.dayTs);
+      this.book(position, bar.open * this.slipOut, "STOP_LOSS", this.dayTs, { date: this.currentDate, kind: "open" });
     }
   }
 
@@ -516,13 +644,17 @@ export class SimMeanRevBroker implements MeanRevBrokerAdapter {
   checkStops(): void {
     for (const position of [...this.positions]) {
       if (position.stopFrac === null) continue; // mode "none": strategy exits only
+      // close1545 mode: a position entered THIS pass filled at the CLOSE —
+      // the session's low printed before it existed, so the intraday stop
+      // cannot apply on the entry session (first exposure is the next gap).
+      if (this.p1545 !== undefined && position.entryDate === this.currentDate) continue;
       const i = this.todayIndex(position.symbol);
       if (i === undefined) continue;
       const bar = this.series.get(position.symbol)!.bars[i];
       const stop = position.entryPrice * (1 - position.stopFrac);
       if (bar.low > stop) continue;
       const fill = Math.min(bar.open, stop) * this.slipOut; // floor only — gaps were booked pre-pass
-      this.book(position, fill, "STOP_LOSS", this.dayTs);
+      this.book(position, fill, "STOP_LOSS", this.dayTs, { date: this.currentDate, kind: "intraday", rawPx: Math.min(bar.open, stop) });
     }
   }
 
@@ -570,6 +702,15 @@ export async function runMeanRevReplay(
   const isCrypto = cfg.source === "binance_futures";
   if (cfg.funding && !isCrypto) {
     throw new Error("meanrev replay: funding=true requires source=binance_futures (funding_rates carry Binance perp symbols)");
+  }
+  // §12-septies G0 execution mode (OPT-IN by meanrev.execution — see the
+  // MeanRevSimParams augmentation above): stocks daily only, declared
+  // universe only (no membership), requires the 15:45-slice DB.
+  const exec1545 = p.execution === "close1545";
+  if (exec1545) {
+    if (isCrypto || cfg.funding) throw new Error("meanrev replay: execution=close1545 is stocks-only");
+    if (cfg.membership) throw new Error("meanrev replay: execution=close1545 does not support membership mode");
+    if (!cfg.sliceDbPath) throw new Error("meanrev replay: execution=close1545 requires cfg.sliceDbPath (hist-sp500-close.db)");
   }
 
   const db = new Database(cfg.dbPath, { readonly: true });
@@ -635,8 +776,30 @@ export async function runMeanRevReplay(
     const windowDates = [...tsByDate.keys()].sort();
     if (windowDates.length === 0) return null;
 
+    // close1545: adjusted 15:45 prices per universe symbol/session —
+    // p1545_adj = adjClose(session) × raw1545/rawClose (basis of the SAME
+    // dailies this replay trades; scripts/lib/closeSlices.ts). A session
+    // with no slice (or no daily bar) simply has no 15:45 price.
+    let p1545Map: Map<string, Map<string, { px: number; ts: number }>> | undefined;
+    if (exec1545) {
+      const slices = loadCloseSlices(cfg.sliceDbPath!);
+      p1545Map = new Map();
+      for (const symbol of cfg.universe) {
+        const bySession = slices.get(symbol);
+        if (!bySession) continue;
+        const item = series.get(symbol)!;
+        const m = new Map<string, { px: number; ts: number }>();
+        for (const [session, row] of bySession) {
+          const idx = item.indexByDate.get(session);
+          if (idx === undefined) continue;
+          m.set(session, { px: item.bars[idx].close * row.ratio, ts: row.sliceStartMs + 15 * 60_000 });
+        }
+        p1545Map.set(symbol, m);
+      }
+    }
+
     // ── the REAL engine over the sim adapter ─────────────────────────────
-    const broker = new SimMeanRevBroker(cfg, series, stopSpec, fundingBook, isCrypto);
+    const broker = new SimMeanRevBroker(cfg, series, stopSpec, fundingBook, isCrypto, p1545Map);
     // Seed the book with live positions already open at the epoch (OPEN.md
     // P2) — BEFORE the day loop starts, so maxPositions/stops see them
     // from day 1. Absent/empty seedPositions = byte-identical legacy
@@ -688,6 +851,15 @@ export async function runMeanRevReplay(
         }
         return liquid.has(symbol);
       };
+    }
+    // close1545 (§12-septies G0): a symbol with NO 15:45 slice this session
+    // has no signal this session — entry-ineligible AND exempt from the
+    // all-universe entry-freshness gate (its daily tape only reaches the
+    // previous session, which under the one-session-forward engine clock
+    // reads as stale; without the exemption one missing slice would block
+    // the whole day's entries). Mutually exclusive with membership mode.
+    if (exec1545) {
+      entryEligibility = (symbol) => p1545Map!.get(symbol)?.has(broker.currentDate) === true;
     }
     // "silent" still forwards warns to the diagnostic hook (null → no-op):
     // the engine's gross-cap veto only exists as a warn line + report entry,
@@ -754,22 +926,33 @@ export async function runMeanRevReplay(
     const equityHistory: Array<{ t: number; eq: number }> = [];
 
     try {
-      for (const date of windowDates) {
+      for (let di = 0; di < windowDates.length; di++) {
+        const date = windowDates[di];
+        const stampTs = tsByDate.get(date)!;
         broker.currentDate = date;
-        broker.dayTs = tsByDate.get(date)!;
+        // close1545 ENGINE-CLOCK SHIFT: the pass that decides session D at
+        // 15:45 runs with the engine's todayKey = the NEXT session (or the
+        // next calendar day on the fold's last session), so the synthetic
+        // 15:45 bar dated D is the engine's last COMPLETED bar (never
+        // dropped as a partial), the freshness gate expects exactly D, the
+        // same-completed-bar exit deferral works on the following pass, and
+        // the time stop counts sessions AFTER the entry session (TIME_STOP
+        // fires at the close of the 10th session after the entry close).
+        // Legacy path: dayTs = the session's own bar stamp, byte-identical.
+        broker.dayTs = exec1545 ? noonEtMs(windowDates[di + 1] ?? nextCalendarKey(date)) : stampTs;
 
         // Funding settles continuously on live perps: apply every settlement
         // in (prevDay, today] BEFORE the pass, so the RiskGuard equity read
         // inside runDaily already includes it. No-op without a FundingBook.
         // Applied before the gap stops: a position stopped at today's open
         // held through the settlement instant that stamps the open.
-        broker.applyFunding(prevDayTs, broker.dayTs);
+        broker.applyFunding(prevDayTs, stampTs);
         // Reg-T financing accrues over the same pre-pass range, so the
         // RiskGuard equity read inside runDaily already includes it (same
         // placement as runWithConfig's accrueMarginInterest call). No-op
         // unless costs.<tier>.marginInterest set a nonzero rate (línea E).
-        broker.accrueMarginInterest(prevDayTs, broker.dayTs);
-        prevDayTs = broker.dayTs;
+        broker.accrueMarginInterest(prevDayTs, stampTs);
+        prevDayTs = stampTs;
 
         // Delisting (membership mode only): a held symbol whose tape is
         // EXHAUSTED (last bar is the series' final bar, >6 calendar days
@@ -790,6 +973,17 @@ export async function runMeanRevReplay(
         // (live: GTC stop / 15s loop closes at ~09:30; the ~09:35 pass sees
         // the slot free and the realized loss — 2026-09-25 fidelity fix).
         broker.checkGapStops();
+        // close1545 fidelity (2026-10-14 director review): with a 15:45
+        // decision, an INTRADAY stop whose low printed during the session
+        // fires BEFORE the decision in live (15 s loop + native GTC stop) —
+        // the bar's low timing is unknown, so the conservative reading is
+        // "the stop fired first". Run phase 2 BEFORE the pass here: only
+        // prior-session positions exist at this point (entries happen inside
+        // the pass and are exempt by the entry-session guard), stop-outs
+        // book at the stop level and free their slot before the 15:45
+        // decision. The legacy 09:35 path keeps phase 2 AFTER the pass,
+        // byte-identical.
+        if (exec1545) broker.checkStops();
 
         // Live evaluates the prior completed bar shortly after today's open:
         // exits free slots, then ranked entries — all inside the engine.
@@ -811,13 +1005,18 @@ export async function runMeanRevReplay(
 
         // Phase 2: intraday stops (not gapped at the open) — driver-level
         // (AccountManager parity), after the engine pass, including
-        // same-day entries.
-        broker.checkStops();
+        // same-day entries. close1545 already ran this pre-pass (see above;
+        // its same-session entries are exempt from intraday stops anyway —
+        // they fill at the close, after the session's low printed).
+        if (!exec1545) broker.checkStops();
 
         equity = broker.markToMarket();
         peakEquity = Math.max(peakEquity, equity);
         maxDrawdown = Math.max(maxDrawdown, (peakEquity - equity) / peakEquity);
-        equityHistory.push({ t: broker.dayTs, eq: equity });
+        // Equity is stamped at the SESSION's own bar timestamp (stampTs ===
+        // broker.dayTs on the legacy path) so daily returns keep real
+        // session dates under the close1545 engine-clock shift.
+        equityHistory.push({ t: stampTs, eq: equity });
         if (equity <= 0) { ruined = true; break; }
       }
     } finally {
@@ -841,8 +1040,9 @@ export async function runMeanRevReplay(
         const item = series.get(position.symbol)!;
         const lastIdx = [...item.bars].reverse().findIndex(b => b.timestamp >= fromMs && b.timestamp < toMs);
         if (lastIdx < 0) throw new Error(`meanrev replay: no terminal price for ${position.symbol}`);
-        const px = item.bars[item.bars.length - 1 - lastIdx].close * slipOut;
-        broker.book(position, px, "fold_end", toMs);
+        const lastBar = item.bars[item.bars.length - 1 - lastIdx];
+        const px = lastBar.close * slipOut;
+        broker.book(position, px, "fold_end", toMs, exec1545 ? { date: lastBar.date, kind: "close" } : undefined);
       }
     }
     const finalEq = ruined
@@ -925,6 +1125,9 @@ export async function runMeanRevReplay(
       // Authoritative: the REAL engine's RiskGuard state at replay end —
       // walk-forward chains it into the next fold (previously inert).
       finalRiskState: { ...engine.getRiskState() },
+      // G0 output-only extras: gross night/day split of the close1545 mode
+      // (absent on the legacy path — the result shape is untouched there).
+      ...(exec1545 ? { execSplit: { nightPnl: broker.nightPnl, dayPnl: broker.dayPnl } } : {}),
     };
   } finally {
     db.close();

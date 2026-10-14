@@ -52,6 +52,9 @@ import { getPreviousTradingDay } from "../src/utils/marketHours";
 import { INITIAL_RISK_STATE, type RiskState } from "../src/strategies/momentum/RiskGuard";
 import { canonicalJson, type ClosedTrade } from "./backtest-momentum-wf";
 import { isMemberAt, loadMembership, type MembershipBook } from "./lib/membership";
+import { rsi2 } from "../src/strategies/meanrev/MeanRevEngine";
+import { trailPctFromVol } from "../src/strategies/momentum/MomentumEngine";
+import { loadCloseSlices, type CloseSliceRow } from "./lib/closeSlices";
 
 export interface StReversalParams {
   /** k: signal lookback in completed sessions (1–5 per §12 line B). */
@@ -107,12 +110,64 @@ export interface StReversalConfig {
    *  long market orders); §12-bis constrains WHOLE shares + price ≥ $5 to
    *  the SHORT side only. Absent/false = legacy (whole shares both sides). */
   fractionalLongs?: boolean;
+  /** §12-septies line G (OPT-IN; absent = the exact line-B/B2 behavior AND
+   *  every legacy hash — canonicalJson drops undefined keys). See
+   *  CloseReversalSpec. When set: params.holdDays = MAX HOLD SESSIONS,
+   *  params.residual must be "none" and params.lookbackDays must be 1
+   *  (both inert — the Connors signal replaces the residual-momentum one). */
+  closeReversal?: CloseReversalSpec;
+  /** 15:45-slice database path (runtime-only like dbPath — EXCLUDED from
+   *  hashStConfig; the slice rows enter the run's data identity through
+   *  hashCloseSlices in the driver). Required with closeReversal. */
+  sliceDbPath?: string;
+}
+
+/**
+ * §12-septies line G: Connors-style close-auction reversal over the line-B
+ * universe. The SIGNAL is computed at 15:45 ET of each session (the 15:45
+ * price is the series' last value; the SMA uses the `smaLong` PRIOR closes,
+ * per the pre-registration "media de los 200 cierres previos"):
+ *   LONG:  RSI(2) < entryRsi AND p1545 > SMA(smaLong prior closes),
+ *          p1545 ≥ minPrice, ≥ minPriorCloses prior closes; lowest RSI
+ *          first, max slotsPerSide names.
+ *   SHORT (G4 mirror, `short` set): RSI(2) > short.entryRsi AND p1545 <
+ *          SMA(prior closes); same floors; highest RSI first.
+ * ENTRIES fill in the SAME session's closing auction (close ± cost), whole
+ * shares fixed at 15:45 (floor(slot / p1545)). EXITS per `exit`:
+ *   "nextOpen":  at the open of the holdDays-th session after entry (G1/G4).
+ *   "nextClose": at the next session's close, UNLESS still among the top
+ *                slotsPerSide signal names at 15:45 (kept, no sell+rebuy),
+ *                max holdDays sessions (G2).
+ *   "sma5":      at the close of the first session whose 15:45 price exceeds
+ *                the SMA(smaExit) of the 4 prior closes + that price, or at
+ *                the close of the holdDays-th session; with the meanrev
+ *                vol-scaled hard stop (gap stops at the open, intraday stops
+ *                at the level, never on the entry session) (G3).
+ */
+export interface CloseReversalSpec {
+  entryRsi: number;
+  smaLong: number;
+  minPrice: number;
+  minPriorCloses: number;
+  exit: "nextOpen" | "nextClose" | "sma5";
+  /** Required when exit === "sma5". */
+  smaExit?: number;
+  /** meanrev vol-scaled hard stop (G3): kSigma × σ(lookbackBars daily
+   *  closes), clamped [minPct, maxPct] percent-units, resolved ONCE at
+   *  entry from completed closes strictly before the entry session. */
+  hardStop?: { kSigma: number; lookbackBars: number; minPct: number; maxPct: number };
+  /** G4 mirror short: sell at the close when RSI(2) > entryRsi and p1545 <
+   *  SMA(prior closes); cover at the next open; borrow accrues. */
+  short?: { entryRsi: number };
 }
 
 /** SHA-256 of the canonical config, excluding runtime-only dbPath —
  *  the same identity convention as hashReplayConfig. */
 export function hashStConfig(cfg: StReversalConfig): string {
-  const { dbPath, ...semantic } = cfg;
+  // sliceDbPath is a machine-local path like dbPath: excluded. It was never
+  // present in any legacy config (undefined is dropped by JSON.stringify),
+  // so every pre-existing hash is byte-identical.
+  const { dbPath, sliceDbPath, ...semantic } = cfg;
   return createHash("sha256").update(canonicalJson(semantic)).digest("hex");
 }
 
@@ -186,6 +241,10 @@ interface Position {
   entryFee: number;
   mark: number;
   borrowPaid: number;     // shorts only
+  /** closeReversal G3: entry-anchored hard-stop PRICE (longs). */
+  stopPrice?: number | null;
+  /** closeReversal: entry session's date (drives the night/day split). */
+  entryDate?: string;
 }
 
 export interface StReversalResult {
@@ -225,9 +284,26 @@ export interface StReversalResult {
   maxGrossSeen: number;
   hash: string;
   finalRiskState: RiskState;
+  /** closeReversal output-only extras (absent on the legacy path). Gross
+   *  night (close→next open) vs day (open→close/exit) price-leg split. */
+  nightPnl?: number;
+  dayPnl?: number;
+  /** closeReversal signal telemetry: per-session averages and how many
+   *  sessions ended with every long (short) slot occupied. */
+  signalStats?: {
+    sessions: number;
+    avgLongSignals: number;
+    fullLongSessions: number;
+    avgShortSignals?: number;
+    fullShortSessions?: number;
+  };
 }
 
 const membershipCache = new Map<string, MembershipBook>();
+
+// closeReversal: 15:45-slice cache per slice-DB path (same amortization as
+// seriesCache — dozens of fold replays reuse one immutable snapshot).
+const sliceCache = new Map<string, Map<string, Map<string, CloseSliceRow>>>();
 
 /**
  * Run one fully-resolved reversal replay. Same contract as the other
@@ -240,6 +316,19 @@ export async function runStReversalReplay(
 ): Promise<StReversalResult | null> {
   const p = cfg.params;
   if (p.lookbackDays < 1 || p.holdDays < 1 || p.slotsPerSide < 1) throw new Error("invalid StReversalParams");
+  const cr = cfg.closeReversal;
+  if (cr) {
+    // §12-septies G: the Connors close-auction mode replaces the residual
+    // signal entirely — the legacy knobs it ignores must be pinned to inert
+    // values (config that changes nothing is rejected, same philosophy as
+    // the walk-forward validators).
+    if (p.residual !== "none") throw new Error('closeReversal requires params.residual="none"');
+    if (p.lookbackDays !== 1) throw new Error("closeReversal requires params.lookbackDays=1 (inert)");
+    if (!cfg.sliceDbPath) throw new Error("closeReversal requires cfg.sliceDbPath (hist-sp500-close.db)");
+    if (cfg.sizing !== "equityProportional") throw new Error('closeReversal requires sizing="equityProportional" (§12-septies G)');
+    if (cfg.fractionalLongs) throw new Error("closeReversal trades WHOLE shares on both legs (no fractionalLongs)");
+    if (cr.exit === "sma5" && !(cr.smaExit !== undefined && cr.smaExit >= 1)) throw new Error('closeReversal exit="sma5" requires smaExit');
+  }
   const fromMs = Date.parse(win.from);
   const toMs = Date.parse(win.to);
   const loadFrom = fromMs - cfg.warmupDays * DAY_MS;
@@ -247,7 +336,7 @@ export async function runStReversalReplay(
   const commRate = cfg.commissionBps / 10_000;
   const slotUsd = (cfg.initialEquity * cfg.maxGrossMult) / (2 * p.slotsPerSide);
   const eqProp = cfg.sizing === "equityProportional";
-  const minWarmupBars = cfg.corrLookbackSessions + p.lookbackDays + 2;
+  const minWarmupBars = cr ? cr.minPriorCloses : cfg.corrLookbackSessions + p.lookbackDays + 2;
 
   const db = new Database(cfg.dbPath, { readonly: true });
   try {
@@ -308,7 +397,49 @@ export async function runStReversalReplay(
       return cut > 0 ? s.bars[cut - 1].close : undefined;
     };
 
-    const book2 = (pos: Position, price: number, reason: string, exitAt: number) => {
+    // ── closeReversal: 15:45 prices + night/day split state ──────────────
+    let slices: Map<string, Map<string, CloseSliceRow>> | undefined;
+    if (cr) {
+      slices = sliceCache.get(cfg.sliceDbPath!);
+      if (!slices) { slices = loadCloseSlices(cfg.sliceDbPath!); sliceCache.set(cfg.sliceDbPath!, slices); }
+    }
+    /** Adjusted 15:45 price for (symbol, session): adjClose × raw ratio —
+     *  undefined = no 15:45 price that session (no signal). */
+    const p1545Of = (sym: string, s: Series, date: string): number | undefined => {
+      const row = slices?.get(sym)?.get(date);
+      if (row === undefined) return undefined;
+      const i = s.indexByDate.get(date);
+      if (i === undefined) return undefined;
+      return s.bars[i].close * row.ratio;
+    };
+    let nightPnl = 0;
+    let dayPnl = 0;
+    let longSignalSum = 0;
+    let shortSignalSum = 0;
+    let fullLongSessions = 0;
+    let fullShortSessions = 0;
+
+    /** closeReversal gross night/day split: entry at close(entryDate), walk
+     *  the symbol's bars to the exit session; sign-aware for shorts. Price
+     *  legs only (raw opens/closes — costs are separate channels). */
+    const accumulateSplit = (pos: Position, info: { date: string; kind: "open" | "close" | "intraday"; rawPx?: number }) => {
+      if (pos.entryDate === undefined) return;
+      const s = series.get(pos.symbol);
+      if (!s) return;
+      const e = s.indexByDate.get(pos.entryDate);
+      const x = s.indexByDate.get(info.date);
+      if (e === undefined || x === undefined || x <= e) return;
+      const sq = (pos.side === "buy" ? 1 : -1) * pos.qty;
+      for (let d = e + 1; d <= x; d++) {
+        nightPnl += sq * (s.bars[d].open - s.bars[d - 1].close);
+        if (d < x) dayPnl += sq * (s.bars[d].close - s.bars[d].open);
+      }
+      if (info.kind === "close") dayPnl += sq * (s.bars[x].close - s.bars[x].open);
+      else if (info.kind === "intraday") dayPnl += sq * ((info.rawPx ?? s.bars[x].close) - s.bars[x].open);
+    };
+
+    const book2 = (pos: Position, price: number, reason: string, exitAt: number, exitInfo?: { date: string; kind: "open" | "close" | "intraday"; rawPx?: number }) => {
+      if (cr && exitInfo) accumulateSplit(pos, exitInfo);
       const sign = pos.side === "buy" ? 1 : -1;
       const gross = (price - pos.entryPrice) * pos.qty * sign;
       const exitFee = pos.qty * price * commRate;
@@ -404,10 +535,164 @@ export async function runStReversalReplay(
         const lastBar = s.bars[s.bars.length - 1];
         if (lastBar.date < date && dayTs - lastBar.timestamp > 6 * DAY_MS) {
           const px = pos.side === "buy" ? lastBar.close * (1 - slipIn) : lastBar.close * (1 + slipIn);
-          book2(pos, px, "DELISTED", dayTs);
+          book2(pos, px, "DELISTED", dayTs, cr ? { date: lastBar.date, kind: "close" } : undefined);
         }
       }
 
+      if (cr) {
+        // ── §12-septies G session (closeReversal) ───────────────────────
+        // 3G-a. Gap stops at the open (G3 hard stop, meanrev parity: the
+        //       live GTC stop fires at ~09:30; never on the entry session —
+        //       the position filled at that session's close).
+        for (const pos of [...positions]) {
+          if (pos.stopPrice == null || pos.side !== "buy" || pos.entrySession >= si) continue;
+          const s = series.get(pos.symbol)!;
+          const i = s.indexByDate.get(date);
+          if (i === undefined) continue;
+          if (s.bars[i].open > pos.stopPrice) continue;
+          book2(pos, s.bars[i].open * (1 - slipIn), "STOP_LOSS", dayTs, { date, kind: "open" });
+        }
+        // 3G-b. "next open" exits (G1 / G4): at the open of the holdDays-th
+        //       session after entry; shorts cover at the open (+slippage).
+        if (cr.exit === "nextOpen") {
+          for (const pos of [...positions]) {
+            if (si - pos.entrySession < p.holdDays) continue;
+            const s = series.get(pos.symbol)!;
+            const i = s.indexByDate.get(date);
+            if (i === undefined) continue; // no bar today: retry next session
+            const open = s.bars[i].open;
+            const px = pos.side === "buy" ? open * (1 - slipIn) : open * (1 + slipIn);
+            book2(pos, px, "OPEN_EXIT", dayTs, { date, kind: "open" });
+          }
+        }
+
+        // 4G. The 15:45 decision: signal series = prior completed closes +
+        //     the session's adjusted 15:45 price (NOTHING after 15:45 enters
+        //     a decision); exits and entries fill in the CLOSING auction.
+        const prevKey = getPreviousTradingDay(date);
+        interface CrSignal { symbol: string; rsi: number; px: number; closeRaw: number; cut: number }
+        const longsSig: CrSignal[] = [];
+        const shortsSig: CrSignal[] = [];
+        for (const [sym, s] of series) {
+          if (!isMemberAt(book, sym, dayTs)) continue;
+          const i = s.indexByDate.get(date);
+          if (i === undefined || i === 0) continue;       // need today's close to fill
+          const cut = cutIndex(s, date);
+          if (cut < cr.minPriorCloses) continue;          // ≥ minPriorCloses prior closes
+          if (s.bars[cut - 1].date < prevKey) continue;   // stale tape
+          const px = p1545Of(sym, s, date);
+          if (px === undefined || px < cr.minPrice) continue;
+          // Cutler RSI(2) over [c[-2], c[-1], p1545] — same math as meanrev.
+          const rsi = rsi2([s.closes[cut - 2], s.closes[cut - 1], px], 2);
+          let smaPrior = 0;
+          for (let k = cut - cr.smaLong; k < cut; k++) smaPrior += s.closes[k];
+          smaPrior /= cr.smaLong;
+          const sig: CrSignal = { symbol: sym, rsi, px, closeRaw: s.bars[i].close, cut };
+          if (rsi < cr.entryRsi && px > smaPrior) longsSig.push(sig);
+          if (cr.short && rsi > cr.short.entryRsi && px < smaPrior) shortsSig.push(sig);
+        }
+        // Deterministic ranking (Cutler RSI(2) ties at exactly 0/100 are
+        // common — declared tie-break by symbol).
+        longsSig.sort((a, b) => a.rsi - b.rsi || (a.symbol < b.symbol ? -1 : 1));
+        shortsSig.sort((a, b) => b.rsi - a.rsi || (a.symbol < b.symbol ? -1 : 1));
+        longSignalSum += longsSig.length;
+        shortSignalSum += shortsSig.length;
+        const topLong = new Set(longsSig.slice(0, p.slotsPerSide).map(x => x.symbol));
+
+        // Close exits. G2 ("nextClose"): exit at the close UNLESS still
+        // among the top-N signal names (kept, no sell+rebuy) and under the
+        // holdDays cap. G3 ("sma5"): exit when p1545 > SMA(smaExit) of the
+        // (smaExit−1) prior closes + p1545, or at the holdDays-th session
+        // (time stop fires even without a slice — it only needs the close).
+        const closedThisClose = new Set<string>();
+        if (cr.exit === "nextClose" || cr.exit === "sma5") {
+          for (const pos of [...positions]) {
+            if (pos.side !== "buy" || pos.entrySession >= si) continue;
+            const s = series.get(pos.symbol)!;
+            const i = s.indexByDate.get(date);
+            let reason: string | null = null;
+            if (cr.exit === "nextClose") {
+              const keep = topLong.has(pos.symbol) && si - pos.entrySession < p.holdDays;
+              if (keep) continue;
+              reason = si - pos.entrySession >= p.holdDays ? "TIME_EXIT" : "CLOSE_EXIT";
+            } else {
+              const px = p1545Of(pos.symbol, s, date);
+              const cut = cutIndex(s, date);
+              if (px !== undefined && cut >= cr.smaExit! - 1) {
+                let sma = px;
+                for (let k = cut - (cr.smaExit! - 1); k < cut; k++) sma += s.closes[k];
+                sma /= cr.smaExit!;
+                if (px > sma) reason = "SMA_EXIT";
+              }
+              if (reason === null && si - pos.entrySession >= p.holdDays) reason = "TIME_STOP";
+              if (reason === null) continue;
+            }
+            if (i === undefined) continue; // no bar today: retry next session
+            book2(pos, s.bars[i].close * (1 - slipIn), reason, dayTs, { date, kind: "close" });
+            closedThisClose.add(pos.symbol);
+          }
+        }
+
+        // Entries in the closing auction. Slot = DECISION-TIME equity
+        // (marked at the last COMPLETED closes — no lookahead) × gross /
+        // (2 × N); qty = whole shares fixed at 15:45 on the 15:45 price.
+        const heldSyms = new Set(positions.map(x => x.symbol));
+        let freeLong = p.slotsPerSide - positions.filter(x => x.side === "buy").length;
+        let freeShort = cr.short ? p.slotsPerSide - positions.filter(x => x.side === "sell").length : 0;
+        let eqNow = cfg.initialEquity + realizedGross - feesPaid - borrowPaid;
+        for (const pos of positions) {
+          const mark = lastCompletedClose(series.get(pos.symbol)!, date) ?? pos.mark;
+          eqNow += (mark - pos.entryPrice) * pos.qty * (pos.side === "buy" ? 1 : -1);
+        }
+        const equityBase = Math.max(0, eqNow);
+        const sessionSlotUsd = (equityBase * cfg.maxGrossMult) / (2 * p.slotsPerSide);
+        const grossNow = () => positions.reduce((s2, x) => s2 + x.qty * x.mark, 0);
+        const enterCr = (c: CrSignal, side: "buy" | "sell"): boolean => {
+          const qty = Math.floor(sessionSlotUsd / c.px); // whole shares, fixed at 15:45
+          if (qty < 1) return false;
+          if (grossNow() + qty * c.px > equityBase * cfg.maxGrossMult * 1.001) return false;
+          const fill = side === "buy" ? c.closeRaw * (1 + slipIn) : c.closeRaw * (1 - slipIn);
+          const entryFee = qty * fill * commRate;
+          feesPaid += entryFee;
+          turnoverNotional += qty * fill;
+          const s = series.get(c.symbol)!;
+          // G3: the meanrev vol-scaled hard stop, resolved ONCE at entry
+          // from completed closes strictly before the entry session.
+          const stopPrice = side === "buy" && cr.hardStop
+            ? fill * (1 - trailPctFromVol(s.closes.slice(0, c.cut), cr.hardStop, 1) / 100)
+            : null;
+          positions.push({
+            symbol: c.symbol, side, qty, entryPrice: fill, entryAt: dayTs,
+            entrySession: si, entryFee, mark: fill, borrowPaid: 0, stopPrice, entryDate: date,
+          });
+          return true;
+        };
+        for (const c of longsSig) {
+          if (freeLong <= 0) break;
+          if (heldSyms.has(c.symbol) || closedThisClose.has(c.symbol)) continue;
+          if (enterCr(c, "buy")) { heldSyms.add(c.symbol); freeLong--; }
+        }
+        for (const c of shortsSig) {
+          if (freeShort <= 0) break;
+          if (heldSyms.has(c.symbol) || closedThisClose.has(c.symbol)) continue;
+          if (enterCr(c, "sell")) { heldSyms.add(c.symbol); freeShort--; }
+        }
+        if (positions.filter(x => x.side === "buy").length >= p.slotsPerSide) fullLongSessions++;
+        if (cr.short && positions.filter(x => x.side === "sell").length >= p.slotsPerSide) fullShortSessions++;
+
+        // 4G-b. Intraday stops AFTER the decision (meanrev two-phase
+        //       parity); never on the entry session (filled at the close).
+        for (const pos of [...positions]) {
+          if (pos.stopPrice == null || pos.side !== "buy" || pos.entrySession >= si) continue;
+          const s = series.get(pos.symbol)!;
+          const i = s.indexByDate.get(date);
+          if (i === undefined) continue;
+          const bar = s.bars[i];
+          if (bar.low > pos.stopPrice) continue;
+          const raw = Math.min(bar.open, pos.stopPrice);
+          book2(pos, raw * (1 - slipIn), "STOP_LOSS", dayTs, { date, kind: "intraday", rawPx: raw });
+        }
+      } else {
       // 3. Time exits at TODAY's open (holdDays sessions elapsed). A symbol
       //    without a bar today holds and retries next session.
       const exitedToday = new Set<string>();
@@ -511,6 +796,7 @@ export async function runStReversalReplay(
           freeShort--;
         }
       }
+      } // end legacy (non-closeReversal) session block
 
       // 5. Mark to market at today's closes.
       let eq = cfg.initialEquity + realizedGross - feesPaid - borrowPaid;
@@ -537,9 +823,10 @@ export async function runStReversalReplay(
         const s = series.get(pos.symbol)!;
         const lastIdx = [...s.bars].reverse().findIndex(b => b.timestamp >= fromMs && b.timestamp < toMs);
         if (lastIdx < 0) throw new Error(`streversal: no terminal price for ${pos.symbol}`);
-        const c = s.bars[s.bars.length - 1 - lastIdx].close;
+        const lastBar = s.bars[s.bars.length - 1 - lastIdx];
+        const c = lastBar.close;
         const px = pos.side === "buy" ? c * (1 - slipIn) : c * (1 + slipIn);
-        book2(pos, px, "fold_end", toMs);
+        book2(pos, px, "fold_end", toMs, cr ? { date: lastBar.date, kind: "close" } : undefined);
       }
     }
     const finalEq = ruined
@@ -615,6 +902,24 @@ export async function runStReversalReplay(
       maxGrossSeen,
       hash: hashStConfig(cfg),
       finalRiskState: { ...(initialRiskState ?? INITIAL_RISK_STATE) },
+      // closeReversal output-only extras (keys absent on the legacy path).
+      ...(cr
+        ? {
+            nightPnl,
+            dayPnl,
+            signalStats: {
+              sessions: refWindowBars.length,
+              avgLongSignals: refWindowBars.length > 0 ? longSignalSum / refWindowBars.length : 0,
+              fullLongSessions,
+              ...(cr.short
+                ? {
+                    avgShortSignals: refWindowBars.length > 0 ? shortSignalSum / refWindowBars.length : 0,
+                    fullShortSessions,
+                  }
+                : {}),
+            },
+          }
+        : {}),
     };
   } finally {
     db.close();
@@ -625,4 +930,5 @@ export async function runStReversalReplay(
 export function clearStReversalCaches(): void {
   seriesCache.clear();
   membershipCache.clear();
+  sliceCache.clear();
 }

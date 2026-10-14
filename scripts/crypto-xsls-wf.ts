@@ -32,6 +32,7 @@ import {
   stitchedMetrics,
   type ExperimentManifest,
   type WalkForwardSummary,
+  type ReplayRunner,
 } from "./walk-forward";
 import type { ReplayResult } from "./backtest-momentum-wf";
 import { runXslsReplay, type XslsReplayResult, type XslsSignal } from "./crypto-xsls-replay";
@@ -102,6 +103,7 @@ async function rerunChainWithUniverse(
   m: ExperimentManifest,
   summary: WalkForwardSummary,
   universe: string[],
+  runner?: ReplayRunner,
 ): Promise<ReplayResult[]> {
   const signal = manifestSignal(m);
   const results: ReplayResult[] = [];
@@ -118,7 +120,7 @@ async function rerunChainWithUniverse(
       from: new Date(outer.result.fromMs).toISOString(),
       to: new Date(outer.result.toMs).toISOString(),
     };
-    const r = await runXslsReplay(cfg, win, undefined, { signal });
+    const r = await (runner ? runner(cfg, win) : runXslsReplay(cfg, win, undefined, { signal }));
     if (!r) throw new Error(`ex-top-decile replay failed at ${sel.foldPath}`);
     results.push(r);
   }
@@ -147,6 +149,18 @@ async function main() {
   console.log(`\n▌ protocol summary: sharpe=${summary.stitchedOos.sharpe.toFixed(2)} ret=${(summary.stitchedOos.totalReturn * 100).toFixed(1)}% DD=${(summary.stitchedOos.maxDrawdown * 100).toFixed(1)}% trades=${summary.stitchedOos.trades} outerPSR=${summary.outerPsr?.toFixed(3)} approvalReason=${summary.approvalReason}`);
   if (dryRun) return;
 
+  await evaluateXslsCriteria(m, summary, outputDir, manifestPath);
+}
+
+/** Shared §12 evaluator. H injects only its runner and output filename;
+ * absent options retain A/F2's criterion values and default rerun behavior. */
+export async function evaluateXslsCriteria(
+  m: ExperimentManifest,
+  summary: WalkForwardSummary,
+  outputDir: string,
+  manifestPath: string,
+  opts?: { runner?: ReplayRunner; criteriaFile?: string },
+) {
   const ppy = periodsPerYear(m.sleeve, m.data.source);
 
   // ── criterion 5: daily OOS correlation vs current combined portfolio ──
@@ -191,7 +205,7 @@ async function main() {
   const topDecileCount = Math.max(1, Math.ceil(rankedSyms.length * 0.1));
   const excluded = rankedSyms.slice(0, topDecileCount).map(([sym]) => sym);
   const exUniverse = m.data.universe.filter(s => !excluded.includes(s));
-  const exResults = await rerunChainWithUniverse(m, summary, exUniverse);
+  const exResults = await rerunChainWithUniverse(m, summary, exUniverse, opts?.runner);
   const exStitched = stitchEquityHistory(exResults, m.ledger.initialEquity);
   const exMetrics = stitchedMetrics(exStitched, exResults, ppy);
 
@@ -274,7 +288,7 @@ async function main() {
     criteria,
   };
   if (existsSync(outputDir)) {
-    writeFileSync(join(outputDir, "lineA-criteria.json"), JSON.stringify(out, null, 2));
+    writeFileSync(join(outputDir, opts?.criteriaFile ?? "lineA-criteria.json"), JSON.stringify(out, null, 2));
   }
   console.log("\n▌ §12 criteria");
   for (const [key, c] of Object.entries(criteria)) {
@@ -284,7 +298,8 @@ async function main() {
   console.log(`   corr vs combined: ${corrCombined.toFixed(3)} over ${commonDates.length} common days`);
   console.log(`   orders/day OOS: ${ordersPerDay.toFixed(1)} (${orders} orders / ${Math.round(days)} days)`);
   console.log(`   VERDICT: ${out.verdict}`);
-  console.log(`   written: ${outputDir}/lineA-criteria.json`);
+  console.log(`   written: ${outputDir}/${opts?.criteriaFile ?? "lineA-criteria.json"}`);
+  return out;
 }
 
 if (import.meta.main) await main();

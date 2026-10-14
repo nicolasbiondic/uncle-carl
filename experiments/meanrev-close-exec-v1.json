@@ -1,0 +1,66 @@
+{
+  "name": "meanrev-close-exec-v1",
+  "sleeve": "meanrev",
+  "description": "PRE-REGISTRADO (2026-10-14, G0 de V-plan SS12-septies, 'comprar justo despues de la caida') ANTES de correr ningun trial. REDISENO DE EJECUCION del vivo meanrev_stocks: misma senal Connors (RSI(2) Cutler < 5 sobre la media de 200, salida al superar la media de 5, time stop 10 sesiones), mismo universo de 32, misma ventana/folds/costes/capital/parametros que el control meanrev-slot12-pure-v1 (artefacto 624d50e9..., Sharpe OOS 0.705 / maxDD 17.6% / PSR outer 0.968 / stress Sharpe 0.2015). UNICO cambio (eje opt-in meanrev.execution='close1545' en scripts/meanrev-replay.ts, byte-identico ausente — fingerprint y tests de identidad verdes): la SENAL se decide a las 15:45 ET con el precio de las 15:45 (cierre de la barra SIP de 15 min que empieza 30 min antes del cierre; 12:30-12:45 en sesiones cortas) como ultimo valor de la serie diaria para el RSI(2), el chequeo de SMA200 y la salida por SMA5 (4 cierres previos + ese precio); la ENTRADA llena en la subasta de cierre del MISMO dia de la senal (fill = cierre +/- coste, acciones enteras fijadas a las 15:45 sobre el precio de las 15:45); las SALIDAS (SMA_EXIT al primer dia cuyo precio de las 15:45 supera la media de 5; TIME_STOP al cierre de la decima sesion) llenan en la subasta de cierre del dia de decision; el stop duro por volatilidad del vivo SIN cambios (distancia volScaled k3/20d/2-12% sobre cierres completados previos a la sesion de entrada; gap stop en la apertura siguiente, stop intradia nunca en la sesion de entrada). Un simbolo sin barra de 15:45 esa sesion no tiene senal esa sesion (declarado; cobertura reportada en LG-reversion-al-cierre.md). DATOS: diarias = la misma base hist-sp500.db cuyo dataHash reproduce el control bit a bit (verificado antes de correr G0); precio 15:45 = hist-sp500-close.db (descarga raw SIP, p1545_adj = adjClose x raw1545/rawClose — coherencia de ajustes probada en dias de split NVDA 2024-06-10 / AAPL 2020-08-31 / TSLA 2022-08-25, scripts/download-close-slice.test.ts). Las filas de slices entran en el dataHash (hashCloseSlices). CRITERIOS SS12-septies G0 (VALIDADO solo si cumple todos, evaluados contra el control en el reporte): (1) cadena OOS pura; (2) Sharpe OOS base >= control + 0.10 (>= 0.805); (3) maxDD OOS <= control + 2pp (<= 19.63%); (4) Sharpe stress >= el del control (>= 0.2015); (5) PSR outer >= 0.95. Se reporta ademas el reparto noche/dia del P&L y las ordenes/dia. TRIAL ACCOUNTING: base 375 (tras lineas S y S-bis); 1 candidato nuevo -> 376. complete=false.",
+  "trialAccounting": { "priorUniqueTrials": 375, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "ABBV", "AVGO", "BAC", "CAT", "COST", "CVX", "DIS", "GE", "HD", "HON",
+      "JNJ", "JPM", "KO", "LLY", "MA", "MCD", "MRK", "NFLX", "NKE", "ORCL",
+      "PG", "QCOM", "UNH", "V", "WMT", "XLE", "XLF", "XLI", "XLP", "XLV",
+      "XOM", "SLV"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440,
+    "sliceDb": "$UC_RESEARCH_DATA_DIR/hist-sp500-close.db"
+  },
+  "asOf": "2026-10-02T00:00:00Z",
+  "window": {
+    "from": "2018-01-01",
+    "to": "2026-08-06",
+    "outerFoldCount": 6,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 365
+  },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0 },
+    "stress": { "slippageBps": 5, "commissionBps": 2 }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 1,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "close-exec",
+      "cadenceMin": 1440,
+      "hardStop": { "mode": "volScaled", "kSigma": 3, "lookbackBars": 20, "minPct": 2, "maxPct": 12 },
+      "meanrev": { "entryRsi": 5, "smaLong": 200, "smaExit": 5, "timeStopDays": 10, "maxPositions": 7, "slotPct": 0.12, "execution": "close1545" }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0.5,
+    "maxDrawdown": 0.25,
+    "minTotalReturn": 0,
+    "minExcessSharpeVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 100,
+    "stressMinSharpe": 0,
+    "stressMaxDrawdown": 0.3,
+    "stressMinTotalReturn": -0.1,
+    "looMinSharpe": 0,
+    "looMaxDrawdown": 0.3,
+    "looMinTotalReturn": -0.1,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": { "threshold": 0.5, "count": 3 },
+    "minBreakEvenSlippageBps": 10
+  }
+}

@@ -1535,6 +1535,11 @@ export interface ReplayConfig {
   perpsMembership?: { topN: number; volLookbackDays: number; minDays: number; freshDays: number };
   warmupDays: number;
   dbPath: string;
+  /** 15:45-slice database (§12-septies G0 — meanrev.execution="close1545"):
+   *  runtime-only path like dbPath, EXCLUDED from hashReplayConfig (the
+   *  slice rows enter the run's DATA identity via hashCloseSlices in the
+   *  walk-forward driver, not the candidate hash). Absent = legacy. */
+  sliceDbPath?: string;
 }
 
 export interface ReplayResult {
@@ -1618,9 +1623,12 @@ export function canonicalJson(obj: unknown): string {
   });
 }
 
-/** SHA-256 of a canonical replay config, excluding runtime-only dbPath. */
+/** SHA-256 of a canonical replay config, excluding runtime-only dbPath and
+ *  sliceDbPath (both machine-local paths; undefined sliceDbPath was never in
+ *  any legacy canonical JSON — JSON.stringify drops undefined — so every
+ *  pre-existing hash is byte-identical). */
 export function hashReplayConfig(cfg: ReplayConfig): string {
-  const { dbPath, ...semanticCfg } = cfg;
+  const { dbPath, sliceDbPath, ...semanticCfg } = cfg;
   return createHash("sha256").update(canonicalJson(semanticCfg)).digest("hex");
 }
 

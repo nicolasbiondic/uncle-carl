@@ -29,7 +29,6 @@ import type { OHLCV } from "../utils/types";
 import { getDB, insertTrade, closeTrade, updateTradeCloseReason, getOpenTrades, RECONCILE_CLOSE_SQL } from "../db/database";
 import { createLogger } from "../utils/logger";
 import { binanceKlinesEnabled, fetchBinanceKlines } from "../market/binanceKlines";
-import { v4 as uuid } from "uuid";
 
 const log = createLogger("ShadowAdapter");
 
@@ -147,7 +146,7 @@ export class ShadowAdapter implements MomentumBrokerAdapter {
       : undefined;
 
     insertTrade({
-      id: uuid(),
+      id: crypto.randomUUID(),
       symbol: action.symbol,
       market: this.cfg.market,
       side: action.side,

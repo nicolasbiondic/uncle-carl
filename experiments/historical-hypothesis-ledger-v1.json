@@ -926,6 +926,56 @@
       "resultsComplete": false,
       "executionReported": true,
       "evidence": "LINEA F (V-plan SS12-ter, segunda ola, pre-registrada en master 174e7b1 ANTES de correr): el diseno vivo de momentum_crypto TAL CUAL (TSM horaria +5%/-2%, stop fijo 4%, RiskGuard y freno de correlacion por defecto, motor real MomentumEngine via runWithConfig) trasladado al universo PIT mensual de la linea A (top-30 por volumen cotizado de 30 dias sin las 8 bases de momentum_crypto, sin stables/envueltos/indices/TradFi; hist-perps.db solo lectura; union 2021-2026 = 360 simbolos). MALLA CERRADA de 4 candidatos: slots {4x0.375 vivo, 8x0.1875} x volTarget {35 vivo, 20}. Costes de A (4 bps comision + 5 bps slippage por lado + funding real; stress 2x); criterios comunes SS12 1-8 sin cambios; misma ventana/folds que el control vivo re-corrido 06e1a160 (asOf 2026-10-02T08Z) para comparar sobre los 8 grandes. Convencion de A: cierre forzoso al ultimo precio tras 24h sin barra (DELISTED); fuera del universo no se abren posiciones nuevas. Habilitador solo-scripts, opt-in y byte-identico ausente (test backtest-momentum-wf.perps.test.ts): ReplayConfig.perpsMembership (elegibilidad mensual + warmup + frescura 24h via el hook entryEligibility del motor, funding fail-closed acotado al span de barras por simbolo, refSymbol benchmark-only) y LOO acotado pre-registrado a los 10 simbolos con mayor |P&L| (opts.looTopPnlSymbols — 360 simbolos x motor real horario hace el LOO completo incomputable; 7b ex-top-decil se evalua aparte como en A). LIMITACION declarada (como en A): quote_volume_1d no entra en el dataHash; los parametros de membresia si entran en el configHash. +4 hipotesis (base 351 -> 355; el director resuelve el conteo al integrar). RESULTADOS: docs/reports/LF-cripto-tendencia-alts.md."
+    },
+    {
+      "id": "meanrev-close-exec-2026-10-14",
+      "sourceCommit": "21db103 (rama research/close-reversal; eje close1545 + descargador 15:45 en 46c52c8; pre-registro V-plan SS12-septies en master 0394628, ANTES de correr)",
+      "sourcePaths": [
+        "experiments/meanrev-close-exec-v1.json",
+        "scripts/meanrev-replay.ts",
+        "scripts/download-close-slice.ts",
+        "scripts/lib/closeSlices.ts",
+        "docs/reports/LG-reversion-al-cierre.md"
+      ],
+      "hypothesisCount": 1,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "LINEA G0 (V SS12-septies, 'comprar justo despues de la caida'): rediseno de EJECUCION del vivo meanrev_stocks — senal a las 15:45 ET (precio de las 15:45 como ultimo valor de la serie para RSI(2) Cutler, SMA200 y la salida SMA5), entrada en la subasta de cierre del dia de la senal, salidas al cierre del dia de decision, stop por volatilidad sin cambios. Control: meanrev-slot12-pure-v1 (624d50e9..., Sharpe 0.705 / maxDD 17.6% / PSR 0.968 / stress 0.2015), re-reproducido bit a bit sobre los datos de G0 ANTES de correr el candidato. Datos nuevos: hist-sp500-close.db (barra SIP 15m que empieza 30 min antes del cierre, raw; p1545_adj = adjClose x raw1545/rawClose, coherencia probada en dias de split). Eje opt-in byte-identico ausente (fingerprint verde). Criterios pre-registrados: Sharpe base >= control+0.10, maxDD <= control+2pp, stress >= control, PSR >= 0.95, cadena pura. Base de trials 375 -> 376. RESULTADOS: authoritativeArtifactMeanrevCloseExec (se anade con el run)."
+    },
+    {
+      "id": "stocks-close-reversal-2026-10-14",
+      "sourceCommit": "21db103 (rama research/close-reversal; eje closeReversal del kernel B en 46c52c8; pre-registro V-plan SS12-septies en master 0394628, ANTES de correr)",
+      "sourcePaths": [
+        "experiments/stocks-close-reversal-v1.json",
+        "scripts/stocks-reversal-replay.ts",
+        "scripts/stocks-reversal-wf.ts",
+        "scripts/download-close-slice.ts",
+        "docs/reports/LG-reversion-al-cierre.md"
+      ],
+      "hypothesisCount": 4,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "LINEA G (V SS12-septies): cartera nueva de reversion al cierre en el S&P 500 PIT (universo de B: miembros PIT menos los 43 vivos y ETF de referencia), senal Connors a las 15:45 (RSI(2) Cutler < 5 con el precio de las 15:45 como ultimo valor, precio > media de los 200 cierres PREVIOS, >= $5, >= 201 cierres previos, 10 huecos por lado, tamano proporcional al patrimonio, bruto 1x por lado, capital SS13 $7,800, costes de B, ventana/folds/protocolo de B2). MALLA CERRADA de 4: G1 una noche (cierre -> apertura), G2 una sesion (mantener si sigue top-10 a las 15:45, max 5), G3 salida Connors (SMA5 a las 15:45 o 10 sesiones, stop vol de meanrev), G4 espejo corto (RSI>95 y precio<SMA200, vende el cierre, recompra la apertura, prestamo de cortos). Criterios: los comunes 1-8 de SS12 sin cambios (mismos gates que stocks-streversal-b2-v1). Eje opt-in byte-identico ausente (tests de identidad). Base de trials 376 -> 380. RESULTADOS: authoritativeArtifactCloseReversal (se anade con el run)."
+    },
+    {
+      "id": "crypto-drop-reversal-linea-h-2026-10-14",
+      "sourceCommit": "5961abc (manifest ANTES de todo ensayo; preregistro vinculante V-plan 12-septies @ 0394628)",
+      "sourcePaths": [
+        "experiments/crypto-drop-reversal-v1.json",
+        "scripts/crypto-drop-replay.ts",
+        "scripts/crypto-drop-wf.ts",
+        "scripts/crypto-drop-replay.test.ts",
+        "docs/reports/LH-cripto-caida-horaria.md"
+      ],
+      "hypothesisCount": 4,
+      "priorUniqueTrials": 380,
+      "resultingUniqueTrials": 384,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "LINEA H, malla CERRADA k {3,4} x h {4,12} horas. Compra al cierre tras z<=-k (log retorno / sd muestral de las 720 horas previas excluyendo t, >=600 validos) solo si z BTC misma hora >-2. PIT de A, sin los 8 majors; 5 slots equity/5, bruto de entradas <=1x tras costes, una posicion por simbolo, sin stop. Capital 1600; mismos datos, ventana, folds, costes y acceptance de A. Funding fresco <=9h solo al entrar, gap retenido=0 optimista, delist tras 24h sin barra al ultimo precio; epsilon settlement 60s heredado de A. LOO COMPLETO 357 simbolos. Kernel y evaluador compartidos opt-in, fingerprints A/F2 originales 0394628 reproducidos. +4: 380->384 segun SS12-septies; G0/G son lotes paralelos y se integran aparte, no se inventan aqui. RESULTADO REFUTADO: falla 2,3,4,6,7; cadena uniforme k3-h12 en 3 folds, Sharpe -0.159, stress -0.487, PSR 0.369, maxDD 80.11%, retorno -67.20%, 2.76 ordenes/dia. BTC bloquea 4593 de 7601 senales, rebote bruto a 12h -0.050%; NO SE CABLEA. authoritativeArtifactCryptoDropReversal y LH."
     }
   ],
   "trialSensitivityFinding": {
@@ -2431,6 +2481,145 @@
         "maxDrawdownPct": 52.58,
         "stressSharpe": 0.935
       }
+    }
+  },
+  "authoritativeArtifactCryptoDropReversal": {
+    "path": "data/backtests/b2ad0f5dbf3513c6bb00bf853ea7a019dcb913496109f09d91e2f3f4c010ee8c/",
+    "manifest": "experiments/crypto-drop-reversal-v1.json @ 5961abc (pre-registro antes de correr)",
+    "date": "2026-10-14",
+    "verdict": "REFUTADO por los criterios comunes SS12 1-7: falla 2 (Sharpe -0.159, PSR 0.369), 3 (stress -0.487), 4 (break-even slippage absoluto 0.65 bps frente a 23), 6 (maxDD 80.11%) y 7 (2022=78.16% del P&L negativo; ex-top-decil Sharpe -1.310). Pasan 1 (3 folds completos, seleccion uniforme k3-h12) y 5 (correlacion combinada -0.005). NO SE CABLEA. BTC bloquea 4593/7601 senales; 2297 trades, 4594 ordenes, 2.76 ordenes/dia. Rebote bruto medio a 12h -0.050%, no ventaja ni antes de costes en esa media. LUNA aporta -615.97 USD de los -1075.22 USD del libro cosido; la caida del simbolo sin desplome horario de BTC no protege de un colapso idiosincratico persistente.",
+    "cryptoDropReversal": {
+      "outerFoldReturnsPct": [
+        -42.4,
+        0.84,
+        -43.54
+      ],
+      "stitchedReturnPct": -67.2,
+      "sharpe": -0.159,
+      "stressSharpe": -0.487,
+      "maxDrawdownPct": 80.11,
+      "outerPsr": 0.369,
+      "trades": 2297,
+      "orders": 4594,
+      "ordersPerDayOos": 2.76,
+      "breakEvenSlippageBps": 0.65,
+      "corrVsCombined": -0.005,
+      "exTopDecileSharpe": -1.31,
+      "maxYearPnlShare": 0.782,
+      "signals": 7601,
+      "btcBlocked": 4593,
+      "delayedExits": 0,
+      "rebound12hPct": -0.05,
+      "gatesFailed": [
+        "looMaxDrawdown",
+        "looMinSharpe",
+        "looMinTotalReturn",
+        "maxDrawdown",
+        "minBreakEvenSlippageBps",
+        "minFoldsPsrAbove",
+        "minOuterPsr",
+        "minSharpe",
+        "minTotalReturn",
+        "stressMaxDrawdown",
+        "stressMinSharpe",
+        "stressMinTotalReturn"
+      ]
+    }
+  },
+  "authoritativeArtifactMeanrevCloseExec": {
+    "path": "data/backtests/d34159e0ee4b5054d82c8d77d6e9b7d6439299ddccfaf25e623d9dc9061f5032/",
+    "supersededOptimisticPath": "data/backtests/00c424920540c7f5df76c26546bfb7eea6d9b1447b3ffc2183ac335684c17670/",
+    "manifest": "experiments/meanrev-close-exec-v1.json @ 21db103 (pre-registro, antes de correr); fix de fidelidad de stops en 41a2c7f (re-corrida de identidad de ejecucion, +0 trials, como el gap-stop fix 2026-09-25)",
+    "controlPath": "data/backtests/624d50e930d47ef55e42f16e6537e0e895dec847fb0b709c26b2ecd94ea37db7/",
+    "controlReproPath": "data/backtests/4930af666000f8b0ed85393e54de806be3dcd49feacff6e1235060c8da97204c/",
+    "date": "2026-10-14",
+    "verdict": "REFUTADO por el criterio 2 pre-registrado SS12-septies G0 tras la correccion de fidelidad del simulador (revision del director): con la decision a las 15:45, un stop intradia cuyo minimo imprime durante la sesion dispara ANTES de la decision en vivo (loop 15s + GTC nativo); el orden original acreditaba el cierre a 8 trades que habian tocado su stop (+$1,055 medidos sobre la cadena optimista 00c42492, p.ej. UNH 2021-01-05: SMA_EXIT a 324.67 vs stop 303.45). Con el orden CONSERVADOR (stop primero; la hora del minimo es desconocida): Sharpe base 0.7663 < 0.8049 (control+0.10) — mejora +0.061 sobre el control 0.7049 pero POR DEBAJO del liston pre-registrado +0.10 — FALLA c2. Pasan c1 (cadena pura 6/6), c3 (maxDD 16.93% <= 19.63%, aun MEJOR que el control 17.63%), c4 (stress 0.2954 >= 0.2015) y c5 (PSR 0.9787 >= 0.95). La cadena optimista superseded (0.8194/14.61%/PSR 0.985) cumplia los 5; el margen de c2 era +0.015 y la correccion de ~$1k por re-pricing mas el re-camino de la cadena (stops liberan hueco antes de la decision: cierres por stop 521 -> 576, trades 3179 -> 3317) se lo come. Reparto bruto noche/dia (conservador): +$25,812 noche / +$11,858 dia — la primera noche tras la caida SI paga, y el DD baja 0.7pp frente al control, pero el edge extra no alcanza el liston. Ordenes/dia: 3.58/sesion. La MISMA ordenacion solo puede empeorar la linea G (G3 es el unico candidato con stop), ya REFUTADA. NO SE CABLEA; un re-intento (p.ej. criterio de mejora distinto o datos intradia con la hora del minimo) exige pre-registro nuevo.",
+    "meanrevCloseExec": {
+      "outerFoldReturnsPct": [
+        -3.22,
+        20.42,
+        2.67,
+        6.59,
+        6.68,
+        26.5
+      ],
+      "stitchedReturnPct": 72.19,
+      "sharpe": 0.766,
+      "maxDrawdownPct": 16.93,
+      "outerPsr": 0.979,
+      "trades": 3317,
+      "stressSharpe": 0.295,
+      "breakEvenSlippageBps": 9.76,
+      "nightPnlUsd": 25812.1,
+      "dayPnlUsd": 11857.5,
+      "ordersPerSession": 3.58,
+      "gatesFailed": [
+        "minBreakEvenSlippageBps",
+        "minExcessSharpeVsBench"
+      ],
+      "supersededOptimistic": {
+        "stitchedReturnPct": 73.6,
+        "sharpe": 0.819,
+        "maxDrawdownPct": 14.61,
+        "outerPsr": 0.985,
+        "trades": 3179,
+        "stressSharpe": 0.316,
+        "stopOverlapTrades": 8,
+        "stopOverlapUsd": 1055
+      },
+      "control": {
+        "stitchedReturnPct": 64.32,
+        "sharpe": 0.705,
+        "maxDrawdownPct": 17.63,
+        "outerPsr": 0.968,
+        "stressSharpe": 0.202,
+        "breakEvenSlippageBps": 8.42,
+        "gatesFailed": [
+          "minBreakEvenSlippageBps",
+          "minExcessSharpeVsBench"
+        ]
+      }
+    }
+  },
+  "authoritativeArtifactCloseReversal": {
+    "path": "data/backtests/5b0925549536c8d37eaeba6237e5a81fe59e49515e8771161617a564afd433ac/",
+    "manifest": "experiments/stocks-close-reversal-v1.json @ 21db103 (pre-registro, malla cerrada de 4, antes de correr)",
+    "date": "2026-10-14",
+    "verdict": "REFUTADO por los criterios pre-registrados SS12 comunes 1-8: falla 2 (Sharpe 0.343 < 1.0; PSR outer 0.832 < 0.95), 3 (Sharpe stress -0.063 < 0.5), 4 (break-even ADICIONAL 2.53 bps/lado < 4; cruce absoluto 4.5 bps), 6 (maxDD 32.1% > 25%) y 7 (2025 aporta el 56.1% del P&L > 50%; sin el decil top de simbolos Sharpe -0.22 < 0.5). Pasa 1 (cadena pura MIXTA: g2-session folds 0/3, g3-connors folds 1/2/4/5; 6/6 folds, 0 saltados) y 5 (corr diaria vs cartera viva 0.185 <= 0.30). Criterio 8: 8.88 ordenes/sesion (6.10/dia natural; 18,626 ordenes en 2,098 sesiones). HALLAZGO ECONOMICO HONESTO: la intuicion del dueno sobre LA NOCHE es direccionalmente correcta — el P&L bruto nocturno del OOS es +$8,857 contra -$2,891 del tramo de dia (la reversion tras la caida se cobra del cierre a la apertura) — pero sobre ~500 nombres PIT con 2 bps/lado el edge neto no certifica: en el universo curado de 32 (G0) el mismo mecanismo mejora al control (+0.061 de Sharpe) pero queda bajo el liston pre-registrado +0.10 tras el fix de fidelidad de stops (REFUTADO tambien). g4 (espejo corto) es el peor candidato de la malla (mediana inner Sharpe -1.90, nunca gana un fold): en sus 18 trials inner la pata larga gana +$3,726 y la CORTA pierde -$35,838 — vender el RSI(2)>95 bajo la SMA200 es ponerse corto el rebote mas violento del mercado, consistente con las refutaciones de S/S-bis. Senales: 50-67 largas/sesion de media; los 10 huecos se llenan el 90.7% de las sesiones (1,903 de 2,098). NO SE CABLEA NADA; cualquier variante exige pre-registro nuevo.",
+    "closeReversal": {
+      "outerFoldReturnsPct": [
+        -7.39,
+        29.58,
+        0.45,
+        -12.18,
+        24.22,
+        7.27
+      ],
+      "stitchedReturnPct": 41.18,
+      "sharpe": 0.343,
+      "maxDrawdownPct": 32.07,
+      "outerPsr": 0.832,
+      "trades": 9313,
+      "stressSharpe": -0.063,
+      "breakEvenExtraBpsPerSide": 2.53,
+      "corrVsLive": 0.185,
+      "maxYearPnlShare": 0.561,
+      "exTopDecileSharpe": -0.222,
+      "ordersPerSessionOos": 8.88,
+      "nightPnlUsd": 8857.3,
+      "dayPnlUsd": -2891.2,
+      "g4InnerLongPnlUsd": 3726.0,
+      "g4InnerShortPnlUsd": -35838.1,
+      "fullBookSessionsShare": 0.907,
+      "gatesFailed": [
+        "exTopDecileMinSharpe",
+        "maxDrawdown",
+        "maxYearPnlShare",
+        "minBreakEvenExtraBps",
+        "minOuterPsr",
+        "minSharpe",
+        "stressMinSharpe"
+      ]
     }
   }
 }
