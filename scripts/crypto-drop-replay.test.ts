@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { hourlyDropZ, runDropReplay, type DropReplayResult } from "./crypto-drop-replay";
 import { runXslsReplay } from "./crypto-xsls-replay";
 import { candidateToReplayConfig, loadManifest, type WalkForwardSummary } from "./walk-forward";
@@ -18,7 +19,7 @@ const withLiveArtifacts = existsSync(join("data/backtests", "5f03d68daed8572ebb7
 afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
 
 export function dropFixture(opts: { btcDrop?: number; fundingGap?: boolean; barGap?: boolean; delist?: boolean; entryAndExitFunding?: boolean; furtherDrop?: boolean } = {}) {
-  const dir = mkdtempSync("/tmp/opencode/drop-test-");
+  const dir = mkdtempSync(join(tmpdir(), "drop-test-"));
   dirs.push(dir);
   const path = join(dir, "perps.db");
   const db = new Database(path);
