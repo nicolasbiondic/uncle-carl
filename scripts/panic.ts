@@ -12,9 +12,9 @@
 // is forced to respect it — while suspended, Alpaca rejects every NEW order
 // submission account-wide.
 //
-// API surface (verified against the SDK we already ship,
-// node_modules/@alpacahq/alpaca-trade-api/dist/resources/account.js +
-// dist/alpaca-trade-api.js):
+// API surface (SDK v5 through the v3-shaped compat adapter,
+// src/executor/alpaca-v5-compat.ts — same raw snake_case responses the v3
+// SDK returned):
 //   - write: client.updateAccountConfigurations({ suspend_trade: bool })
 //            → PATCH /v2/account/configurations
 //   - read:  client.getAccountConfigurations().suspend_trade
@@ -61,6 +61,7 @@ import { dirname } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { config } from "../src/config";
 import { alpacaPaperLiveMismatch } from "../src/executor/alpaca-executor";
+import { createAlpacaV3Compat } from "../src/executor/alpaca-v5-compat";
 
 // The minimal client surface this script needs — satisfied by the real SDK
 // instance and by test fakes.
@@ -162,8 +163,10 @@ function printState(s: PanicState): void {
 }
 
 function makeSdkClient(): PanicClient {
-  const Alpaca = require("@alpacahq/alpaca-trade-api");
-  return new Alpaca({
+  // SDK v5 via the same v3-shaped compat adapter the executor uses
+  // (src/executor/alpaca-v5-compat.ts): identical raw snake_case responses
+  // (`trade_suspended_by_user`, `suspend_trade`), one attempt per call.
+  return createAlpacaV3Compat({
     keyId: config.alpaca.keyId,
     secretKey: config.alpaca.secretKey,
     paper: config.alpaca.paper,

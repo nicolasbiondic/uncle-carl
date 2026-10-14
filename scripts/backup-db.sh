@@ -19,6 +19,18 @@ if [ ! -f "$SRC_DB" ]; then
   exit 1
 fi
 
+# The off-host targets are documented as .env settings (.env.example), but
+# cron runs this script without loading .env: read just these two keys from
+# it when the environment doesn't already set them (2026-10-14 — setting
+# them in .env used to do nothing).
+env_from_dotenv() {
+  [ -f "$ROOT_DIR/.env" ] || return 0
+  # A key absent from .env must yield "" — never trip set -e/pipefail.
+  { grep -E "^$1=" "$ROOT_DIR/.env" || true; } | tail -n 1 | cut -d= -f2- | sed -e "s/^['\"]//" -e "s/['\"]\$//"
+}
+[ -n "${BACKUP_REMOTE:-}" ] || BACKUP_REMOTE="$(env_from_dotenv BACKUP_REMOTE)"
+[ -n "${BACKUP_OFFHOST_DIR:-}" ] || BACKUP_OFFHOST_DIR="$(env_from_dotenv BACKUP_OFFHOST_DIR)"
+
 # P1 fix (2026-07-27): resolve bun the same robust way start.sh does instead
 # of hardcoding one host's path (e.g. /home/<user>/.bun/bin/bun) — some hosts
 # have no sqlite3 CLI AND bun only lives under a user-specific .bun/bin, so
@@ -42,14 +54,15 @@ STATE_FILE="$BACKUP_DIR/daily-${DAY}-state.tar.gz"
 STATE_WEEKLY_FILE="$BACKUP_DIR/weekly-$(date -u +%Y-W%V)-state.tar.gz"
 
 # ── 1. Consistent backup (safe with WAL + concurrent writers)
-if command -v sqlite3 >/dev/null 2>&1; then
-  sqlite3 "$SRC_DB" ".backup '$DAILY_FILE.tmp'"
-  mv "$DAILY_FILE.tmp" "$DAILY_FILE"
-elif [ -n "$BUN" ] && [ -x "$BUN" ]; then
-  # bun:sqlite serialize() reads a consistent snapshot including live WAL pages.
-  # `bun run -` reads a script from stdin; bare `bun` without a subcommand
-  # prints the help page and exits 1, which caused the mv to fail (P1 fix).
-  SRC_DB="$SRC_DB" OUT_DB="$DAILY_FILE.tmp" "$BUN" run - <<'BUN'
+# snapshot_sqlite SRC OUT — WAL-safe copy of a live SQLite DB into OUT.
+snapshot_sqlite() {
+  if command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "$1" ".backup '$2.tmp'"
+  elif [ -n "$BUN" ] && [ -x "$BUN" ]; then
+    # bun:sqlite serialize() reads a consistent snapshot including live WAL pages.
+    # `bun run -` reads a script from stdin; bare `bun` without a subcommand
+    # prints the help page and exits 1, which caused the mv to fail (P1 fix).
+    SRC_DB="$1" OUT_DB="$2.tmp" "$BUN" run - <<'BUN'
 import { Database } from "bun:sqlite";
 import { writeFileSync } from "fs";
 
@@ -62,10 +75,24 @@ const snapshot = db.serialize();
 db.close();
 writeFileSync(out, snapshot);
 BUN
-  mv "$DAILY_FILE.tmp" "$DAILY_FILE"
-else
-  echo "❌ Neither sqlite3 nor a resolvable bun binary is available for a WAL-safe backup" >&2
-  exit 1
+  else
+    echo "❌ Neither sqlite3 nor a resolvable bun binary is available for a WAL-safe backup" >&2
+    exit 1
+  fi
+  mv "$2.tmp" "$2"
+}
+snapshot_sqlite "$SRC_DB" "$DAILY_FILE"
+
+# ── 1a. AI-quorum DB (line D): its forward-only record cannot be rebuilt —
+# decisions were stored before their outcomes existed. Same daily/weekly
+# cadence under its own "aiq-" names, so the main DB's retention globs
+# (daily-*.db, weekly-*.db) never count or delete these files.
+AIQ_DB="$DATA_DIR/ai-quorum.db"
+AIQ_DAILY="$BACKUP_DIR/aiq-daily-${DAY}.db"
+AIQ_WEEKLY="$BACKUP_DIR/aiq-weekly-$(date -u +%Y-W%V).db"
+if [ -f "$AIQ_DB" ]; then
+  snapshot_sqlite "$AIQ_DB" "$AIQ_DAILY"
+  chmod 640 "$AIQ_DAILY" 2>/dev/null || true
 fi
 
 # ── 1b. Risk-state tarball (P2-F): the DB alone isn't the full picture —
@@ -90,6 +117,10 @@ if [ "$DOW" = "7" ] || [ ! -f "$WEEKLY_FILE" ]; then
   cp "$DAILY_FILE" "$WEEKLY_FILE"
   [ -f "$STATE_FILE" ] && cp "$STATE_FILE" "$STATE_WEEKLY_FILE"
 fi
+if [ -f "$AIQ_DAILY" ] && { [ "$DOW" = "7" ] || [ ! -f "$AIQ_WEEKLY" ]; }; then
+  cp "$AIQ_DAILY" "$AIQ_WEEKLY"
+  chmod 640 "$AIQ_WEEKLY" 2>/dev/null || true
+fi
 
 # ── 3. Retention: keep last 14 daily + 8 weekly (state tarballs follow the
 # same retention as their DB counterparts)
@@ -97,6 +128,8 @@ find "$BACKUP_DIR" -maxdepth 1 -name 'daily-*.db' -type f -mtime +14 -delete 2>/
 find "$BACKUP_DIR" -maxdepth 1 -name 'daily-*-state.tar.gz' -type f -mtime +14 -delete 2>/dev/null || true
 ls -1t "$BACKUP_DIR"/weekly-*.db 2>/dev/null | tail -n +9 | xargs -r rm -f
 ls -1t "$BACKUP_DIR"/weekly-*-state.tar.gz 2>/dev/null | tail -n +9 | xargs -r rm -f
+find "$BACKUP_DIR" -maxdepth 1 -name 'aiq-daily-*.db' -type f -mtime +14 -delete 2>/dev/null || true
+ls -1t "$BACKUP_DIR"/aiq-weekly-*.db 2>/dev/null | tail -n +9 | xargs -r rm -f
 
 # Ad-hoc one-shot-script backups (pre-legacy-cleanup-*, historical-pre-*,
 # pre-aggclose-reconcile-*, + their -shm/-wal sidecars) had no retention at
@@ -144,54 +177,44 @@ rm -f "$DAILY_FILE-shm" "$DAILY_FILE-wal" "$WEEKLY_FILE-shm" "$WEEKLY_FILE-wal" 
 #   BACKUP_OFFHOST_DIR — a local path that is really elsewhere (NFS/SMB mount,
 #                        rclone mount, external/secondary disk).
 #   BACKUP_REMOTE      — an rsync/scp target, e.g. user@host:/srv/uncle-carl-backups
-DAILY_BASENAME="$(basename "$DAILY_FILE")"
-if [ -n "${BACKUP_OFFHOST_DIR:-}" ]; then
-  if mkdir -p "$BACKUP_OFFHOST_DIR" 2>/dev/null && cp "$DAILY_FILE" "$BACKUP_OFFHOST_DIR/$DAILY_BASENAME.tmp" 2>/dev/null \
-     && mv "$BACKUP_OFFHOST_DIR/$DAILY_BASENAME.tmp" "$BACKUP_OFFHOST_DIR/$DAILY_BASENAME" 2>/dev/null; then
-    chmod 640 "$BACKUP_OFFHOST_DIR/$DAILY_BASENAME" 2>/dev/null || true
-    echo "📦 Off-host copy → $BACKUP_OFFHOST_DIR/$DAILY_BASENAME"
-  else
-    echo "⚠️  Off-host copy to BACKUP_OFFHOST_DIR=$BACKUP_OFFHOST_DIR FAILED (local backup still OK)" >&2
-  fi
-fi
-if [ -n "${BACKUP_REMOTE:-}" ]; then
-  if command -v rsync >/dev/null 2>&1 \
-     && rsync -az -e "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new" "$DAILY_FILE" "$BACKUP_REMOTE/" 2>/dev/null; then
-    echo "📦 Off-host rsync → $BACKUP_REMOTE"
-  elif command -v scp >/dev/null 2>&1 \
-     && scp -Bq -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$DAILY_FILE" "$BACKUP_REMOTE/" 2>/dev/null; then
-    echo "📦 Off-host scp → $BACKUP_REMOTE"
-  else
-    echo "⚠️  Off-host transfer to BACKUP_REMOTE=$BACKUP_REMOTE FAILED (local backup still OK)" >&2
-  fi
-fi
-# Same off-host treatment for the state tarball, if one was produced above.
-if [ -f "$STATE_FILE" ]; then
-  STATE_BASENAME="$(basename "$STATE_FILE")"
+#                        (or an ~/.ssh/config Host alias, e.g. uc-backup:).
+# ship FILE MODE — copy FILE to every configured off-host target with MODE.
+ship() {
+  local file="$1" mode="$2" base
+  base="$(basename "$file")"
   if [ -n "${BACKUP_OFFHOST_DIR:-}" ]; then
-    if mkdir -p "$BACKUP_OFFHOST_DIR" 2>/dev/null && cp "$STATE_FILE" "$BACKUP_OFFHOST_DIR/$STATE_BASENAME.tmp" 2>/dev/null \
-       && mv "$BACKUP_OFFHOST_DIR/$STATE_BASENAME.tmp" "$BACKUP_OFFHOST_DIR/$STATE_BASENAME" 2>/dev/null; then
-      chmod 640 "$BACKUP_OFFHOST_DIR/$STATE_BASENAME" 2>/dev/null || true
-      echo "📦 Off-host copy → $BACKUP_OFFHOST_DIR/$STATE_BASENAME"
+    if mkdir -p "$BACKUP_OFFHOST_DIR" 2>/dev/null && cp "$file" "$BACKUP_OFFHOST_DIR/$base.tmp" 2>/dev/null        && chmod "$mode" "$BACKUP_OFFHOST_DIR/$base.tmp" 2>/dev/null        && mv "$BACKUP_OFFHOST_DIR/$base.tmp" "$BACKUP_OFFHOST_DIR/$base" 2>/dev/null; then
+      echo "📦 Off-host copy → $BACKUP_OFFHOST_DIR/$base"
     else
-      echo "⚠️  Off-host copy of state tarball to BACKUP_OFFHOST_DIR=$BACKUP_OFFHOST_DIR FAILED (local backup still OK)" >&2
+      echo "⚠️  Off-host copy of $base to BACKUP_OFFHOST_DIR=$BACKUP_OFFHOST_DIR FAILED (local backup still OK)" >&2
     fi
   fi
   if [ -n "${BACKUP_REMOTE:-}" ]; then
-    if command -v rsync >/dev/null 2>&1 \
-       && rsync -az -e "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new" "$STATE_FILE" "$BACKUP_REMOTE/" 2>/dev/null; then
-      echo "📦 Off-host rsync → $BACKUP_REMOTE ($STATE_BASENAME)"
-    elif command -v scp >/dev/null 2>&1 \
-       && scp -Bq -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$STATE_FILE" "$BACKUP_REMOTE/" 2>/dev/null; then
-      echo "📦 Off-host scp → $BACKUP_REMOTE ($STATE_BASENAME)"
+    if command -v rsync >/dev/null 2>&1        && rsync -az --chmod="F$mode" -e "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new" "$file" "$BACKUP_REMOTE/" 2>/dev/null; then
+      echo "📦 Off-host rsync → $BACKUP_REMOTE ($base)"
+    elif command -v scp >/dev/null 2>&1        && scp -Bq -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$file" "$BACKUP_REMOTE/" 2>/dev/null; then
+      echo "📦 Off-host scp → $BACKUP_REMOTE ($base)"
     else
-      echo "⚠️  Off-host transfer of state tarball to BACKUP_REMOTE=$BACKUP_REMOTE FAILED (local backup still OK)" >&2
+      echo "⚠️  Off-host transfer of $base to BACKUP_REMOTE=$BACKUP_REMOTE FAILED (local backup still OK)" >&2
     fi
   fi
+}
+ship "$DAILY_FILE" 640
+# Same off-host treatment for the state tarball and the AI-quorum DB, if
+# produced above.
+[ -f "$STATE_FILE" ] && ship "$STATE_FILE" 640
+[ -f "$AIQ_DAILY" ] && ship "$AIQ_DAILY" 640
+# The master key decrypts the broker credentials stored in the DB; its only
+# other copy lives on this same host. Shipped off-host as-is (mode 600, one
+# file, overwritten daily): useless without the DB, and the DB without it
+# loses the encrypted broker accounts.
+if [ -f "$DATA_DIR/master.key" ] && { [ -n "${BACKUP_REMOTE:-}" ] || [ -n "${BACKUP_OFFHOST_DIR:-}" ]; }; then
+  ship "$DATA_DIR/master.key" 600
 fi
 
 STATE_MSG="no risk-state files found"
 [ -f "$STATE_FILE" ] && STATE_MSG="state → $STATE_FILE"
+[ -f "$AIQ_DAILY" ] && STATE_MSG="$STATE_MSG, ai-quorum → $AIQ_DAILY"
 
 if [ -z "$INTEGRITY" ]; then
   echo "⚠️  DB backed up at ${TS} → $DAILY_FILE (${SIZE_MB} MB, integrity=skipped, $STATE_MSG)"

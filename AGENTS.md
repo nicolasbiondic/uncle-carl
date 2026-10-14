@@ -91,6 +91,7 @@ index.ts (entry)
 | `src/account/AccountManager.ts` | Core orchestrator: stop-loss loop, broker syncs, snapshots |
 | `src/sync/BrokerSync.ts` | DB↔broker reconciler; broker is truth |
 | `src/executor/alpaca-executor.ts` / `binance-executor.ts` | Broker REST/WS clients |
+| `src/executor/alpaca-v5-compat.ts` | Alpaca SDK v5 behind the v3-shaped `client` the executor, `scripts/panic.ts` and the test fakes use; SDK retries and rate limiting off, the executor owns both (`alpaca-v5-compat.test.ts`) |
 | `src/strategies/momentum/MomentumEngine.ts` | TSM engine shared by every momentum sleeve |
 | `src/strategies/meanrev/MeanRevEngine.ts` | Connors RSI(2)+SMA200 daily engine |
 | `src/governor/SleeveGovernor.ts` / `ShadowAdapter.ts` / `SwitchingAdapter.ts` | live/shadow mode persistence + routing |

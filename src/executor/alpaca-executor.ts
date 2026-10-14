@@ -19,6 +19,7 @@ import {
 import { estimateFromQuote } from "./bookDepth";
 import { getVenueRateLimiter, retryAfterMsFromHeaders, type RequestClass } from "./rateLimiter";
 import { symbolLocks } from "./symbolLock";
+import { createAlpacaV3Compat } from "./alpaca-v5-compat";
 
 const log = createLogger("AlpacaExecutor");
 const EXECUTABLE_QUOTE_TTL_MS = 30_000;
@@ -252,8 +253,8 @@ export class AlpacaExecutor {
   // ── Broker-side kill switch (2026-08-09) ─────────────────────────────────
   //
   // Alpaca's `suspend_trade` account configuration (PATCH
-  // /v2/account/configurations; SDK: updateAccountConfigurations — see
-  // node_modules/@alpacahq/alpaca-trade-api/dist/resources/account.js) makes
+  // /v2/account/configurations; compat client: updateAccountConfigurations —
+  // see src/executor/alpaca-v5-compat.ts + scripts/panic.ts) makes
   // the ACCOUNT "unable to submit new orders". Its read side is
   // `trade_suspended_by_user` on GET /v2/account. Unlike TRADING_ENABLED /
   // RiskEngine state / governor modes — which live inside ONE process's env
@@ -384,25 +385,21 @@ export class AlpacaExecutor {
   constructor(options: AlpacaExecutorOptions = {}) {
     this.creds = options.credentials ?? null;
     try {
-      const Alpaca = require("@alpacahq/alpaca-trade-api");
-      // The SDK natively supports Connect tokens via `oauth`
-      // (docs.alpaca.markets/us/docs/using-oauth2-and-trading-api). In env
-      // mode the accessors resolve to the exact config.alpaca.* values this
-      // constructor always passed.
-      this.client = new Alpaca(this.oauthToken
-        ? {
-          oauth: this.oauthToken,
-          paper: this.paper,
-          baseUrl: this.baseUrl,
-        }
-        : {
-          keyId: this.keyId,
-          secretKey: this.secretKey,
-          paper: this.paper,
-          baseUrl: this.baseUrl,
-        });
-    } catch {
-      log.warn("@alpacahq/alpaca-trade-api not available");
+      // SDK v5 behind the v3-shaped compat adapter (alpaca-v5-compat.ts):
+      // this.client keeps the exact v3 surface this executor (and its test
+      // fakes) consume — same methods, raw snake_case JSON out, typed v5
+      // errors through (they satisfy every error parse below). OAuth Connect
+      // tokens map to v5 `accessToken`. In env mode the accessors resolve to
+      // the exact config.alpaca.* values this constructor always passed.
+      this.client = createAlpacaV3Compat({
+        keyId: this.keyId,
+        secretKey: this.secretKey,
+        oauth: this.oauthToken,
+        paper: this.paper,
+        baseUrl: this.baseUrl,
+      });
+    } catch (e: any) {
+      log.warn(`@alpacahq/alpaca-trade-api not available (${e?.message ?? e})`);
     }
   }
 

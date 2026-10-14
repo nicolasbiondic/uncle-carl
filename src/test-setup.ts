@@ -14,12 +14,13 @@
 // dotenv runs exactly once, module-cached) and delete AFTER: isTradingEnabled()
 // is a per-call process.env read, so the deletion sticks for every test.
 // Gate tests still set the variable explicitly and restore it.
-// The Alpaca SDK ALSO runs its own vendored dotenv at import (non-override:
-// it repopulates DELETED vars from .env). Without importing it here, the
-// first test file that lazily pulled the SDK (src/account/coinmUsdcSleeves →
-// AccountManager → alpaca-executor) resurrected TRADING_ENABLED=false
-// mid-suite and poisoned every file after it. Import every import-time
-// dotenv caller FIRST (module cache makes each run exactly once), then strip.
+// The v3 Alpaca SDK ALSO ran its own vendored dotenv at import (non-override:
+// it repopulated DELETED vars from .env) — the first test file that lazily
+// pulled the SDK resurrected TRADING_ENABLED=false mid-suite and poisoned
+// every file after it. SDK v5 (2026-10-14) no longer loads dotenv at all, so
+// that resurrect vector is gone; the import stays as cheap insurance that any
+// future import-time env reader in the SDK runs BEFORE the strips below
+// (module cache makes it run exactly once).
 import { config } from "./config";
 import "@alpacahq/alpaca-trade-api";
 delete process.env.TRADING_ENABLED;
