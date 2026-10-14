@@ -708,6 +708,32 @@ function createTables() {
       applied_at INTEGER,
       PRIMARY KEY (symbol, ca_type, ex_date)
     );
+
+    -- ═══ P0 (2026-10-09): decision-pass funnel telemetry ═══
+    -- One row per engine decision pass (MomentumEngine.tick /
+    -- MeanRevEngine.runDaily), written by the injected DecisionRecorder
+    -- (src/telemetry/decisionRecorder.ts). PURE telemetry: never read by any
+    -- trading path; the recorder never throws into an engine. blocks is a
+    -- JSON object { reason: count } with stable keys (risk_gate, regime,
+    -- market_trend, trading_disabled, gross_cap, capacity, no_slot, no_data,
+    -- open_failed); block_note keeps the latest human-readable motive.
+    -- Retention: 90 days (pruned on insert).
+    CREATE TABLE IF NOT EXISTS decision_passes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id TEXT NOT NULL,
+      ts INTEGER NOT NULL,
+      universe INTEGER NOT NULL,
+      evaluated INTEGER NOT NULL,
+      signals_long INTEGER NOT NULL DEFAULT 0,
+      signals_short INTEGER NOT NULL DEFAULT 0,
+      entries INTEGER NOT NULL DEFAULT 0,
+      exits INTEGER NOT NULL DEFAULT 0,
+      blocks TEXT NOT NULL DEFAULT '{}',
+      block_note TEXT,
+      slots_used INTEGER,
+      slots_total INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_decision_passes_account_ts ON decision_passes(account_id, ts);
   `);
 }
 
@@ -1078,6 +1104,34 @@ export const RECONCILE_CLOSE_SQL =
 // in a headline "how is the bot doing" number.
 const V8_ACCOUNTS_SQL = `('${ALL_PROFILE_IDS.join("','")}')`;
 
+/**
+ * P0 volume KPI (2026-10-09): "trades" for the owner's 30/day goal are
+ * EXECUTED ORDERS on the real accounts — the entry and the exit of a position
+ * count as SEPARATE orders. Scope: v8 live sleeves by default (no shadow_*
+ * books — simulated fills, no broker order behind them), never sync_*-id
+ * reconciliation rows (BrokerSync bookkeeping, not orders the bot placed),
+ * and an exit only counts when a real closing order existed at the broker
+ * (RECONCILE_CLOSE_SQL excludes fabricated closes: BROKER_GONE_404,
+ * *_RECONCILED, MANUAL_CLOSE_UNRECONCILED…). Entries always count — a row
+ * only exists because an order filled (reconcile labels describe the CLOSE).
+ * Shared by getTradingStats.todayTrades/periodTrades (dashboard header) and
+ * the /api/kpis + Telegram volume lines so they can't drift apart.
+ */
+export function countExecutedOrders(sinceMs: number, untilMs?: number, accountId?: string): number {
+  const whereAcc = accountId ? ` AND account_id = ?` : ` AND account_id IN ${V8_ACCOUNTS_SQL}`;
+  const bindAcc = accountId ? [accountId] : [];
+  const until = untilMs ?? Number.MAX_SAFE_INTEGER;
+  // `_` is a single-char wildcard in LIKE — escape it so 'syncX…' ids don't match.
+  const NOT_SYNC = ` AND id NOT LIKE 'sync\\_%' ESCAPE '\\'`;
+  const entries = db.prepare(
+    `SELECT COUNT(*) c FROM trades WHERE entry_time > ? AND entry_time <= ?${NOT_SYNC}${whereAcc}`,
+  ).get(sinceMs, until, ...bindAcc) as any;
+  const exits = db.prepare(
+    `SELECT COUNT(*) c FROM trades WHERE exit_time IS NOT NULL AND exit_time > ? AND exit_time <= ? AND ${RECONCILE_CLOSE_SQL}${NOT_SYNC}${whereAcc}`,
+  ).get(sinceMs, until, ...bindAcc) as any;
+  return (entries?.c ?? 0) + (exits?.c ?? 0);
+}
+
 export function getTradingStats(accountId?: string, periodDays = 1) {
   // No account ⇒ v8 live sleeves only (no shadow_, no legacy, no sync rows).
   const whereAcc = accountId ? ` AND account_id = ?` : ` AND account_id IN ${V8_ACCOUNTS_SQL}`;
@@ -1094,8 +1148,11 @@ export function getTradingStats(accountId?: string, periodDays = 1) {
 
   const todayStart = getETDayStart();
   const RECONCILE_FILTER = ` AND ${RECONCILE_CLOSE_SQL}`;
-  // Count trades opened OR closed today — both are today's trading activity
-  const todayTrades = db.prepare(`SELECT COUNT(*) as count FROM trades WHERE (entry_time > ? OR (exit_time IS NOT NULL AND exit_time > ?))${RECONCILE_FILTER}${whereAcc}`).get(todayStart, todayStart, ...bindAcc) as any;
+  // P0 (2026-10-09): todayTrades counts EXECUTED ORDERS (entry + exit
+  // separately — countExecutedOrders above). The old query counted ROWS
+  // touched today, so a same-day round trip read as 1 when the owner's
+  // 30/day goal counts it as 2 orders.
+  const todayTrades = { count: countExecutedOrders(todayStart, undefined, accountId) };
   const todayPnl = db.prepare(`SELECT COALESCE(SUM(pnl), 0) as total FROM trades WHERE status = 'closed' AND exit_time > ?${RECONCILE_FILTER}${whereAcc}`).get(todayStart, ...bindAcc) as any;
   // v6.0: today's closed trades and win rate (separate from all-time)
   const todayClosed = db.prepare(`SELECT COUNT(*) as count FROM trades WHERE status = 'closed' AND exit_time > ?${RECONCILE_FILTER}${whereAcc}`).get(todayStart, ...bindAcc) as any;
@@ -1107,7 +1164,8 @@ export function getTradingStats(accountId?: string, periodDays = 1) {
   // periodDays===0 ⇒ all-time (epoch 0), for the "All" dashboard window.
   const periodStart = periodDays === 0 ? 0 : periodDays <= 1 ? todayStart : getETDayStart(Date.now() - (periodDays - 1) * 86_400_000);
   const periodPnl = db.prepare(`SELECT COALESCE(SUM(pnl), 0) as total FROM trades WHERE status = 'closed' AND exit_time > ?${RECONCILE_FILTER}${whereAcc}`).get(periodStart, ...bindAcc) as any;
-  const periodTrades = db.prepare(`SELECT COUNT(*) as count FROM trades WHERE (entry_time > ? OR (exit_time IS NOT NULL AND exit_time > ?))${RECONCILE_FILTER}${whereAcc}`).get(periodStart, periodStart, ...bindAcc) as any;
+  // Same order semantics as todayTrades above (periodDays=1 ⇒ identical).
+  const periodTrades = { count: countExecutedOrders(periodStart, undefined, accountId) };
   const periodClosed = db.prepare(`SELECT COUNT(*) as count FROM trades WHERE status = 'closed' AND exit_time > ?${RECONCILE_FILTER}${whereAcc}`).get(periodStart, ...bindAcc) as any;
   const periodWins = db.prepare(`SELECT COUNT(*) as count FROM trades WHERE status = 'closed' AND pnl > 0 AND exit_time > ?${RECONCILE_FILTER}${whereAcc}`).get(periodStart, ...bindAcc) as any;
 
@@ -2505,4 +2563,95 @@ export function getPnlAttribution(days: number): {
   });
   const netPnl = buckets.reduce((s, b) => s + b.totalPnl, 0);
   return { buckets, netPnl, windowDays: days };
+}
+
+// ══════════════════════════════════════════════
+// P0 (2026-10-09): decision-pass funnel telemetry (decision_passes table)
+// ══════════════════════════════════════════════
+
+export interface DecisionPassSnapshot {
+  accountId: string;
+  ts: number;
+  /** Size of the configured universe. */
+  universe: number;
+  /** Symbols with usable candles this pass (≤ universe). */
+  evaluated: number;
+  signalsLong: number;
+  signalsShort: number;
+  /** Orders actually EXECUTED this pass (not merely planned). */
+  entries: number;
+  exits: number;
+  /** { reason: count } — stable keys (see the schema comment). */
+  blocks: Record<string, number>;
+  /** Latest human-readable motive (e.g. the RiskGuard reason). */
+  blockNote?: string;
+  slotsUsed?: number;
+  slotsTotal?: number;
+}
+
+const DECISION_PASS_RETENTION_MS = 90 * 24 * 60 * 60_000;
+
+export function insertDecisionPass(p: DecisionPassSnapshot): void {
+  db.prepare(`
+    INSERT INTO decision_passes (account_id, ts, universe, evaluated, signals_long,
+      signals_short, entries, exits, blocks, block_note, slots_used, slots_total)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    p.accountId, p.ts, p.universe, p.evaluated, p.signalsLong, p.signalsShort,
+    p.entries, p.exits, JSON.stringify(p.blocks ?? {}), p.blockNote ?? null,
+    p.slotsUsed ?? null, p.slotsTotal ?? null,
+  );
+  // 90-day retention, pruned on insert — the table stays small by construction
+  // (≤ ~30 passes/day across every sleeve).
+  db.prepare(`DELETE FROM decision_passes WHERE ts < ?`).run(p.ts - DECISION_PASS_RETENTION_MS);
+}
+
+export interface FunnelAccountSummary {
+  accountId: string;
+  passes: number;
+  /** Universe size of the LATEST pass (universes are config constants). */
+  universe: number;
+  signalsLong: number;
+  signalsShort: number;
+  entries: number;
+  exits: number;
+  blocks: Record<string, number>;
+  lastBlockNote: string | null;
+  slotsUsed: number | null;
+  slotsTotal: number | null;
+  lastTs: number;
+}
+
+/** Aggregate decision passes per account since `sinceMs` (GET /api/funnel). */
+export function getDecisionPassSummary(sinceMs: number): FunnelAccountSummary[] {
+  const rows = db.prepare(
+    `SELECT * FROM decision_passes WHERE ts >= ? ORDER BY account_id ASC, ts ASC`,
+  ).all(sinceMs) as any[];
+  const byAccount = new Map<string, FunnelAccountSummary>();
+  for (const r of rows) {
+    let s = byAccount.get(r.account_id);
+    if (!s) {
+      s = {
+        accountId: r.account_id, passes: 0, universe: 0, signalsLong: 0, signalsShort: 0,
+        entries: 0, exits: 0, blocks: {}, lastBlockNote: null, slotsUsed: null, slotsTotal: null, lastTs: 0,
+      };
+      byAccount.set(r.account_id, s);
+    }
+    s.passes++;
+    s.universe = r.universe;
+    s.signalsLong += r.signals_long;
+    s.signalsShort += r.signals_short;
+    s.entries += r.entries;
+    s.exits += r.exits;
+    let blocks: Record<string, number> = {};
+    try { blocks = JSON.parse(r.blocks || "{}"); } catch {}
+    for (const [k, v] of Object.entries(blocks)) {
+      if (Number.isFinite(v as number) && (v as number) > 0) s.blocks[k] = (s.blocks[k] ?? 0) + (v as number);
+    }
+    if (r.block_note) s.lastBlockNote = r.block_note;
+    if (r.slots_used !== null) s.slotsUsed = r.slots_used;
+    if (r.slots_total !== null) s.slotsTotal = r.slots_total;
+    s.lastTs = r.ts;
+  }
+  return [...byAccount.values()];
 }

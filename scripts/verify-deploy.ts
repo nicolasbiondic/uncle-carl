@@ -14,6 +14,7 @@
 import dotenv from "dotenv";
 import { readdirSync, readFileSync, readlinkSync } from "fs";
 import { getVersionInfo } from "../src/utils/version";
+import { docsOnlyRange } from "./lib/docsOnly";
 
 // Only when EXECUTED as a script — an import-time dotenv({override:true})
 // re-clobbered process.env for every test file that ran after
@@ -75,7 +76,11 @@ async function main() {
 
   let failed = false;
 
-  if (!commitsMatch(remoteCommit, local.commit)) {
+  if (!commitsMatch(remoteCommit, local.commit) && remoteCommit && local.commit !== "unknown" && docsOnlyRange(remoteCommit, local.commit)) {
+    // auto-deploy.sh pulls documentation-only commits without restarting
+    // (scripts/lib/docs-only.sh): the live code IS the disk code.
+    console.log(`✅ Live process runs ${remoteCommit}; the commits since then up to ${local.commit} only touch documentation (pulled without a restart).`);
+  } else if (!commitsMatch(remoteCommit, local.commit)) {
     console.error(
       `❌ MISMATCH — the running process is NOT on this checkout's commit.\n` +
       `   live=${remoteCommit ?? "unknown"}  disk=${local.commit}\n` +

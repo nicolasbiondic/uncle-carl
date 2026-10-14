@@ -43,6 +43,7 @@ import { sleeveOutput, isPolicyPreventedReason } from "../../ops/sleeveOutput";
 import { eventBus, EVENTS } from "../../utils/events";
 import { isTradingEnabled } from "../../config";
 import { systemClock, type Clock } from "../../utils/clock";
+import type { DecisionRecorder, DecisionPassSnapshot } from "../../telemetry/decisionRecorder";
 
 export interface MomentumBrokerAdapter {
   /** Returns currently open positions on the broker (already in our domain
@@ -236,6 +237,73 @@ export function trailPctFromVol(closes: number[], cfg: TrailStopConfig, barsPerD
   return Math.min(cfg.maxPct, Math.max(cfg.minPct, cfg.kSigma * dailyVol * 100));
 }
 
+/**
+ * Short-only hard-stop distance (line S-bis, V §12-sexies): the inherited
+ * fixed 4% stop was sized for the LONG side's horizon and sank the shorts
+ * (S1: signal/regime exits won, 4%-stop exits lost ~$37/trade). Forms:
+ *   - fixed: entry-anchored distance as a FRACTION (0.08 = 8%) — the
+ *     hardStop "fixed" convention.
+ *   - volScaled: kSigma × the σ of DAILY log returns over the last
+ *     `lookbackDays` COMPLETED UTC daily closes (built from the trading
+ *     bars — on hourly tapes the daily close is the last close of each
+ *     completed UTC day; NO √-scaling of bar-level vol), clamped to
+ *     [minPct, maxPct] PERCENT-units. Fails open to maxPct on short or
+ *     degenerate history (trailPctFromVol's convention).
+ * Longs are never touched. Absent = legacy behavior, byte for byte.
+ */
+export type ShortStopSpec =
+  | { mode: "fixed"; pct: number }
+  | { mode: "volScaled"; kSigma: number; lookbackDays: number; minPct: number; maxPct: number };
+
+/**
+ * Closes of COMPLETED UTC days from a bar series (any bar size): the close
+ * of each UTC day is its last bar's close; a day only counts once a bar
+ * from a LATER day exists or its last bar closes exactly at the next UTC
+ * midnight (daily bars always do). The in-progress day is never visible —
+ * same causality discipline as the replay's dailyClosesFromBars.
+ */
+export function completedDailyCloses(bars: OHLCV[], barMs: number): number[] {
+  const out: number[] = [];
+  let curDay = -1;
+  let curClose = 0;
+  let curLastBarEnd = 0;
+  for (const b of bars) {
+    const day = Math.floor(b.timestamp / 86_400_000);
+    if (day !== curDay) {
+      if (curDay >= 0) out.push(curClose);
+      curDay = day;
+    }
+    curClose = b.close;
+    curLastBarEnd = b.timestamp + barMs;
+  }
+  if (curDay >= 0 && curLastBarEnd % 86_400_000 === 0) out.push(curClose);
+  return out;
+}
+
+/**
+ * Short-stop distance in PERCENT-units for a position opened now, from the
+ * decision-time bar history (closed bars only — the caller passes exactly
+ * what the ranking saw). Pure; shared by the live open path and the replay
+ * simulator so both resolve the identical distance.
+ */
+export function shortStopDistancePct(spec: ShortStopSpec, bars: OHLCV[], barMs: number): number {
+  if (spec.mode === "fixed") return spec.pct * 100;
+  const daily = completedDailyCloses(bars, barMs);
+  const n = Math.min(spec.lookbackDays, daily.length - 1);
+  if (n < 2) return spec.maxPct;
+  const rets: number[] = [];
+  for (let i = daily.length - n; i < daily.length; i++) {
+    const a = daily[i - 1], b = daily[i];
+    if (a > 0 && b > 0) rets.push(Math.log(b / a));
+  }
+  if (rets.length < 2) return spec.maxPct;
+  const mean = rets.reduce((s, x) => s + x, 0) / rets.length;
+  const variance = rets.reduce((s, x) => s + (x - mean) ** 2, 0) / (rets.length - 1);
+  const dailyVol = Math.sqrt(variance);
+  if (!(dailyVol > 0)) return spec.maxPct;
+  return Math.min(spec.maxPct, Math.max(spec.minPct, spec.kSigma * dailyVol * 100));
+}
+
 export interface MarketTrendGateConfig {
   /** Symbol whose DAILY closes define the market regime (e.g. "BTC/USD"). */
   symbol: string;
@@ -350,6 +418,12 @@ export interface MomentumEngineConfig {
    * class as the sleeve_modes 2026-08-08 promotion note.
    */
   volStop?: TrailStopConfig;
+  /** Short-only stop distance (line S-bis — see ShortStopSpec): at a SHORT
+   *  open, `openPosition.stopLossPct` carries this spec's distance instead
+   *  of volStop's; adapters that persist a stop then place it ABOVE the
+   *  entry at the short's own distance. Longs keep volStop/legacy behavior.
+   *  Undefined = OFF (no live sleeve sets it; byte-identical). */
+  shortStop?: ShortStopSpec;
   /** Optional rolling-Sharpe entry gate. Undefined = OFF (current behavior). */
   sharpeGate?: SharpeGateConfig;
   /**
@@ -674,6 +748,11 @@ export interface RebalanceReport {
 export class MomentumEngine {
   private cfg: MomentumEngineConfig;
   private tsm: TimeSeriesMomentum;
+  /** Line-S telemetry (output-only, never read by any decision path): count
+   *  of SHORT entries vetoed by the shared gross-exposure cap. The replay
+   *  harness copies it into ReplayResult.grossCapShortBlocks; live engines
+   *  only ever log the veto. */
+  grossCapShortBlocks = 0;
   private regime: RegimeFilter;
   private riskState: RiskState = { ...INITIAL_RISK_STATE };
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -698,6 +777,28 @@ export class MomentumEngine {
    *  return — conservative, never fabricates a gain). */
   private shadowHeld: string[] = [];
   private shadowPrices = new Map<string, number>();
+  /** P0 funnel telemetry (src/telemetry/decisionRecorder.ts) — injected by
+   *  index.ts AFTER construction, never through the parity-locked portfolio
+   *  plan configs. Pure telemetry: recordDecisionPass below is fail-soft and
+   *  nothing in any decision path reads it back, so tick() behaves byte-
+   *  identically with and without it (locked by decisionRecorder.test.ts). */
+  private decisionRecorder?: DecisionRecorder;
+  private decisionAccountId = "";
+
+  setDecisionRecorder(recorder: DecisionRecorder, accountId: string): void {
+    this.decisionRecorder = recorder;
+    this.decisionAccountId = accountId;
+  }
+
+  /** Telemetry sink — NEVER throws into a tick, never gates anything. */
+  private recordDecisionPass(s: Omit<DecisionPassSnapshot, "accountId">): void {
+    if (!this.decisionRecorder) return;
+    try {
+      this.decisionRecorder.record({ accountId: this.decisionAccountId, ...s });
+    } catch (e: any) {
+      this.log.warn(`decision-pass telemetry failed: ${e?.message ?? e}`);
+    }
+  }
 
   constructor(
     cfg: Partial<MomentumEngineConfig>,
@@ -1133,7 +1234,21 @@ export class MomentumEngine {
         if (heldSymbols.has(sym) || heldShorts.has(sym) || this.cfg.entryEligibility(sym, now)) rankCandles.set(sym, c);
       }
     }
-    let decisions = this.tsm.rank(rankCandles, heldSymbols, heldShorts);
+    // Short-regime gate (line S, opt-in via tsm.shortRegime — see its
+    // TSMConfig docstring): evaluated once per tick with the adapter's
+    // CAUSAL daily closes, verdict handed to rank(). FAIL-CLOSED for
+    // shorts — the opposite of marketTrend's fail-open: missing data must
+    // never author NEW short risk, and a held short without a bear verdict
+    // is decided out at this tick. Undefined when unconfigured: the rank
+    // call is then byte-identical to the legacy three-argument form.
+    const shortRegimeCfg = this.tsm.getConfig().shortRegime;
+    const shortRegimeBearish = shortRegimeCfg ? await this.evaluateShortRegimeBearish(shortRegimeCfg) : undefined;
+    let decisions = this.tsm.rank(
+      rankCandles,
+      heldSymbols,
+      heldShorts,
+      shortRegimeCfg ? { shortRegimeBearish } : undefined,
+    );
 
     // Rolling-Sharpe entry gate (flag-gated): NEW entries only — held
     // positions keep their normal stay/exit logic. Fails open (null) on
@@ -1241,6 +1356,27 @@ export class MomentumEngine {
     // as closes/opens execute below, so it stays accurate without re-fetching.
     const notionalBySymbolSide = new Map(universePositions.map(p => [`${p.symbol}|${p.side}`, Math.abs(p.notional)]));
     let liveGrossNotional = universePositions.reduce((s, p) => s + Math.abs(p.notional), 0);
+    // ── P0 funnel counters (telemetry only — recordDecisionPass at the end;
+    // never read by any branch below). Gate keys count BLOCKED PASSES (one
+    // per tick), entry keys (gross_cap/capacity/no_slot/open_failed) count
+    // blocked/failed ENTRIES.
+    const blockCounts: Record<string, number> = {};
+    let blockNote: string | undefined;
+    const bumpBlock = (key: string, note?: string) => {
+      blockCounts[key] = (blockCounts[key] ?? 0) + 1;
+      if (note) blockNote = note;
+    };
+    if (blocked) {
+      bumpBlock(
+        tradingDisabled ? "trading_disabled" : !canOpen ? "risk_gate" : !regimeCheck.tradeable ? "regime" : "market_trend",
+        blockedReason,
+      );
+    } else if (hasUndecidableHold) {
+      bumpBlock("no_data", `held without usable candles: ${heldWithoutDecision.map(p => p.symbol).join(",")}`);
+    }
+    const noSlotCount = decisions.filter(d => d.noSlot === true).length;
+    if (noSlotCount > 0) blockCounts.no_slot = noSlotCount;
+    let planOpensOk = 0, planClosesOk = 0;
     for (const a of ordered) {
       try {
         if (a.type === "close") {
@@ -1250,6 +1386,7 @@ export class MomentumEngine {
           const res = await this.broker.closePosition({ symbol: a.symbol, side: a.side, ...(a.closeReason ? { closeReason: a.closeReason } : {}) });
           if (res.ok) {
             executed.push(a);
+            planClosesOk++;
             liveGrossNotional -= notionalBySymbolSide.get(`${a.symbol}|${a.side}`) ?? 0;
             this.entryMarks.delete(`${a.symbol}|${a.side}`); // hold ended — drop the clock anchor
             if (sleeve) sleeveOutput.recordClose(sleeve);
@@ -1262,6 +1399,10 @@ export class MomentumEngine {
             if (liveGrossNotional + notionalUsd > cap) {
               const reason = `gross exposure cap: live $${liveGrossNotional.toFixed(0)} + new $${notionalUsd.toFixed(0)} would exceed ${this.cfg.maxGrossExposureMult}× equity ($${cap.toFixed(0)} on $${equity.toFixed(0)} equity)`;
               this.log.warn(`open ${a.symbol} BLOCKED by ${reason}`);
+              bumpBlock("gross_cap", reason);
+              // Line-S telemetry (output-only, not part of any identity):
+              // how often the shared gross cap vetoed a SHORT entry.
+              if (a.side === "sell") this.grossCapShortBlocks++;
               // Policy veto, never reached the broker — see sleeveOutput's
               // isPolicyPreventedReason docstring (B-ops-alerts.md #4).
               if (sleeve) sleeveOutput.recordPreventedByPolicy(sleeve, reason);
@@ -1279,6 +1420,7 @@ export class MomentumEngine {
               const reason = `capacity guard: entry $${notionalUsd.toFixed(0)} > ${cg.maxAdvPct}% of ADV$ $${adv.toFixed(0)} (${cg.lookbackBars}d)`;
               if (cg.mode === "enforce") {
                 this.log.warn(`open ${a.symbol} BLOCKED by ${reason}`);
+                bumpBlock("capacity", reason);
                 if (sleeve) sleeveOutput.recordPreventedByPolicy(sleeve, reason);
                 continue;
               }
@@ -1289,12 +1431,18 @@ export class MomentumEngine {
           // Vol-scaled hard stop (volStop docstring): distance from the SAME
           // decision closes the trail uses; fails open to maxPct inside
           // trailPctFromVol when history is short/degenerate.
-          const stopLossPct = this.cfg.volStop
+          // Short-only override (line S-bis, cfg.shortStop): a SELL open
+          // carries the short's OWN distance — adapters persist the stop
+          // ABOVE entry at this distance. Longs keep the exact legacy line.
+          const stopLossPct = a.side === "sell" && this.cfg.shortStop
+            ? shortStopDistancePct(this.cfg.shortStop, candles.get(a.symbol) ?? [], (this.cfg.tsm.barMinutes ?? DEFAULT_TSM_CONFIG.barMinutes) * 60_000)
+            : this.cfg.volStop
             ? trailPctFromVol((candles.get(a.symbol) ?? []).map(c => c.close), this.cfg.volStop, this.barsPerDay())
             : undefined;
           const res = await this.broker.openPosition({ symbol: a.symbol, side: a.side, notionalUsd, ...(stopLossPct !== undefined ? { stopLossPct } : {}) });
           if (res.ok) {
             executed.push(a);
+            planOpensOk++;
             liveGrossNotional += notionalUsd;
             // Record the TRUE entry time even with the time stop OFF, so a
             // later activation measures real holds instead of first-sightings.
@@ -1303,6 +1451,7 @@ export class MomentumEngine {
           }
           else {
             this.log.warn(`open ${a.symbol} failed: ${res.reason}`);
+            bumpBlock("open_failed", res.reason);
             // A RiskEngine deny / maintenance kill-switch is sound risk
             // management working, not a broken open path — see
             // isPolicyPreventedReason (B-ops-alerts.md #4).
@@ -1336,6 +1485,23 @@ export class MomentumEngine {
       `Rebalance done: equity=$${equity.toFixed(2)}, ${executed.filter(a => a.type === "close").length} close, ${executed.filter(a => a.type === "open").length} open, ${plan.unchanged.length} hold. Realised since last: ${realisedValid ? `$${realised.toFixed(2)}` : "unknown (read failed)"}`
     );
 
+    // P0 funnel telemetry — recorded after every completed pass, fail-soft.
+    this.recordDecisionPass({
+      ts: now,
+      universe: this.cfg.universe.length,
+      evaluated: candles.size,
+      signalsLong: decisions.filter(d => d.action === "long").length,
+      signalsShort: decisions.filter(d => d.action === "short").length,
+      entries: planOpensOk,
+      exits: executed.filter(a => a.type === "close").length,
+      blocks: blockCounts,
+      ...(blockNote !== undefined ? { blockNote } : {}),
+      // universePositions reflects the post-trail/cutover snapshot; plan
+      // closes/opens executed above adjust it to the end-of-tick occupancy.
+      slotsUsed: Math.max(0, universePositions.length - planClosesOk + planOpensOk),
+      slotsTotal: (this.cfg.tsm.maxLongs ?? DEFAULT_TSM_CONFIG.maxLongs) + (this.cfg.tsm.maxShorts ?? DEFAULT_TSM_CONFIG.maxShorts),
+    });
+
     if (equityValid && realisedValid) this.beatHeartbeat();
     return {
       timestamp: now,
@@ -1353,6 +1519,35 @@ export class MomentumEngine {
 
   private barsPerDay(): number {
     return (24 * 60) / (this.cfg.tsm.barMinutes ?? DEFAULT_TSM_CONFIG.barMinutes);
+  }
+
+  /**
+   * Short-regime verdict (line S — tsm.shortRegime REQUIRED by the caller):
+   * true ⟺ refSymbol's last CLOSED UTC daily close sits below the SMA of
+   * its last maDays daily closes (marketTrendBlocked's exact math, causal
+   * via fetchDailyCloses). Every failure path returns FALSE (fail CLOSED
+   * for shorts): adapter without fetchDailyCloses, throwing/empty fetch,
+   * fewer than maDays closed days, degenerate closes. Longs are never
+   * touched by this verdict.
+   */
+  private async evaluateShortRegimeBearish({ refSymbol, maDays }: { refSymbol: string; maDays: number }): Promise<boolean> {
+    if (!this.broker.fetchDailyCloses) {
+      this.log.warn(`short regime: adapter has no fetchDailyCloses — failing CLOSED (no shorts; ${refSymbol} SMA${maDays} unverifiable)`);
+      return false;
+    }
+    let closes: number[];
+    try {
+      closes = await this.broker.fetchDailyCloses(refSymbol, maDays);
+    } catch (e: any) {
+      this.log.warn(`short regime: fetchDailyCloses ${refSymbol} failed (${e.message}) — failing CLOSED (no shorts)`);
+      return false;
+    }
+    const verdict = marketTrendBlocked(closes, maDays);
+    if (verdict === null) {
+      this.log.warn(`short regime: ${closes?.length ?? 0} closed daily closes for ${refSymbol} (< ${maDays} or degenerate) — failing CLOSED (no shorts)`);
+      return false;
+    }
+    return verdict;
   }
 
   /**

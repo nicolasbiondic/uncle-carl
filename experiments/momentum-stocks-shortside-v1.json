@@ -1,0 +1,280 @@
+{
+  "name": "momentum-stocks-shortside-v1",
+  "sleeve": "stocks",
+  "description": "PRE-REGISTRO 2026-10-10 (linea S2 de docs/reports/V-plan-volumen-rentabilidad.md SS12-quinquies, malla CERRADA por el director; commiteado ANTES de correr). EL LADO CORTO REDISENADO sobre momentum_stocks: cada candidato es el kernel vivo k150 (el candidato del control cb516547, byte a byte, incl. maxGrossExposureMult 1.725 que rige para largos y cortos JUNTOS) MAS los ejes cortos \u2014 shortRegime {SPY, SMA200 de cierres diarios CERRADOS, fail-closed}, shortUniverse [SPY, QQQ] (cortos SOLO en ETF de indice, nunca acciones sueltas), umbrales propios y maxShorts propio. MALLA CERRADA de 4: maxShorts {1,2} x (shortEntryPct, shortExitPct) {(-5,+2),(-5,0)}. COSTES: los del control MAS costs.*.shortBorrow 0.5%/anio sobre el nocional corto por dia natural (ademas del marginInterest 6.5% del manifest, que ya financia el bruto sobre equity). VENTANA/folds/datos/asOf identicos al control (hist-sp500.db, dataHash cda09aba reproducido en esta rama antes de correr). CRITERIOS SS12-quinquies (VALIDADO solo si cumple TODOS, scripts/short-side-eval.ts): (1) cadena OOS pura; (2) Sharpe OOS base >= control (1.1217); (3) maxDD OOS <= control (31.17%); (4) P&L neto de los cortos > 0 con costes y prestamo; (5) Sharpe stress >= control stress (1.1098); (6) PSR outer >= 0.95. SE REPORTA: ordenes/dia anadidas, P&L de cortos por anio, tiempo en regimen bajista, vetos del tope bruto a cortos. Gates del manifest = control, sin cambios. TRIAL ACCOUNTING: +4; base 359 -> 363 de este lote (S1 en paralelo, misma base; el director resuelve el conteo al integrar). complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 359,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-24",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0,
+      "marginInterest": {
+        "annualRate": 0.065
+      },
+      "shortBorrow": {
+        "annualRate": 0.005
+      }
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2,
+      "marginInterest": {
+        "annualRate": 0.065
+      },
+      "shortBorrow": {
+        "annualRate": 0.005
+      }
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "s2-ms1-e5x2",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.1875,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 1,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "lookbackDaysList": [
+        63,
+        126,
+        252
+      ],
+      "maxGrossExposureMult": 1.725,
+      "shortEntryPct": -5,
+      "shortExitPct": 2,
+      "shortRegime": {
+        "refSymbol": "SPY",
+        "maDays": 200
+      },
+      "shortUniverse": [
+        "SPY",
+        "QQQ"
+      ]
+    },
+    {
+      "name": "s2-ms1-e5x0",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.1875,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 1,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "lookbackDaysList": [
+        63,
+        126,
+        252
+      ],
+      "maxGrossExposureMult": 1.725,
+      "shortEntryPct": -5,
+      "shortExitPct": 0,
+      "shortRegime": {
+        "refSymbol": "SPY",
+        "maDays": 200
+      },
+      "shortUniverse": [
+        "SPY",
+        "QQQ"
+      ]
+    },
+    {
+      "name": "s2-ms2-e5x2",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.1875,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 2,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "lookbackDaysList": [
+        63,
+        126,
+        252
+      ],
+      "maxGrossExposureMult": 1.725,
+      "shortEntryPct": -5,
+      "shortExitPct": 2,
+      "shortRegime": {
+        "refSymbol": "SPY",
+        "maDays": 200
+      },
+      "shortUniverse": [
+        "SPY",
+        "QQQ"
+      ]
+    },
+    {
+      "name": "s2-ms2-e5x0",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.1875,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 2,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "lookbackDaysList": [
+        63,
+        126,
+        252
+      ],
+      "maxGrossExposureMult": 1.725,
+      "shortEntryPct": -5,
+      "shortExitPct": 0,
+      "shortRegime": {
+        "refSymbol": "SPY",
+        "maDays": 200
+      },
+      "shortUniverse": [
+        "SPY",
+        "QQQ"
+      ]
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

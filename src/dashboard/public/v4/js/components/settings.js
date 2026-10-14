@@ -2,9 +2,16 @@
 // sessions, preferences, installation. Mounted by main.js's router
 // (#/ajustes); the old slideover + "keys live in .env" block are gone —
 // broker credentials are managed in the Cuentas page (platform registry).
+// Layout (2026-10-11, owner: "demasiado espacio en blanco … hazlo en varias
+// columnas"): cards in three columns that collapse to two and then one on
+// narrower screens (.set-grid in app.css). Same day, owner: "Settings y
+// Accounts podrían estar juntos" — the broker accounts (accounts.js, the
+// retired #/cuentas page) joined the middle column:
+//   you (account, preferences) | connections (brokers, sessions) | system (sign-in, installation)
 import { api } from "../api.js";
 import { store, t } from "../store.js";
 import { esc, icon } from "../ui.js";
+import { mountAccounts } from "./accounts.js";
 
 // ── pure helpers (unit-tested in settings.test.js) ───────────────────────
 
@@ -36,22 +43,24 @@ export function loginMethodsHtml(m) {
 }
 
 export function sessionRowHtml(s) {
-  return `<div class="set-row" data-sess="${esc(s.handle)}">
-    <span>
+  return `<div class="set-row set-sess" data-sess="${esc(s.handle)}">
+    <span class="sess-main">
       <b>${esc(deviceLabel(s.device))}</b>${s.current ? ` <span class="chip">${t("this session", "esta sesión")}</span>` : ""}
-      <span class="muted" style="display:block;font-size:var(--t-xs)" title="${esc(s.device || "")}">${esc(s.ip || "")} · ${t("since", "desde")} ${esc(fmtTs(s.createdAt))} · ${t("active", "activa")} ${esc(fmtTs(s.lastActivity))}</span>
+      <span class="muted sess-meta" title="${esc(s.device || "")}">${esc(s.ip || "")} · ${t("since", "desde")} ${esc(fmtTs(s.createdAt))} · ${t("active", "activa")} ${esc(fmtTs(s.lastActivity))}</span>
     </span>
-    <button class="acc-btn danger" data-sess-revoke="${esc(s.handle)}">${s.current ? t("Log out", "Salir") : t("Revoke", "Revocar")}</button>
+    <button class="acc-btn danger sm" data-sess-revoke="${esc(s.handle)}">${s.current ? t("Log out", "Salir") : t("Revoke", "Revocar")}</button>
   </div>`;
 }
 
 // ── page ─────────────────────────────────────────────────────────────────
 
-const section = (title, bodyHtml) =>
-  `<div class="page-section"><span class="card-note">${esc(title)}</span>${bodyHtml}</div>`;
+const card = (id, iconName, title, bodyHtml) =>
+  `<section class="set-card" data-set-card="${id}"><h4 class="set-card-h">${icon(iconName, 13)} ${esc(title)}</h4>${bodyHtml}</section>`;
+
+const COPY_LABEL = () => `${icon("copy", 12)} ${t("Copy", "Copiar")}`;
 
 function copyBtn(value, label) {
-  return `<button class="acc-btn" data-copy="${esc(value)}" aria-label="${esc(label)}" title="${esc(label)}">${icon("copy", 12)} ${t("Copy", "Copiar")}</button>`;
+  return `<button class="acc-btn sm" data-copy="${esc(value)}" aria-label="${esc(label)}" title="${esc(label)}">${COPY_LABEL()}</button>`;
 }
 
 function preferencesHtml(s) {
@@ -62,22 +71,39 @@ function preferencesHtml(s) {
     <div class="set-row"><span>${t("Default window", "Ventana por defecto")}</span>${seg("period", [[1, t("Today", "Hoy")], [7, "7D"], [30, "30D"], [0, t("All", "Todo")]], s.period)}</div>`;
 }
 
+const row = (label, valueHtml) => `<div class="set-row"><span>${esc(label)}</span><span class="set-v">${valueHtml}</span></div>`;
+
 function accountHtml(me, pm) {
-  const row = (label, valueHtml) => `<div class="set-row"><span>${esc(label)}</span><span class="set-v">${valueHtml}</span></div>`;
   let html = row(t("Name", "Nombre"), esc(me?.displayName || "—"))
     + row(t("Username", "Usuario"), `<code>${esc(me?.username || "—")}</code>`)
     + row(t("Role", "Rol"), esc(me?.role === "admin" ? t("Admin (owner)", "Admin (dueño)") : me?.role || "—"));
-  if (pm?.accountId) html += row(t("Account ID", "ID de cuenta"), `<code>${esc(pm.accountId)}</code> ${copyBtn(pm.accountId, t("Copy account ID", "Copiar ID de cuenta"))}`);
-  if (pm?.instanceId) html += row(t("Installation ID", "ID de instalación"), `<code style="font-size:var(--t-xs)">${esc(pm.instanceId)}</code> ${copyBtn(pm.instanceId, t("Copy installation ID", "Copiar ID de instalación"))}`);
+  if (pm?.accountId) html += row(t("Account ID", "ID de cuenta"), `<code class="set-id">${esc(pm.accountId)}</code> ${copyBtn(pm.accountId, t("Copy account ID", "Copiar ID de cuenta"))}`);
   return html;
 }
 
+/** The installation ID lives with the installation it identifies (it sat in
+ *  the Account section until 2026-10-11). */
 function installationHtml(pm) {
-  const row = (label, v) => `<div class="set-row"><span>${esc(label)}</span><span class="set-v">${v}</span></div>`;
-  return row("Commit", pm?.commit ? `<code>${esc(pm.commit)}</code>` : "—")
+  return (pm?.instanceId ? row(t("Installation ID", "ID de instalación"), `<code class="set-id">${esc(pm.instanceId)}</code> ${copyBtn(pm.instanceId, t("Copy installation ID", "Copiar ID de instalación"))}`) : "")
+    + row("Commit", pm?.commit ? `<code>${esc(pm.commit)}</code>` : "—")
     + row(t("Accounts mode", "Modo de cuentas"), `<code>${esc(pm?.accountsSource || "env")}</code>`)
     + row(t("Portfolios source", "Fuente de portafolios"), `<code>${esc(pm?.portfoliosSource || "code")}</code>`)
     + row(t("Public URL", "URL pública"), pm?.publicUrl ? `<code>${esc(pm.publicUrl)}</code>` : `<span class="muted">${t("not set", "sin configurar")}</span>`);
+}
+
+/** The whole page: three columns of cards (pure — settings.test.js).
+ *  Sessions load after mount into #setSessions. */
+export function settingsLayoutHtml(s) {
+  const me = s.me;
+  const pm = s.platformMe;
+  const docsNote = `<div class="muted page-note">${t(
+    "Sign-in methods are configured on the server — see", "Los métodos de acceso se configuran en el servidor — ver",
+  )} <code>docs/platform/self-hosting.md</code></div>`;
+  return `<div class="set-grid">
+    <div class="set-col">${card("account", "user", t("Account", "Cuenta"), accountHtml(me, pm))}${card("preferences", "settings", t("Preferences", "Preferencias"), preferencesHtml(s))}</div>
+    <div class="set-col">${card("brokers", "coin", t("Broker accounts", "Cuentas de broker"), `<div id="setBrokers"></div>`)}${card("sessions", "list", t("Sessions", "Sesiones"), `<div id="setSessions"><div class="muted">…</div></div>`)}</div>
+    <div class="set-col">${card("signin", "shield", t("Sign-in", "Inicio de sesión"), loginMethodsHtml(pm?.loginMethods ?? { password: true }) + docsNote)}${card("installation", "box", t("Installation", "Instalación"), installationHtml(pm))}</div>
+  </div>`;
 }
 
 let host = null;
@@ -91,7 +117,7 @@ async function loadSessions() {
   const list = data?.sessions;
   if (!list) { box.innerHTML = `<div class="muted">${t("Session list unavailable on this server.", "Lista de sesiones no disponible en este servidor.")}</div>`; return; }
   box.innerHTML = list.map(sessionRowHtml).join("")
-    + (list.length > 1 ? `<button class="acc-btn" data-sess-others style="margin-top:var(--s2)">${t("Log out other sessions", "Cerrar las demás sesiones")}</button>` : "");
+    + (list.length > 1 ? `<button class="acc-btn sm set-others" data-sess-others>${t("Log out other sessions", "Cerrar las demás sesiones")}</button>` : "");
 }
 
 /** Mounts the Ajustes page into `host` (a fresh #pageBody element).
@@ -99,21 +125,11 @@ async function loadSessions() {
 export async function mountSettings(hostEl, onChange) {
   host = hostEl;
   onChangeCb = onChange;
-  const s = store.state;
-  const me = s.me;
-  const pm = s.platformMe;
-  const docsNote = `<div class="muted page-note">${t(
-    "Sign-in methods are configured on the server — see", "Los métodos de acceso se configuran en el servidor — ver",
-  )} <code>docs/platform/self-hosting.md</code></div>`;
-  const accountsLink = `<div class="muted page-note">${t("Broker API keys are managed in", "Las claves API de broker se gestionan en")} <a class="lnk" href="#/cuentas">${t("Accounts", "Cuentas")}</a>.</div>`;
-  host.innerHTML =
-    section(t("Account", "Cuenta"), accountHtml(me, pm))
-    + section(t("Sign-in", "Inicio de sesión"), loginMethodsHtml(pm?.loginMethods ?? { password: true }) + docsNote)
-    + section(t("Sessions", "Sesiones"), `<div id="setSessions"><div class="muted">…</div></div>`)
-    + section(t("Preferences", "Preferencias"), preferencesHtml(s))
-    + section(t("Installation", "Instalación"), installationHtml(pm) + accountsLink);
+  host.innerHTML = settingsLayoutHtml(store.state);
   host.addEventListener("click", onClick);
   loadSessions().catch(() => {});
+  const brokers = host.querySelector("#setBrokers");
+  if (brokers) mountAccounts(brokers).catch(() => {});
 }
 
 async function onClick(e) {
@@ -128,7 +144,12 @@ async function onClick(e) {
   }
   const copy = e.target.closest("[data-copy]");
   if (copy) {
-    try { await navigator.clipboard.writeText(copy.dataset.copy); copy.classList.add("on"); setTimeout(() => copy.classList.remove("on"), 800); } catch {}
+    try {
+      await navigator.clipboard.writeText(copy.dataset.copy);
+      copy.classList.add("on");
+      copy.textContent = `✓ ${t("Copied", "Copiado")}`;
+      setTimeout(() => { copy.classList.remove("on"); copy.innerHTML = COPY_LABEL(); }, 1200);
+    } catch {}
     return;
   }
   const revoke = e.target.closest("[data-sess-revoke]");

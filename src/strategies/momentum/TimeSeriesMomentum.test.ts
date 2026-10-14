@@ -85,6 +85,54 @@ describe("TimeSeriesMomentum", () => {
     expect(tsm.rank(m, undefined, new Set(["HELD"])).find(d => d.symbol === "HELD")?.action).toBe("short");
   });
 
+  // ── Line S: shortRegime / shortUniverse opt-in gates ──────────────────
+  test("identity: absent short gates + omitted opts = byte-identical decisions (legacy callers)", () => {
+    const m = new Map<string, OHLCV[]>();
+    m.set("DOWN", ramp(100, 70));
+    m.set("UP", ramp(100, 130));
+    m.set("MILD", ramp(100, 98));
+    const legacy = new TimeSeriesMomentum({ maxShorts: 2 }).rank(m, new Set(["UP"]), new Set(["DOWN"]));
+    const withOpts = new TimeSeriesMomentum({ maxShorts: 2 }).rank(m, new Set(["UP"]), new Set(["DOWN"]), undefined);
+    const withEmptyOpts = new TimeSeriesMomentum({ maxShorts: 2 }).rank(m, new Set(["UP"]), new Set(["DOWN"]), {});
+    expect(withOpts).toEqual(legacy);
+    expect(withEmptyOpts).toEqual(legacy);
+  });
+
+  test("shortRegime: no bear verdict = no short ENTRY (fail closed, incl. missing opts)", () => {
+    const m = new Map<string, OHLCV[]>();
+    m.set("DOWN", ramp(100, 70));
+    const tsm = new TimeSeriesMomentum({ maxShorts: 4, shortRegime: { refSymbol: "BTC/USD", maDays: 200 } });
+    expect(tsm.rank(m).find(d => d.symbol === "DOWN")?.action).toBe("flat"); // opts omitted
+    expect(tsm.rank(m, undefined, undefined, { shortRegimeBearish: false }).find(d => d.symbol === "DOWN")?.action).toBe("flat");
+    expect(tsm.rank(m, undefined, undefined, { shortRegimeBearish: true }).find(d => d.symbol === "DOWN")?.action).toBe("short");
+  });
+
+  test("shortRegime: a HELD short loses its stay signal when the regime ends (decision = exit)", () => {
+    const m = new Map<string, OHLCV[]>();
+    m.set("HELD", ramp(100, 97)); // stay-valid short absent the regime gate
+    const tsm = new TimeSeriesMomentum({ maxShorts: 4, shortRegime: { refSymbol: "BTC/USD", maDays: 200 } });
+    const held = new Set(["HELD"]);
+    expect(tsm.rank(m, undefined, held, { shortRegimeBearish: true }).find(d => d.symbol === "HELD")?.action).toBe("short");
+    expect(tsm.rank(m, undefined, held, { shortRegimeBearish: false }).find(d => d.symbol === "HELD")?.action).toBe("flat");
+  });
+
+  test("shortRegime: longs are never touched by the regime verdict", () => {
+    const m = new Map<string, OHLCV[]>();
+    m.set("UP", ramp(100, 130));
+    const tsm = new TimeSeriesMomentum({ maxShorts: 4, shortRegime: { refSymbol: "BTC/USD", maDays: 200 } });
+    expect(tsm.rank(m, undefined, undefined, { shortRegimeBearish: false }).find(d => d.symbol === "UP")?.action).toBe("long");
+  });
+
+  test("shortUniverse: only listed symbols may fill short slots; outsiders stay flat", () => {
+    const m = new Map<string, OHLCV[]>();
+    m.set("SPY", ramp(100, 70));
+    m.set("AAPL", ramp(100, 60)); // worse trend, but not shortable
+    const tsm = new TimeSeriesMomentum({ maxShorts: 2, shortUniverse: ["SPY", "QQQ"] });
+    const d = tsm.rank(m);
+    expect(d.find(x => x.symbol === "SPY")?.action).toBe("short");
+    expect(d.find(x => x.symbol === "AAPL")?.action).toBe("flat");
+  });
+
   test("maxShorts caps the number of short positions, worst |r| picked first", () => {
     const m = new Map<string, OHLCV[]>();
     for (let i = 0; i < 6; i++) m.set(`S${i}`, ramp(100, 80 - i * 2)); // all downtrending, S5 worst

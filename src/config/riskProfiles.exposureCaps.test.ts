@@ -39,11 +39,11 @@ describe("sleeve max gross-exposure caps (locked against REAL production wiring,
     expect(GROSS_CAP_HEADROOM).toBe(1.15);
   });
 
-  test("momentum_stocks: sizing 0.125 x 8 = 1.0x — since 2026-09-25 (k8-s8 pure chain 5a5a9577); backstop 1.15x since 2026-10-07", () => {
-    expect(MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT).toBe(0.125);
+  test("momentum_stocks: sizing 0.1875 x 8 = 1.5x since 2026-10-10 (line E quorum, k150 pure chain cb516547); backstop 1.725x", () => {
+    expect(MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT).toBe(0.1875);
     expect(MOMENTUM_STOCKS_MAX_LONGS).toBe(8);
-    expect(MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT * MOMENTUM_STOCKS_MAX_LONGS).toBe(1.0);
-    expect(MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT).toBeCloseTo(1.15, 10);
+    expect(MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT * MOMENTUM_STOCKS_MAX_LONGS).toBe(1.5);
+    expect(MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT).toBeCloseTo(1.725, 10);
   });
 
   test("momentum_crypto: sizing 0.375 x 4 = 1.5x; backstop 1.725x since 2026-10-07", () => {
@@ -73,19 +73,22 @@ describe("sleeve max gross-exposure caps (locked against REAL production wiring,
     expect(MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT).toBeCloseTo(0.966, 10);
   });
 
-  test("the two Alpaca sleeves' caps fit inside the shared account without margin", () => {
-    // momentum_stocks 1.15x of its ledger + meanrev 0.966x of its base, both
-    // ledgers seeded at $50k: the theoretical max is 2.116 x $50k = $105.8k —
-    // still below the ~$110k Alpaca paper equity (tighter than the pre-G
-    // 1.84x = $92k, re-checked consciously when applying the headroom), so
-    // neither sleeve's entries can be starved of cash by the other (Reg-T 2x
-    // is not needed; the shared-account guard in AlpacaMomentumAdapter is the
-    // belt for the residual overlap). Locked to the exact sum so raising
-    // either cap forces a conscious re-check.
-    expect(MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT + MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT).toBeCloseTo(2.116, 10);
+  test("the two Alpaca sleeves' caps fit inside the owner's 1.8x leverage budget of the shared account", () => {
+    // momentum_stocks 1.725x of its ledger + meanrev 0.966x of its base, both
+    // ledgers seeded at $50k: the theoretical max is 2.691 x $50k = $134.6k.
+    // Since line E (2026-10-10) that is ABOVE the ~$108k Alpaca equity, i.e.
+    // it uses margin on purpose: the k150 chain pays 6.5%/yr Reg-T interest
+    // on it. It stays at ~1.24x of the account — inside the owner's 1.8x
+    // budget (plan V §9) and the broker's 2x overnight Reg-T; the
+    // shared-account guard in AlpacaMomentumAdapter blocks anything the broker
+    // would reject. (2.116x = $105.8k, no margin, until 2026-10-10.) Locked
+    // to the exact sum so raising either cap forces a conscious re-check.
+    expect(MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT + MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT).toBeCloseTo(2.691, 10);
+    const alpacaEquity = 108_300; // 2026-10-10
+    expect(((MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT + MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT) * 50_000) / alpacaEquity).toBeLessThan(1.8);
   });
 
-  test("would FAIL if momentum_stocks' theoretical cap silently escalated (e.g. maxLongs 8->9, or notionalPctPerSlot 0.125->0.25)", () => {
+  test("would FAIL if momentum_stocks' theoretical cap silently escalated (e.g. maxLongs 8->9, or notionalPctPerSlot 0.1875->0.25)", () => {
     // Simulates the exact drift the audit found possible today: nothing
     // currently stops either number from moving independently. This test
     // hardcodes the EXPECTED product so any future change to either
@@ -93,7 +96,7 @@ describe("sleeve max gross-exposure caps (locked against REAL production wiring,
     // index.ts must also consciously update this literal for the suite to
     // stay green — that's the "someone raised leverage without updating it"
     // trip-wire.
-    const declaredTheoreticalMax = 1.0; // 2.0 until 2026-09-23
+    const declaredTheoreticalMax = 1.5; // 1.0 from 2026-09-23 to 2026-10-10, 2.0 before
     expect(MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT * MOMENTUM_STOCKS_MAX_LONGS).toBe(declaredTheoreticalMax);
     // The next escalation this audit specifically flagged as "wouldn't break
     // anything today" — proving it WOULD break this lock now.
@@ -101,7 +104,7 @@ describe("sleeve max gross-exposure caps (locked against REAL production wiring,
     expect(MOMENTUM_STOCKS_MAX_LONGS * 0.25).not.toBe(declaredTheoreticalMax);
   });
 
-  test("RISK_PROFILES.momentum_stocks.leverage is no longer a lying field — matches its real 1.0x SIZING gross (the backstop above it carries the measured headroom)", () => {
+  test("RISK_PROFILES.momentum_stocks.leverage is no longer a lying field — matches its real 1.5x SIZING gross (the backstop above it carries the measured headroom)", () => {
     expect(RISK_PROFILES.momentum_stocks.leverage).toBe(MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT * MOMENTUM_STOCKS_MAX_LONGS);
     expect(RISK_PROFILES.momentum_stocks.leverage * GROSS_CAP_HEADROOM).toBeCloseTo(MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT, 10);
   });

@@ -78,6 +78,21 @@ export interface InstanceConfig {
    *  binance}`. `binance` covers BOTH USDⓈ-M pools (USDT + USDC) of the
    *  same account; COIN-M stays .env-configured. */
   runtimeAccounts: { alpaca: string | null; binance: string | null };
+  /** Owner KPI goals (P0, 2026-10-09): env KPI_TARGET_TRADES_PER_DAY /
+   *  KPI_TARGET_DAILY_RETURN_PCT / KPI_RISK_BUDGET_DD_PCT > instance.json
+   *  `kpiTargets.{tradesPerDay,dailyReturnPct,riskBudgetDdPct}`. null =
+   *  unset — the dashboard/Telegram show the raw figures without a goal
+   *  (fresh installs and forks have no owner quota). */
+  kpiTargets: KpiTargets;
+}
+
+export interface KpiTargets {
+  /** Executed orders per day that count as 100% (owner: 30). */
+  tradesPerDay: number | null;
+  /** Daily compounded return goal, in percent (owner: 0.12). */
+  dailyReturnPct: number | null;
+  /** Max drawdown budget from the peak, in percent (owner: 25). */
+  riskBudgetDdPct: number | null;
 }
 
 // ── dataDir ────────────────────────────────────────────────────────────────
@@ -145,6 +160,13 @@ function parseBrokerOAuthApp(raw: any): BrokerOAuthAppConfig | null {
   const clientId = str(raw?.clientId);
   const clientSecret = str(raw?.clientSecret);
   return clientId && clientSecret ? { clientId, clientSecret } : null;
+}
+
+/** Positive finite number (string or number input), else null. Tolerant by
+ *  the same contract as the rest of this loader: garbage never crashes. */
+function posNum(v: any): number | null {
+  const n = typeof v === "string" ? Number(v.trim()) : typeof v === "number" ? v : NaN;
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
 // ── Env overrides (precedence: env > instance.json > defaults) ─────────────
@@ -216,6 +238,11 @@ export function loadInstanceConfig(): InstanceConfig {
     runtimeAccounts: {
       alpaca: envStr("RUNTIME_ACCOUNT_ALPACA") ?? str(file?.runtimeAccounts?.alpaca),
       binance: envStr("RUNTIME_ACCOUNT_BINANCE") ?? str(file?.runtimeAccounts?.binance),
+    },
+    kpiTargets: {
+      tradesPerDay: posNum(envStr("KPI_TARGET_TRADES_PER_DAY")) ?? posNum(file?.kpiTargets?.tradesPerDay),
+      dailyReturnPct: posNum(envStr("KPI_TARGET_DAILY_RETURN_PCT")) ?? posNum(file?.kpiTargets?.dailyReturnPct),
+      riskBudgetDdPct: posNum(envStr("KPI_RISK_BUDGET_DD_PCT")) ?? posNum(file?.kpiTargets?.riskBudgetDdPct),
     },
   };
   return cached;

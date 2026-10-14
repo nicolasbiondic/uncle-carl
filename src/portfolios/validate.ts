@@ -36,7 +36,7 @@ import type {
  *  by validate.test.ts (data mirror, not an import: liveSleeveConfigs
  *  imports src/index.ts and this module sits UNDER it in the import graph). */
 export const VALIDATED_PRESETS: Record<string, { template: PortfolioTemplate; manifestPath: string }> = {
-  momentum_stocks: { template: "momentum_tsm", manifestPath: "experiments/momentum-stocks-daily-blend3-pure-v1.json" },
+  momentum_stocks: { template: "momentum_tsm", manifestPath: "experiments/momentum-stocks-daily-blend3-k150-exposure-v1.json" },
   meanrev_stocks: { template: "meanrev_connors", manifestPath: "experiments/meanrev-slot12-pure-v1.json" },
   momentum_crypto: { template: "momentum_tsm", manifestPath: "experiments/momentum-crypto-2026w-control-pure-v1.json" },
   momentum_crypto_usdc: { template: "momentum_tsm", manifestPath: "experiments/momentum-crypto-usdc-daily-s5-pure-v1.json" },

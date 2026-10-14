@@ -179,6 +179,38 @@ when it has no fresh broker reading). Changes apply on the next restart.
 Seeded portfolios you never edit follow the shipped definitions when you
 update the code; an edited one is yours and stays as you left it.
 
+## AI quorum (shadow experiment)
+
+An optional, fully isolated experiment: three LLMs of distinct
+families vote daily on ~20 symbols (10 US stocks/ETFs after the close, 10
+crypto perps after the UTC day roll) and a fixed quorum rule (≥2 of 3 agree,
+mean confidence ≥ 0.6) opens one-day positions in a **shadow book** — own
+database `data/ai-quorum.db`, fictitious $100k notional, zero capital, never
+counted in the volume KPIs. It runs as a separate cron process
+(`scripts/ai-quorum.sh stocks|crypto`, installed by `scripts/install-cron.sh`)
+and reads `data/historical.db` read-only; it never touches `trading.db`.
+
+Configuration is env-only, all `AI_QUORUM_*` (see the commented block in
+`.env.example`). The recommended setup is **one OpenRouter key** plus
+`AI_QUORUM_OPENROUTER_MODELS` with three `family/model` ids — one account,
+several model families; direct Anthropic/OpenAI/Google keys work too, as long
+as exactly three models of three distinct families result. A fourth option
+is a **generic OpenAI-compatible proxy** (e.g. a local CLIProxyAPI serving
+several model families behind one endpoint): `AI_QUORUM_PROXY_BASE_URL` +
+`AI_QUORUM_PROXY_API_KEY` + `AI_QUORUM_PROXY_MODELS` with `family/model` ids
+— the family is explicit (lowercase, before the first "/"), the id after it
+is sent to the proxy verbatim. It can mix with the other sources as long as
+the total is still exactly three models of three distinct families. Some
+proxied models wrap their JSON answer in ```` ```json ```` fences; those are
+stripped before strict validation, for every provider. **Without keys the
+experiment runs in "pending" mode**: snapshots are built and stored daily so
+the pipeline is proven, but no model is called and no money is ever spent.
+A hard daily cost cap (`AI_QUORUM_MAX_DAILY_USD`, default $1) stops all calls
+once reached. The dashboard shows the experiment on the Activity page
+("AI quorum (shadow)" panel); the verdict rule is fixed in code before any
+result exists (`src/ai-quorum/types.ts`, applied by `src/ai-quorum/evaluate.ts`)
+and evaluated automatically 8 weeks after the first decision with keys.
+
 ## Files & secrets summary
 
 | File | Mode | Contents |

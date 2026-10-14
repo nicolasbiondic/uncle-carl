@@ -17,6 +17,8 @@ import { initDatabase } from "./db/database";
 import { initHistoricalStore, closeHistoricalStore } from "./data/HistoricalStore";
 import { AccountManager } from "./account/AccountManager";
 import { DashboardServer } from "./dashboard/server";
+import { attachSessionPersistence } from "./dashboard/auth-store";
+import { createSessionStore } from "./dashboard/sessionPersistence";
 import { TelegramReporter } from "./telegram/telegram-reporter";
 import { BrokerSync } from "./sync/BrokerSync";
 import { buildBrokerSyncSources } from "./sync/brokerSyncSource";
@@ -49,6 +51,8 @@ import { SwitchingAdapter } from "./governor/SwitchingAdapter";
 import { ShadowAdapter } from "./governor/ShadowAdapter";
 import { FundingMonitor } from "./market/fundingMonitor";
 import { TreasurySweep, type TreasurySweepConfig } from "./treasury/TreasurySweep";
+import { createDecisionRecorder } from "./telemetry/decisionRecorder";
+import { registerGrossCap } from "./ops/grossCaps";
 import { CorporateActionsMonitor } from "./market/corporateActions";
 import { heartbeats } from "./ops/heartbeat";
 import { publishInstanceManifest } from "./ops/instanceManifest";
@@ -279,8 +283,11 @@ export const MOMENTUM_STOCKS_MAX_LONGS = 8;
 // manifest ran WITHOUT slotHysteresis (pre-registration error), so it
 // measures the gross axis on the pre-09-10 kernel. The sleeve still fails
 // 4 gates (bench, PSR, displacement, break-even) at any gross.
-export const MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT = 0.125; // 0.25 until 2026-09-25 (see MAX_LONGS above)
-export const MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT = MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT * MOMENTUM_STOCKS_MAX_LONGS * GROSS_CAP_HEADROOM; // 1.15× (1.0× hasta 2026-10-07 — G gross-cap)
+// Since 2026-10-10: k = 1.5 (line E exposure grid, decided by the owner-
+// delegated AI quorum 2-1 — docs/reports/LE2-quorum-decision.md; pure chain
+// cb516547…: +563.2% / Sharpe 1.12 / maxDD 31.2% with 6.5% Reg-T interest).
+export const MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT = 0.1875; // 0.125 from 2026-09-25, 0.25 before (see MAX_LONGS above)
+export const MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT = MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT * MOMENTUM_STOCKS_MAX_LONGS * GROSS_CAP_HEADROOM; // 1.725× (1.15× hasta 2026-10-10; 1.0× hasta 2026-10-07 — G gross-cap)
 
 /**
  * OPT-IN daily-horizon mode for momentum_stocks (R2 research 2026-09-24,
@@ -386,19 +393,21 @@ export function momentumStocksDailyTickDue(nowMs: number, lastRunKey: string): b
  * leaving it set is harmless but noisy in intent.
  * See MomentumEngineConfig.reunderwriteBefore for the mechanism.
  */
-// History: the 2026-09-26 cutover re-underwrote META/AAPL on the 09-28 pass.
-// ACTIVE 2026-10-06 (owner: "alinéalo"): GOOGL only. Its 10-02 exit, which
-// the model took, bounced 403 (stop-cancel race, fixed 55bdae1); on 10-05
-// slotHysteresis kept it, so live held a position the model does not. The
-// 10-07 pass closes it through the normal path (MODEL_CUTOVER) and re-ranks it
-// as not held. MOMENTUM_STOCKS_CUTOVER_SYMBOLS keeps the rest of the book out.
-export const MOMENTUM_STOCKS_CUTOVER_AT: number | null = Date.UTC(2026, 9, 6, 5);
-export const MOMENTUM_STOCKS_CUTOVER_SYMBOLS: string[] | undefined = ["GOOGL"];
+// History: the 2026-09-26 cutover re-underwrote META/AAPL on the 09-28 pass;
+// the 2026-10-06 one (owner: "alinéalo") GOOGL only, on the 10-07 pass.
+// ACTIVE 2026-10-10 (line E, k = 1.5 — the quorum voted to resize the open
+// book): the WHOLE book, no symbol filter. Its 8 positions were sized at
+// 0.125/slot; the 10-12 pass closes them through the normal path
+// (MODEL_CUTOVER) and re-ranks them as not held, so whatever still passes the
+// entry rules is bought at 0.1875/slot. Parity re-anchors on that pass
+// (PARITY_EPOCHS) and the scorecard's model window starts the next session.
+export const MOMENTUM_STOCKS_CUTOVER_AT: number | null = Date.UTC(2026, 9, 11);
+export const MOMENTUM_STOCKS_CUTOVER_SYMBOLS: string[] | undefined = undefined;
 /** The cutover is only wired into an engine built BEFORE this instant, so a
  *  forgotten constant cannot re-underwrite anything later (e.g. an adopted
  *  orphan carrying an old broker timestamp). The window leaves room for a
  *  retry pass if the first close bounces; one-shot by entry time anyway. */
-export const MOMENTUM_STOCKS_CUTOVER_EXPIRES_AT = Date.UTC(2026, 9, 9);
+export const MOMENTUM_STOCKS_CUTOVER_EXPIRES_AT = Date.UTC(2026, 9, 14);
 
 /** reunderwriteBefore for a momentum_stocks engine built at `nowMs`:
  *  the boundary while the cutover window is open, otherwise undefined. */
@@ -429,8 +438,14 @@ export function momentumStocksCutoverFor(nowMs: number): number | undefined {
  *  loss-streak re-anchor on change — MomentumEngineConfig.modelVersion): the
  *  daily blend3 kernel's first pass (2026-09-28) must not inherit the 5m
  *  kernel's peak ($55.7k — a 2.8% drawdown it never produced) or its 2
- *  losing rebalances. Bump it only when the wired model itself changes. */
-export const MOMENTUM_STOCKS_MODEL_VERSION = "daily-blend3-2026-09-28";
+ *  losing rebalances. Bump it only when the wired model itself changes.
+ *  Bumped 2026-10-10 for line E's k = 1.5: the new sizing starts its own
+ *  window from a fresh peak and streak, like its parity sim at the epoch. */
+export const MOMENTUM_STOCKS_MODEL_VERSION = "daily-blend3-k150-2026-10-12";
+/** SleeveGovernor evidence version: changing it restarts the evidence epoch.
+ *  "v8-stocks" until 2026-10-10; k = 1.5 scales every P&L, so closes taken
+ *  at k = 1 are not evidence against the k = 1.5 band. */
+export const MOMENTUM_STOCKS_EVIDENCE_VERSION = "v8.4-stocks-k150";
 
 export const MOMENTUM_CRYPTO_MAX_LONGS = DEFAULT_TSM_CONFIG.maxLongs;
 export const MOMENTUM_CRYPTO_NOTIONAL_PCT_PER_SLOT = 0.375;
@@ -747,7 +762,7 @@ export function momentumStocksPortfolioPlan(): MomentumPortfolioPlan {
   return {
     template: "momentum_tsm",
     portfolioId: "momentum_stocks",
-    governorRegistration: { sleeve: "momentum_stocks", kind: "live", evidenceVersion: "v8-stocks" },
+    governorRegistration: { sleeve: "momentum_stocks", kind: "live", evidenceVersion: MOMENTUM_STOCKS_EVIDENCE_VERSION },
     // Daily-horizon mode reads "1Day" bars with today's partial session
     // stripped (dropTodayDailyBar — MomentumEngine has no MeanRevEngine-style
     // strip of its own); default mode is the pre-existing 5Min adapter.
@@ -933,11 +948,15 @@ function portfolioEnabled(id: string): boolean {
 function momentumPlanFor(id: string): MomentumPortfolioPlan {
   const plan = buildPortfolioPlan(portfolioDefinition(id), Date.now());
   if (plan.template !== "momentum_tsm") throw new Error(`portfolio '${id}': expected a momentum_tsm plan`);
+  // Dashboard exposure chips (display only); MomentumEngine caps × current equity.
+  registerGrossCap(id, plan.engineConfig.maxGrossExposureMult, "equity");
   return plan;
 }
 function meanrevPlanFor(id: string): MeanRevPortfolioPlan {
   const plan = buildPortfolioPlan(portfolioDefinition(id), Date.now());
   if (plan.template !== "meanrev_connors") throw new Error(`portfolio '${id}': expected a meanrev_connors plan`);
+  // Dashboard exposure chips (display only); MeanRevEngine caps × baseUsd (the allocation).
+  registerGrossCap(id, plan.engineConfig.maxGrossExposureMult, "allocation");
   return plan;
 }
 function persistenceFor(s: StatePersistenceSpec): MomentumStatePersistence {
@@ -1311,6 +1330,15 @@ async function main() {
 
   // 5. Dashboard + Prometheus
   log.info("Starting dashboard...");
+  // Sessions survive restarts (platform_sessions, sha256(sid) only): before
+  // 2026-10-11 every deploy logged every browser out, "stay signed in"
+  // included. Fail-soft: without the store they just live in memory.
+  try {
+    const r = attachSessionPersistence(createSessionStore(getDB()));
+    log.info(`🔐 Dashboard sessions: ${r.restored} restored from disk${r.expired ? `, ${r.expired} expired removed` : ""}`);
+  } catch (e: any) {
+    log.warn(`Dashboard session persistence unavailable (${e.message}) — sessions end with this process`);
+  }
   const dashboard = new DashboardServer(accountManager);
   handles.dashboard = dashboard;
   try {
@@ -1567,6 +1595,7 @@ async function main() {
       sleeveLogger(cryptoPlan.loggerContext),
       persistenceFor(cryptoPlan.statePersistence),
     );
+    cryptoEngine.setDecisionRecorder(createDecisionRecorder(), "momentum_crypto");
     handles.cryptoEngine = cryptoEngine;
     await cryptoEngine.start();
     log.info("🚀 momentum_crypto engine started (60min rebalance, 24/7)");
@@ -1613,6 +1642,7 @@ async function main() {
       sleeveLogger(usdcPlan.loggerContext),
       persistenceFor(usdcPlan.statePersistence),
     );
+    usdcEngine.setDecisionRecorder(createDecisionRecorder(), "momentum_crypto_usdc");
     handles.usdcEngine = usdcEngine;
     await usdcEngine.start();
     log.info("🚀 momentum_crypto_usdc engine started (daily rebalance 00:00 UTC, 24/7, max 5 positions)");
@@ -1644,6 +1674,7 @@ async function main() {
       sleeveLogger(coinmPlan.loggerContext),
       persistenceFor(coinmPlan.statePersistence),
     );
+    coinmEngine.setDecisionRecorder(createDecisionRecorder(), "momentum_btc");
     handles.coinmEngine = coinmEngine;
     await coinmEngine.start();
     log.info("🚀 momentum_btc engine started (60min rebalance, 24/7, single position)");
@@ -1671,7 +1702,7 @@ async function main() {
     governor.register({
       sleeve: "momentum_stocks",
       kind: "live",
-      evidenceVersion: "v8-stocks",
+      evidenceVersion: MOMENTUM_STOCKS_EVIDENCE_VERSION,
     });
     const stocksAdapter = new SwitchingAdapter(
       "momentum_stocks",
@@ -1686,6 +1717,7 @@ async function main() {
       sleeveLogger(stocksPlan.loggerContext),
       persistenceFor(stocksPlan.statePersistence),
     );
+    stocks.setDecisionRecorder(createDecisionRecorder(), "momentum_stocks");
     stocksEngine = stocks;
     // index.ts owns this loop (engine.start() not called) so it registers the
     // name; stocksEngine.tick() beats it on a successful in-hours rebalance.
@@ -1823,6 +1855,7 @@ async function main() {
       undefined,
       persistenceFor(meanrevPlan.statePersistence),
     );
+    meanrevEngine.setDecisionRecorder(createDecisionRecorder());
     const meanrevLabel = meanrevPlan.scheduler.kind === "index-meanrev-daily" ? meanrevPlan.scheduler.label : "meanrev";
     meanrevInterval = scheduleDailyStockRun(meanrevLabel, async ({ skipEntries }) => {
       const report = await meanrevEngine.runDaily({ skipEntries });

@@ -208,7 +208,8 @@ let data = null;       // last GET /api/platform/accounts payload
 let pendingOauthResult = null; // parsed OAuth redirect result → banner on next mount
 
 /** main.js stores the OAuth round-trip result here before navigating to
- *  #/cuentas, so the banner shows on the page mount. One-shot. */
+ *  #/ajustes, so the banner shows when the broker-accounts card mounts.
+ *  One-shot. */
 export function setPendingOauthResult(result) { pendingOauthResult = result; }
 
 function noticeHtml(text, ok) {
@@ -224,8 +225,9 @@ async function reload(el) {
   if (add) add.disabled = !data || data.configured === false;
 }
 
-/** Mounts the "Cuentas" page into `host` (a fresh #pageBody element).
- *  Replaces the old slideover (2026-10-06 portfolio-manager nav). */
+/** Mounts the broker-accounts view into `host`: the Ajustes card's body
+ *  since 2026-10-11 (it was the separate "Cuentas" page, and before that a
+ *  slideover). */
 export async function mountAccounts(host) {
   closeModal();
   if (escHandler) { document.removeEventListener("keydown", escHandler); escHandler = null; }
@@ -235,7 +237,7 @@ export async function mountAccounts(host) {
   host.innerHTML = `
     ${noticeHtml(oauthResultMessage(oauthResult), !!(oauthResult && oauthResult.ok))}
     <div id="accList" class="acc-list"><div class="muted">…</div></div>
-    <button class="acc-btn primary" data-acc-open-add style="margin-top:var(--s4)">${t("Connect account", "Conectar cuenta")}</button>
+    <button class="acc-btn primary acc-add" data-acc-open-add>${t("Connect account", "Conectar cuenta")}</button>
     <div class="muted acc-note">${t(
       "Credentials are encrypted at rest and never shown again. The bot only signs with the account linked at startup.",
       "Las credenciales se cifran en reposo y no vuelven a mostrarse. El bot solo firma con la cuenta vinculada al arrancar.",

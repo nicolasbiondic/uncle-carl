@@ -89,7 +89,7 @@ function startRotation() {
     const el = byId("newsScroll");
     if (!el) return;
     const card = el.querySelector(".news-card"); if (!card) return;
-    const step = card.getBoundingClientRect().width + 12;
+    const step = card.getBoundingClientRect().width + (parseFloat(getComputedStyle(el).columnGap) || 8);
     const maxS = el.scrollWidth - el.clientWidth - 2;
     if (maxS <= 0) return;
     if (el.scrollLeft >= maxS) el.scrollTo({ left: 0, behavior: "smooth" });
@@ -97,17 +97,17 @@ function startRotation() {
   }, 6000);
 }
 
+/** One row (2026-10-12): the toggle sits LEFT of the headlines instead of on a
+ *  line of its own, and the cards are two-line (app.css .news-bar) — the bar
+ *  went from ~174px to ~90px of the one-screen Overview. */
 export function renderNewsBar() {
   const open = !!store.state.newsShown;
-  return `<div class="card" style="margin-top:var(--s4)">
-    <h3>
-      <button class="card-note" data-act="news-toggle" aria-expanded="${open}" aria-controls="newsScroll"
-        style="appearance:none;background:none;border:none;padding:0;margin:0;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-family:inherit">
-        ${icon("news", 13)} ${t("Market News", "Noticias")}
-        <span aria-hidden="true" style="transition:transform var(--dur);transform:rotate(${open ? "90deg" : "0deg"});display:inline-block">▸</span>
-      </button>
-    </h3>
-    <div class="news-scroll" id="newsScroll" ${open ? "" : "hidden"}><div class="muted" style="padding:var(--s3)">…</div></div></div>`;
+  return `<div class="card news-bar${open ? "" : " closed"}">
+    <button class="card-note news-h" data-act="news-toggle" aria-expanded="${open}" aria-controls="newsScroll">
+      ${icon("news", 13)} <span>${t("Market News", "Noticias")}</span>
+      <span class="news-caret" aria-hidden="true" style="transform:rotate(${open ? "90deg" : "0deg"})">▸</span>
+    </button>
+    <div class="news-scroll" id="newsScroll" ${open ? "" : "hidden"}><div class="muted" style="padding:var(--s2)">…</div></div></div>`;
 }
 
 /** Flip open/closed, persist it (store.set writes localStorage for

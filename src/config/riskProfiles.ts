@@ -96,11 +96,11 @@ export const RISK_PROFILES: Record<RiskProfileId, RiskProfile> = {
     emoji: "📈",
     initialEquity: 50_000, // its ALLOCATION of the shared Alpaca wallet (meanrev_stocks owns the other 50k)
     stopLossPct: 4,
-    // 1.0× since 2026-09-23 — notionalPctPerSlot(0.25) × maxLongs(4), see
-    // index.ts's MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT (was 2 from launch to
-    // 2026-09-23, when the gross axis went through the protocol). Locked to
-    // the real product by riskProfiles.exposureCaps.test.ts.
-    leverage: 1,
+    // 1.5× since 2026-10-10 — notionalPctPerSlot(0.1875) × maxLongs(8), line E
+    // (index.ts's MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT). 1.0× from
+    // 2026-09-23, 2 from launch. Locked to the real product by
+    // riskProfiles.exposureCaps.test.ts.
+    leverage: 1.5,
   },
   momentum_crypto: {
     id: "momentum_crypto",

@@ -8,7 +8,7 @@
 //     vol stop; a seeded above-SMA5 position closes SMA_EXIT; a symbol
 //     already entered TODAY in the ledger is NOT re-entered (idempotency
 //     seam); slot arithmetic respects maxPositions.
-//   - momentum: only the crafted uptrends enter, at equity×0.125/slot,
+//   - momentum: only the crafted uptrends enter, at equity×0.1875/slot,
 //     with vol-scaled stops inside the {5..30}% band; nothing was written
 //     to either DB (read-only contract).
 // ═══════════════════════════════════════════════════════════════════════
@@ -147,13 +147,13 @@ describe("rehearse-daily-pass — meanrev plan", () => {
 });
 
 describe("rehearse-daily-pass — momentum plan", () => {
-  test("only the crafted uptrends enter, ≤ maxLongs, sized equity×0.125/slot", () => {
+  test("only the crafted uptrends enter, ≤ maxLongs, sized equity×0.1875/slot", () => {
     const symbols = plans.momentum.opens.map(o => o.symbol).sort();
     expect(symbols.length).toBeGreaterThan(0);
     expect(symbols.length).toBeLessThanOrEqual(8);
     for (const s of symbols) expect(["NVDA", "MSFT", "SMH"]).toContain(s);
     for (const o of plans.momentum.opens) {
-      expect(o.notionalUsd).toBeCloseTo(60_000 * 0.125, 2);
+      expect(o.notionalUsd).toBeCloseTo(60_000 * 0.1875, 2);
       expect(o.stopLossPct).toBeGreaterThanOrEqual(5);
       expect(o.stopLossPct).toBeLessThanOrEqual(30);
     }

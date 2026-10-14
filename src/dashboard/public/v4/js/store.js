@@ -40,6 +40,7 @@ export const store = {
   },
 };
 
-export const periodLabel = (p) => p === 0 ? "All" : p === 1 ? "Today" : `${p}D`;
+// Localized (2026-10-12): the Spanish dashboard read "Today"/"All" here.
+export const periodLabel = (p) => p === 0 ? t("All", "Todo") : p === 1 ? t("Today", "Hoy") : `${p}D`;
 export const isEs = () => store.state.lang === "es";
 export const t = (en, es) => (isEs() ? es : en);

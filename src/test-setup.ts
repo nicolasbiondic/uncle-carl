@@ -49,4 +49,12 @@ for (const k of [
   "PORTFOLIOS_SOURCE", // prod may flip it to "db"; tests pass the source explicitly
   "ACCOUNTS_SOURCE", "RUNTIME_ACCOUNT_ALPACA", "RUNTIME_ACCOUNT_BINANCE", // prod binds its accounts through these
   "DISPLAY_HISTORY_START", // prod hides the pre-v8 era from "All"; tests pass it explicitly
+  // Line D (shadow AI quorum): prod will carry real provider keys and paths.
+  "AI_QUORUM_OPENROUTER_API_KEY", "AI_QUORUM_OPENROUTER_MODELS",
+  "AI_QUORUM_ANTHROPIC_API_KEY", "AI_QUORUM_ANTHROPIC_MODEL", "AI_QUORUM_OPENAI_API_KEY", "AI_QUORUM_OPENAI_MODEL",
+  "AI_QUORUM_GOOGLE_API_KEY", "AI_QUORUM_GOOGLE_MODEL",
+  "AI_QUORUM_PROXY_BASE_URL", "AI_QUORUM_PROXY_API_KEY", "AI_QUORUM_PROXY_MODELS",
+  "AI_QUORUM_TIMEOUT_MS", "AI_QUORUM_RETRIES",
+  "AI_QUORUM_MAX_DAILY_USD", "AI_QUORUM_EST_COST_PER_CALL_USD", "AI_QUORUM_DB_PATH", "AI_QUORUM_HISTORICAL_DB_PATH",
+  "KPI_TARGET_TRADES_PER_DAY", "KPI_TARGET_DAILY_RETURN_PCT", "KPI_RISK_BUDGET_DD_PCT", // prod sets the owner's goals; tests pass them explicitly
 ]) delete process.env[k];

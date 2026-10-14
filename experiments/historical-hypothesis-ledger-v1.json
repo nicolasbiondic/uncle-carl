@@ -747,6 +747,185 @@
       "resultsComplete": false,
       "executionReported": true,
       "evidence": "DIAGNOSTICO de fidelidad vivo<->modelo (mision G, 2026-10-05), NO batch de candidatos a cablear: los 4 motores vivos aplican maxGrossExposureMult (stocks 1.0x, crypto 1.5x, USDC 1.0x, meanrev 0.84x de baseUsd) pero los 4 artefactos autoritativos del scorecard (5f03d68d/624d50e9/06e1a160/413ffb90) se corrieron SIN el tope; prod lo activo 8 veces desde el 2026-09-26 (USDC: 4x LTC, 4x AVAX bloqueados con 4/5 posiciones) pese a que liveSleeveConfigs.test.ts lo declaraba backstop que nunca se activa. Pre-registrado en 80a2b92 ANTES de correr: 4 cadenas puras = copia byte a byte del autoritativo + el tope vivo (+1 hipotesis diagnostica c/u, base 319 -> 323), sobre la MISMA base hist-sp500.db cuyo dataHash reproduce cada artefacto; regla pre-declarada: |dSharpe| >= 0.05, |dCAGR| >= 1pp o tope activo en >= 2% de las decisiones de entrada OOS -> recomendar cambiar el tope (holgura H con activacion <1% o degradar a alerta). Habilitador tecnico solo-scripts: passthrough del cap al MeanRevEngine real en runMeanRevReplay + hooks observador grossCapDiag (meanrev-replay.grossCap.test.ts). RESULTADOS: ver docs/reports/G-gross-cap.md."
+    },
+    {
+      "id": "stocks-streversal-2026-10-09",
+      "sourceCommit": "44a6854 (rama research/stocks-st-reversal, pre-registro antes de correr)",
+      "sourcePaths": [
+        "experiments/stocks-streversal-v1.json",
+        "scripts/stocks-reversal-replay.ts",
+        "scripts/stocks-reversal-wf.ts",
+        "scripts/stocks-reversal-replay.test.ts",
+        "docs/reports/LB-acciones-reversion.md"
+      ],
+      "hypothesisCount": 4,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "Linea B (V-plan §12): reversion de corto plazo largo/corto, dolar-neutral, residual por sector (ETF asignado por correlacion pasada 126/21 sesiones, solo datos anteriores a cada decision), sobre los miembros PIT del S&P 500 (hist-sp500.db) menos los 43 simbolos vivos; capital §13 $8,300 a 3x bruto, acciones enteras, cortos con apertura >= $5 y prestamo 0.5%/año (stress 1%). 4 candidatos pre-registrados en 44a6854 ANTES de correr (base 323 -> 327): rev5-sector-h5, rev3-sector-h3, rev2-sector-h2-b6, rev5-raw-h5. Kernel y driver nuevos solo-scripts (scripts/stocks-reversal-replay.ts + scripts/stocks-reversal-wf.ts) que reutilizan los instrumentos del harness compartido (folds purgados, seleccion inner por DSR, PSR/MinTRL, curva break-even, sequence risk); criterios §12 comunes 1-8 tal cual como gates. RESULTADO: REFUTADO — ver authoritativeArtifactStReversal y docs/reports/LB-acciones-reversion.md."
+    },
+    {
+      "id": "intraday-spy-qqq-2026-10-09",
+      "sourceCommit": "research/intraday-spy-qqq (pre-registro en experiments/intraday-spy-qqq-v1.json antes de correr)",
+      "sourcePaths": [
+        "experiments/intraday-spy-qqq-v1.json",
+        "scripts/intraday-wf.ts",
+        "scripts/lib/intradayMomentum.ts",
+        "scripts/lib/combinedPortfolioReturns.ts",
+        "scripts/download-intraday-spy-qqq.ts",
+        "docs/reports/LC-intradia.md"
+      ],
+      "hypothesisCount": 4,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": [
+        "Linea C del plan de volumen (docs/reports/V-plan-volumen-rentabilidad.md Parte 2, S12): momentum intradia de la ultima media hora en SPY/QQQ (Gao, Han, Li & Zhou 2018). Datos nuevos fuera del repo ($UC_RESEARCH_DATA_DIR/hist-intraday.db, 2,097,503 barras de 1 minuto RTH 2016-01-04..2026-10-09, feed SIP vía Alpaca). 4 candidatos declarados ANTES de correr en el manifest (base 323 -> 327): fhh-sign (signo del retorno 09:30-10:00 ET vs cierre previo), penultimate-sign (signo del retorno 15:00-15:30 ET), agree-fhh-penultimate (solo opera si ambas senales coinciden en signo) y fhh-threshold-5bps (fhh-sign con filtro de magnitud >=5bps). Kernel nuevo (scripts/intraday-wf.ts) con el mismo esquema de summary que walk-forward.ts (stitchedOos, outerSelection, outerPsr, foldPsr, breakEvenCurve, acceptance), reusando sus funciones puras (generateFolds/aggregateInner/selectCandidate/penalizedPsr/breakEvenFromCurve) y scripts/lib/sequenceRisk.ts; 4 folds outer expandentes, 3 folds inner, purga 0.03 anios. RESULTADO: REFUTADO por los criterios 1-7 (solo pasan 'structuralOuterFolds' y 'maxCorrelation'): Sharpe OOS cosido -1.587 (umbral >=1.0), PSR outer 0.0002 (umbral >=0.95), Sharpe a coste stress -4.147 (umbral >=0.5), breakeven 0bps adicionales/lado (umbral >=4), maxDD 49.7% (umbral <=25%), Sharpe SPY -1.658 y QQQ -1.361 por separado (umbral >=0.5 cada uno). El edge bruto (sin costes) ya es ligeramente negativo (Sharpe -0.164 en fhh-sign puro sobre SPY 2016-2026); con el coste base (2bps/lado, operando ~99% de los dias) el Sharpe se hunde. Correlacion con la cartera vivo combinada (-0.035) y concentracion anual del P&L (ningun anio >19.5%) SI pasan, pero son irrelevantes frente al resto. Ver docs/reports/LC-intradia.md."
+      ]
+    },
+    {
+      "id": "crypto-xs-ls-2026-10-09",
+      "sourceCommit": "4ce7c1d (rama research/crypto-xs-ls, pre-registro del manifest ANTES de correr)",
+      "sourcePaths": [
+        "experiments/crypto-xsls-v1.json",
+        "scripts/crypto-xsls-wf.ts",
+        "scripts/crypto-xsls-replay.ts",
+        "scripts/lib/xsls-universe.ts",
+        "scripts/fetch-binance-perps-vision.ts",
+        "docs/reports/LA-cripto-ls.md"
+      ],
+      "hypothesisCount": 4,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "LINEA A del plan V (docs/reports/V-plan-volumen-rentabilidad.md SS12): estrategia NUEVA cripto largo/corto por momentum relativo, neutral al mercado en dolares, sobre universo PIT mensual top-30 de perps USDT-M (data.binance.vision, incluidos retirados; sin stablecoins, sin envueltos/tokenizados TradFi, sin indices, sin los 8 de momentum_crypto). 4 candidatos pre-registrados en 4ce7c1d (eje lookback 7/14/28d x rebalanceo 24h/8h, k=5/5, bruto 1.0x dolar-neutral) sobre base nueva $UC_RESEARCH_DATA_DIR/hist-perps.db (klines 1h+1d y funding real 2020-2026, 895 perps, cobertura en hist-perps-coverage.json). Kernel nuevo scripts/crypto-xsls-replay.ts inyectado como runner de runWalkForward (mismo protocolo y esquema de summary; opts.codeFiles cubre el kernel en el codeHash). Base de trials 323 (tras gross-cap-fidelity-diagnostic-2026-10-05) -> 327. RESULTADOS: ver authoritativeArtifactCryptoXsLs y docs/reports/LA-cripto-ls.md."
+    },
+    {
+      "id": "stocks-streversal-b2-2026-10-10",
+      "sourceCommit": "ede3b2b (rama research/stocks-reversal-b2, pre-registro antes de correr; malla cerrada por el director en 33504c8, V-plan §12-bis)",
+      "sourcePaths": [
+        "experiments/stocks-streversal-b2-v1.json",
+        "scripts/stocks-reversal-replay.ts",
+        "scripts/stocks-reversal-wf.ts",
+        "scripts/stocks-reversal-replay.test.ts",
+        "docs/reports/LB2-acciones-reversion-amplia.md"
+      ],
+      "hypothesisCount": 4,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "B2 (V-plan §12-bis): rediseño pre-registrado tras la refutacion de B que corrige SOLO el fallo identificado (slots de nocional fijo que no se reducen al caer el capital). Misma señal residual sectorial y universo PIT-43, costes §12 B y capital §13; diseño fijo: >= 20 nombres por lado, slot = patrimonio a la decision x bruto / (2 x N) recalculado en cada rebalanceo, bruto 2x, cortos solo acciones enteras que quepan en el slot y precio >= $5 (largos fraccionados, declarado). MALLA CERRADA de 4 candidatos (N en {20,30} x mantenimiento en {3,5}, k = mantenimiento), pre-registrada en ede3b2b ANTES de correr (base 331 -> 335). Ejes de kernel opt-in (sizing equityProportional + fractionalLongs) con hashes legacy intactos (test de identidad). RESULTADO: REFUTADO 6/8 gates — la ruina desaparece (6/6 folds completos) pero el edge neto no existe; ver authoritativeArtifactStReversalB2 y docs/reports/LB2-acciones-reversion-amplia.md."
+    },
+    {
+      "id": "exposure-grid-linea-e-2026-10-09",
+      "sourceCommit": "rama research/exposure-budget (pre-registro antes de correr; criterios de seleccion fijados en master 43576b4, V-plan SS12-E)",
+      "sourcePaths": [
+        "experiments/momentum-stocks-daily-blend3-k125-exposure-v1.json",
+        "experiments/momentum-stocks-daily-blend3-k150-exposure-v1.json",
+        "experiments/momentum-stocks-daily-blend3-k200-exposure-v1.json",
+        "experiments/meanrev-slot12-k125-exposure-v1.json",
+        "experiments/meanrev-slot12-k150-exposure-v1.json",
+        "experiments/meanrev-slot12-k200-exposure-v1.json",
+        "experiments/momentum-crypto-usdc-daily-s5-k125-exposure-v1.json",
+        "experiments/momentum-crypto-usdc-daily-s5-k150-exposure-v1.json",
+        "experiments/momentum-crypto-usdc-daily-s5-k200-exposure-v1.json",
+        "experiments/momentum-crypto-2026w-k125-exposure-v1.json",
+        "experiments/momentum-crypto-2026w-k150-exposure-v1.json",
+        "experiments/momentum-crypto-2026w-k200-exposure-v1.json",
+        "scripts/diag-exposure-grid.ts",
+        "docs/reports/LE-exposicion.md"
+      ],
+      "hypothesisCount": 12,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "LINEA E (V-plan Parte 2 SS9/SS12-E, decision del dueno 2026-10-09): DIAGNOSTICO DE TAMANO, no batch de candidatos de senal — con capital fijo por portafolio la palanca de rentabilidad es la exposicion; el dueno pide el maximo crecimiento dentro de un drawdown de 25% (margen a 20% en OOS combinado). Malla k en {1.25, 1.5, 2.0} x 4 portafolios validados: notionalPctPerSlot x k (meanrev: slotPct x k) y tope bruto x k (el tope vivo ya lleva GROSS_CAP_HEADROOM 1.15 del diagnostico G), cadenas puras de 1 candidato sobre hist-sp500.db (mismo dataHash que los artefactos autoritativos 5f03d68d/624d50e9/06e1a160/413ffb90; k=1 = reproduccion bit a bit, +0). Financiacion: Reg-T 6.5%/ano sobre lo prestado en los dos sleeves de acciones (costs.marginInterest; habilitador solo-scripts: SimMeanRevBroker.accrueMarginInterest espejo del SimBroker, test meanrev-replay.marginInterest.test.ts); perps con funding real ya modelado. SELECCION pre-registrada (SS12-E, fijada ANTES de correr): combinacion por pesos de capital de mayor crecimiento logaritmico con maxDD combinado OOS <= 20%, maxDD por portafolio <= su gate, bruto Alpaca <= 1.8x patrimonio, bruto Binance <= 3x por pool. +12 hipotesis (base 323 tras gross-cap-fidelity -> 335). RESULTADOS: docs/reports/LE-exposicion.md."
+    },
+    {
+      "id": "crypto-funding-carry-2026-10-10",
+      "sourceCommit": "9e5d295 (rama research/crypto-funding-carry, pre-registro del manifest ANTES de correr; malla cerrada por el director en V SS12-ter @ 174e7b1)",
+      "sourcePaths": [
+        "experiments/crypto-fcarry-v1.json",
+        "scripts/crypto-xsls-wf.ts",
+        "scripts/crypto-xsls-replay.ts",
+        "docs/reports/LF2-carry-funding.md"
+      ],
+      "hypothesisCount": 4,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "LINEA F2 (V SS12-ter, segunda ola): carry de funding transversal en perps USDT-M — corto los 5 de funding medio mas alto, largo los 5 mas bajo, dolar-neutral, slot 10% (bruto 1.0x), sobre el universo PIT y los datos de la linea A (hist-perps.db, solo lectura). Funding medio = suma de tasas LIQUIDADAS en la ventana / dias de la ventana (nunca por evento: intervalos 1/4/8 h coexisten), solo eventos <= decision (+60 s de tolerancia de sello; una posicion abierta EN la decision no paga esa liquidacion). Malla CERRADA de 4 pre-registrada por el director: ventana {3,7} dias x rebalanceo {8h tras liquidacion, 24h}. Kernel: signal=fundingCarry en scripts/crypto-xsls-replay.ts (campo top-level del manifest, entra al configHash). Motivacion: en A el libro corto cobro +$8.2k de funding vs $6.9k de comisiones. Base de trials 351 (SS12-ter) -> 355 de este lote (la linea F corre en paralelo con la misma base; el director resuelve el conteo al integrar). RESULTADOS: ver authoritativeArtifactCryptoFundingCarry y docs/reports/LF2-carry-funding.md."
+    },
+    {
+      "id": "short-side-crypto-2026-10-10",
+      "sourceCommit": "a2733f0 (rama research/short-side; ejes en 1271a21; fix del loader SPY e930dfa)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-shortside-v1.json",
+        "scripts/short-side-eval.ts",
+        "docs/reports/LS-lado-corto.md"
+      ],
+      "hypothesisCount": 4,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "LINEA S (V SS12-quinquies, pre-registro del director en b6c191a; manifests commiteados en a2733f0 ANTES de correr): el lado corto REDISENADO — regimen bajista obligatorio para entrar Y mantener (SMA200 de cierres diarios CERRADOS del activo de referencia, fail-closed), umbrales propios del corto, maxShorts propio, funding real / prestamo 0.5%/anio. Ejes opt-in byte-identicos cuando faltan (TSMConfig.shortRegime/shortUniverse, ReplayConfig.shortEntryPct/shortExitPct, costs.shortBorrow; regression-fingerprint verde y controles reproducidos BIT A BIT bajo el codigo nuevo ANTES de los candidatos: dataHash/configHash/metricas identicos — crypto 7a6fa423, stocks 05cbea8f). Base de trials 359 (tras F2 y F); +4 este lote (el gemelo corre en paralelo con la misma base; el director resuelve el conteo al integrar). S1 = control vt-35 (06e1a160) + shortRegime BTC/USD 200d + malla maxShorts {2,4} x (entrada,salida corto) {(-5,+2),(-10,0)}. RESULTADOS: authoritativeArtifactShortSideCrypto."
+    },
+    {
+      "id": "short-side-stocks-2026-10-10",
+      "sourceCommit": "a2733f0 (rama research/short-side; ejes en 1271a21; fix del loader SPY e930dfa)",
+      "sourcePaths": [
+        "experiments/momentum-stocks-shortside-v1.json",
+        "scripts/short-side-eval.ts",
+        "docs/reports/LS-lado-corto.md"
+      ],
+      "hypothesisCount": 4,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "LINEA S (V SS12-quinquies, pre-registro del director en b6c191a; manifests commiteados en a2733f0 ANTES de correr): el lado corto REDISENADO — regimen bajista obligatorio para entrar Y mantener (SMA200 de cierres diarios CERRADOS del activo de referencia, fail-closed), umbrales propios del corto, maxShorts propio, funding real / prestamo 0.5%/anio. Ejes opt-in byte-identicos cuando faltan (TSMConfig.shortRegime/shortUniverse, ReplayConfig.shortEntryPct/shortExitPct, costs.shortBorrow; regression-fingerprint verde y controles reproducidos BIT A BIT bajo el codigo nuevo ANTES de los candidatos: dataHash/configHash/metricas identicos — crypto 7a6fa423, stocks 05cbea8f). Base de trials 359 (tras F2 y F); +4 este lote (el gemelo corre en paralelo con la misma base; el director resuelve el conteo al integrar). S2 = control k150 (cb516547) + shortRegime SPY 200d + shortUniverse [SPY,QQQ] (solo ETF de indice) + shortBorrow 0.5%/anio + malla maxShorts {1,2} x {(-5,+2),(-5,0)}. RESULTADOS: authoritativeArtifactShortSideStocks."
+    },
+    {
+      "id": "short-side-bis-crypto-stop-2026-10-10",
+      "sourceCommit": "08702d3 (rama research/short-side-bis; eje shortStop en c4464cd)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-shortside-stop-v1.json",
+        "scripts/short-side-eval.ts",
+        "docs/reports/LS2-corto-stop-propio.md"
+      ],
+      "hypothesisCount": 4,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "LINEA S-BIS (V SS12-sexies, pre-registro del director en 6855bcf; manifests commiteados en 08702d3 ANTES de correr): el corto con su propio stop, tras el diagnostico de S (los cortos parados en el 4%% heredado perdian ~$37 de media; los salidos por senal/regimen ganaban). Eje nuevo opt-in ShortStopSpec (fijo | volScaled sobre sigma DIARIA de cierres UTC completos, sin raiz de barsPerDay), byte-identico ausente (fingerprint verde, GOLDEN RULE de hashes, tests scripts/backtest-momentum-wf.shortStop.test.ts incl. prueba de que el motor vivo pasa stopLossPct del corto al abrir); controles re-reproducidos BIT A BIT bajo el codigo nuevo antes de los candidatos (crypto f0f526dd = 06e1a160; USDC bdf68c93 = 413ffb90). Base de trials 367 (tras linea S); +4 este lote (el gemelo corre en paralelo con la misma base; el director resuelve el conteo). CIERRE SS12-sexies: con S-bis refutada, el lado corto de estas estrategias queda CERRADO hasta una idea nueva (tres disenos probados: espejo 2026-08, regimen+umbrales propios en S, stop propio / stops anchos en S-bis). S1b = control vt-35 + cortos (-5,+2) maxShorts 4 + regimen BTC<SMA200 + malla shortStop {fijo 8%%, fijo 12%%, 3 sigma diaria 20d (6-20%%), catastrofico 25%%}; largos siguen al 4%%. RESULTADOS: authoritativeArtifactShortSideBisCrypto."
+    },
+    {
+      "id": "short-side-bis-usdc-2026-10-10",
+      "sourceCommit": "08702d3 (rama research/short-side-bis; eje shortStop en c4464cd)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-usdc-shortside-v1.json",
+        "scripts/short-side-eval.ts",
+        "docs/reports/LS2-corto-stop-propio.md"
+      ],
+      "hypothesisCount": 4,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "LINEA S-BIS (V SS12-sexies, pre-registro del director en 6855bcf; manifests commiteados en 08702d3 ANTES de correr): el corto con su propio stop, tras el diagnostico de S (los cortos parados en el 4%% heredado perdian ~$37 de media; los salidos por senal/regimen ganaban). Eje nuevo opt-in ShortStopSpec (fijo | volScaled sobre sigma DIARIA de cierres UTC completos, sin raiz de barsPerDay), byte-identico ausente (fingerprint verde, GOLDEN RULE de hashes, tests scripts/backtest-momentum-wf.shortStop.test.ts incl. prueba de que el motor vivo pasa stopLossPct del corto al abrir); controles re-reproducidos BIT A BIT bajo el codigo nuevo antes de los candidatos (crypto f0f526dd = 06e1a160; USDC bdf68c93 = 413ffb90). Base de trials 367 (tras linea S); +4 este lote (el gemelo corre en paralelo con la misma base; el director resuelve el conteo). CIERRE SS12-sexies: con S-bis refutada, el lado corto de estas estrategias queda CERRADO hasta una idea nueva (tres disenos probados: espejo 2026-08, regimen+umbrales propios en S, stop propio / stops anchos en S-bis). S3 = control USDC d13-s5 + cortos con regimen BTC<SMA200 sobre su senal diaria 63/126/252, con LOS MISMOS stops anchos volScaled 8 sigma 5-30%% de sus largos (verificados side-correct para cortos: stop por encima, trail desde el minimo); malla maxShorts {2,3} x {(-5,+2),(-10,0)}. RESULTADOS: authoritativeArtifactShortSideBisUsdc."
+    },
+    {
+      "id": "crypto-tsm-alts-linea-f-2026-10-10",
+      "sourceCommit": "rama research/crypto-tsm-alts (pre-registro antes de correr; malla cerrada fijada en master 174e7b1, V-plan SS12-ter)",
+      "sourcePaths": [
+        "experiments/crypto-tsm-alts-v1.json",
+        "scripts/crypto-tsm-alts-wf.ts",
+        "scripts/backtest-momentum-wf.perps.test.ts",
+        "docs/reports/LF-cripto-tendencia-alts.md"
+      ],
+      "hypothesisCount": 4,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "LINEA F (V-plan SS12-ter, segunda ola, pre-registrada en master 174e7b1 ANTES de correr): el diseno vivo de momentum_crypto TAL CUAL (TSM horaria +5%/-2%, stop fijo 4%, RiskGuard y freno de correlacion por defecto, motor real MomentumEngine via runWithConfig) trasladado al universo PIT mensual de la linea A (top-30 por volumen cotizado de 30 dias sin las 8 bases de momentum_crypto, sin stables/envueltos/indices/TradFi; hist-perps.db solo lectura; union 2021-2026 = 360 simbolos). MALLA CERRADA de 4 candidatos: slots {4x0.375 vivo, 8x0.1875} x volTarget {35 vivo, 20}. Costes de A (4 bps comision + 5 bps slippage por lado + funding real; stress 2x); criterios comunes SS12 1-8 sin cambios; misma ventana/folds que el control vivo re-corrido 06e1a160 (asOf 2026-10-02T08Z) para comparar sobre los 8 grandes. Convencion de A: cierre forzoso al ultimo precio tras 24h sin barra (DELISTED); fuera del universo no se abren posiciones nuevas. Habilitador solo-scripts, opt-in y byte-identico ausente (test backtest-momentum-wf.perps.test.ts): ReplayConfig.perpsMembership (elegibilidad mensual + warmup + frescura 24h via el hook entryEligibility del motor, funding fail-closed acotado al span de barras por simbolo, refSymbol benchmark-only) y LOO acotado pre-registrado a los 10 simbolos con mayor |P&L| (opts.looTopPnlSymbols — 360 simbolos x motor real horario hace el LOO completo incomputable; 7b ex-top-decil se evalua aparte como en A). LIMITACION declarada (como en A): quote_volume_1d no entra en el dataHash; los parametros de membresia si entran en el configHash. +4 hipotesis (base 351 -> 355; el director resuelve el conteo al integrar). RESULTADOS: docs/reports/LF-cripto-tendencia-alts.md."
     }
   ],
   "trialSensitivityFinding": {
@@ -1967,6 +2146,290 @@
         "trades": 455,
         "gatesFailed": [],
         "looWorstSharpe": 0.871
+      }
+    }
+  },
+  "authoritativeArtifactCryptoXsLs": {
+    "path": "data/backtests/4937aacc6031db367a0fd06c72231c168bfcfed90992f6abac93a301d2531746/",
+    "manifest": "experiments/crypto-xsls-v1.json @ 4ce7c1d (pre-registro, antes de correr)",
+    "date": "2026-10-09",
+    "verdict": "REFUTADO por los criterios pre-registrados SS12 (1-7, evaluados en lineA-criteria.json del artefacto): falla 2 (Sharpe 0.662 < 1.0; PSR outer 0.913 < 0.95), 3 (Sharpe stress 0.190 < 0.5), 4 (break-even 17.6 bps < 23), 6 (maxDD 54.96% > 25%) y 7 (2026 aporta el 98.6% del P&L > 50%; sin el decil top por P&L el Sharpe cae a -1.121 < 0.5). Pasa 1 (cadena pura, 3 folds, seleccion solo inner, outerSelection persistido — cadena MIXTA: lb7-r24/lb7-r8/lb28-r24, la propia inestabilidad de seleccion es evidencia en contra) y 5 (correlacion diaria con la cartera combinada -0.037 <= 0.30). Criterio 8 (reporte): 19.8 ordenes/dia OOS — la linea SI habria dado el volumen pedido, pero sin edge certificable (certifiable Sharpe a PSR95 con 1665 obs = 0.77 > 0.662 observado). NO SE CABLEA (SS12: lo refutado se documenta y no se cablea). Cualquier re-intento de la linea exige nuevo pre-registro.",
+    "cryptoXsLs": {
+      "outerFoldReturnsPct": [
+        0.29,
+        -28.52,
+        259.67
+      ],
+      "stitchedReturnPct": 157.81,
+      "sharpe": 0.662,
+      "maxDrawdownPct": 54.96,
+      "outerPsr": 0.913,
+      "trades": 6221,
+      "gatesFailed": [
+        "looMaxDrawdown",
+        "looMinSharpe",
+        "maxDrawdown",
+        "minBreakEvenSlippageBps",
+        "minOuterPsr",
+        "minSharpe",
+        "stressMaxDrawdown",
+        "stressMinSharpe"
+      ],
+      "corrVsCombined": -0.037,
+      "ordersPerDayOos": 19.78,
+      "breakEvenSlippageBps": 17.61,
+      "exTopDecileSharpe": -1.121,
+      "maxYearPnlShare": 0.986
+    }
+  },
+  "authoritativeArtifactStReversal": {
+    "path": "data/backtests/e6f6637196f1ee9602d67ffdd9d18e3b81b9cc0c1e1097b526f6ddd6040306bb/",
+    "manifest": "experiments/stocks-streversal-v1.json @ 44a6854 (pre-registro, antes de correr)",
+    "date": "2026-10-09",
+    "verdict": "REFUTADO (linea B, V-plan §12) por los criterios pre-registrados 2-7: la cadena OOS base se ARRUINA en el fold 1 (test 2019-10-15..2021-03-06, incluye marzo 2020) con slots de nocional fijo a 3x bruto sobre $8,300 — la caida no reduce la exposicion y el libro L/S 4+4 (o 6+6) no sobrevive el COVID; el protocolo corta la cadena (folds 2-5 nunca se ejecutan, regla anti-resurreccion) y la aprobacion queda bloqueada. Stitched OOS (folds 0-1): ret -100%, Sharpe -0.90, maxDD 104.4%, PSR outer 0.144, 728 trades, 455 obs; stress tambien arruinado; break-even 0 bps adicionales; sin el top-10% de simbolos Sharpe -1.27; 2020 es el año que se lleva todo el P&L negativo (gate maxYearPnlShare falla cerrado con P&L total <= 0). El fold 0 (2018-05..2019-10) fue positivo (+68.8%, Sharpe 1.29, DD 20.8%), senal de que el residuo sectorial tuvo algo de vida pre-2020, pero el unico gate que pasa es maxCorrVsLive (0.253 <= 0.30). Ordenes/dia OOS reportadas (criterio 8): 2.08 por sesion (1.43 por dia natural) — tampoco habria alcanzado el rango 10-20/dia de §12. NO SE CABLEA NADA.",
+    "stReversal": {
+      "outerFoldReturnsPct": [
+        68.83,
+        -100
+      ],
+      "stitchedReturnPct": -100,
+      "sharpe": -0.899,
+      "maxDrawdownPct": 104.35,
+      "outerPsr": 0.144,
+      "trades": 728,
+      "ordersPerSessionOos": 2.08,
+      "corrVsLive": 0.253,
+      "gatesFailed": [
+        "exTopDecileMinSharpe",
+        "maxDrawdown",
+        "maxYearPnlShare",
+        "minBreakEvenExtraBps",
+        "minOuterPsr",
+        "minSharpe",
+        "stressMinSharpe"
+      ]
+    }
+  },
+  "authoritativeArtifactIntradaySpyQqq": {
+    "path": "data/backtests/c2dcffaf15e0726ba93e6938ff383d74c8fc6ba7573295be45da4b648a8d894c",
+    "manifest": "experiments/intraday-spy-qqq-v1.json",
+    "verdict": "REFUTADO (lineaC): falla minSharpeBase, minOuterPsr, minSharpeStress, minBreakEvenSlippageBps, maxDrawdown, minSharpeSpy y minSharpeQqq; solo pasan structuralOuterFolds, maxCorrelation y maxYearPnlShare. No se cablea.",
+    "intradaySpyQqq": {
+      "outerFoldReturnsPct": [
+        -5.78,
+        -11.92,
+        -23.36,
+        -20.52
+      ],
+      "stitchedReturnPct": -49.45,
+      "sharpe": -1.587,
+      "maxDrawdownPct": 49.72,
+      "outerPsr": 0.0,
+      "stressSharpe": -4.147,
+      "correlation": -0.035,
+      "spySharpe": -1.658,
+      "qqqSharpe": -1.361,
+      "ordersPerDay": 3.37,
+      "trades": 3636,
+      "gatesFailed": [
+        "maxDrawdown",
+        "minBreakEvenSlippageBps",
+        "minOuterPsr",
+        "minSharpeBase",
+        "minSharpeQqq",
+        "minSharpeSpy",
+        "minSharpeStress"
+      ]
+    }
+  },
+  "authoritativeArtifactStReversalB2": {
+    "path": "data/backtests/c96583fb957fcd31e53ae46079939ca9d198256f72d0ee855775f48cae23f6db/",
+    "manifest": "experiments/stocks-streversal-b2-v1.json @ ede3b2b (pre-registro, malla cerrada por el director en V-plan §12-bis, antes de correr)",
+    "date": "2026-10-10",
+    "verdict": "REFUTADO (B2, V-plan §12-bis) por los criterios pre-registrados: el rediseño SI corrige la ruina de B (sizing proporcional al patrimonio a 2x bruto: la cadena completa 6/6 folds OOS 2018-05..2026-10 sin ruina, COVID incluido con DD 43.8% en el fold 1), pero el edge neto no da: Sharpe OOS cosido 0.29 (gate >= 1.0), PSR outer 0.793 (>= 0.95), stress Sharpe -0.04 (>= 0.5), break-even ADICIONAL 2.73 bps/lado (>= 4), maxDD cosido 47.2% (<= 25%), y sin el top-10% de simbolos (64) Sharpe -0.47 (>= 0.5). Pasan solo maxCorrVsLive (0.127 <= 0.30) y maxYearPnlShare (46.4% <= 50%). Con rotacion de 185-340x el patrimonio/año, 2 bps/lado se comen un edge bruto fino: la curva break-even muere a 4.7 bps/lado absolutos. Ordenes/dia OOS (criterio 8): 20.9 por sesion (14.4 por dia natural, 43,914 ordenes en 2,098 sesiones) — el volumen objetivo de §12 se alcanza, pero sin ventaja neta no se cablea (el volumen sin edge esta refutado en §3 del plan). NO SE CABLEA NADA.",
+    "stReversalB2": {
+      "outerFoldReturnsPct": [
+        0.11,
+        8.47,
+        -9.03,
+        4.07,
+        7.47,
+        22.83
+      ],
+      "stitchedReturnPct": 39.43,
+      "sharpe": 0.29,
+      "maxDrawdownPct": 47.24,
+      "outerPsr": 0.793,
+      "trades": 21957,
+      "ordersPerSessionOos": 20.93,
+      "corrVsLive": 0.127,
+      "breakEvenExtraBpsPerSide": 2.73,
+      "gatesFailed": [
+        "exTopDecileMinSharpe",
+        "maxDrawdown",
+        "minBreakEvenExtraBps",
+        "minOuterPsr",
+        "minSharpe",
+        "stressMinSharpe"
+      ]
+    }
+  },
+  "authoritativeArtifactCryptoFundingCarry": {
+    "path": "data/backtests/d93558a7ce57c8fc3d85145fb1523d729989ba452deb7757654caa1e0dba0f38/",
+    "manifest": "experiments/crypto-fcarry-v1.json @ 9e5d295 (pre-registro, antes de correr)",
+    "date": "2026-10-10",
+    "verdict": "REFUTADO por los criterios pre-registrados SS12 (1-7, en lineA-criteria.json del artefacto): falla 2 (Sharpe -0.664, PSR outer 0.079), 3 (Sharpe stress -0.950), 4 (break-even 0 bps: muerta ya a slippage 0, Sharpe -0.50 solo con comision+funding), 6 (maxDD 93.9%) y 7 (sin el decil top por P&L, Sharpe -2.007; el reparto por anios si cumple, max 48.9%). Pasa 1 (cadena pura, 3 folds, seleccion solo inner — mixta: fc-w7-r8/fc-w3-r8/fc-w7-r24) y 5 (correlacion diaria con la cartera combinada -0.015). Criterio 8 (reporte): 23.1 ordenes/dia OOS. HALLAZGO ECONOMICO HONESTO: el carry SI se cosecha — funding neto +$7,249 contra $2,176 de comisiones (3.3x) — pero la pata de PRECIO lo destruye: -91.4% total, los 3 folds negativos (-41.6/-57.9/-65.0). Cortar los 5 de funding mas alto es cortar sistematicamente los nombres mas calientes del momentum alcista (seleccion adversa espejo de A, donde el funding del libro corto era incidental). NO SE CABLEA. Cualquier variante (p. ej. carry con filtro de momentum) exige nuevo pre-registro.",
+    "cryptoFundingCarry": {
+      "outerFoldReturnsPct": [
+        -41.61,
+        -57.86,
+        -64.98
+      ],
+      "stitchedReturnPct": -91.38,
+      "sharpe": -0.664,
+      "maxDrawdownPct": 93.89,
+      "outerPsr": 0.079,
+      "trades": 3460,
+      "gatesFailed": [
+        "looMaxDrawdown",
+        "looMinSharpe",
+        "looMinTotalReturn",
+        "maxDrawdown",
+        "minBreakEvenSlippageBps",
+        "minFoldsPsrAbove",
+        "minOuterPsr",
+        "minSharpe",
+        "minTotalReturn",
+        "stressMaxDrawdown",
+        "stressMinSharpe",
+        "stressMinTotalReturn"
+      ],
+      "corrVsCombined": -0.015,
+      "ordersPerDayOos": 23.07,
+      "breakEvenSlippageBps": 0,
+      "exTopDecileSharpe": -2.007,
+      "maxYearPnlShare": 0.489,
+      "fundingPnlUsd": 7249.14,
+      "feesUsd": 2175.67
+    }
+  },
+  "authoritativeArtifactShortSideCrypto": {
+    "path": "data/backtests/c94f26418a3cf1fe24e866524995bc081179576f08e7c61465decf3b2c8a6a34/",
+    "manifest": "experiments/momentum-crypto-shortside-v1.json @ a2733f0 (pre-registro, antes de correr)",
+    "controlPath": "data/backtests/06e1a160c3556102aa2fff769f9e4c2a3d27d09a6f3874841286426425faf6e4/",
+    "date": "2026-10-10",
+    "verdict": "REFUTADO por los criterios pre-registrados SS12-quinquies (1-6, en lineS-criteria.json del artefacto): falla 2 (Sharpe 1.243 < control 1.313), 3 (maxDD 36.48% > 32.58%), 4 (P&L neto de los cortos -$1,238 en 164 cortos, negativo CADA anio salvo +14 en 2025 — pierde incluso en el bajista de 2022, -441, pese al filtro de regimen y a cobrar funding) y 5 (Sharpe stress 1.014 < 1.108). Pasa 1 (cadena pura mixta ms4-e5x2/ms2-e5x2/ms4-e5x2) y 6 (PSR 0.995). Reportado: regimen bajista el 43.0% del OOS, +0.19 ordenes/dia anadidas, 0 vetos del tope bruto (el control corre sin tope). El corto redisenado con el filtro pedido por el dueno SIGUE restando: rachas bajistas de cripto rebotan mas rapido que la SMA200 y los stops del 4% comen cada rebote. NO SE CABLEA; el control long-only sigue siendo el mejor conocido.",
+    "shortSideCrypto": {
+      "outerFoldReturnsPct": [
+        65.36,
+        219.88,
+        3.71
+      ],
+      "stitchedReturnPct": 448.57,
+      "sharpe": 1.243,
+      "maxDrawdownPct": 36.48,
+      "outerPsr": 0.995,
+      "trades": 1382,
+      "stressSharpe": 1.014,
+      "shortTrades": 164,
+      "shortPnlNetUsd": -1237.96,
+      "bearRegimeShare": 0.43,
+      "ordersPerDayAdded": 0.19,
+      "control": {
+        "stitchedReturnPct": 509.77,
+        "sharpe": 1.313,
+        "maxDrawdownPct": 32.58,
+        "stressSharpe": 1.108
+      }
+    }
+  },
+  "authoritativeArtifactShortSideStocks": {
+    "path": "data/backtests/4376f0831b9d0ec1eb16872095a51b867ec4795c45d436187f7fa13eec9e27c2/",
+    "manifest": "experiments/momentum-stocks-shortside-v1.json @ a2733f0 (pre-registro, antes de correr)",
+    "controlPath": "data/backtests/cb516547be365b7080cb56357a391ae73535aa3db3f83295fe9c935b7a7ed031/",
+    "date": "2026-10-10",
+    "verdict": "REFUTADO por los criterios pre-registrados SS12-quinquies (1-6): falla 2 (Sharpe 1.106 < control 1.122), 4 (P&L neto de los cortos -$1,309 en apenas 9 cortos de 7 anios: -474 en el whipsaw COVID 2020, -933 en 2022, +98 en 2023; prestamo $46) y 5 (stress 1.093 < 1.110). Pasa 1 (cadena pura mixta ms2-e5x0/ms2-e5x0/ms1-e5x0), 3 (maxDD 31.17% = control: el corto ni siquiera recorta la caida) y 6 (PSR 0.997). Reportado: regimen bajista el 19.1% de los dias OOS, +0.01 ordenes/dia anadidas, 0 vetos del tope bruto 1.725x. Con SPY bajo SMA200 Y el blend 63/126/252 <= -5% a la vez, el corto en ETF casi no existe y cuando existe entra tarde (el rebote ya empezo). NO SE CABLEA; el control k150 long-only queda como el mejor conocido.",
+    "shortSideStocks": {
+      "outerFoldReturnsPct": [
+        116.5,
+        117.36,
+        37.51
+      ],
+      "stitchedReturnPct": 547.1,
+      "sharpe": 1.106,
+      "maxDrawdownPct": 31.17,
+      "outerPsr": 0.997,
+      "trades": 128,
+      "stressSharpe": 1.093,
+      "shortTrades": 9,
+      "shortPnlNetUsd": -1309.4,
+      "bearRegimeShare": 0.191,
+      "ordersPerDayAdded": 0.01,
+      "control": {
+        "stitchedReturnPct": 563.24,
+        "sharpe": 1.122,
+        "maxDrawdownPct": 31.17,
+        "stressSharpe": 1.11
+      }
+    }
+  },
+  "authoritativeArtifactShortSideBisCrypto": {
+    "path": "data/backtests/8446f70d9a8e38ae006114baec6c3c14d36893b50e5b23a791c066fcf52cbd3e/",
+    "manifest": "experiments/momentum-crypto-shortside-stop-v1.json @ 08702d3 (pre-registro, antes de correr)",
+    "controlPath": "data/backtests/06e1a160c3556102aa2fff769f9e4c2a3d27d09a6f3874841286426425faf6e4/",
+    "date": "2026-10-10",
+    "verdict": "REFUTADO por los criterios pre-registrados SS12-quinquies 1-6 (en lineS-criteria.json): falla 2 (Sharpe 1.157 < control 1.313), 3 (maxDD 35.25%% > 32.58%%), 4 (P&L neto de cortos -$263 en 182 cortos) y 5 (stress 0.974 < 1.108). Pasa 1 (cadena PURA: s1b-fixed8 gana los 3 folds inner) y 6 (PSR 0.993). EL MECANISMO QUEDA FALSADO LIMPIO: con el stop del 8%% solo 3 de 182 cortos tocan stop (-242) y el lado corto SIGUE negativo — la perdida se redistribuye a las salidas por senal/regimen (179 cierres, -21 neto): el hallazgo de S ('las salidas por senal ganaban') era CONDICIONAL al stop del 4%% absorbiendo a los perdedores, no una ventaja de la senal. Por anios: 2022 -302, 2023 -131, 2024 +94, 2025 +406, 2026 -330. Regimen bajista 43%% del OOS; +0.22 ordenes/dia; 0 vetos del tope. NO SE CABLEA; con esto el lado corto de momentum_crypto queda CERRADO (SS12-sexies) hasta una idea nueva.",
+    "shortSideBisCrypto": {
+      "outerFoldReturnsPct": [
+        67.1,
+        161.25,
+        5.74
+      ],
+      "stitchedReturnPct": 361.62,
+      "sharpe": 1.157,
+      "maxDrawdownPct": 35.25,
+      "outerPsr": 0.993,
+      "trades": 1406,
+      "stressSharpe": 0.974,
+      "shortTrades": 182,
+      "shortPnlNetUsd": -263.25,
+      "bearRegimeShare": 0.43,
+      "ordersPerDayAdded": 0.22,
+      "control": {
+        "stitchedReturnPct": 509.77,
+        "sharpe": 1.313,
+        "maxDrawdownPct": 32.58,
+        "stressSharpe": 1.108
+      }
+    }
+  },
+  "authoritativeArtifactShortSideBisUsdc": {
+    "path": "data/backtests/7be4ffa3748e5a787d7948302a5252ef4ccff60dcadfdf50d777d0a70672502f/",
+    "manifest": "experiments/momentum-crypto-usdc-shortside-v1.json @ 08702d3 (pre-registro, antes de correr)",
+    "controlPath": "data/backtests/413ffb90cd968bfdfe51f1b1eebc87612f262ce9ecb7d2ca82fd59383a704625/",
+    "date": "2026-10-10",
+    "verdict": "REFUTADO por los criterios pre-registrados SS12-quinquies 1-6: falla 2 (Sharpe 0.893 < control 1.028), 3 (maxDD 58.16%% > 52.58%%), 4 (P&L neto de cortos -$230 en 34 cortos) y 5 (stress 0.772 < 0.935). Pasa 1 (cadena pura mixta) y 6 (PSR 0.957). Mismo patron con stops ANCHOS (8 sigma, 5-30%%): las salidas por senal/regimen ganan (+$1,066 en 26 cierres) pero el TRAIL come -$993 en 7 cierres y un stop -$303 — en diario el trail desde el minimo devuelve cada rebote del bajista. Por anios: 2023 -592, 2024 -476, 2026 +838. Regimen bajista 36.9%% del OOS; +0.03 ordenes/dia; 0 vetos del tope. NO SE CABLEA; el lado corto del kernel USDC queda CERRADO (SS12-sexies) hasta una idea nueva.",
+    "shortSideBisUsdc": {
+      "outerFoldReturnsPct": [
+        56.72,
+        11.17,
+        91.32
+      ],
+      "stitchedReturnPct": 233.34,
+      "sharpe": 0.893,
+      "maxDrawdownPct": 58.16,
+      "outerPsr": 0.957,
+      "trades": 127,
+      "stressSharpe": 0.772,
+      "shortTrades": 34,
+      "shortPnlNetUsd": -230.44,
+      "bearRegimeShare": 0.369,
+      "ordersPerDayAdded": 0.03,
+      "control": {
+        "stitchedReturnPct": 324.34,
+        "sharpe": 1.028,
+        "maxDrawdownPct": 52.58,
+        "stressSharpe": 0.935
       }
     }
   }

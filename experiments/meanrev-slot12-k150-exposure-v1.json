@@ -1,0 +1,125 @@
+{
+  "name": "meanrev-slot12-k150-exposure-v1",
+  "sleeve": "meanrev",
+  "description": "PRE-REGISTRO 2026-10-09, LINEA E (exposicion medida dentro del presupuesto de riesgo, V-plan Parte 2 SS9/SS12-E, criterios fijados en master 43576b4 ANTES de correr; DIAGNOSTICO DE TAMANO, la recomendacion la aprueba el dueno porque sube el riesgo). Copia byte a byte de meanrev-slot12-pure-v1 salvo el eje de exposicion k=1.5: meanrev.slotPct 0.12 -> 0.18 y candidate.maxGrossExposureMult = 1.449 (= tope vivo 0.966 x k; el tope vivo ya lleva la holgura medida GROSS_CAP_HEADROOM 1.15 del diagnostico G), mas costs.base/stress.marginInterest.annualRate = 0.065 (Reg-T 6.5%/ano sobre lo prestado; el sim lo modela: SimBroker ya lo hacia, SimMeanRevBroker desde esta linea). Misma ventana/asOf/folds/gates; cadena pura de 1 candidato sobre la base hist-sp500.db cuyo dataHash reproduce el artefacto autoritativo (k=1 = el autoritativo, bit a bit). SELECCION pre-registrada (SS12-E): combinacion por pesos de capital de mayor crecimiento logaritmico con maxDD combinado <= 20%, maxDD por portafolio <= su gate, bruto Alpaca <= 1.8x patrimonio, bruto Binance <= 3x por pool. TRIAL ACCOUNTING: k=1.5 sobre esta cadena nunca corrido = +1 hipotesis (diagnostica de tamano). priorUniqueTrials=327; pasa a 328. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 327,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "ABBV",
+      "AVGO",
+      "BAC",
+      "CAT",
+      "COST",
+      "CVX",
+      "DIS",
+      "GE",
+      "HD",
+      "HON",
+      "JNJ",
+      "JPM",
+      "KO",
+      "LLY",
+      "MA",
+      "MCD",
+      "MRK",
+      "NFLX",
+      "NKE",
+      "ORCL",
+      "PG",
+      "QCOM",
+      "UNH",
+      "V",
+      "WMT",
+      "XLE",
+      "XLF",
+      "XLI",
+      "XLP",
+      "XLV",
+      "XOM",
+      "SLV"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2018-01-01",
+    "to": "2026-08-06",
+    "outerFoldCount": 6,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 365
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 1,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "slot12-k150",
+      "cadenceMin": 1440,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 3,
+        "lookbackBars": 20,
+        "minPct": 2,
+        "maxPct": 12
+      },
+      "meanrev": {
+        "entryRsi": 5,
+        "smaLong": 200,
+        "smaExit": 5,
+        "timeStopDays": 10,
+        "maxPositions": 7,
+        "slotPct": 0.18
+      },
+      "maxGrossExposureMult": 1.449
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0.5,
+    "maxDrawdown": 0.25,
+    "minTotalReturn": 0,
+    "minExcessSharpeVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 100,
+    "stressMinSharpe": 0,
+    "stressMaxDrawdown": 0.3,
+    "stressMinTotalReturn": -0.1,
+    "looMinSharpe": 0,
+    "looMaxDrawdown": 0.3,
+    "looMinTotalReturn": -0.1,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 3
+    },
+    "minBreakEvenSlippageBps": 10
+  }
+}

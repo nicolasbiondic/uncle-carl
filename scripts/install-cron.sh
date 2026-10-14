@@ -2,7 +2,7 @@
 # ══════════════════════════════════════════════
 # Install Uncle Carl cron entries for the current user. Idempotent: rerun
 # safely. Installs four jobs. Times are the HOST'S LOCAL time (cron has no
-# timezone of its own): prod runs America/Lima (UTC−5, no DST), so 04:00 /
+# timezone of its own): the reference host runs at UTC−5 (no DST), so 04:00 /
 # 04:30 / 04:45 there are 09:00 / 09:30 / 09:45 UTC = 05:00–05:45 ET — the
 # relative order (refresh → backup → parity, all before the 09:35 ET pass)
 # is what matters and holds in any timezone.
@@ -18,6 +18,12 @@
 #      pulled yesterday's daily bars and the 04:30 backup; Tue–Sat because
 #      each run compares the PREVIOUS trading session Mon–Fri). Read-only;
 #      pages the OPS chat only on divergence (scripts/parity-check.ts).
+#   5+6. Línea-D shadow AI quorum (scripts/ai-quorum.sh): stocks at 16:15
+#      host-local Mon–Fri (= 21:15 UTC on a UTC−5 host, after the US close) and
+#      crypto at 19:15 host-local daily (= 00:15 UTC, after the UTC day
+#      roll). Shadow-only — own DB (data/ai-quorum.db), zero capital, never
+#      touches trading.db; without AI_QUORUM_* keys it stores the snapshot
+#      and calls nobody ("pending" mode).
 # ══════════════════════════════════════════════
 
 set -euo pipefail
@@ -28,9 +34,10 @@ BACKUP_SCRIPT="$ROOT_DIR/scripts/backup-db.sh"
 REFRESH_SCRIPT="$ROOT_DIR/scripts/refresh-historical.sh"
 WATCHDOG_SCRIPT="$ROOT_DIR/scripts/watchdog.sh"
 PARITY_SCRIPT="$ROOT_DIR/scripts/parity-check.sh"
+AI_QUORUM_SCRIPT="$ROOT_DIR/scripts/ai-quorum.sh"
 LOG_DIR="$ROOT_DIR/logs"
 
-for s in "$BACKUP_SCRIPT" "$REFRESH_SCRIPT" "$WATCHDOG_SCRIPT" "$PARITY_SCRIPT"; do
+for s in "$BACKUP_SCRIPT" "$REFRESH_SCRIPT" "$WATCHDOG_SCRIPT" "$PARITY_SCRIPT" "$AI_QUORUM_SCRIPT"; do
   if [ ! -x "$s" ]; then
     chmod +x "$s"
   fi
@@ -53,6 +60,14 @@ WATCHDOG_TAG="# uncle-carl-watchdog"
 PARITY_LINE="45 4 * * 2-6 $PARITY_SCRIPT >> $LOG_DIR/parity-check.log 2>&1"
 PARITY_TAG="# uncle-carl-parity-check"
 
+# Línea-D shadow AI quorum — times are HOST-LOCAL (a UTC−5 host shown):
+# 16:15 Mon–Fri = 21:15 UTC (stocks, after the US close);
+# 19:15 daily   = 00:15 UTC (crypto, after the UTC day roll).
+AIQ_STOCKS_LINE="15 16 * * 1-5 $AI_QUORUM_SCRIPT stocks >> $LOG_DIR/ai-quorum.log 2>&1"
+AIQ_STOCKS_TAG="# uncle-carl-ai-quorum-stocks"
+AIQ_CRYPTO_LINE="15 19 * * * $AI_QUORUM_SCRIPT crypto >> $LOG_DIR/ai-quorum.log 2>&1"
+AIQ_CRYPTO_TAG="# uncle-carl-ai-quorum-crypto"
+
 CURRENT=$(crontab -l 2>/dev/null || echo "")
 NEW="$CURRENT"
 
@@ -70,6 +85,8 @@ add_entry "$BACKUP_TAG"  "$BACKUP_LINE"
 add_entry "$REFRESH_TAG" "$REFRESH_LINE"
 add_entry "$WATCHDOG_TAG" "$WATCHDOG_LINE"
 add_entry "$PARITY_TAG" "$PARITY_LINE"
+add_entry "$AIQ_STOCKS_TAG" "$AIQ_STOCKS_LINE"
+add_entry "$AIQ_CRYPTO_TAG" "$AIQ_CRYPTO_LINE"
 
 if [ "$NEW" != "$CURRENT" ]; then
   echo "$NEW" | crontab -

@@ -17,15 +17,16 @@ describe("actionButton", () => {
 });
 
 describe("renderNav", () => {
-  test("all five pages with hash links and visible labels", () => {
-    Object.assign(store.state, { lang: "es", page: "cuentas" });
+  test("four pages with hash links and visible labels — broker accounts live in Ajustes (2026-10-11)", () => {
+    Object.assign(store.state, { lang: "es", page: "ajustes" });
     const html = renderNav();
+    expect(NAV_PAGES().map(([id]) => id)).toEqual(["resumen", "portafolios", "actividad", "ajustes"]);
     for (const [id] of NAV_PAGES()) expect(html).toContain(`href="#/${id}"`);
     expect(html).toContain(">Resumen<");
     expect(html).toContain(">Portafolios<");
-    expect(html).toContain(">Cuentas<");
     expect(html).toContain(">Actividad<");
     expect(html).toContain(">Ajustes<");
+    expect(html).not.toContain("#/cuentas");
   });
   test("the active page is marked with aria-current", () => {
     Object.assign(store.state, { page: "portafolios" });

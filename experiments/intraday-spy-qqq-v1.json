@@ -1,0 +1,45 @@
+{
+  "name": "intraday-spy-qqq-v1",
+  "line": "C",
+  "description": "Gao, Han, Li & Zhou (2018) 'Market Intraday Momentum': the return from the previous close to 10:00 ET (and/or the penultimate half hour 15:00-15:30 ET) predicts the last half hour (15:30-16:00 ET) return on SPY/QQQ. Entry ~15:30 ET, exit at the close (last RTH bar), long and short, no overnight position. Pre-registered 2026-10-09 per docs/reports/V-plan-volumen-rentabilidad.md §12 (criteria fixed BEFORE running, line C may not change or reinterpret them).",
+  "trialAccounting": {
+    "priorUniqueTrials": 323,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "$UC_RESEARCH_DATA_DIR/hist-intraday.db",
+    "universe": ["SPY", "QQQ"],
+    "timeframe": "1m",
+    "source": "alpaca_wide"
+  },
+  "window": {
+    "from": "2016-01-11",
+    "to": "latest",
+    "outerFoldCount": 4,
+    "innerFoldCount": 3,
+    "purgeYears": 0.03
+  },
+  "costs": {
+    "base": { "bpsPerSide": 2 },
+    "stress": { "bpsPerSide": 5 }
+  },
+  "ledger": {
+    "initialEquity": 50000
+  },
+  "candidates": [
+    { "name": "fhh-sign", "signal": "fhh" },
+    { "name": "penultimate-sign", "signal": "penultimate" },
+    { "name": "agree-fhh-penultimate", "signal": "agree" },
+    { "name": "fhh-threshold-5bps", "signal": "fhhThreshold", "thresholdBps": 5 }
+  ],
+  "acceptance": {
+    "minOuterPsr": 0.95,
+    "minSharpeBase": 1.0,
+    "minSharpeStress": 0.5,
+    "minBreakEvenSlippageBpsPerSide": 4,
+    "maxCorrelationWithPortfolio": 0.30,
+    "maxDrawdown": 0.25,
+    "maxYearPnlShare": 0.50,
+    "minSharpePerSymbol": 0.5
+  }
+}

@@ -71,15 +71,21 @@ function qtyFmt(v) {
 function sleeveBadge(profileId, account) {
   if (!profileId) return "";
   const label = account?.label || profileId;
-  return ` <span class="sbadge" title="${esc(label)}"><span class="d" style="background:${dotColor(profileId)}"></span>${esc(sleeveBadgeCode(profileId))}</span>`;
+  // .sb-t: the code text hides on mid-width desktops (app.css), leaving the
+  // colour dot — the exposure chips above double as its legend.
+  return ` <span class="sbadge" title="${esc(label)}"><span class="d" style="background:${dotColor(profileId)}"></span><span class="sb-t">${esc(sleeveBadgeCode(profileId))}</span></span>`;
 }
 
-/** Per-sleeve open notional vs. its allocation (RISK_PROFILES[id].initialEquity,
- *  shipped to the frontend as dashboard.accounts[].initialEquity — no second
- *  copy of that number here). THIS is the number that turns "4 positions"
- *  into the operator-facing "2.05x" leverage figure — a sleeve whose summed
- *  notional exceeds its allocation is over-deployed even though every row
- *  looks like an ordinary position individually.
+/** Per-sleeve gross exposure: open notional ÷ the base the sleeve's engine
+ *  checks its gross cap against — CURRENT equity for the momentum sleeves
+ *  (MomentumEngine), the allocation for meanrev (MeanRevEngine baseUsd);
+ *  dashboard.accounts[].grossCapBase — and that ratio as a share of the
+ *  sleeve's configured cap (accounts[].grossCapMult; both registered by
+ *  index.ts from each engine's maxGrossExposureMult). Until 2026-10-12 the
+ *  ratio was taken over the initial allocation and painted red at ≥ 1×: the
+ *  approved 1.5× sizing of momentum_stocks and a USDC sleeve whose equity
+ *  grew from $5k to $7.4k both read as alarms at their designed size.
+ *  Without a current equity the allocation is the base.
  *  `positions` must already carry `profileId` (see renderPositions) — a
  *  position with none is silently excluded (can't attribute exposure to an
  *  unknown sleeve). A sleeve with ANY unpriceable position (COIN-M) reports
@@ -91,7 +97,7 @@ export function sleeveExposure(positions, accounts) {
     const id = p?.profileId;
     if (!id) continue;
     const bucket = agg.get(id) || { notional: 0, unknown: 0, count: 0 };
-    const notional = positionNotional(p, accById.get(id));
+    const notional = marketNotional(p, accById.get(id));
     if (notional == null) bucket.unknown++; else bucket.notional += notional;
     bucket.count++;
     agg.set(id, bucket);
@@ -100,30 +106,59 @@ export function sleeveExposure(positions, accounts) {
   for (const [id, bucket] of agg) {
     const acc = accById.get(id);
     const allocation = acc && Number.isFinite(Number(acc.initialEquity)) ? Number(acc.initialEquity) : undefined;
-    const ratio = allocation > 0 && bucket.unknown === 0 ? bucket.notional / allocation : null;
-    rows.push({ id, label: acc?.label || id, notional: bucket.notional, allocation, ratio, count: bucket.count, unknown: bucket.unknown });
+    const equity = acc && priced(acc.equity) && Number(acc.equity) > 0 ? Number(acc.equity) : undefined;
+    const baseKind = acc?.grossCapBase === "allocation" || equity === undefined ? "allocation" : "equity";
+    const base = baseKind === "equity" ? equity : allocation;
+    const ratio = base > 0 && bucket.unknown === 0 ? bucket.notional / base : null;
+    const cap = acc && priced(acc.grossCapMult) && Number(acc.grossCapMult) > 0 ? Number(acc.grossCapMult) : null;
+    const usage = ratio != null && cap != null ? ratio / cap : null;
+    rows.push({ id, label: acc?.label || id, notional: bucket.notional, allocation, equity, base, baseKind, ratio, cap, usage, count: bucket.count, unknown: bucket.unknown });
   }
   return rows.sort((a, b) => (b.ratio ?? -1) - (a.ratio ?? -1));
+}
+
+/** Market value — what the engines' gross-cap check sums (the broker's
+ *  current notional) — falling back to the entry price while no current
+ *  price is known. The Notional column stays at cost (positionNotional). */
+function marketNotional(p, account) {
+  if (isInverseContractSleeve(account) || !priced(p?.quantity)) return null;
+  const px = priced(p?.currentPrice) && Number(p.currentPrice) > 0 ? Number(p.currentPrice)
+    : priced(p?.avgEntryPrice) ? Number(p.avgEntryPrice) : null;
+  return px == null ? null : Math.abs(Number(p.quantity)) * px;
+}
+
+/** Colour of an exposure ratio: by its share of the sleeve's own cap when the
+ *  cap is known (amber from 90%, red past the cap); without a cap, the old
+ *  rule (red at ≥ 1× of the base). */
+export function exposureColor(row) {
+  if (row.ratio == null) return "var(--muted)";
+  if (row.usage != null) return row.usage > 1 ? "var(--down)" : row.usage >= 0.9 ? "var(--warn)" : "var(--text)";
+  return row.ratio >= 1 ? "var(--down)" : "var(--text)";
 }
 
 function renderExposure(positions, accounts) {
   const rows = sleeveExposure(positions, accounts);
   if (!rows.length) return "";
   const chips = rows.map((r) => {
-    const over = r.ratio != null && r.ratio >= 1;
-    const value = r.ratio == null
-      ? `<span class="muted" title="${esc(t("Notional unavailable for this sleeve (COIN-M contracts, not units) — see \u2014 in the Notional column", "Nocional no disponible para este sleeve (contratos COIN-M, no unidades) — ver \u2014 en la columna Nocional"))}">—</span>`
-      : `<b style="color:${over ? "var(--down)" : "var(--text)"}">${num(r.ratio, 2)}×</b>`;
     // r.unknown > 0 means r.notional is a PARTIAL sum (some rows unpriceable,
     // e.g. COIN-M) — printing it as if it were the sleeve's whole notional
     // would read as "exactly $X deployed" when part of it is simply unknown.
     const notionalLabel = r.unknown > 0 ? "—" : money(r.notional, 0);
-    return `<div class="mchip" title="${esc(r.label)}">
-      <span class="l">${esc(sleeveBadgeCode(r.id))} · ${notionalLabel}${r.allocation ? ` / ${money(r.allocation, 0)}` : ""}</span>
-      ${value}
+    const value = r.ratio == null ? "—" : `${num(r.ratio, 2)}×`;
+    // Up to 3 decimals, trailing zeros dropped: the caps are 1.725× / 0.966× /
+    // 1.15× (and arrive with float noise, 1.7249999999999999).
+    const capLabel = r.cap == null ? "" : `${+r.cap.toFixed(3)}×`;
+    const baseLabel = r.baseKind === "equity" ? t("equity", "patrimonio") : t("allocation", "asignación");
+    const tip = r.ratio == null
+      ? t("Notional unavailable for this sleeve (COIN-M contracts, not units)", "Nocional no disponible para este sleeve (contratos COIN-M, no unidades)")
+      : `${r.label}: ${notionalLabel} ${t("deployed on", "invertidos sobre")} ${money(r.base, 0)} ${baseLabel} (${value})`
+        + (r.cap != null ? ` · ${t("cap", "tope")} ${capLabel}` : "")
+        + (r.allocation ? ` · ${t("allocation", "asignación")} ${money(r.allocation, 0)}` : "");
+    return `<div class="mchip xchip" title="${esc(tip)}">
+      <span class="d" style="background:${dotColor(r.id)}"></span><span class="l">${esc(sleeveBadgeCode(r.id))}</span><b style="color:${exposureColor(r)}">${value}</b>${r.cap != null ? `<span class="xcap">/ ${capLabel}</span>` : ""}
     </div>`;
   }).join("");
-  return `<div class="chips" style="margin-bottom:var(--s2)">${chips}</div>`;
+  return `<div class="chips xchips">${chips}</div>`;
 }
 
 export function renderPositions(state, trades) {
@@ -149,8 +184,13 @@ export function renderPositions(state, trades) {
   // OPEN row actually carries one, so it reappears on its own if that ever
   // changes instead of needing another UI change.
   const anyTp = pos.some((p) => priced(p.takeProfit) && Number(p.takeProfit) > 0);
+  // Same rule for the side column (2026-10-12): every live strategy is long
+  // only, so "L" on every row was dead width that pushed the SL cell onto two
+  // lines. It reappears on its own when a short position exists.
+  const isLong = (p) => p.side === "buy" || p.side === "long";
+  const anyShort = pos.some((p) => !isLong(p));
   const rows = pos.map((p) => {
-    const isL = p.side === "buy" || p.side === "long";
+    const isL = isLong(p);
     const now = Date.now();
     const held = p.durationSeconds != null ? p.durationSeconds * 1000 : (now - n(p.openedAt, now));
     const acc = accById.get(p.profileId);
@@ -158,7 +198,7 @@ export function renderPositions(state, trades) {
     const slDist = stopDistancePct(p.currentPrice, p.stopLoss, isL);
     return `<tr>
       <td><span class="symlink" data-sym="${esc(p.symbol)}" role="button" tabindex="0">${esc(p.symbol)}</span>${sleeveBadge(p.profileId, acc)}</td>
-      <td><span class="badge ${isL ? "l" : "s"}">${isL ? "L" : "S"}</span></td>
+      ${anyShort ? `<td><span class="badge ${isL ? "l" : "s"}">${isL ? "L" : "S"}</span></td>` : ""}
       <td class="opt3">${qtyFmt(p.quantity)}</td>
       <td class="opt3">${money(p.avgEntryPrice)}</td>
       <td>${notional != null
@@ -174,13 +214,13 @@ export function renderPositions(state, trades) {
     </tr>`;
   }).join("");
   return `${renderExposure(pos, accounts)}<div class="scroll"><table class="postbl">
-    <thead><tr><th>${t("Sym", "Sím")}</th><th>S</th><th class="opt3">${t("Qty", "Cant.")}</th><th class="opt3">${t("Entry", "Entrada")}</th>
+    <thead><tr><th>${t("Sym", "Sím")}</th>${anyShort ? "<th>S</th>" : ""}<th class="opt3">${t("Qty", "Cant.")}</th><th class="opt3">${t("Entry", "Entrada")}</th>
       <th title="${esc(t("Quantity \u00d7 entry price — the $ actually deployed. \u2014 for COIN-M (contracts, not units)", "Cantidad \u00d7 precio de entrada — el $ realmente invertido. \u2014 en COIN-M (contratos, no unidades)"))}">${t("Notional", "Nocional")}</th>
       <th class="opt3">${t("Now", "Ahora")}</th><th>P&L</th><th class="opt2">${t("Time", "Tiempo")}</th>
       <th class="opt1" title="${esc(t("Stop price · distance from the current price to the stop", "Precio de stop · distancia desde el precio actual al stop"))}">SL</th>
       ${anyTp ? `<th class="opt1">TP</th>` : ""}</tr></thead>
     <tbody>${rows}</tbody>
-    ${renderTotalsRow(pos, anyTp)}</table></div>`;
+    ${renderTotalsRow(pos, anyTp, anyShort)}</table></div>`;
 }
 
 /** Sum of unrealized P&L across the open positions shown above.
@@ -210,7 +250,7 @@ export function positionsTotals(positions) {
   return { total, counted, unpriced };
 }
 
-function renderTotalsRow(positions, anyTp) {
+function renderTotalsRow(positions, anyTp, anyShort = true) {
   const { total, counted, unpriced } = positionsTotals(positions);
   if (!counted) return "";
   const note = unpriced > 0
@@ -219,8 +259,13 @@ function renderTotalsRow(positions, anyTp) {
   // One cell per column (not a colspan over the Qty/Entry/Now columns): on
   // narrow screens those columns are display:none, and a colspan="6" then
   // spilled past the visible columns and pushed the total off-screen.
+  // Short label (the long form rides in the title): with the side column
+  // hidden it sits in the symbol column alone, and "Total unrealized · 21
+  // positions" forced that column to ~200px — the table then needed a
+  // sideways scroll (2026-10-12).
+  const what = `${counted} ${counted === 1 ? t("position", "posición") : t("positions", "posiciones")}`;
   return `<tfoot><tr class="totals">
-    <td colspan="2">${t("Total unrealized", "No realizado total")} <span class="muted">· ${counted} ${counted === 1 ? t("position", "posición") : t("positions", "posiciones")}${note}</span></td>
+    <td colspan="${anyShort ? 2 : 1}" title="${esc(t("Total unrealized P&L", "P&L no realizado total"))} · ${esc(what)}">${t("Unrealized", "No realizado")} <span class="muted">· ${counted}${note}</span></td>
     <td class="opt3"></td><td class="opt3"></td><td></td><td class="opt3"></td>
     <td style="color:${pnlColor(total)}">${moneySigned(total)}</td>
     <td class="opt2"></td><td class="opt1"></td>${anyTp ? `<td class="opt1"></td>` : ""}

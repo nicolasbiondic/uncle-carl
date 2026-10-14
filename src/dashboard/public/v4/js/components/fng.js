@@ -54,7 +54,7 @@ export function renderFngKpi() {
   const color = fngColor(v);
   const dash = ((v / 100) * FNG_ARC_LEN).toFixed(2);
   const arc = `M4 17 A13 13 0 0 1 30 17`;
-  return `<div class="kpi sm" title="Crypto Fear &amp; Greed Index — alternative.me">
+  return `<div class="kpi sm lo" title="Crypto Fear &amp; Greed Index — alternative.me">
     <span class="kl">${esc(t("Fear & Greed", "Miedo y Codicia"))}</span>
     <span class="kv" style="display:inline-flex;align-items:center;gap:7px">
       <svg width="34" height="19" viewBox="0 0 34 19" aria-hidden="true" style="flex-shrink:0">

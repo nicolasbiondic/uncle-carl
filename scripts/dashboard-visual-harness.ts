@@ -53,7 +53,18 @@ const server = Bun.serve({
     if (pathname === "/api/auth/logout") return json({ ok: true });
 
     // ── real fixtures ───────────────────────────────────────────────────
-    if (pathname === "/api/dashboard") return json(fx("dashboard.json"));
+    // Fixtures captured before 2026-10-12 lack accounts[].grossCapMult/Base
+    // (the engines' caps, src/ops/grossCaps.ts): fill in prod's values so the
+    // exposure chips render as they do live.
+    if (pathname === "/api/dashboard") {
+      const d = fx("dashboard.json");
+      const CAPS: Record<string, number> = { momentum_stocks: 1.725, meanrev_stocks: 0.966, momentum_crypto: 1.725, momentum_crypto_usdc: 1.15 };
+      for (const a of d.accounts ?? []) {
+        if (a.grossCapMult === undefined) a.grossCapMult = CAPS[a.id] ?? null;
+        if (a.grossCapBase === undefined) a.grossCapBase = a.id === "meanrev_stocks" ? "allocation" : "equity";
+      }
+      return json(d);
+    }
     if (pathname === "/api/trades") return json(fx("trades.json"));
     if (pathname === "/api/v2/profiles") return json(fx("profiles-7d.json"));
 
@@ -171,6 +182,40 @@ const server = Bun.serve({
     }
     if (pathname === "/api/analytics/hourly") {
       return json(Array.from({ length: 24 }, (_, hour) => ({ hour, avgPnl: Math.sin(hour / 3) * 14, tradeCount: 4 + (hour % 5) })));
+    }
+
+    // ── owner KPIs + decision funnel (src/dashboard/routes/kpis.ts) — synthetic
+    if (pathname === "/api/kpis") {
+      return json({
+        targets: { tradesPerDay: 30, dailyReturnPct: 0.12, riskBudgetDdPct: 25 },
+        volume: { today: 8, avg7d: 6.6 },
+        ret: { dailyAvgPct30d: 0.093, windowDays: 30 },
+        risk: { drawdownPct: 2.1, peakEquity: 118_400, equity: 115_900 },
+      });
+    }
+    if (pathname === "/api/funnel") {
+      const days = Number(url.searchParams.get("days") || 7) || 7;
+      const mk = (accountId: string, passes: number, universe: number, sl: number, en: number, ex: number,
+        blocks: Record<string, number>, note: string | null, su: number, st: number, design: number | null) => ({
+        accountId, passes, universe, signalsLong: sl, signalsShort: 0, entries: en, exits: ex,
+        blocks, lastBlockNote: note, slotsUsed: su, slotsTotal: st,
+        liveOrders: en + ex, liveOrdersPerDay: (en + ex) / days,
+        designOpsPerDay: design, designOrdersPerDay: design == null ? null : design * 2,
+      });
+      const accounts = [
+        mk("momentum_stocks", days, 11, 3, 0, 1, { no_slot: 2 }, null, 8, 8, 0.05),
+        mk("meanrev_stocks", days, 32, 9, 6, 5, { gross_cap: 1 }, "gross exposure cap: live $40984 + new $12500 would exceed 1.0× baseUsd", 3, 7, 1.2),
+        mk("momentum_crypto", 24 * days, 8, 31, 5, 6, { risk_gate: 55, no_slot: 9 }, "drawdown 7.8% > 5% soft limit — entries paused", 4, 4, 0.78),
+        mk("momentum_crypto_usdc", days, 13, 2, 1, 0, {}, null, 3, 5, 0.08),
+      ];
+      return json({
+        days,
+        accounts,
+        totals: {
+          liveOrdersPerDay: accounts.reduce((s, a) => s + a.liveOrdersPerDay, 0),
+          designOrdersPerDay: accounts.reduce((s, a) => s + (a.designOrdersPerDay ?? 0), 0),
+        },
+      });
     }
 
     // ── empty-but-shaped stubs for everything else the frontend calls ───

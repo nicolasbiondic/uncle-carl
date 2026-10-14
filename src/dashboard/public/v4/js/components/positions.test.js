@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   positionsTotals, positionNotional, isInverseContractSleeve,
-  sleeveBadgeCode, sleeveExposure, renderPositions, stopDistancePct,
+  sleeveBadgeCode, sleeveExposure, renderPositions, stopDistancePct, exposureColor,
 } from "./positions.js";
 
 describe("positionsTotals", () => {
@@ -204,8 +204,11 @@ describe("renderPositions (partial data)", () => {
       },
     };
     const html = renderPositions(state, []);
-    expect(html).not.toContain("$0 / $1,000");
-    expect(html).toContain("MOM-BTC · — / $1,000");
+    const chip = html.slice(html.indexOf('class="mchip xchip"'), html.indexOf("</div>", html.indexOf('class="mchip xchip"')));
+    expect(chip).toContain("MOM-BTC");
+    expect(chip).toContain(">—</b>");
+    expect(chip).not.toContain("$0");
+    expect(chip).toContain("COIN-M");
   });
 
   test("single-sleeve view: positions with no profileId still resolve exposure/notional from state.view", () => {
@@ -307,8 +310,87 @@ describe("positions table: the column header and the totals row stay in view (ow
     expect(css).toMatch(/tfoot tr\.totals td \{[^}]*position: sticky; bottom: 0;/);
   });
   test("viewport-locked layout: the table box (not the card body) is the scroller, so the sticky rows have something to stick to", () => {
-    const lock = css.slice(css.indexOf("@media (min-width: 981px) and (min-height: 660px)"));
+    const lock = css.slice(css.indexOf("@media (min-width: 981px) and (min-height:"));
     expect(lock).toContain("#opsBody { display: flex; flex-direction: column; overflow: hidden; }");
     expect(lock).toContain("#opsBody > .scroll { flex: 1 1 0; min-height: 0; overflow: auto; }");
+  });
+});
+
+// ── Exposure vs current equity and the sleeve's own cap (2026-10-12) ───────
+// Until then the ratio was taken over the initial allocation and painted red
+// at ≥ 1×: the approved 1.5× momentum_stocks book and a USDC sleeve whose
+// equity grew from $5k to $7.4k both read as alarms at their designed size.
+describe("sleeveExposure — current equity base and cap usage", () => {
+  const acc = (over = {}) => ({ id: "momentum_stocks", label: "Momentum Stocks", broker: "alpaca", initialEquity: 50_000, ...over });
+  const book = [{ symbol: "SPY", side: "buy", quantity: 100, avgEntryPrice: 794.41, profileId: "momentum_stocks" }]; // $79,441
+
+  test("the ratio is over the sleeve's CURRENT equity when the payload carries it", () => {
+    const [row] = sleeveExposure(book, [acc({ equity: 52_960, grossCapMult: 1.725 })]);
+    expect(row.ratio).toBeCloseTo(79_441 / 52_960, 6); // ≈ 1.50×, not 1.59× of the $50k allocation
+    expect(row.cap).toBe(1.725);
+    expect(row.usage).toBeCloseTo(row.ratio / 1.725, 6);
+  });
+
+  test("meanrev's cap is over its allocation (MeanRevEngine baseUsd), even with a current equity", () => {
+    const mr = { id: "meanrev_stocks", label: "MeanRev Stocks", broker: "alpaca", initialEquity: 25_000, equity: 24_000, grossCapMult: 0.966, grossCapBase: "allocation" };
+    const [row] = sleeveExposure([{ symbol: "UNH", side: "buy", quantity: 10, avgEntryPrice: 300, profileId: "meanrev_stocks" }], [mr]);
+    expect(row.baseKind).toBe("allocation");
+    expect(row.ratio).toBeCloseTo(3_000 / 25_000, 6);
+  });
+
+  test("the ratio is over MARKET value (what the engine's cap check sums), entry price only as fallback", () => {
+    const pos = [
+      { symbol: "LINK/USDC", side: "buy", quantity: 100, avgEntryPrice: 14, currentPrice: 12, profileId: "momentum_stocks" },
+      { symbol: "UNI/USDC", side: "buy", quantity: 100, avgEntryPrice: 10, profileId: "momentum_stocks" },
+    ];
+    const [row] = sleeveExposure(pos, [acc({ equity: 2_000, grossCapMult: 1.15 })]);
+    expect(row.notional).toBe(100 * 12 + 100 * 10);
+    expect(row.ratio).toBeCloseTo(2_200 / 2_000, 6);
+  });
+
+  test("the cap shows its real precision, without float noise", () => {
+    const html = renderPositions({ view: "consolidated", dashboard: { accounts: [acc({ equity: 52_960, grossCapMult: 1.7249999999999999 })], portfolio: { positions: book } } }, []);
+    expect(html).toContain('<span class="xcap">/ 1.725×</span>');
+  });
+
+  test("colour by share of the cap: normal below 90%, amber from 90%, red past the cap", () => {
+    expect(exposureColor({ ratio: 1.5, usage: 1.5 / 1.725 })).toBe("var(--text)");
+    expect(exposureColor({ ratio: 1.6, usage: 1.6 / 1.725 })).toBe("var(--warn)");
+    expect(exposureColor({ ratio: 1.8, usage: 1.8 / 1.725 })).toBe("var(--down)");
+    expect(exposureColor({ ratio: null, usage: null })).toBe("var(--muted)");
+  });
+
+  test("without a cap or a current equity it falls back to the old rule over the allocation", () => {
+    const [row] = sleeveExposure(book, [acc()]);
+    expect(row.ratio).toBeCloseTo(79_441 / 50_000, 6);
+    expect(row.cap).toBeNull();
+    expect(exposureColor(row)).toBe("var(--down)");
+  });
+
+  test("the chip shows the ratio and the cap; the $ deployed rides in the tooltip", () => {
+    const state = { view: "consolidated", dashboard: { accounts: [acc({ equity: 52_960, grossCapMult: 1.725 })], portfolio: { positions: book } } };
+    const html = renderPositions(state, []);
+    expect(html).toContain(">1.50×</b>");
+    expect(html).toContain('<span class="xcap">/ 1.725×</span>');
+    expect(html).toMatch(/class="mchip xchip" title="[^"]*\$79,441[^"]*cap 1\.725×/);
+  });
+});
+
+describe("renderPositions — side column only when a short exists", () => {
+  const accounts = [{ id: "momentum_stocks", label: "Momentum Stocks", broker: "alpaca", initialEquity: 50_000 }];
+  const row = (symbol, side) => ({ symbol, side, quantity: 1, avgEntryPrice: 100, currentPrice: 101, unrealizedPnl: side === "buy" ? 1 : -1, profileId: "momentum_stocks" });
+
+  test("long-only book (every live strategy today): no S column, totals label spans one column", () => {
+    const html = renderPositions({ view: "consolidated", dashboard: { accounts, portfolio: { positions: [row("AAPL", "buy"), row("MSFT", "buy")] } } }, []);
+    expect(html).not.toContain("<th>S</th>");
+    expect(html).not.toContain('class="badge l"');
+    expect(html).toContain('<td colspan="1"');
+  });
+
+  test("a short position brings the column back, with its badge", () => {
+    const html = renderPositions({ view: "consolidated", dashboard: { accounts, portfolio: { positions: [row("AAPL", "buy"), row("QQQ", "sell")] } } }, []);
+    expect(html).toContain("<th>S</th>");
+    expect(html).toContain('class="badge s"');
+    expect(html).toContain('<td colspan="2"');
   });
 });

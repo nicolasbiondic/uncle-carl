@@ -27,6 +27,13 @@
 #     the pre-pull SHA) and marks the bad SHA in data/.deploy-rejected-sha
 #     so the next ~2min poll SKIPS re-deploying the same unhealthy commit —
 #     it only retries once a NEW commit lands on origin/master
+#   • a commit range that only touches documentation (*.md, docs/ — rule in
+#     scripts/lib/docs-only.sh) still runs the gate but does NOT restart the
+#     bot: the running code is byte-identical (2026-10-11 — docs pushes were
+#     restarting the bot up to 14 times a day)
+#   • a successful deploy is log-only; only failures page Telegram (owner,
+#     2026-10-11: TELEGRAM_OPS_CHAT_ID is the owner's own chat, so every
+#     "DEPLOYED" reached them)
 # ──────────────────────────────────────────────────────────────────────────
 set -uo pipefail
 REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -60,6 +67,10 @@ GATE_TYPECHECK_CMD="${GATE_TYPECHECK_CMD:-bun run typecheck}"
 GATE_TEST_CMD="${GATE_TEST_CMD:-bun test}"
 START_CMD="${START_CMD:-./start.sh}"
 log() { echo "[$(date -u +%FT%TZ)] auto-deploy: $*"; }
+# docs_only_range (missing file → the function is undefined, the check below
+# fails and every deploy restarts: the pre-2026-10-11 behavior).
+# shellcheck source=lib/docs-only.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/docs-only.sh" 2>/dev/null || true
 
 # Best-effort Telegram page. Reads the two vars with grep — deliberately never
 # imports the whole env file into this shell (40+ trading vars; a test pins
@@ -69,8 +80,9 @@ notify() {
   token=$(grep -oP '^TELEGRAM_BOT_TOKEN=\K.+' "$REPO/.env" 2>/dev/null | tail -1)
   # OPS chat only (2026-08-03 user mandate: the user chat is for trading
   # events, never for deploys). No fallback to TELEGRAM_CHAT_ID by design —
-  # with TELEGRAM_OPS_CHAT_ID unset these events live in logs/deploy.log,
-  # which is where the "DEPLOYED / GATE FAIL" stream belongs.
+  # with TELEGRAM_OPS_CHAT_ID unset these events live in logs/deploy.log.
+  # Only problems page (gate failures, rollbacks, blocked deploys, failing
+  # fetches and their recovery); a successful deploy is log-only (2026-10-11).
   chat=$(grep -oP '^TELEGRAM_OPS_CHAT_ID=\K.+' "$REPO/.env" 2>/dev/null | tail -1)
   [ -n "$token" ] && [ -n "$chat" ] || return 0
   curl -fsS -m 10 "https://api.telegram.org/bot${token}/sendMessage" \
@@ -273,6 +285,17 @@ fi
 rm -rf "$GATE_TMPDIR"
 rm -f "$GATEFAIL_PAGED_FILE" 2>/dev/null || true
 
+# 4b. Documentation-only range since what is RUNNING (.deployed-sha, never
+# HEAD — a parked SHA may hold code that never ran): the code is unchanged, so
+# the bot keeps running; record the new SHA as deployed. Unknown deployed SHA →
+# restart as always.
+DEPLOYED_NOW=$(cat "$DEPLOYED_SHA_FILE" 2>/dev/null || true)
+if [ -n "$DEPLOYED_NOW" ] && [ "$DEPLOYED_NOW" != "$REMOTE" ] && docs_only_range "$DEPLOYED_NOW" "$REMOTE" 2>/dev/null; then
+  log "docs-only change ${DEPLOYED_NOW:0:7}..${REMOTE:0:7} — gate passed, running code unchanged, NOT restarting"
+  echo "$REMOTE" > "$DEPLOYED_SHA_FILE" 2>/dev/null || true
+  exit 0
+fi
+
 # 5. Deploy: restart via the canonical entrypoint (systemd-managed).
 log "gate passed (typecheck+tests) — restarting uncle-carl"
 # Mark this restart as planned so the bot suppresses its Telegram startup banner
@@ -283,7 +306,6 @@ if bash -c "$START_CMD" >/dev/null 2>&1; then
   if health_check; then
     log "DEPLOYED ${REMOTE:0:7}"
     echo "$REMOTE" > "$DEPLOYED_SHA_FILE" 2>/dev/null || true
-    notify "✅ DEPLOYED ${REMOTE:0:7} and healthy"
   else
     log "GATE FAIL: health check — bot unhealthy after restart on ${REMOTE:0:7}; rolling back to ${LOCAL:0:7}"
     if ! git reset --hard "$LOCAL" >/dev/null 2>&1; then

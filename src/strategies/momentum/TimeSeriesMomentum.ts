@@ -63,6 +63,30 @@ export interface TSMConfig {
    * horizons is more robust than any single lookback.
    */
   lookbackDaysList?: number[];
+  /**
+   * OPT-IN short-side regime gate (line S, V §12-quinquies; absent = legacy
+   * behavior, byte-identical): shorts may only ENTER or STAY while
+   * `refSymbol`'s last CLOSED UTC daily close is below the SMA of its last
+   * `maDays` daily closes (data strictly before the decision). The CONFIG
+   * lives here; the EVALUATION needs daily closes the rank() candle window
+   * cannot carry (200 daily closes ≫ the hourly history window), so the
+   * caller (MomentumEngine.evaluateShortRegime, via the adapter's causal
+   * fetchDailyCloses) passes the verdict into rank() as
+   * `opts.shortRegimeBearish`. FAIL-CLOSED contract — the OPPOSITE of
+   * marketTrend's fail-open: when this config is set and the verdict is
+   * missing/false (no adapter method, fetch failed, < maDays closed days,
+   * market above MA), NO short enters and every held short's decision is
+   * exit at the next tick. Missing data may never author short risk.
+   */
+  shortRegime?: { refSymbol: string; maDays: number };
+  /**
+   * OPT-IN short-side universe restriction (line S; absent = legacy
+   * behavior, byte-identical): only these symbols may be ranked into the
+   * short set. Longs are unaffected. A held short outside the list (config
+   * change mid-hold) is treated like any short losing its slot: action
+   * "flat" ⇒ covered at the next decision.
+   */
+  shortUniverse?: string[];
 }
 
 /**
@@ -75,6 +99,12 @@ export interface TSMConfig {
  */
 export interface TSMDecision extends MomentumDecision {
   displaced?: boolean;
+  /** Telemetry (P0 funnel, 2026-10-09): a NON-held symbol whose fresh entry
+   *  signal was valid this bar but that got no slot because maxLongs/
+   *  maxShorts bound ("sin hueco"). Optional and only present when true —
+   *  same byte-compatibility discipline as `displaced`; nothing in the
+   *  decision path reads it. */
+  noSlot?: boolean;
 }
 
 export const DEFAULT_TSM_CONFIG: TSMConfig = {
@@ -99,7 +129,15 @@ export class TimeSeriesMomentum {
    * Decide per-symbol action. `currentlyHeld` (longs) / `currentlyShort` are
    * required so we can apply asymmetric entry/exit thresholds correctly.
    */
-  rank(candlesBySymbol: Map<string, OHLCV[]>, currentlyHeld?: Set<string>, currentlyShort?: Set<string>): TSMDecision[] {
+  rank(
+    candlesBySymbol: Map<string, OHLCV[]>,
+    currentlyHeld?: Set<string>,
+    currentlyShort?: Set<string>,
+    /** Caller-evaluated verdicts for opt-in gates whose data lives outside
+     *  the candle window (see TSMConfig.shortRegime). Omitted by every
+     *  legacy caller — with shortRegime unset the output is byte-identical. */
+    opts?: { shortRegimeBearish?: boolean },
+  ): TSMDecision[] {
     const lookbackBars = Math.floor(this.cfg.lookbackDays * 24 * 60 / this.cfg.barMinutes);
     // Multi-horizon (opt-in): bar counts per horizon, longest first for the
     // history requirement. Absent/empty leaves every line below on the exact
@@ -193,14 +231,34 @@ export class TimeSeriesMomentum {
       if (longStayOk(c) && !longs.has(c.symbol)) displaced.add(c.symbol);
     }
 
+    // Short-side opt-in gates (line S): with shortRegime configured, shorts
+    // exist ONLY on a true bear verdict from the caller (fail closed — see
+    // the config docstring); shortUniverse restricts which symbols may fill
+    // short slots. Both absent = the exact legacy loop below.
+    const shortsAllowed = this.cfg.shortRegime ? opts?.shortRegimeBearish === true : true;
+    const shortUniv = this.cfg.shortUniverse ? new Set(this.cfg.shortUniverse) : null;
     const shorts = new Set<string>();
-    for (let i = cands.length - 1; i >= 0 && shorts.size < this.cfg.maxShorts; i--) {
+    for (let i = cands.length - 1; i >= 0 && shortsAllowed && shorts.size < this.cfg.maxShorts; i--) {
       const c = cands[i];
       if (longs.has(c.symbol)) continue; // longs take slot priority
+      if (shortUniv && !shortUniv.has(c.symbol)) continue;
       const belowMa = c.px < c.ma;
       const enterOk = c.r <= this.cfg.shortEntryThresholdPct / 100 && belowMa;
       const stayOk  = c.heldShort && c.r <= this.cfg.shortExitThresholdPct / 100 && belowMa;
       if (enterOk || stayOk) shorts.add(c.symbol);
+    }
+
+    // Telemetry (P0 funnel): a NON-held symbol with a valid fresh entry
+    // signal that got no slot — "sin hueco". Held-but-ranked-out stays
+    // `displaced` above; both are read AFTER the slot sets are final, so
+    // neither can change an assignment.
+    const noSlot = new Set<string>();
+    for (const c of cands) {
+      if (longs.has(c.symbol) || shorts.has(c.symbol)) continue;
+      const longEnterOk = !c.held && c.r >= this.cfg.entryThresholdPct / 100 && c.px > c.ma;
+      const shortEnterOk = this.cfg.maxShorts > 0 && shortsAllowed && (!shortUniv || shortUniv.has(c.symbol))
+        && !c.heldShort && c.r <= this.cfg.shortEntryThresholdPct / 100 && c.px < c.ma;
+      if (longEnterOk || shortEnterOk) noSlot.add(c.symbol);
     }
 
     return cands.map((c, idx) => ({
@@ -213,9 +271,10 @@ export class TimeSeriesMomentum {
         : shorts.has(c.symbol)
         ? `tsm short: r=${(c.r * 100).toFixed(2)}% below ${(this.cfg.shortEntryThresholdPct).toFixed(1)}%, price below MA`
         : `tsm flat: r=${(c.r * 100).toFixed(2)}%, ${c.px > c.ma ? "above MA" : "below MA"}`,
-      // Optional field, only present when true — a decision object without
-      // displacement is byte-identical to the pre-field output.
+      // Optional fields, only present when true — a decision object without
+      // displacement/no-slot is byte-identical to the pre-field output.
       ...(displaced.has(c.symbol) ? { displaced: true } : {}),
+      ...(noSlot.has(c.symbol) ? { noSlot: true } : {}),
     }));
   }
 

@@ -54,18 +54,18 @@ function brokerCard(key, group, bt, stats) {
   const status = pausedCount === 0
     ? `<span class="live"><span class="d"></span>LIVE</span>`
     : `<span class="chip" style="color:var(--warn)">${pausedCount} ${t("paused", "en pausa")}</span>`;
+  // Two lines per column (2026-10-12): equity and the period P&L share a line,
+  // so the card is ~64px instead of ~90px of the one-screen Overview.
   return `
     <div class="pcard ${on ? "on" : ""} fade-up" data-broker="${esc(key)}" role="button" tabindex="0" title="${esc(name)}">
       <div class="pcol pcol-l">
         <span class="pname"><span class="pdot" style="background:${dotColor(key)}"></span><b>${esc(name)}</b>${status}</span>
-        <span class="peq">${money(equity, 0)}</span>
-        <span class="psub">${esc(periodLabel(store.state.period))} <b style="color:${pnlColor(periodPnl)}">${moneySigned(periodPnl)}</b>${periodPct == null ? "" : ` <span class="muted">${pctSigned(periodPct)}</span>`}</span>
+        <span class="pline"><span class="peq">${money(equity, 0)}</span><span class="psub">${esc(periodLabel(store.state.period))} <b style="color:${pnlColor(periodPnl)}">${moneySigned(periodPnl)}</b>${periodPct == null ? "" : ` <span class="muted">${pctSigned(periodPct)}</span>`}</span></span>
       </div>
       <div class="pspark" data-spark="${esc(key)}_main" aria-hidden="true"></div>
       <div class="pcol pcol-r">
-        <span class="broker">${group.length} ${t("sleeves", "sleeves")}</span>
-        <span class="pall" style="color:${pnlColor(allPct)}">${pctSigned(allPct)}</span>
-        <span class="muted pdet">${t("Details →", "Detalle →")}</span>
+        <span class="pall" style="color:${pnlColor(allPct)}" title="${esc(t("Return since the start of the current system", "Rentabilidad desde el inicio del sistema actual"))}">${pctSigned(allPct)} <span class="muted ptot">${t("total", "total")}</span></span>
+        <span class="psub"><span class="broker">${group.length} ${t("sleeves", "sleeves")}</span> <span class="pdet">${t("Details →", "Detalle →")}</span></span>
       </div>
     </div>`;
 }

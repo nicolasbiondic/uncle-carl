@@ -6,9 +6,12 @@ import { windowSeg } from "./kpis.js";
 
 // Consolidated from 11 → 7. Portfolio dropped (duplicated the Positions card);
 // Hours/Symbols/P&L Source/Tearsheet merged into one "Performance" deep-dive.
+// "Volume" (2026-10-12): the decision funnel (funnel.js), formerly a card under
+// Positions/Trades that crushed that table in the viewport-locked layout.
 const TABS = () => [
   ["equity", t("Equity", "Curva")],
   ["performance", t("Performance", "Rendimiento")],
+  ["volume", t("Volume", "Volumen")],
   ["activity", t("Activity", "Actividad")],
 ];
 
@@ -37,6 +40,11 @@ export async function loadTab() {
     const { destroyEquityChart } = await import("./equity.js");
     destroyEquityChart();
     if (tab === "performance") body.innerHTML = await performance();
+    else if (tab === "volume") {
+      const { renderFunnelPanel, loadFunnel } = await import("./funnel.js");
+      body.innerHTML = renderFunnelPanel();
+      await loadFunnel();
+    }
     else if (tab === "activity") body.innerHTML = activity(await api.activity(60));
   } catch (e) { body.innerHTML = `<div class="empty">${t("Could not load", "No se pudo cargar")}: ${esc(e.message)}</div>`; }
 }

@@ -49,6 +49,7 @@ import { eventBus, EVENTS } from "../../utils/events";
 // watermarks, so it always writes/reads an empty trailMarks map.
 import type { CapacityGuardConfig, MomentumStatePersistence, TrailStopConfig } from "../momentum/MomentumEngine";
 import { averageDailyDollarVolume, trailPctFromVol, validRiskAnchor } from "../momentum/MomentumEngine";
+import type { DecisionRecorder, DecisionPassSnapshot } from "../../telemetry/decisionRecorder";
 
 // ── Math (copied from scripts/backtest-meanrev.ts) ──────────────────────────
 
@@ -478,6 +479,24 @@ export class MeanRevEngine {
    *  MeanRevEngine.riskAnchor.test.ts). 0 = no prior period to compute
    *  realised pnl for. */
   private lastRiskReadAt = 0;
+  /** P0 funnel telemetry — injected by index.ts AFTER construction (never
+   *  through the parity-locked plan config). Pure telemetry: fail-soft,
+   *  never read back by any decision path (decisionRecorder.test.ts). */
+  private decisionRecorder?: DecisionRecorder;
+
+  setDecisionRecorder(recorder: DecisionRecorder): void {
+    this.decisionRecorder = recorder;
+  }
+
+  /** Telemetry sink — NEVER throws into a pass, never gates anything. */
+  private recordDecisionPass(s: Omit<DecisionPassSnapshot, "accountId">): void {
+    if (!this.decisionRecorder) return;
+    try {
+      this.decisionRecorder.record({ accountId: this.cfg.accountId, ...s });
+    } catch (e: any) {
+      this.log.warn(`decision-pass telemetry failed: ${e?.message ?? e}`);
+    }
+  }
 
   constructor(
     cfg: Partial<MeanRevEngineConfig>,
@@ -695,6 +714,17 @@ export class MeanRevEngine {
       riskBlockedReason = "realised-pnl read failed: loss-streak breaker frozen";
     }
 
+    // ── P0 funnel counters (telemetry only — recordDecisionPass runs before
+    // every return below except the non-trading-day skip; never read by any
+    // branch). Gate keys count BLOCKED PASSES, entry keys blocked ENTRIES.
+    const blockCounts: Record<string, number> = {};
+    let blockNote: string | undefined;
+    const bumpBlock = (key: string, note?: string, by = 1) => {
+      blockCounts[key] = (blockCounts[key] ?? 0) + by;
+      if (note) blockNote = note;
+    };
+    let funnelSignals = 0;
+
     // ENTRIES — RSI(2) < entryRsi AND close > SMA(200), ranked by lowest RSI.
     // Gated on entriesReady: incomplete/stale universe data skips new entries
     // for the day without touching the exits already processed above.
@@ -706,9 +736,11 @@ export class MeanRevEngine {
       // retry loop, no "FAILED after retries" page for entries this host
       // must not place while the switch is off.
       this.log.info("meanrev: TRADING_ENABLED=false (maintenance kill-switch) — entries skipped, exits processed");
+      bumpBlock("trading_disabled", "TRADING_ENABLED=false (maintenance kill-switch)");
     } else if (!canOpen) {
       report.blockedReason = riskBlockedReason;
       this.log.warn(`MeanRev new entries BLOCKED: ${riskBlockedReason}`);
+      bumpBlock("risk_gate", riskBlockedReason);
     } else if (!opts?.skipEntries && slots > 0) {
       if (entriesReady) {
         // rsiMethod OPT-IN (default "cutler" = pre-existing rsi2, byte-
@@ -734,6 +766,7 @@ export class MeanRevEngine {
         } else {
           cands.sort((a, b) => a.rsi - b.rsi);
         }
+        funnelSignals = cands.length;
         const [dayStart, dayEnd] = getETDayBounds(todayKey);
         // Gross-exposure guard bookkeeping (see maxGrossExposureMult
         // docstring): local running total seeded from the positions STILL
@@ -745,8 +778,13 @@ export class MeanRevEngine {
           .filter((p) => held.has(p.symbol))
           .reduce((s, p) => s + Math.abs(p.notional), 0);
         let attempted = 0;
-        for (const cand of cands) {
-          if (attempted >= slots) break;
+        for (const [candIdx, cand] of cands.entries()) {
+          if (attempted >= slots) {
+            // Telemetry only: the remaining ranked candidates had a valid
+            // signal but no free slot ("sin hueco").
+            bumpBlock("no_slot", `slots full (${held.size + attempted}/${this.cfg.maxPositions})`, cands.length - candIdx);
+            break;
+          }
           // Broker positions can lag a just-filled order. The engine's own DB
           // row cannot be allowed to lag that same fill, so use it as the
           // durable once-per-symbol/day barrier before every submission
@@ -830,8 +868,22 @@ export class MeanRevEngine {
           `missing/stale: ${bad.map((s) => `${s}=${lastBarKey.get(s) ?? "none"}`).join(",")}`;
         report.errors.push(msg);
         report.status = "incomplete_data";
+        bumpBlock("no_data", msg);
+        this.recordDecisionPass({
+          ts: now, universe: this.cfg.universe.length, evaluated: candles.size,
+          signalsLong: funnelSignals, signalsShort: 0,
+          entries: report.opens.filter((o) => o.ok).length,
+          exits: report.closes.filter((c) => c.ok).length,
+          blocks: blockCounts,
+          ...(blockNote !== undefined ? { blockNote } : {}),
+          slotsUsed: held.size, slotsTotal: this.cfg.maxPositions,
+        });
         return report;
       }
+    } else if (!opts?.skipEntries && slots <= 0) {
+      // Telemetry only: pass with every slot occupied — candidates were not
+      // even computed, so this counts the PASS, not candidates.
+      bumpBlock("no_slot", `slots full (${held.size}/${this.cfg.maxPositions})`);
     }
 
     // Output-liveness tick (src/ops/sleeveOutput.ts) — recorded AFTER the
@@ -841,6 +893,22 @@ export class MeanRevEngine {
     // return skips this too — that failure class already pages via
     // MeanRevRetry's "FAILED after retries" burst.
     if (this.cfg.heartbeatName) sleeveOutput.recordTick(this.cfg.heartbeatName);
+
+    // P0 funnel telemetry — one row per completed pass, fail-soft, recorded
+    // before status resolution so terminal/action-failure passes count too.
+    this.recordDecisionPass({
+      ts: now,
+      universe: this.cfg.universe.length,
+      evaluated: candles.size,
+      signalsLong: funnelSignals,
+      signalsShort: 0,
+      entries: report.opens.filter((o) => o.ok).length,
+      exits: report.closes.filter((c) => c.ok).length,
+      blocks: blockCounts,
+      ...(blockNote !== undefined ? { blockNote } : {}),
+      slotsUsed: held.size + report.opens.filter((o) => o.ok).length,
+      slotsTotal: this.cfg.maxPositions,
+    });
 
     // Resolve pass status from collected open/close results.
     const terminalClose = report.closes.find((c) => c.terminal);

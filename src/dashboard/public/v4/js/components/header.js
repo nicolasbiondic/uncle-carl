@@ -95,10 +95,11 @@ export function renderActions() {
 
 /** Persistent portfolio-manager navigation. Labels ALWAYS visible (the owner
  *  asked for named sections, not icon-guessing); aria-current marks the page. */
+// Broker accounts are a section of Ajustes since 2026-10-11 (owner: "Settings
+// y Accounts podrían estar juntos") — #/cuentas is an alias (router.js).
 export const NAV_PAGES = () => [
   ["resumen", "home", t("Overview", "Resumen")],
   ["portafolios", "briefcase", t("Portfolios", "Portafolios")],
-  ["cuentas", "box", t("Accounts", "Cuentas")],
   ["actividad", "list", t("Activity", "Actividad")],
   ["ajustes", "settings", t("Settings", "Ajustes")],
 ];

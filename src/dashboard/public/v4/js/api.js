@@ -48,8 +48,12 @@ export const api = {
   sleeveRisk: () => soft("/api/v2/sleeves/risk", { sleeves: [] }),
   connections: () => soft("/api/connections", {}),
   activity: (limit = 60, type) => soft("/api/activity" + qs({ limit, type: type && type !== "all" ? type : "" }), []),
+  aiQuorum: () => soft("/api/ai-quorum/summary", { status: "none" }),
   trades: (limit = 100, account) => soft("/api/trades" + qs({ limit, account }), []),
   equityHistory: ({ account = "consolidated", days, range } = {}) => soft("/api/equity/history" + qs({ account, days, range }), []),
+  // Owner KPIs + decision funnel (P0 2026-10-09 — src/dashboard/routes/kpis.ts)
+  kpis: () => soft("/api/kpis", null),
+  funnel: (days = 7) => soft("/api/funnel" + qs({ days }), null),
   // analytics — the v8 market-monitor/agent/strategies-matrix endpoints were
   // removed backend-side (2026-07-09/13); their frontend callers went with them.
   monthlyReturns: (profile = "binance_main", months = 12) => soft("/api/analytics/monthly-returns" + qs({ profile, months }), []),

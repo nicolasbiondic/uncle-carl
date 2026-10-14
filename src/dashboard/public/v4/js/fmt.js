@@ -1,3 +1,4 @@
+import { t } from "./store.js";
 // ── fmt.js — the ONE source of formatting. v3's bugs came from many divergent
 // copies of "today" / money / pct / date helpers. Everything formats here.
 
@@ -63,17 +64,17 @@ export function etDateTime(ms) {
 
 /** Relative age: "just now" / "5m" / "3h" / "2d" / date. Handles ms epoch. */
 export function ago(ms) {
-  const t = n(ms, 0);
-  if (!t) return "—";
-  const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
-  if (s < 45) return "just now";
+  const ts = n(ms, 0);
+  if (!ts) return "—";
+  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (s < 45) return t("just now", "ahora");
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
+  if (m < 60) return t(`${m}m ago`, `hace ${m} min`);
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
+  if (h < 24) return t(`${h}h ago`, `hace ${h} h`);
   const d = Math.floor(h / 24);
-  if (d < 30) return `${d}d ago`;
-  return etDate(t);
+  if (d < 30) return t(`${d}d ago`, `hace ${d} d`);
+  return etDate(ts);
 }
 
 /** Duration in ms -> "3h 12m" / "45m" / "12s". */

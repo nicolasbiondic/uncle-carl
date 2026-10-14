@@ -8,7 +8,7 @@
 # is shared), then stop and disable the service and its watchdog for good.
 #
 # RUNBOOK (the full consolidation, in order — do not reorder):
-#   1. This script runs via cron at 08:35 America/Lima (= 09:35 ET, market
+#   1. This script runs via cron at 08:35 host-local, UTC−5 (= 09:35 ET, market
 #      open, weekdays) and does: remove watchdog cron -> stop unit ->
 #      close-stocks-at-open.ts (bounded flush) -> verify 0 open rows ->
 #      disable unit -> write data/.decommissioned -> remove own cron line.

@@ -51,7 +51,8 @@ import {
 // protocol's outer verdict and production speak the same statistics.
 import { minTrlObservations, probabilisticSharpe as psrFromMoments } from "../src/portfolio/trackRecord";
 import { computeSequenceRisk, type SequenceRiskSummary } from "./lib/sequenceRisk";
-import type { MarketTrendGateConfig, TimeStopConfig, TrailStopConfig, VolSizingConfig, VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
+import { expandDataPath } from "./lib/researchData";
+import type { MarketTrendGateConfig, ShortStopSpec, TimeStopConfig, TrailStopConfig, VolSizingConfig, VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
 import type { RiskGuardConfig, RiskState } from "../src/strategies/momentum/RiskGuard";
 import { getETDateKey } from "../src/db/database";
 
@@ -75,6 +76,31 @@ export interface CandidateConfig {
   exitPct?: number;
   maxLongs?: number;
   maxShorts?: number;
+  /** Short-side entry threshold in PERCENT, strictly negative (TSMConfig.
+   *  shortEntryThresholdPct via ReplayConfig.shortEntryPct). Line-S axis.
+   *  Absent = engine default (−5) AND the legacy candidate hash. Requires
+   *  maxShorts ≥ 1 (inert otherwise — the class every axis here rejects). */
+  shortEntryPct?: number;
+  /** Short-side exit threshold in PERCENT, > shortEntryPct (TSMConfig.
+   *  shortExitThresholdPct). Absent = engine default (+2) AND the legacy
+   *  hash. Requires maxShorts ≥ 1. */
+  shortExitPct?: number;
+  /** Short-regime gate (TSMConfig.shortRegime — line S): shorts only enter
+   *  or stay while refSymbol's last CLOSED UTC daily close < SMA(maDays) of
+   *  its daily closes; otherwise a held short's decision is exit. FAIL
+   *  CLOSED on missing data (opposite of marketTrend's fail-open). Absent =
+   *  OFF AND the legacy hash. Requires maxShorts ≥ 1. */
+  shortRegime?: { refSymbol: string; maDays: number };
+  /** Short-universe restriction (TSMConfig.shortUniverse): only these
+   *  symbols may fill short slots. Absent = OFF AND the legacy hash.
+   *  Requires maxShorts ≥ 1. */
+  shortUniverse?: string[];
+  /** Short-only stop distance (line S-bis — MomentumEngine.ShortStopSpec):
+   *  fixed pct is a FRACTION (0.08 = 8%); volScaled is kSigma × the σ of
+   *  DAILY log returns over lookbackDays COMPLETED UTC daily closes,
+   *  clamped [minPct, maxPct] PERCENT-units. Longs keep hardStop/
+   *  hardStopPct. Absent = OFF AND the legacy hash. Requires maxShorts ≥ 1. */
+  shortStop?: ShortStopSpec;
   /** TSM lookback horizon in bar-math DAYS (ReplayConfig.lookbackDays →
    *  TimeSeriesMomentum.lookbackDays; trading days on stocks via
    *  barMinutesEq). The horizon axis (momentum-stocks-horizon-v1): the
@@ -171,6 +197,11 @@ const VALID_CANDIDATE_KEYS = new Set<keyof CandidateConfig>([
   "exitPct",
   "maxLongs",
   "maxShorts",
+  "shortEntryPct",
+  "shortExitPct",
+  "shortRegime",
+  "shortUniverse",
+  "shortStop",
   "lookbackDays",
   "maLengthDays",
   "lookbackDaysList",
@@ -351,6 +382,55 @@ function validateProfitLock(p: unknown): void {
   }
 }
 
+/**
+ * Validate a short-regime gate config (line S). Strict key allowlist — an
+ * unknown key would be silently dropped by the engine (config that changes
+ * nothing), so throw. Same shape discipline as validateMarketTrend.
+ */
+function validateShortRegime(sr: unknown): void {
+  if (!sr || typeof sr !== "object" || Array.isArray(sr)) throw new Error("shortRegime must be an object");
+  const obj = sr as Record<string, unknown>;
+  const unknown = Object.keys(obj).filter(k => k !== "refSymbol" && k !== "maDays");
+  if (unknown.length > 0) throw new Error(`shortRegime has unknown keys: ${unknown.join(", ")}`);
+  if (typeof obj.refSymbol !== "string" || obj.refSymbol.length === 0) {
+    throw new Error("shortRegime.refSymbol must be a non-empty string");
+  }
+  if (!Number.isInteger(obj.maDays) || (obj.maDays as number) < 2) {
+    throw new Error("shortRegime.maDays must be an integer >= 2 (closed UTC days)");
+  }
+}
+
+/**
+ * Validate a ShortStopSpec (line S-bis). Strict per-mode key allowlists,
+ * same philosophy as validateHardStop. fixed.pct is a FRACTION;
+ * volScaled.lookbackDays counts DAILY closes (not bars) with min/max in
+ * PERCENT-units.
+ */
+function validateShortStop(ss: unknown): void {
+  if (!ss || typeof ss !== "object" || Array.isArray(ss)) throw new Error("shortStop must be an object");
+  const obj = ss as Record<string, unknown>;
+  const allowedByMode: Record<string, string[]> = {
+    fixed: ["mode", "pct"],
+    volScaled: ["mode", "kSigma", "lookbackDays", "minPct", "maxPct"],
+  };
+  const mode = obj.mode as string;
+  const allowed = allowedByMode[mode];
+  if (!allowed) throw new Error(`shortStop.mode must be "fixed" or "volScaled", got ${JSON.stringify(obj.mode)}`);
+  const unknown = Object.keys(obj).filter(k => !allowed.includes(k));
+  if (unknown.length > 0) throw new Error(`shortStop (mode ${mode}) has unknown keys: ${unknown.join(", ")}`);
+  if (mode === "fixed") {
+    if (!Number.isFinite(obj.pct) || (obj.pct as number) <= 0 || (obj.pct as number) >= 1) {
+      throw new Error("shortStop.pct must be a fraction in (0, 1), e.g. 0.08");
+    }
+  } else {
+    if (!Number.isFinite(obj.kSigma) || (obj.kSigma as number) <= 0) throw new Error("shortStop.kSigma must be positive");
+    if (!Number.isInteger(obj.lookbackDays) || (obj.lookbackDays as number) < 2) throw new Error("shortStop.lookbackDays must be an integer >= 2 (DAILY closes)");
+    const minPct = obj.minPct as number, maxPct = obj.maxPct as number;
+    if (!Number.isFinite(minPct) || minPct <= 0) throw new Error("shortStop.minPct must be positive (percent-units, e.g. 6 = 6%)");
+    if (!Number.isFinite(maxPct) || maxPct < minPct || maxPct >= 100) throw new Error("shortStop.maxPct must be >= minPct and < 100 (percent-units)");
+  }
+}
+
 /** Canonical MeanRevSimParams keys; unknown keys are rejected like CandidateConfig's. */
 const VALID_MEANREV_KEYS = new Set<keyof MeanRevSimParams>([
   "entryRsi",
@@ -422,7 +502,7 @@ export function validateCandidate(c: unknown): CandidateConfig {
     // maxGrossExposureMult left this list 2026-10-05: runMeanRevReplay now
     // forwards it to MeanRevEngine (it is no longer config that changes
     // nothing on meanrev) — see the G gross-cap diagnostic.
-    const forbidden = ["entryPct", "exitPct", "maxLongs", "maxShorts", "notionalPctPerSlot", "volTarget", "volSizing", "tsmTrail", "sharpeGate", "timeStop", "marketTrend", "risk", "cooldownBarsAfterStop", "slotHysteresis", "regime", "profitLock", "lookbackDays", "maLengthDays", "lookbackDaysList"]
+    const forbidden = ["entryPct", "exitPct", "maxLongs", "maxShorts", "shortEntryPct", "shortExitPct", "shortRegime", "shortUniverse", "shortStop", "notionalPctPerSlot", "volTarget", "volSizing", "tsmTrail", "sharpeGate", "timeStop", "marketTrend", "risk", "cooldownBarsAfterStop", "slotHysteresis", "regime", "profitLock", "lookbackDays", "maLengthDays", "lookbackDaysList"]
       .filter(k => obj[k] !== undefined);
     if (forbidden.length > 0) {
       throw new Error(`meanrev CandidateConfig must not set momentum-only keys: ${forbidden.join(", ")}`);
@@ -453,6 +533,32 @@ export function validateCandidate(c: unknown): CandidateConfig {
   if (!Number.isInteger(obj.maxLongs) || (obj.maxLongs as number) < 0) throw new Error("CandidateConfig.maxLongs must be a non-negative integer");
   if (!Number.isInteger(obj.maxShorts) || (obj.maxShorts as number) < 0) throw new Error("CandidateConfig.maxShorts must be a non-negative integer");
   if ((obj.maxLongs as number) + (obj.maxShorts as number) === 0) throw new Error("CandidateConfig must allow at least one position");
+  // Line-S short axes: every short knob is INERT unless the candidate can
+  // actually short (maxShorts >= 1) — config that changes nothing is the
+  // class this validator rejects everywhere else.
+  const shortKeys = ["shortEntryPct", "shortExitPct", "shortRegime", "shortUniverse", "shortStop"].filter(k => obj[k] !== undefined);
+  if (shortKeys.length > 0 && (obj.maxShorts as number) < 1) {
+    throw new Error(`short-side keys (${shortKeys.join(", ")}) require maxShorts >= 1`);
+  }
+  if (obj.shortEntryPct !== undefined && (!Number.isFinite(obj.shortEntryPct) || (obj.shortEntryPct as number) >= 0)) {
+    throw new Error("CandidateConfig.shortEntryPct must be a finite NEGATIVE percent (e.g. -5)");
+  }
+  if (obj.shortExitPct !== undefined) {
+    if (!Number.isFinite(obj.shortExitPct)) throw new Error("CandidateConfig.shortExitPct must be finite (percent)");
+    const entry = (obj.shortEntryPct as number | undefined) ?? -5; // engine default
+    if ((obj.shortExitPct as number) <= entry) {
+      throw new Error("CandidateConfig.shortExitPct must be > shortEntryPct (hysteresis: easier to stay than enter)");
+    }
+  }
+  if (obj.shortRegime !== undefined) validateShortRegime(obj.shortRegime);
+  if (obj.shortStop !== undefined) validateShortStop(obj.shortStop);
+  if (obj.shortUniverse !== undefined) {
+    const su = obj.shortUniverse;
+    if (!Array.isArray(su) || su.length === 0 || su.some(s => typeof s !== "string" || s.length === 0)) {
+      throw new Error("CandidateConfig.shortUniverse must be a non-empty array of symbol strings");
+    }
+    if (new Set(su).size !== su.length) throw new Error("CandidateConfig.shortUniverse must not contain duplicates");
+  }
   if (obj.notionalPctPerSlot !== undefined && (!Number.isFinite(obj.notionalPctPerSlot) || (obj.notionalPctPerSlot as number) <= 0)) {
     throw new Error("CandidateConfig.notionalPctPerSlot must be positive");
   }
@@ -502,6 +608,12 @@ export interface CostConfig {
    *  stays the legacy one (undefined keys are dropped). Forbidden on
    *  meanrev manifests (that runner doesn't model financing; leverage 1). */
   marginInterest?: { annualRate: number };
+  /** Short-borrow financing (line S): the momentum sim debits gross SHORT
+   *  notional × annualRate/365 per UTC calendar day, accrued per position
+   *  so ClosedTrade.pnl nets it. Same calendar-day convention and fraction
+   *  units as marginInterest; momentum-only (the meanrev runner never
+   *  shorts). Absent = 0 charges AND the legacy candidate hash. */
+  shortBorrow?: { annualRate: number };
 }
 
 export interface DataConfig {
@@ -524,6 +636,12 @@ export interface DataConfig {
    *  topN members by median dollar volume over lookbackSessions CLOSED
    *  sessions at each decision date. Requires membership. */
   liquidityRank?: { topN: number; lookbackSessions: number };
+  /** PIT MONTHLY perp membership (ReplayConfig.perpsMembership — línea F,
+   *  see its docstring in backtest-momentum-wf.ts): the line-A universe
+   *  rule over the research perps DB. Crypto-with-funding only; mutually
+   *  exclusive with `membership`. Absent = legacy replays AND the legacy
+   *  candidate hashes. */
+  perpsMembership?: { topN: number; volLookbackDays: number; minDays: number; freshDays: number };
 }
 
 export interface WindowConfig {
@@ -901,7 +1019,9 @@ export function runIdentityHash(configHash: string, dataHash: string, codeHash: 
   return hashString(canonicalJson({ configHash, dataHash, codeHash }));
 }
 
-export async function hashCodeFiles(files = [
+/** Default code-identity file list (exported so wrapper drivers can extend
+ *  it via runWalkForward's opts.codeFiles without duplicating it). */
+export const DEFAULT_CODE_FILES = [
     "bun.lock",
     "package.json",
     "scripts/backtest-momentum-wf.ts",
@@ -927,7 +1047,9 @@ export async function hashCodeFiles(files = [
     "src/config/index.ts",
     "src/ops/sleeveOutput.ts",
     "src/utils/events.ts",
-  ].sort()): Promise<string> {
+  ].sort();
+
+export async function hashCodeFiles(files = DEFAULT_CODE_FILES): Promise<string> {
   const hash = createHash("sha256");
   hash.update(`runtime:${Bun.version}|${process.platform}|${process.arch}\n`);
   for (const f of files) {
@@ -974,6 +1096,15 @@ export function validateManifest(m: ExperimentManifest): ExperimentManifest {
       throw new Error("meanrev data.refSymbol is benchmark-only and must NOT be in data.universe");
     }
     if (m.data.funding) throw new Error("meanrev manifests must set data.funding=false");
+  } else if (m.data.perpsMembership !== undefined) {
+    // Perps-membership mode (línea F): the refSymbol is benchmark-only,
+    // exactly like meanrev — BTC is one of the 8 momentum_crypto bases the
+    // universe rule EXCLUDES (disjoint USDT pool), and a declared symbol
+    // would otherwise enter the tradable domain. The replay loads its bars
+    // separately (see runWithConfig).
+    if (m.data.universe.includes(m.data.refSymbol)) {
+      throw new Error("perpsMembership data.refSymbol is benchmark-only and must NOT be in data.universe");
+    }
   } else if (!m.data.universe.includes(m.data.refSymbol)) {
     throw new Error("data.refSymbol must be in data.universe");
   }
@@ -984,19 +1115,33 @@ export function validateManifest(m: ExperimentManifest): ExperimentManifest {
     throw new Error("ledger values must be positive and hardStopPct must be below 1");
   }
   // A3 margin-interest cost knob: strict keys and fraction bounds (0.075 =
-  // 7.5%/yr; a percent-units 7.5 would be a 750%/yr typo). Forbidden on
-  // meanrev — the meanrev runner doesn't model financing, so the key would
-  // be config that changes nothing (same philosophy as validateCandidate).
+  // 7.5%/yr; a percent-units 7.5 would be a 750%/yr typo). Valid on EVERY
+  // sleeve since 2026-10-09 (línea E): SimMeanRevBroker.accrueMarginInterest
+  // now models Reg-T financing with the same calendar-day semantics as the
+  // momentum SimBroker (it used to be forbidden here as config that changes
+  // nothing) — locked by scripts/meanrev-replay.marginInterest.test.ts.
   for (const tier of ["base", "stress"] as const) {
     const mi = m.costs?.[tier]?.marginInterest;
-    if (mi === undefined) continue;
-    if (m.sleeve === "meanrev") {
-      throw new Error(`meanrev manifests must not set costs.${tier}.marginInterest (financing is not modeled by the meanrev runner)`);
+    if (mi !== undefined) {
+      const unknown = Object.keys(mi).filter(k => k !== "annualRate");
+      if (unknown.length > 0) throw new Error(`costs.${tier}.marginInterest has unknown keys: ${unknown.join(", ")}`);
+      if (!Number.isFinite(mi.annualRate) || mi.annualRate < 0 || mi.annualRate >= 1) {
+        throw new Error(`costs.${tier}.marginInterest.annualRate must be a fraction in [0, 1), e.g. 0.075 = 7.5%/yr`);
+      }
     }
-    const unknown = Object.keys(mi).filter(k => k !== "annualRate");
-    if (unknown.length > 0) throw new Error(`costs.${tier}.marginInterest has unknown keys: ${unknown.join(", ")}`);
-    if (!Number.isFinite(mi.annualRate) || mi.annualRate < 0 || mi.annualRate >= 1) {
-      throw new Error(`costs.${tier}.marginInterest.annualRate must be a fraction in [0, 1), e.g. 0.075 = 7.5%/yr`);
+    // Line-S short-borrow cost knob: same shape discipline as marginInterest
+    // but momentum-only (the meanrev runner is long-only — the key would be
+    // config that changes nothing there).
+    const sb = m.costs?.[tier]?.shortBorrow;
+    if (sb !== undefined) {
+      if (m.sleeve === "meanrev") {
+        throw new Error(`meanrev manifests must not set costs.${tier}.shortBorrow (the meanrev runner never shorts)`);
+      }
+      const unknown = Object.keys(sb).filter(k => k !== "annualRate");
+      if (unknown.length > 0) throw new Error(`costs.${tier}.shortBorrow has unknown keys: ${unknown.join(", ")}`);
+      if (!Number.isFinite(sb.annualRate) || sb.annualRate < 0 || sb.annualRate >= 1) {
+        throw new Error(`costs.${tier}.shortBorrow.annualRate must be a fraction in [0, 1), e.g. 0.005 = 0.5%/yr`);
+      }
     }
   }
   if (!Number.isFinite(Date.parse(m.window?.from)) || !Number.isFinite(Date.parse(m.window?.to))) {
@@ -1027,6 +1172,20 @@ export function validateManifest(m: ExperimentManifest): ExperimentManifest {
     if (unknown.length > 0) throw new Error(`data.liquidityRank has unknown keys: ${unknown.join(", ")}`);
     if (!Number.isInteger(lrk.topN) || (lrk.topN as number) < 1) throw new Error("data.liquidityRank.topN must be a positive integer");
     if (!Number.isInteger(lrk.lookbackSessions) || (lrk.lookbackSessions as number) < 2) throw new Error("data.liquidityRank.lookbackSessions must be an integer >= 2");
+  }
+  // Línea F: PIT monthly perp membership — strict shape, crypto-only.
+  if (m.data.perpsMembership !== undefined) {
+    const pm = m.data.perpsMembership as Record<string, unknown>;
+    const keys = ["topN", "volLookbackDays", "minDays", "freshDays"];
+    const unknown = Object.keys(pm).filter(k => !keys.includes(k));
+    if (unknown.length > 0) throw new Error(`data.perpsMembership has unknown keys: ${unknown.join(", ")}`);
+    for (const k of keys) {
+      if (!Number.isInteger(pm[k]) || (pm[k] as number) < 1) throw new Error(`data.perpsMembership.${k} must be a positive integer`);
+    }
+    if (m.sleeve !== "crypto" || !m.data.funding || m.data.rthOnly) {
+      throw new Error("data.perpsMembership requires the crypto sleeve with funding=true and rthOnly=false");
+    }
+    if (m.data.membership !== undefined) throw new Error("data.perpsMembership is mutually exclusive with data.membership");
   }
   if (!Number.isInteger(m.window.outerFoldCount) || m.window.outerFoldCount < 1 || !Number.isInteger(m.window.innerFoldCount) || m.window.innerFoldCount < 0) {
     throw new Error("fold counts must be non-negative integers and outerFoldCount must be positive");
@@ -1088,8 +1247,12 @@ export function validateManifest(m: ExperimentManifest): ExperimentManifest {
 
 export function loadManifest(path: string): ExperimentManifest {
   const raw = readFileSync(path, "utf-8");
-  const m = JSON.parse(raw) as ExperimentManifest;
-  return validateManifest(m);
+  const m = validateManifest(JSON.parse(raw) as ExperimentManifest);
+  // Datasets outside the repo are named "$UC_RESEARCH_DATA_DIR/…": resolved
+  // here, before anything opens or records the path (manifestIdentity leaves
+  // dbPath out of the config hash anyway).
+  m.data.dbPath = expandDataPath(m.data.dbPath);
+  return m;
 }
 
 export function manifestToSleeve(m: ExperimentManifest): Sleeve {
@@ -1184,6 +1347,9 @@ export function candidateToReplayConfig(
     slippageBps: cost.slippageBps,
     commissionBps: cost.commissionBps,
     marginInterest: cost.marginInterest,
+    // Line-S short-borrow financing: absent keys are dropped by
+    // canonicalJson, so every legacy candidate keeps its legacy hash.
+    shortBorrow: cost.shortBorrow,
     initialEquity: m.ledger.initialEquity,
     leverage: m.ledger.leverage,
     hardStopPct: m.ledger.hardStopPct,
@@ -1197,6 +1363,12 @@ export function candidateToReplayConfig(
     exitPct: c.exitPct ?? 0,
     maxLongs: c.maxLongs ?? 0,
     maxShorts: c.maxShorts ?? 0,
+    // Line-S short axes: absent = engine defaults AND the legacy hash.
+    shortEntryPct: c.shortEntryPct,
+    shortExitPct: c.shortExitPct,
+    shortRegime: c.shortRegime,
+    shortUniverse: c.shortUniverse,
+    shortStop: c.shortStop,
     // TSM horizon axis: absent = engine defaults (14/30) AND legacy hash
     // (undefined keys are dropped by canonicalJson).
     lookbackDays: c.lookbackDays,
@@ -1228,6 +1400,9 @@ export function candidateToReplayConfig(
     // into every candidate identity; absent keys keep legacy hashes.
     membership: m.data.membership,
     liquidityRank: m.data.liquidityRank,
+    // Línea F axis (2026-10-10): same manifest-level convention — hashed
+    // into every candidate identity; absent keeps every legacy hash.
+    perpsMembership: m.data.perpsMembership,
     meanrev: c.meanrev && (c.rsiMethod !== undefined || c.deterministicTieBreak !== undefined)
       ? {
           ...c.meanrev,
@@ -1715,10 +1890,18 @@ export async function runLoo(
   outerFolds: OuterFold[],
   snapshotPath?: string,
   runner: ReplayRunner = defaultReplayRunner,
+  /** Symbols to leave out, one chain each. Default (every pre-existing call
+   *  site) = the full declared universe — byte-identical legacy. A driver
+   *  may restrict it (runWalkForward opts.looTopPnlSymbols: línea F's
+   *  360-symbol PIT universe × hourly real-engine replays makes full LOO
+   *  computationally impossible; only symbols with material |P&L| can move
+   *  the stitched Sharpe, so LOO over the top-|P&L| set bounds the same
+   *  single-symbol dependence). */
+  symbols: string[] = m.data.universe,
 ): Promise<LooOutcome> {
   const out: LooResult[] = [];
   const cutChains: string[] = [];
-  for (const sym of m.data.universe) {
+  for (const sym of symbols) {
     const remainingUniverse = m.data.universe.filter(s => s !== sym);
     if (remainingUniverse.length === 0) continue;
     const results: ReplayResult[] = [];
@@ -2026,11 +2209,15 @@ export type ReplayRunner = (cfg: ReplayConfig, win: { label: string; from: strin
 
 export async function runWalkForward(
   m: ExperimentManifest,
-  opts: { dryRun?: boolean; runner?: ReplayRunner; breakEven?: boolean } = {},
+  opts: { dryRun?: boolean; runner?: ReplayRunner; breakEven?: boolean; codeFiles?: string[]; looTopPnlSymbols?: number } = {},
 ): Promise<{ manifest: ExperimentManifest; summary: WalkForwardSummary; outputDir: string }> {
   validateManifest(m);
   validateUniqueCandidates(m);
-  const codeHash = await hashCodeFiles();
+  // opts.codeFiles: a wrapper driver with its OWN kernel (e.g. the line-A
+  // cross-sectional runner) passes the default list PLUS its kernel files so
+  // the artifact's code identity covers the simulator that actually ran.
+  // Absent = the default list — every existing manifest keeps its hashes.
+  const codeHash = await hashCodeFiles(opts.codeFiles);
 
   // Create one immutable read-only SQLite snapshot of the data for this run.
   const tmpDir = mkdtempSync(join(tmpdir(), "uncle-carl-wf-"));
@@ -2327,7 +2514,21 @@ export async function runWalkForward(
     // ── leave-one-symbol-out ──────────────────────────────────────────────
     let loo: LooResult[] = [];
     if (selectedByOuter.size > 0 && !opts.dryRun) {
-      const looOutcome = await runLoo(m, selectedByOuter, folds, snapshotPath, opts.runner);
+      // opts.looTopPnlSymbols (additive, absent = full-universe legacy):
+      // restrict the LOO chains to the N symbols with the largest |gross
+      // P&L| across the outer OOS chain — the only ones whose exclusion can
+      // move the stitched metrics (see runLoo's `symbols` docstring).
+      let looSymbols = m.data.universe;
+      if (opts.looTopPnlSymbols !== undefined && opts.looTopPnlSymbols > 0) {
+        const pnl = new Map<string, number>();
+        for (const r of outerTestResults) {
+          for (const [sym, v] of Object.entries(r.tradesBySymbol)) {
+            if (v.trades > 0) pnl.set(sym, (pnl.get(sym) ?? 0) + Math.abs(v.grossPnl));
+          }
+        }
+        looSymbols = [...pnl.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, opts.looTopPnlSymbols).map(([s]) => s);
+      }
+      const looOutcome = await runLoo(m, selectedByOuter, folds, snapshotPath, opts.runner, looSymbols);
       loo = looOutcome.results;
       chainCutFolds.push(...looOutcome.cutChains);
     }

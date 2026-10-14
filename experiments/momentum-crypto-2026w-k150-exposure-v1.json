@@ -1,0 +1,100 @@
+{
+  "name": "momentum-crypto-2026w-k150-exposure-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTRO 2026-10-09, LINEA E (exposicion medida dentro del presupuesto de riesgo, V-plan Parte 2 SS9/SS12-E, criterios fijados en master 43576b4 ANTES de correr; DIAGNOSTICO DE TAMANO, la recomendacion la aprueba el dueno porque sube el riesgo). Copia byte a byte de momentum-crypto-2026w-control-pure-v1 salvo el eje de exposicion k=1.5: notionalPctPerSlot 0.375 -> 0.5625 y candidate.maxGrossExposureMult = 2.5875 (= tope vivo 1.725 x k; el tope vivo ya lleva la holgura medida GROSS_CAP_HEADROOM 1.15 del diagnostico G); sin marginInterest: sleeve de perps, el funding real ya esta modelado (funding: true). Misma ventana/asOf/folds/gates; cadena pura de 1 candidato sobre la base hist-sp500.db cuyo dataHash reproduce el artefacto autoritativo (k=1 = el autoritativo, bit a bit). SELECCION pre-registrada (SS12-E): combinacion por pesos de capital de mayor crecimiento logaritmico con maxDD combinado <= 20%, maxDD por portafolio <= su gate, bruto Alpaca <= 1.8x patrimonio, bruto Binance <= 3x por pool. TRIAL ACCOUNTING: k=1.5 sobre esta cadena nunca corrido = +1 hipotesis (diagnostica de tamano). priorUniqueTrials=333; pasa a 334. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 333,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt-35-k150",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.5625,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "maxGrossExposureMult": 2.5875
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

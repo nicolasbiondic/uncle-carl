@@ -101,11 +101,12 @@ import { candidateToReplayConfig, type CandidateConfig, type ExperimentManifest 
 // sleeve here is the only wiring needed to check it (plus a dispatch arm in
 // main() if it needs a non-daily comparison shape, like momentum_crypto's).
 export const PARITY_EPOCHS: Partial<Record<LiveSleeveId, string>> = {
-  // Re-anchored to the owner's realign pass (10-07): GOOGL (kept after its
-  // 10-02 exit bounced 403) is closed by that pass's MODEL_CUTOVER, which the
-  // extractors exclude, so the sim starts from the live book at the epoch.
-  // 09-28..10-06 compared clean apart from GOOGL (AUDITS 2026-10-06).
-  momentum_stocks: "2026-10-07",
+  // Re-anchored to line E's resize pass (10-12, k = 1.5): its MODEL_CUTOVER
+  // closes the whole k = 1 book, which the extractors exclude, so the sim
+  // starts empty at the epoch exactly like the live book after the cutover,
+  // and both buy at 0.1875/slot. Before: 10-07, the owner's GOOGL realign
+  // (09-28..10-06 compared clean apart from GOOGL, AUDITS 2026-10-06).
+  momentum_stocks: "2026-10-12",
   meanrev_stocks: "2026-09-29",
   // First pass after the 2026-09-26 vt-35 risk-state re-anchor
   // (MOMENTUM_CRYPTO_MODEL_VERSION) — live's book was emptied by that

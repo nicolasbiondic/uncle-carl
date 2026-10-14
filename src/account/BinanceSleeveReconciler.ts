@@ -40,6 +40,7 @@ import {
 } from "../db/database";
 import type { TradeRecord } from "../utils/types";
 import { BinanceExecutor, fapiClientOrderId } from "../executor/binance-executor";
+import { hasInflightEngineClose } from "../sync/inflightCloses";
 import { USDC_SYMBOL_MAP } from "../executor/binance/quoteAsset";
 import { positionUsd, type CoinMPosition } from "../executor/binance-coinm-executor";
 import { createLogger } from "../utils/logger";
@@ -416,6 +417,19 @@ async function closeFlatRow(
   spec: LinearSleeveSpec,
   trade: TradeRecord,
 ): Promise<void> {
+  // P0 fix (2026-10-02 incident — see src/sync/inflightCloses.ts): the
+  // engine's own close races this sync. The broker is already flat but the
+  // adapter hasn't written its DB close yet, so this pass would attribute
+  // the ENGINE's fills and mislabel them MANUAL_CLOSE. While an engine close
+  // for this portfolio+symbol is fresh in flight, leave the row to the
+  // adapter; a crashed adapter stops blocking after INFLIGHT_CLOSE_MAX_AGE_MS
+  // and the normal grace path below reconciles. Telemetry-honesty fix only:
+  // nothing about WHAT closes on the broker changes, and the row still
+  // converges to broker truth.
+  if (hasInflightEngineClose(spec.accountId, trade.symbol)) {
+    log.info(`📡 ${spec.syncTag}: ${trade.symbol} close in flight by the engine [${spec.accountId}] — deferring reconciliation to the adapter`);
+    return;
+  }
   if (spec.logFlatDetection) {
     log.warn(`📡 ${spec.syncTag}: ${trade.symbol} closed on Binance but open in DB [${spec.accountId}] — attributing broker fills`);
   }

@@ -65,10 +65,50 @@ function consolidated(state) {
   };
 }
 
+/** P0 (2026-10-09): volume KPI — executed orders today vs the owner's goal
+ *  (server: /api/kpis). Without the payload (old server, harness without the
+ *  fixture) falls back to the profiles-derived count, without a goal. */
+function volumeKpi(k, kp) {
+  const target = kp?.targets?.tradesPerDay ?? null;
+  const today = kp?.volume?.today ?? k.todayTrades;
+  const avg7 = kp?.volume?.avg7d ?? null;
+  const val = target
+    ? `${num(today, 0)}/${num(target, 0)} <span class="kv sub">${pct((today / target) * 100, 0)}</span>`
+    : `${num(today, 0)} <span class="kv sub">${t("today", "hoy")}</span>`;
+  const sub = avg7 == null ? "" : target
+    ? `${t("7d avg", "media 7d")} ${num(avg7, 1)} · ${pct((avg7 / target) * 100, 0)}`
+    : `${t("7d avg", "media 7d")} ${num(avg7, 1)}`;
+  return kpi(t("Trades today", "Trades hoy"), val, "sm", sub);
+}
+
+/** P0: 30-day mean compounded daily return of consolidated equity vs goal. */
+function returnKpi(kp) {
+  if (kp?.ret?.dailyAvgPct30d == null) return "";
+  const r = kp.ret.dailyAvgPct30d;
+  const goal = kp.targets?.dailyReturnPct ?? null;
+  const val = `<span style="color:${pnlColor(r)}">${pctSigned(r, 2)}</span> <span class="kv sub">/${t("day", "día")}</span>`;
+  const sub = goal
+    ? `${t("goal", "meta")} ${pct(goal, 2)} · ${pct(Math.max(0, r / goal) * 100, 0)}`
+    : t("30d daily mean", "media diaria 30d");
+  return kpi(t("Return 30D", "Rentab. 30D"), val, "sm", sub);
+}
+
+/** P0: drawdown from the display-history peak vs the 25% budget. */
+function riskKpi(kp) {
+  if (kp?.risk?.drawdownPct == null) return "";
+  const dd = kp.risk.drawdownPct;
+  const budget = kp.targets?.riskBudgetDdPct ?? null;
+  const val = `${pct(dd, 1)} <span class="kv sub">DD</span>`;
+  const sub = budget
+    ? `${t("budget", "presupuesto")} ${pct(budget, 0)} · ${pct((dd / budget) * 100, 0)} ${t("used", "usado")}`
+    : t("from peak", "desde el pico");
+  return kpi(t("Risk", "Riesgo"), val, "sm", sub);
+}
+
 export function renderKpis() {
   const s = store.state;
   const k = consolidated(s);
-  const pnlL = s.period === 1 ? t("Today P&L", "P&L Hoy") : `${periodLabel(s.period)} P&L`;
+  const pnlL = s.period === 1 ? t("Today P&L", "P&L Hoy") : t(`${periodLabel(s.period)} P&L`, `P&L ${periodLabel(s.period)}`);
   // Delta % beside each P&L. Prefer the server-computed broker-truth pct
   // (rebase-aware: null when an all-time methodology jump makes a simple return
   // meaningless). When it's null AND we're on the consolidated view, fall back
@@ -97,10 +137,12 @@ export function renderKpis() {
     kpi(t("Total Equity", "Patrimonio"), k.equity == null ? "—" : money(k.equity, 0)) +
     kpi(pnlL, k.periodPnl == null ? "—" : `<span style="color:${pnlColor(k.periodPnl)}">${moneySigned(k.periodPnl)}${pctSpan(periodPct)}</span>`, "", realizedSub(k.periodRealized, k.periodRealizedCount, s.period)) +
     (s.period === 7 ? "" : kpi(t("7D P&L", "P&L 7D"), k.pnl7d == null ? "—" : `<span style="color:${pnlColor(k.pnl7d)}">${moneySigned(k.pnl7d)}${pctSpan(pnl7dPct)}</span>`, "sm", realizedSub(k.realized7d, k.realized7dCount, 7))) +
-    kpi(t("Win Rate", "% Ganadas"), pct(k.winRate, 0), "sm") +
-    kpi(t("Open", "Abiertas"), num(k.open, 0), "sm") +
-    kpi(t("Trades", "Trades"), `${num(k.todayTrades, 0)} <span class="kv sub">${t("today", "hoy")}</span> · ${num(k.totalTrades, 0)}`, "sm") +
-    kpi(t("Running", "Activo"), `${num(k.days, 0)} <span class="kv sub">${t("days", "días")}</span>`, "sm") +
+    kpi(t("Win Rate", "% Ganadas"), pct(k.winRate, 0), "sm lo2") +
+    kpi(t("Open", "Abiertas"), num(k.open, 0), "sm lo2") +
+    volumeKpi(k, s.kpis) +
+    returnKpi(s.kpis) +
+    riskKpi(s.kpis) +
+    kpi(t("Running", "Activo"), `${num(k.days, 0)} <span class="kv sub">${t("days", "días")}</span>`, "sm lo") +
     renderFngKpi()
   );
 }

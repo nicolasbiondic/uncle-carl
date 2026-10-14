@@ -128,21 +128,21 @@ export function builtinPortfolios(): PortfolioDefinition[] {
         // Daily blend3 kernel (k8-s8 + blend, artifacts 5a5a9577…/cc2f5d69…).
         horizon: { lookbackDaysList: [63, 126, 252], maLengthDays: 200 },
         maxLongs: 8,
-        notionalPctPerSlot: 0.125,
+        notionalPctPerSlot: 0.1875, // k = 1.5 since 2026-10-10 (line E quorum; MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT)
         slotHysteresis: true, // owner override 2026-09-10, stocks only
         tsmTrail: { kSigma: 8, lookbackBars: 20, minPct: 5, maxPct: 30 },
         volStop: { kSigma: 8, lookbackBars: 20, minPct: 5, maxPct: 30 },
         sharpeGate: { lookbackDays: 30, minSharpe: 0 },
         capacityGuard: { maxAdvPct: 1, lookbackBars: 20, mode: "observe" },
         equitySemantics: EQUITY_SEMANTICS.SLEEVE_LEDGER,
-        modelVersion: "daily-blend3-2026-09-28",
-        // Expired one-shot (see MOMENTUM_STOCKS_CUTOVER_AT in index.ts).
-        // Owner realign 2026-10-06 (see MOMENTUM_STOCKS_CUTOVER_AT in index.ts).
-        cutover: { at: Date.UTC(2026, 9, 6, 5), expiresAt: Date.UTC(2026, 9, 9), symbols: ["GOOGL"] },
+        modelVersion: "daily-blend3-k150-2026-10-12",
+        // Line E resize 2026-10-10: the whole book re-underwritten at the new
+        // slot on the 10-12 pass (see MOMENTUM_STOCKS_CUTOVER_AT in index.ts).
+        cutover: { at: Date.UTC(2026, 9, 11), expiresAt: Date.UTC(2026, 9, 14) },
         heartbeatName: "momentum:stocks",
         loggerContext: "Momentum:stocks",
         state: { path: "data/momentum-state-stocks.json", currentBase: 50_000, legacyBase: 100_000 },
-        governor: { evidenceVersion: "v8-stocks" },
+        governor: { evidenceVersion: "v8.4-stocks-k150" },
       },
     },
     {

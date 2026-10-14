@@ -57,9 +57,9 @@ describe("momentum_crypto modelVersion wiring", () => {
   });
 });
 
-describe("momentum_stocks modelVersion wiring (2026-09-28)", () => {
+describe("momentum_stocks modelVersion wiring (2026-09-28; bumped 2026-10-10 for line E k = 1.5)", () => {
   test("the daily blend3 kernel has its own model identity, passed once to the stocks engine", () => {
-    expect(MOMENTUM_STOCKS_MODEL_VERSION).toBe("daily-blend3-2026-09-28");
+    expect(MOMENTUM_STOCKS_MODEL_VERSION).toBe("daily-blend3-k150-2026-10-12");
     const src = readFileSync(join(import.meta.dir, "index.ts"), "utf8");
     expect((src.match(/modelVersion: MOMENTUM_STOCKS_MODEL_VERSION,/g) ?? []).length).toBe(1);
   });

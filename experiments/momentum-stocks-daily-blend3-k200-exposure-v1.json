@@ -1,0 +1,123 @@
+{
+  "name": "momentum-stocks-daily-blend3-k200-exposure-v1",
+  "sleeve": "stocks",
+  "description": "PRE-REGISTRO 2026-10-09, LINEA E (exposicion medida dentro del presupuesto de riesgo, V-plan Parte 2 SS9/SS12-E, criterios fijados en master 43576b4 ANTES de correr; DIAGNOSTICO DE TAMANO, la recomendacion la aprueba el dueno porque sube el riesgo). Copia byte a byte de momentum-stocks-daily-blend3-pure-v1 salvo el eje de exposicion k=2.0: notionalPctPerSlot 0.125 -> 0.25 y candidate.maxGrossExposureMult = 2.3 (= tope vivo 1.15 x k; el tope vivo ya lleva la holgura medida GROSS_CAP_HEADROOM 1.15 del diagnostico G), mas costs.base/stress.marginInterest.annualRate = 0.065 (Reg-T 6.5%/ano sobre lo prestado; el sim lo modela: SimBroker ya lo hacia, SimMeanRevBroker desde esta linea). Misma ventana/asOf/folds/gates; cadena pura de 1 candidato sobre la base hist-sp500.db cuyo dataHash reproduce el artefacto autoritativo (k=1 = el autoritativo, bit a bit). SELECCION pre-registrada (SS12-E): combinacion por pesos de capital de mayor crecimiento logaritmico con maxDD combinado <= 20%, maxDD por portafolio <= su gate, bruto Alpaca <= 1.8x patrimonio, bruto Binance <= 3x por pool. TRIAL ACCOUNTING: k=2.0 sobre esta cadena nunca corrido = +1 hipotesis (diagnostica de tamano). priorUniqueTrials=325; pasa a 326. complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 325,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-24",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "blend-63-126-252-k200",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.25,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 8,
+      "maxShorts": 0,
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "lookbackDaysList": [
+        63,
+        126,
+        252
+      ],
+      "maxGrossExposureMult": 2.3
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.35,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.45,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.45,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 200,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

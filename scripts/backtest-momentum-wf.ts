@@ -41,7 +41,7 @@
 
 import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
-import { MomentumEngine, trailPctFromVol, type MarketTrendGateConfig, type MomentumBrokerAdapter, type MomentumStatePersistence, type TimeStopConfig, type TrailMark, type TrailStopConfig, type VolSizingConfig, type VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
+import { MomentumEngine, shortStopDistancePct, trailPctFromVol, type MarketTrendGateConfig, type MomentumBrokerAdapter, type MomentumStatePersistence, type ShortStopSpec, type TimeStopConfig, type TrailMark, type TrailStopConfig, type VolSizingConfig, type VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
 import type { CurrentPosition } from "../src/strategies/momentum/Rebalancer";
 import { DEFAULT_TSM_CONFIG, type TSMConfig } from "../src/strategies/momentum/TimeSeriesMomentum";
 import type { OHLCV } from "../src/utils/types";
@@ -51,6 +51,13 @@ import { getETDateKey } from "../src/db/database";
 import { isMarketOpen } from "../src/utils/marketHours";
 import { TestClock } from "../src/utils/clock";
 import { isMemberAt, lastClosedIndex, loadMembership, membersOverlapping, topNByDollarVolume, type MembershipBook } from "./lib/membership";
+import { computeMonthlyMembership, nextMonthStartMs, type MonthMembership } from "./lib/xsls-universe";
+
+/** Línea F: perps-membership stale tolerance — a held perp with NO bar for
+ *  24h force-closes at its last close (the line-A convention; a live perp
+ *  prints hourly, so 24h of silence means delisted/halted), and a symbol
+ *  that stale is not entry-eligible either. */
+export const PERPS_STALE_CLOSE_MS = 24 * 3_600_000;
 
 function argOf(flag: string): string | undefined {
   const i = process.argv.indexOf(flag);
@@ -549,28 +556,54 @@ export class FundingBook {
   private ts = new Map<string, number[]>();
   private rates = new Map<string, number[]>();
 
-  constructor(db: Database, symbols: string[], fromMs: number, toMs: number) {
+  constructor(
+    db: Database,
+    symbols: string[],
+    fromMs: number,
+    toMs: number,
+    /** Per-symbol fail-closed coverage window override (línea F perps
+     *  membership: a perp listed/delisted MID-window has funding only over
+     *  its own bar span — the global [fromMs, toMs] check would throw).
+     *  Absent (every pre-existing call site) = the exact legacy global
+     *  validation, byte for byte. Gap checks still run inside each
+     *  symbol's effective window. */
+    coverage?: Map<string, { fromMs: number; toMs: number }>,
+  ) {
     for (const sym of symbols) {
       const perp = sym.replace("/USD", "USDT");
       const rows = db.prepare(
         `SELECT funding_time t, rate r FROM funding_rates WHERE symbol = ? ORDER BY funding_time ASC`,
       ).all(perp) as Array<{ t: number; r: number }>;
       if (rows.length === 0) throw new Error(`no funding history for ${perp}`);
+      const eff = coverage?.get(sym);
+      const effFromMs = eff?.fromMs ?? fromMs;
+      const effToMs = eff?.toMs ?? toMs;
       const minT = rows[0].t;
       const maxT = rows[rows.length - 1].t;
       // Fail closed on missing coverage at the start of the window.
-      if (minT > fromMs + 9 * 3_600_000) {
+      if (minT > effFromMs + 9 * 3_600_000) {
         throw new Error(
-          `funding coverage gap: ${perp} starts ${new Date(minT).toISOString()} after window start ${new Date(fromMs).toISOString()}`,
+          `funding coverage gap: ${perp} starts ${new Date(minT).toISOString()} after window start ${new Date(effFromMs).toISOString()}`,
         );
       }
-      if (maxT < toMs) {
+      if (maxT < effToMs) {
         throw new Error(
-          `funding coverage gap: ${perp} ends ${new Date(maxT).toISOString()} before window end ${new Date(toMs).toISOString()}`,
+          `funding coverage gap: ${perp} ends ${new Date(maxT).toISOString()} before window end ${new Date(effToMs).toISOString()}`,
         );
       }
       // Crypto funding events are scheduled every 8h; tolerate 1h slippage.
-      for (let i = 1; i < rows.length; i++) {
+      // With a coverage override the INTERNAL gap check is skipped entirely:
+      // real perp histories carry multi-month funding holes (pauses/delist-
+      // relist, e.g. AERGOUSDT 2026-06→10), and in perps-membership mode
+      // the fail-closed guarantee lives at the DECISION instead — the
+      // eligibility hook requires a settled event within 9h of `nowMs`
+      // (nothing OPENS inside a hole) and the 24h stale-bar close flattens
+      // held positions when the tape pauses with the funding. A hole
+      // straddled by an open position charges 0 during the hole — declared
+      // OPTIMISTIC, the same convention line A's kernel used (it never
+      // validated funding coverage at all). WITHOUT an override the
+      // full-history check runs byte-identical.
+      for (let i = 1; eff === undefined && i < rows.length; i++) {
         if (rows[i].t - rows[i - 1].t > 9 * 3_600_000) {
           throw new Error(
             `funding gap > 9h for ${perp}: ${new Date(rows[i - 1].t).toISOString()} -> ${new Date(rows[i].t).toISOString()}`,
@@ -608,6 +641,11 @@ export interface SimPosition {
   entryCommission?: number;
   /** Running net cash impact of funding since entry (positive = credit received, negative = cost paid; already applied to cash as it accrued). Netted into ClosedTrade.pnl at close. */
   fundingCashDelta?: number;
+  /** Running short-borrow cost since entry (negative; already applied to
+   *  cash as it accrued — see accrueShortBorrow). Netted into
+   *  ClosedTrade.pnl at close. Absent on every long and on every run
+   *  without a shortBorrow rate (legacy shape, byte-identical pnl). */
+  borrowCashDelta?: number;
   /** Entry-anchored hard-stop distance (FRACTION) resolved at open from the
    *  broker's HardStopSpec; null = no hard stop for this position (mode
    *  "none"); undefined = legacy path (broker-level fixed hardStopPct). */
@@ -802,6 +840,8 @@ export class SimBroker implements MomentumBrokerAdapter {
   feesPaid = 0;
   /** Total Reg-T margin interest charged so far (A3 axis; 0 when off). */
   marginInterestPaid = 0;
+  /** Total short-borrow financing charged so far (line-S axis; 0 when off). */
+  shortBorrowPaid = 0;
   /** Engine DECISION ticks executed so far — incremented by the replay loop
    *  immediately before each engine.tick(). The post-stop cooldown counts
    *  in these units (engine cadence), NOT in data bars. */
@@ -849,6 +889,15 @@ export class SimBroker implements MomentumBrokerAdapter {
     /** Profit-lock axis (opt-in, third stop mechanism — see ProfitLockSpec).
      *  Absent = off, the legacy checkStops path byte for byte. */
     private profitLock?: ProfitLockSpec,
+    /** Annual short-borrow rate as a FRACTION (e.g. 0.005 = 0.5%/yr) on
+     *  gross SHORT notional, per UTC calendar day (line S). 0 = no borrow
+     *  charges — the legacy path, byte for byte. */
+    private shortBorrowAnnualRate = 0,
+    /** Short-only stop distance (line S-bis — ShortStopSpec): at a SELL
+     *  open the entry-anchored stopFrac resolves from THIS spec instead of
+     *  hardStopSpec/hardStopPct; longs are untouched. Absent = legacy path,
+     *  byte for byte. */
+    private shortStopSpec?: ShortStopSpec,
   ) { this.cash = cash; }
 
   closedIndex(candles: OHLCV[], t: number): number {
@@ -926,7 +975,14 @@ export class SimBroker implements MomentumBrokerAdapter {
     // bar at `now` is excluded, so volScaled sees exactly what the live
     // engine would have seen when sizing the stop).
     let stopFrac: number | null | undefined;
-    if (this.hardStopSpec) {
+    if (a.side === "sell" && this.shortStopSpec) {
+      // Line S-bis: the short's OWN entry-anchored distance, resolved from
+      // decision-time CLOSED bars only (same causality as the branch below;
+      // volScaled uses COMPLETED UTC daily closes — shortStopDistancePct).
+      const c = this.candles.get(a.symbol) ?? [];
+      const idx = this.closedIndex(c, this.now);
+      stopFrac = shortStopDistancePct(this.shortStopSpec, idx >= 0 ? c.slice(0, idx + 1) : [], this.barDurationMs) / 100;
+    } else if (this.hardStopSpec) {
       let closes: number[] = [];
       if (this.hardStopSpec.mode === "volScaled") {
         const c = this.candles.get(a.symbol) ?? [];
@@ -1023,7 +1079,11 @@ export class SimBroker implements MomentumBrokerAdapter {
     // happened (entry fee at open, funding as it settled, gross-fee here).
     // This is a reporting-only derived value consumed by win rate,
     // expectancy, and concentration.
-    const netPnl = gross - (p.entryCommission ?? 0) - fee + (p.fundingCashDelta ?? 0);
+    // (borrowCashDelta is absent on every legacy run — `?? 0` keeps those
+    // pnl values byte-identical; with a shortBorrow rate it nets the short's
+    // accrued borrow into the trade's economic result, same convention as
+    // funding.)
+    const netPnl = gross - (p.entryCommission ?? 0) - fee + (p.fundingCashDelta ?? 0) + (p.borrowCashDelta ?? 0);
     this.closed.push({ symbol, side, pnl: netPnl, exitAt, reason, entryAt: p.entryAt, entryPrice: p.entryPrice, exitPrice: slip, qty: p.qty, ...(engineCloseReason !== undefined ? { engineCloseReason } : {}) });
     this.positions.splice(idx, 1);
     // Arm the post-stop cooldown ONLY on the sim's hard-stop close
@@ -1178,11 +1238,37 @@ export class SimBroker implements MomentumBrokerAdapter {
     this.marginInterestPaid += charge;
   }
 
+  /**
+   * Short-borrow financing (line S): for every UTC calendar-day boundary
+   * crossed in (prevT, t], charge |qty| × px × annualRate/365 per SHORT
+   * position — same calendar-day convention as accrueMarginInterest, but
+   * accrued PER POSITION (borrowCashDelta) so ClosedTrade.pnl nets it
+   * (criterion-4 short-P&L attribution). Rate 0 / absent = strict no-op.
+   */
+  accrueShortBorrow(prevT: number, t: number) {
+    if (this.shortBorrowAnnualRate <= 0 || this.positions.length === 0) return;
+    const days = Math.floor(t / 86_400_000) - Math.floor(prevT / 86_400_000);
+    if (days <= 0) return;
+    for (const p of this.positions) {
+      if (p.side !== "sell") continue;
+      const px = this.price(p.symbol, t) || p.entryPrice;
+      const charge = Math.abs(p.qty) * px * (this.shortBorrowAnnualRate / 365) * days;
+      if (!(charge > 0)) continue;
+      this.cash -= charge;
+      p.borrowCashDelta = (p.borrowCashDelta ?? 0) - charge;
+      this.shortBorrowPaid += charge;
+    }
+  }
+
   /** Market-trend gate data (set by runWithConfig iff cfg.marketTrend is
    *  configured): UTC-daily closes of the gate symbol with their exclusive
    *  day-end timestamps (dailyClosesFromBars). Absent = fetchDailyCloses
    *  returns [] and the engine's gate fails open — the legacy path. */
   marketTrendDaily?: { symbol: string; dayEndMs: number[]; closes: number[] };
+  /** Short-regime gate data (set by runWithConfig iff cfg.shortRegime is
+   *  configured) — same shape and causality as marketTrendDaily, for the
+   *  short-side reference symbol. */
+  shortRegimeDaily?: { symbol: string; dayEndMs: number[]; closes: number[] };
 
   /**
    * MomentumBrokerAdapter.fetchDailyCloses (optional interface method):
@@ -1191,8 +1277,15 @@ export class SimBroker implements MomentumBrokerAdapter {
    * is never visible, no matter how many of its bars exist in the tape).
    */
   async fetchDailyCloses(symbol: string, days: number): Promise<number[]> {
-    const d = this.marketTrendDaily;
-    if (!d || d.symbol !== symbol || days <= 0) return [];
+    // Registry lookup: marketTrend's series first (legacy), then the
+    // short-regime series (line S). A miss returns [] — the long gate then
+    // fails OPEN and the short gate fails CLOSED, each per its contract.
+    const d = this.marketTrendDaily?.symbol === symbol
+      ? this.marketTrendDaily
+      : this.shortRegimeDaily?.symbol === symbol
+        ? this.shortRegimeDaily
+        : undefined;
+    if (!d || days <= 0) return [];
     // Binary search: last index whose day END is <= now.
     let lo = 0, hi = d.dayEndMs.length - 1, ans = -1;
     while (lo <= hi) {
@@ -1293,12 +1386,38 @@ export interface ReplayConfig {
    *  optimistic bias on 2×-gross stock sleeves whose borrow was free in the
    *  sim. Absent = 0 charges (legacy; absent keys don't change old hashes). */
   marginInterest?: { annualRate: number };
+  /** Short-borrow financing (line S, cost-config knob): each UTC calendar
+   *  day the sim debits gross SHORT notional × annualRate/365, accrued
+   *  PER POSITION (so ClosedTrade.pnl nets it — criterion 4 attribution)
+   *  with the same calendar-day convention as marginInterest. Absent = 0
+   *  charges (legacy; absent keys don't change old hashes). */
+  shortBorrow?: { annualRate: number };
   cadenceMin: number;
   notionalPctPerSlot: number;
   entryPct: number;
   exitPct: number;
   maxLongs: number;
   maxShorts: number;
+  /** Short-side entry threshold in PERCENT, negative (TSMConfig.
+   *  shortEntryThresholdPct). Absent = engine default (−5) AND the legacy
+   *  hash. Line-S axis — swept for the first time there. */
+  shortEntryPct?: number;
+  /** Short-side exit threshold in PERCENT (TSMConfig.shortExitThresholdPct).
+   *  Absent = engine default (+2) AND the legacy hash. */
+  shortExitPct?: number;
+  /** Short-regime gate passthrough (TSMConfig.shortRegime — shorts only
+   *  enter/stay while refSymbol's last CLOSED UTC daily close < SMA(maDays),
+   *  fail CLOSED). Absent = OFF AND the legacy hash. */
+  shortRegime?: { refSymbol: string; maDays: number };
+  /** Short-universe restriction passthrough (TSMConfig.shortUniverse).
+   *  Absent = OFF AND the legacy hash. */
+  shortUniverse?: string[];
+  /** Short-only stop distance (line S-bis — MomentumEngine.ShortStopSpec):
+   *  a SELL open resolves its entry-anchored stopFrac from this spec
+   *  (fixed FRACTION, or kSigma × 20d DAILY vol from completed UTC daily
+   *  closes, clamped [minPct,maxPct] percent-units); longs keep
+   *  hardStop/hardStopPct. Absent = OFF AND the legacy hash. */
+  shortStop?: ShortStopSpec;
   /** TSM lookback horizon in bar-math DAYS (TimeSeriesMomentum.lookbackDays;
    *  trading days on stocks via barMinutesEq, calendar days on crypto).
    *  Sweepable (the horizon axis — Jegadeesh-Titman 3-12m continuation vs
@@ -1392,6 +1511,28 @@ export interface ReplayConfig {
    * never screened. Absent = all members eligible AND the legacy hash.
    */
   liquidityRank?: { topN: number; lookbackSessions: number };
+  /**
+   * Línea F (2026-10-10): PIT MONTHLY perp membership for the crypto TSM
+   * kernel — the line-A universe rule (scripts/lib/xsls-universe.ts
+   * computeMonthlyMembership over the research DB's quote_volume_1d: top-N
+   * by 30-day mean quoted volume, ex the 8 momentum_crypto bases, stables,
+   * wrapped, indices, TradFi perps). When set:
+   *  - cfg.universe is the DOMAIN (data identity, LOO), not an
+   *    always-eligible set: ONLY current-month members with ≥ warmup CLOSED
+   *    bars and a bar within the last 24h are entry-eligible (the engine's
+   *    entryEligibility hook — exits/stops on held positions keep running);
+   *  - the replay loads/trades only symbols that are members of a month
+   *    overlapping the fold window (∩ cfg.universe), so mid-window listings
+   *    don't fail the full-window bar/funding coverage checks — those are
+   *    scoped per symbol to its own bar span (refSymbol stays fully
+   *    fail-closed and is loaded even when not in cfg.universe);
+   *  - a held position whose symbol prints NO bar for 24h force-closes at
+   *    its last close ± slippage with reason "DELISTED" (line-A convention
+   *    for perps; the daily stocks membership analog uses 6 calendar days).
+   * Requires sleeve "crypto", funding, !rthOnly, and no `membership`.
+   * Absent = the exact legacy replay AND the legacy hash.
+   */
+  perpsMembership?: { topN: number; volLookbackDays: number; minDays: number; freshDays: number };
   warmupDays: number;
   dbPath: string;
 }
@@ -1416,6 +1557,12 @@ export interface ReplayResult {
    *  Optional so pre-existing artifacts and the meanrev runner (which does
    *  not model financing — leverage 1) stay type-valid; consumers `?? 0`. */
   marginInterest?: number;
+  /** Total short-borrow financing charged (line S); key absent unless the
+   *  run actually charged borrow — consumers `?? 0`. */
+  shortBorrow?: number;
+  /** SHORT entries vetoed by the shared gross-exposure cap (line-S
+   *  telemetry, output-only); key absent when zero. */
+  grossCapShortBlocks?: number;
   liquidations: number;
   marginRejects: number;
   ruined: boolean;
@@ -1640,10 +1787,35 @@ export async function runWithConfig(
       hardStopPct: cfg.hardStopPct,
       windows: [],
     };
-    const validatedBars = validateBarCoverage(db, sleeve, fromMs, toMs);
+    // ── PIT monthly perp membership (cfg.perpsMembership — see docstring) ──
+    // Months computed ONCE from the replay DB; the fold's tradable set is
+    // every member of a month overlapping [fromMs, toMs) ∩ cfg.universe (the
+    // ∩ keeps LOO exclusions effective). The full-window bar/funding
+    // fail-closed checks below run only for the refSymbol in this mode —
+    // mid-window listings/delistings are validated per symbol instead.
+    let perpsMonths: MonthMembership[] | undefined;
+    let perpsFoldSymbols: string[] = [];
+    if (cfg.perpsMembership) {
+      if (cfg.sleeve !== "crypto" || !cfg.funding || cfg.rthOnly || cfg.membership) {
+        throw new Error("perpsMembership mode requires the crypto sleeve with funding, rthOnly=false and no index membership");
+      }
+      perpsMonths = computeMonthlyMembership(db, fromMs, toMs, cfg.perpsMembership);
+      const declared = new Set(cfg.universe);
+      const inFold = new Set<string>();
+      for (const month of perpsMonths) {
+        if (nextMonthStartMs(month.startMs) <= fromMs || month.startMs >= toMs) continue;
+        for (const s of month.symbols) if (declared.has(s)) inFold.add(s);
+      }
+      perpsFoldSymbols = [...inFold].sort();
+    }
 
-    // Fail closed: validate funding coverage for crypto.
-    if (cfg.funding) {
+    const validatedBars = cfg.perpsMembership
+      ? validateBarCoverage(db, { ...sleeve, universe: [cfg.refSymbol] }, fromMs, toMs)
+      : validateBarCoverage(db, sleeve, fromMs, toMs);
+
+    // Fail closed: validate funding coverage for crypto (perps-membership
+    // mode scopes it per symbol below, where the bar spans are known).
+    if (cfg.funding && !cfg.perpsMembership) {
       validateFundingCoverage(db, cfg.universe, fromMs, toMs);
     }
 
@@ -1667,9 +1839,17 @@ export async function runWithConfig(
 
     const candles = new Map<string, OHLCV[]>();
     const loadedMembers: string[] = [];
-    for (const sym of cfg.universe) {
+    // perps-membership mode loads ONLY the fold's member symbols (plus the
+    // refSymbol below): the declared universe is the whole-window union and
+    // most of it has no tramo inside this fold.
+    const barSymbols = cfg.perpsMembership ? perpsFoldSymbols : cfg.universe;
+    for (const sym of barSymbols) {
       const bars = loadBars(sym, cfg.timeframe, cfg.source, cfg.rthOnly, loadFrom, toMs, db);
       if (bars.length > 0) candles.set(sym, bars);
+    }
+    if (cfg.perpsMembership && !candles.has(cfg.refSymbol)) {
+      const refBars = loadBars(cfg.refSymbol, cfg.timeframe, cfg.source, cfg.rthOnly, loadFrom, toMs, db);
+      if (refBars.length > 0) candles.set(cfg.refSymbol, refBars);
     }
     for (const sym of memberSymbols) {
       const bars = loadBars(sym, cfg.timeframe, cfg.source, cfg.rthOnly, loadFrom, toMs, db);
@@ -1678,24 +1858,62 @@ export async function runWithConfig(
     if (cfg.membership && memberSymbols.length - loadedMembers.length > 0) {
       console.warn(`membership(${cfg.membership.index}): ${memberSymbols.length - loadedMembers.length}/${memberSymbols.length} overlapping members have NO bars in [${win.from}, ${win.to}) and are dropped (see the downloader's coverage report)`);
     }
-    /** Replay universe = declared ∪ loaded members (declared order first). */
-    const replayUniverse = cfg.membership ? [...cfg.universe, ...loadedMembers] : cfg.universe;
+    /** Replay universe = declared ∪ loaded members (declared order first);
+     *  perps-membership mode = the fold's member symbols WITH bars (the
+     *  engine never sees a tramo-less or bar-less name — eligibility gates
+     *  entries, this gates cost). */
+    const replayUniverse = cfg.perpsMembership
+      ? perpsFoldSymbols.filter(s => candles.has(s))
+      : cfg.membership ? [...cfg.universe, ...loadedMembers] : cfg.universe;
     const ref = candles.get(cfg.refSymbol);
     if (!ref || ref.length === 0) { return null; }
 
-    // Fail closed if any symbol lacks sufficient warmup history.
-    for (const sym of cfg.universe) {
-      const bars = candles.get(sym);
-      if (!bars) { throw new Error(`no data for ${sym}`); }
-      const warmupBars = bars.filter(b => b.timestamp < fromMs).length;
-      if (warmupBars < minWarmupBars) {
-        throw new Error(`insufficient warmup for ${sym}: ${warmupBars} bars < ${minWarmupBars}`);
+    // Fail closed if any symbol lacks sufficient warmup history. In
+    // perps-membership mode this global check is replaced by the
+    // per-decision eligibility hook (a mid-window listing HAS no warmup at
+    // fold start; it becomes eligible once it has minWarmupBars closed bars).
+    if (!cfg.perpsMembership) {
+      for (const sym of cfg.universe) {
+        const bars = candles.get(sym);
+        if (!bars) { throw new Error(`no data for ${sym}`); }
+        const warmupBars = bars.filter(b => b.timestamp < fromMs).length;
+        if (warmupBars < minWarmupBars) {
+          throw new Error(`insufficient warmup for ${sym}: ${warmupBars} bars < ${minWarmupBars}`);
+        }
       }
     }
 
-    const fundingBook = cfg.funding ? new FundingBook(db, cfg.universe, fromMs, toMs) : undefined;
-
     const barDurationMs = cfg.barMinutes * 60_000;
+
+    // Funding book: in perps-membership mode, coverage is scoped per symbol
+    // to its bar span ∩ its OWN funding span ∩ the fold window — the
+    // research DB (data.binance.vision) lacks EARLY funding for a handful
+    // of perps (e.g. ICPUSDT: bars 2021-05, funding 2022-09), so the
+    // fail-closed guarantee moves from the window to the DECISION: the
+    // eligibility hook below never lets a NEW position open outside the
+    // symbol's funding span (unmodelable funding = not tradable), and the
+    // 9h gap check still throws INSIDE each effective span. Absent the key
+    // = the legacy global check, byte for byte.
+    const perpsFundingTimes = cfg.perpsMembership
+      ? new Map(replayUniverse.map(s => {
+          const rows = db.prepare(`SELECT funding_time t FROM funding_rates WHERE symbol = ? ORDER BY funding_time ASC`)
+            .all(s.replace("/USD", "USDT")) as Array<{ t: number }>;
+          return [s, rows.map(r => r.t)];
+        }))
+      : undefined;
+    const perpsCoverage = cfg.perpsMembership
+      ? new Map(replayUniverse.map(s => {
+          const bars = candles.get(s)!;
+          const ft = perpsFundingTimes!.get(s)!;
+          return [s, {
+            fromMs: Math.max(fromMs, bars[0].timestamp, ft[0] ?? Infinity),
+            toMs: Math.min(toMs, bars[bars.length - 1].timestamp + barDurationMs, ft[ft.length - 1] ?? -Infinity),
+          }];
+        }))
+      : undefined;
+    const fundingBook = cfg.funding
+      ? new FundingBook(db, cfg.perpsMembership ? replayUniverse : cfg.universe, fromMs, toMs, perpsCoverage)
+      : undefined;
 
     // PIT entry-eligibility hook (daily stocks membership mode): a member is
     // entry-eligible at decision time `nowMs` iff it is a member at that
@@ -1732,6 +1950,40 @@ export async function runWithConfig(
         return allowed.has(symbol);
       };
     }
+    // PIT entry-eligibility hook (perps-membership mode): a symbol is
+    // entry-eligible at `nowMs` iff it is a member of the UTC month
+    // containing nowMs, has ≥ minWarmupBars CLOSED bars (the engine's own
+    // rank/MA history bound — the global warmup fail-closed is skipped in
+    // this mode), and its last CLOSED bar ended within the stale tolerance
+    // (24h — the line-A perp convention; the loop below force-closes HELD
+    // positions at the same threshold). Entries only: exits on held
+    // positions keep running through the engine's normal paths.
+    if (cfg.perpsMembership && perpsMonths) {
+      const months = perpsMonths;
+      const memberSetByMonthStart = new Map(months.map(m => [m.startMs, new Set(m.symbols)]));
+      const monthStarts = months.map(m => m.startMs);
+      const perpBarMs = cfg.barMinutes * 60_000;
+      entryEligibility = (symbol, nowMs) => {
+        let lo = 0, hi = monthStarts.length - 1, idx = -1;
+        while (lo <= hi) { const mid = (lo + hi) >> 1; if (monthStarts[mid] <= nowMs) { idx = mid; lo = mid + 1; } else hi = mid - 1; }
+        if (idx < 0 || !memberSetByMonthStart.get(monthStarts[idx])!.has(symbol)) return false;
+        const bars = candles.get(symbol);
+        if (!bars) return false;
+        // No NEW position without LIVE settled funding: the most recent
+        // settlement must be within the 9h cadence tolerance of nowMs — this
+        // blocks entries before a perp's funding history starts, after it
+        // ends, and INSIDE any multi-month hole (the sim can't charge what
+        // it doesn't have; see the FundingBook gap-check comment).
+        const ft = perpsFundingTimes?.get(symbol);
+        if (!ft || ft.length === 0) return false;
+        let flo = 0, fhi = ft.length - 1, fidx = -1;
+        while (flo <= fhi) { const fmid = (flo + fhi) >> 1; if (ft[fmid] <= nowMs) { fidx = fmid; flo = fmid + 1; } else fhi = fmid - 1; }
+        if (fidx < 0 || nowMs - ft[fidx] > FUNDING_MAX_GAP_MS) return false;
+        const last = lastClosedIndex(bars, nowMs, perpBarMs);
+        if (last + 1 < minWarmupBars) return false;
+        return nowMs - (bars[last].timestamp + perpBarMs) <= PERPS_STALE_CLOSE_MS;
+      };
+    }
     const broker = new SimBroker(
       cfg.initialEquity,
       candles,
@@ -1751,6 +2003,8 @@ export async function runWithConfig(
       cfg.cooldownBarsAfterStop ?? 0,
       cfg.shortFunding,
       cfg.profitLock,
+      cfg.shortBorrow?.annualRate ?? 0,
+      cfg.shortStop,
     );
     // Seed the book with live positions already open at the epoch (OPEN.md
     // P2) — BEFORE the tick loop starts, so slots/exposure/stops see them
@@ -1773,6 +2027,26 @@ export async function runWithConfig(
         throw new Error(`marketTrend: only ${closedBeforeStart} closed ${gateSym} days before window start ${win.from} — need ${maDays}`);
       }
       broker.marketTrendDaily = { symbol: gateSym, dayEndMs: daily.dayEndMs, closes: daily.closes };
+    }
+    // Short-regime gate data (line S): same loading discipline as the
+    // marketTrend block above — maDays(+slack) of pre-window history, fail
+    // CLOSED (throw) when the window start can't see a full SMA, causality
+    // enforced by fetchDailyCloses at read time.
+    if (cfg.shortRegime) {
+      const { refSymbol, maDays } = cfg.shortRegime;
+      // maDays counts CLOSED days WITH BARS (sessions on stocks: SPY trades
+      // ~5 of 7 calendar days, so 200 session-closes need ~290 calendar
+      // days). Load with a 2× calendar factor + slack — over-loading is
+      // harmless (fetchDailyCloses slices the last N at read time), while
+      // the marketTrend-style (maDays + 15) slack starves equity data.
+      const srFrom = fromMs - (maDays * 2 + 15) * 86_400_000;
+      const srBars = loadBars(refSymbol, cfg.timeframe, cfg.source, cfg.rthOnly, srFrom, toMs, db);
+      const daily = dailyClosesFromBars(srBars);
+      const closedBeforeStart = daily.dayEndMs.filter(t => t <= fromMs).length;
+      if (closedBeforeStart < maDays) {
+        throw new Error(`shortRegime: only ${closedBeforeStart} closed ${refSymbol} days before window start ${win.from} — need ${maDays}`);
+      }
+      broker.shortRegimeDaily = { symbol: refSymbol, dayEndMs: daily.dayEndMs, closes: daily.closes };
     }
     // "silent" still forwards warns to the diagnostic hook (null → no-op):
     // the engine's gross-cap veto only exists as a warn line, and replays
@@ -1844,6 +2118,12 @@ export async function runWithConfig(
     if (cfg.maLengthDays !== undefined) tsmCfg.maLengthDays = cfg.maLengthDays;
     // Multi-horizon axis (2026-09-25): absent leaves tsmCfg byte-identical.
     if (cfg.lookbackDaysList !== undefined) tsmCfg.lookbackDaysList = cfg.lookbackDaysList;
+    // Line-S short axes (2026-10-10): absent keys leave tsmCfg byte-identical
+    // (engine defaults −5/+2 apply; regime/universe gates stay OFF).
+    if (cfg.shortEntryPct !== undefined) tsmCfg.shortEntryThresholdPct = cfg.shortEntryPct;
+    if (cfg.shortExitPct !== undefined) tsmCfg.shortExitThresholdPct = cfg.shortExitPct;
+    if (cfg.shortRegime !== undefined) tsmCfg.shortRegime = cfg.shortRegime;
+    if (cfg.shortUniverse !== undefined) tsmCfg.shortUniverse = cfg.shortUniverse;
     const engine = new MomentumEngine(
       {
         mode: "time-series",
@@ -1875,6 +2155,11 @@ export async function runWithConfig(
         // parity — the sim instantiates the real engine). undefined = OFF,
         // matching the engine's own default.
         maxGrossExposureMult: cfg.maxGrossExposureMult,
+        // shortStop (line S-bis): engine-level so the live open path carries
+        // the short's own stopLossPct; the SimBroker above ALSO resolves
+        // stopFrac from the same spec (its openPosition ignores stopLossPct
+        // by construction). undefined = OFF, byte-identical.
+        shortStop: cfg.shortStop,
       },
       broker,
       silent,
@@ -1925,6 +2210,9 @@ export async function runWithConfig(
         // boundary exactly AT toMs belongs to the next fold, like a funding
         // event. No-op unless cfg.marginInterest set a nonzero rate.
         if (prevT) broker.accrueMarginInterest(prevT, Math.min(t, toMs - 1));
+        // Short borrow (line S): same capped range and day convention.
+        // No-op unless cfg.shortBorrow set a nonzero rate.
+        if (prevT) broker.accrueShortBorrow(prevT, Math.min(t, toMs - 1));
         prevT = t;
         const barBySymbol = new Map<string, OHLCV>();
         for (const [sym, cs] of candles) {
@@ -1944,6 +2232,22 @@ export async function runWithConfig(
             if (!c || c.length === 0) continue;
             const idx = broker.closedIndex(c, t);
             if (idx === c.length - 1 && t - c[idx].timestamp > 6 * 86_400_000) {
+              broker.closeAt(p.symbol, p.side, c[idx].close, "DELISTED");
+            }
+          }
+        }
+        // Perps-membership stale close (línea F): a held perp with NO bar
+        // for PERPS_STALE_CLOSE_MS force-closes at its last recorded close
+        // ± slippage, reason "DELISTED" — the line-A convention. Declared
+        // OPTIMISTIC like the stocks analog: the real last negotiable print
+        // can be worse. Same-threshold freshness in entryEligibility keeps
+        // the engine from instantly re-entering the dead tape.
+        if (cfg.perpsMembership) {
+          for (const p of [...broker.positions]) {
+            const c = candles.get(p.symbol);
+            if (!c || c.length === 0) continue;
+            const idx = broker.closedIndex(c, t);
+            if (idx >= 0 && t - (c[idx].timestamp + barDurationMs) >= PERPS_STALE_CLOSE_MS) {
               broker.closeAt(p.symbol, p.side, c[idx].close, "DELISTED");
             }
           }
@@ -1985,6 +2289,8 @@ export async function runWithConfig(
     // boundaries in (lastBar, toMs) accrue while positions are still open;
     // the boundary exactly AT toMs belongs to the next fold.
     if (prevT) broker.accrueMarginInterest(prevT, toMs - 1);
+    // Terminal short-borrow settle, same convention (no-op at rate 0).
+    if (prevT) broker.accrueShortBorrow(prevT, toMs - 1);
 
     liquidateAtFoldEnd(broker, fromMs, toMs, ruined);
 
@@ -2092,6 +2398,10 @@ export async function runWithConfig(
       // Key absent on legacy candidates — pre-existing artifacts/runs.jsonl
       // rows keep their exact shape.
       ...(ddScaleStats ? { ddScaleStats } : {}),
+      // Line-S output-only telemetry: absent unless the run actually charged
+      // borrow / vetoed a short on the gross cap (legacy shape preserved).
+      ...(broker.shortBorrowPaid > 0 ? { shortBorrow: broker.shortBorrowPaid } : {}),
+      ...(engine.grossCapShortBlocks > 0 ? { grossCapShortBlocks: engine.grossCapShortBlocks } : {}),
       hash,
       finalRiskState,
     };

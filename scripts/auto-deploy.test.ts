@@ -307,6 +307,15 @@ describe("auto-deploy.sh source: no DEPLOYED without a passing health check", ()
     expect(failureBranch).toMatch(/git reset --hard "\$LOCAL"/);
     expect(failureBranch).not.toMatch(/while\s*:|for\s*\(\(/);
   });
+
+  test("a successful deploy is log-only: the healthy branch pages nobody (owner, 2026-10-11)", () => {
+    const deployBlock = src.slice(src.indexOf("if health_check; then"));
+    const healthyBranch = deployBlock.slice(0, deployBlock.indexOf("\n  else\n"));
+    expect(healthyBranch).toContain('log "DEPLOYED');
+    expect(healthyBranch).not.toContain("notify");
+    const docsOnly = src.slice(src.indexOf("docs-only change"), src.indexOf("# 5. Deploy"));
+    expect(docsOnly).not.toContain("notify");
+  });
 });
 
 // ── Full-run tests: execute the real script (not --health-check-only)
@@ -321,8 +330,9 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
-/** origin (bare-ish plain repo) + work (clone, this is what REPO points to). */
-function makeRepoPair() {
+/** origin (bare-ish plain repo) + work (clone, this is what REPO points to).
+ *  `bFiles`: files commit B adds (path → content); empty commit when omitted. */
+function makeRepoPair(bFiles?: Record<string, string>) {
   const root = mkdtempSync(join(tmpdir(), "auto-deploy-"));
   const origin = join(root, "origin");
   const work = join(root, "work");
@@ -340,7 +350,16 @@ function makeRepoPair() {
   git(work, "config", "user.email", "t@t.t");
   git(work, "config", "user.name", "t");
   mkdirSync(join(work, "data")); // holds .deploy-restart / .deploy-rejected-sha, mirrors prod layout
-  git(origin, "commit", "--allow-empty", "-m", "commit B", "--quiet");
+  if (bFiles) {
+    for (const [path, content] of Object.entries(bFiles)) {
+      mkdirSync(join(origin, path, ".."), { recursive: true });
+      writeFileSync(join(origin, path), content);
+      git(origin, "add", path);
+    }
+    git(origin, "commit", "-m", "commit B", "--quiet");
+  } else {
+    git(origin, "commit", "--allow-empty", "-m", "commit B", "--quiet");
+  }
   const shaB = git(origin, "rev-parse", "HEAD");
   return { root, origin, work, shaA, shaB };
 }
@@ -659,6 +678,80 @@ describe("auto-deploy.sh full run (temp repo, injected commands)", () => {
       expect(existsSync(join(work, "data", ".deploy-fetch-fail-since"))).toBe(false);
       expect(existsSync(join(work, "data", ".deploy-fetch-fail-count"))).toBe(false);
       expect(git(work, "rev-parse", "HEAD")).toBe(shaB); // and the deploy itself proceeded normally
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("documentation-only push: the gate runs, the bot is NOT restarted, the new SHA counts as deployed", async () => {
+    const { root, work, shaA, shaB } = makeRepoPair({ "README.md": "# new\n", "docs/reports/X.md": "report\n" });
+    writeFileSync(join(work, "data", ".deployed-sha"), `${shaA}\n`); // what is running
+    const gateRan = join(root, "gate.marker");
+    const sentinel = join(root, "started.marker");
+    try {
+      const { code, out } = await runScript({
+        REPO: work,
+        GATE_TYPECHECK_CMD: `touch ${gateRan}`,
+        GATE_TEST_CMD: "true",
+        START_CMD: `touch ${sentinel}`,
+        HEALTH_URL: "http://127.0.0.1:18999/healthz",
+      });
+      expect(code).toBe(0);
+      expect(existsSync(gateRan)).toBe(true);
+      expect(existsSync(sentinel)).toBe(false);
+      expect(out).toContain("docs-only change");
+      expect(out).not.toContain("DEPLOYED");
+      expect(git(work, "rev-parse", "HEAD")).toBe(shaB);
+      expect(readFileSync(join(work, "data", ".deployed-sha"), "utf8").trim()).toBe(shaB);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("a push that touches code as well as docs restarts as always", async () => {
+    const { root, work, shaA, shaB } = makeRepoPair({ "docs/note.md": "n\n", "src/a.ts": "export const a = 1;\n" });
+    writeFileSync(join(work, "data", ".deployed-sha"), `${shaA}\n`);
+    const sentinel = join(root, "started.marker");
+    const server = Bun.serve({ port: 0, fetch: () => Response.json({ status: "ok" }, { status: 200 }) });
+    try {
+      const { code, out } = await runScript({
+        REPO: work,
+        GATE_TYPECHECK_CMD: "true",
+        GATE_TEST_CMD: "true",
+        START_CMD: `touch ${sentinel}`,
+        HEALTH_URL: `http://127.0.0.1:${server.port}/healthz`,
+        HEALTH_CHECK_ATTEMPTS: "3",
+        HEALTH_CHECK_INTERVAL: "1",
+        HEALTH_CHECK_TIMEOUT: "2",
+      });
+      expect(code).toBe(0);
+      expect(existsSync(sentinel)).toBe(true);
+      expect(out).toContain("DEPLOYED");
+      expect(readFileSync(join(work, "data", ".deployed-sha"), "utf8").trim()).toBe(shaB);
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("documentation-only push with no known deployed SHA restarts (conservative)", async () => {
+    const { root, work } = makeRepoPair({ "docs/note.md": "n\n" });
+    const sentinel = join(root, "started.marker");
+    const server = Bun.serve({ port: 0, fetch: () => Response.json({ status: "ok" }, { status: 200 }) });
+    try {
+      const { code } = await runScript({
+        REPO: work,
+        GATE_TYPECHECK_CMD: "true",
+        GATE_TEST_CMD: "true",
+        START_CMD: `touch ${sentinel}`,
+        HEALTH_URL: `http://127.0.0.1:${server.port}/healthz`,
+        HEALTH_CHECK_ATTEMPTS: "3",
+        HEALTH_CHECK_INTERVAL: "1",
+        HEALTH_CHECK_TIMEOUT: "2",
+      });
+      expect(code).toBe(0);
+      expect(existsSync(sentinel)).toBe(true);
     } finally {
       server.stop(true);
       rmSync(root, { recursive: true, force: true });

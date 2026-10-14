@@ -29,7 +29,7 @@ button { font-family: inherit; cursor: pointer; }
 /* merged top bar: broker header (left) + KPI strip (grows) + icon actions (right) on ONE row */
 /* var(--s2) vertical padding: without it the brand row sits flush against the
    viewport top whenever the KPI strip wraps to a second row (≤~1500px). */
-.topbar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s3) var(--s5); min-height: 56px; padding: var(--s2) 0; border-bottom: 1px solid var(--border); }
+.topbar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s1) var(--s5); min-height: 56px; padding: var(--s2) 0 0; border-bottom: 1px solid var(--border); }
 /* left cluster is a 2-line stack: brand+clock on top, broker totals beneath —
    fits inside the KPI-defined bar height, so it costs no extra vertical space */
 .hdr { display: flex; flex-direction: column; justify-content: center; align-items: flex-start; gap: 3px; flex-shrink: 0; }
@@ -56,16 +56,24 @@ button { font-family: inherit; cursor: pointer; }
    collapses on narrow screens, the aria-label/title stays either way. */
 .icn.lbl { width: auto; padding: 0 10px; gap: 6px; font: 600 var(--t-xs) var(--sans); }
 .icn.lbl .icn-l { white-space: nowrap; }
-@media (max-width: 1500px) { .icn.lbl { width: 32px; padding: 0; } .icn.lbl .icn-l { display: none; } }
+/* The actions share row 1 with the brand and the nav: labels where that row
+   has room, icons only below 1280px (the aria-label/title stays). */
+@media (max-width: 1280px) { .icn.lbl { width: 32px; padding: 0; } .icn.lbl .icn-l { display: none; } }
 /* version switch removed — v4 is the only dashboard, served at / and /v4 */
 
 /* ── portfolio-manager navigation (2026-10-06) ─────────────────────────── */
-.nav { display: flex; align-items: center; gap: var(--s2); overflow-x: auto; scrollbar-width: none; }
+/* Since 2026-10-12 the nav sits in the header's first row, between the brand
+   and the actions (it was a row of its own: −36px of the viewport-locked
+   Overview). Pills instead of an underline: an underline floats mid-row once
+   the links share the brand's two-line height. */
+.nav { display: flex; align-items: center; gap: var(--s1); overflow-x: auto; scrollbar-width: none; }
 .nav::-webkit-scrollbar { display: none; }
-.nav-link { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; color: var(--muted); font-weight: 600; font-size: var(--t-sm); border-bottom: 2px solid transparent; white-space: nowrap; }
-.nav-link:hover { color: var(--text-2); }
-.nav-link.on { color: var(--text); border-bottom-color: var(--accent); }
-.nav-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--r1); }
+.nav-link { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; color: var(--muted); font-weight: 600; font-size: var(--t-sm); border-radius: var(--r2); white-space: nowrap; }
+.nav-link:hover { color: var(--text-2); background: var(--bg-1); }
+.nav-link.on { color: var(--text); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--border); }
+.nav-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* Phones: the four labels fit on one line without their icons (2026-10-11). */
+@media (max-width: 560px) { .nav { gap: 0; } .nav-link { padding: 6px 8px; } .nav-link .ic { display: none; } }
 
 /* user chip + dropdown menu */
 .uchip-wrap { position: relative; }
@@ -81,6 +89,26 @@ button { font-family: inherit; cursor: pointer; }
 .set-row:last-child { border-bottom: none; }
 .set-row > span:first-child { color: var(--text-2); }
 .set-row .set-v { display: inline-flex; align-items: center; gap: var(--s2); text-align: right; min-width: 0; word-break: break-all; }
+/* Ajustes page (settings.js, 2026-10-11): cards in three columns — personal |
+   access | system — so a label sits next to its value instead of ~1,600px
+   away. auto-fit collapses to two columns, then one; min(100%, …) keeps a
+   phone from overflowing. In a card a row wraps its value to a second
+   right-aligned line when it doesn't fit (long IDs on narrow columns). */
+.set-grid { display: grid; gap: var(--s4); grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); align-items: start; }
+.set-col { display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
+.set-card { border: 1px solid var(--border); border-radius: var(--r2); background: var(--bg-1); padding: var(--s3) var(--s4) var(--s2); min-width: 0; }
+.set-card-h { display: flex; align-items: center; gap: 6px; margin: 0 0 var(--s1); color: var(--muted); font-size: var(--t-xs); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+.set-card .set-row { flex-wrap: wrap; row-gap: var(--s1); }
+.set-card .set-row > :last-child { margin-left: auto; }
+.set-card .set-row .set-v { flex-wrap: wrap; justify-content: flex-end; row-gap: var(--s1); }
+.set-card .page-note { margin: var(--s2) 0 var(--s1); }
+/* an ID never breaks mid-string: on a narrow card its Copy button drops below */
+.set-id { font-size: var(--t-xs); white-space: nowrap; }
+.set-row.set-sess { flex-wrap: nowrap; align-items: flex-start; }
+.set-sess .sess-main { flex: 1 1 auto; min-width: 0; }
+.set-sess .sess-meta { display: block; font-size: var(--t-xs); }
+.set-others { margin: var(--s2) 0 var(--s1); }
+.acc-btn.sm { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; font-size: var(--t-xs); white-space: nowrap; }
 
 /* full pages (Portafolios / Cuentas / Actividad / Ajustes) */
 .page-card { margin-top: var(--s4); }
@@ -90,18 +118,25 @@ button { font-family: inherit; cursor: pointer; }
 .page-section { margin-top: var(--s5); }
 .page-section:first-child { margin-top: 0; }
 .page-section > .card-note { display: block; margin-bottom: var(--s2); }
+/* Actividad (activity.js): trades | AI quorum + activity log on wide screens. */
+.act-grid { display: grid; gap: var(--s5); grid-template-columns: minmax(0, 1fr); align-items: start; }
+.act-col { min-width: 0; }
+@media (min-width: 1280px) { .act-grid { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); } }
 
 /* KPI bar */
-.kpis { display: flex; align-items: center; gap: 0; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; border-left: 1px solid var(--border); padding-left: var(--s5); }
+.kpis { display: flex; align-items: flex-start; gap: 0; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; border-left: 1px solid var(--border); padding-left: var(--s5); }
 .kpis::-webkit-scrollbar { display: none; }
-.kpi { padding: var(--s3) var(--s5) var(--s3) 0; flex-shrink: 0; }
+/* Heights scale with the viewport (2026-10-12): the Overview must fill exactly
+   one screen, and at line-height 1.5 a 28px figure took a 42px line box —
+   the strip was ~105px tall. Now ~70–85px, figures 20–28px. */
+.kpi { padding: clamp(5px, .8vh, 10px) var(--s5) clamp(5px, .8vh, 10px) 0; flex-shrink: 0; }
 .kpi + .kpi { padding-left: var(--s5); border-left: 1px solid var(--border); }
-.kpi .kl { color: var(--muted); font-size: var(--t-xs); text-transform: uppercase; letter-spacing: .05em; display: block; margin-bottom: 3px; }
-.kpi .kv { font-size: var(--t-xl); font-weight: 800; }
-.kpi.sm .kv { font-size: var(--t-lg); }
+.kpi .kl { color: var(--muted); font-size: var(--t-xs); line-height: 1.35; text-transform: uppercase; letter-spacing: .05em; display: block; margin-bottom: 2px; }
+.kpi .kv { font-size: clamp(20px, 2.5vh, 28px); line-height: 1.15; font-weight: 800; }
+.kpi.sm .kv { font-size: clamp(16px, 2vh, 20px); }
 .kpi .kv.sub { font-size: var(--t-xs); color: var(--muted); font-weight: 500; }
 /* Realized-in-window line under the P&L KPIs + its "breakdown" link (pnl-breakdown.js). */
-.kpi .ks { display: block; margin-top: 3px; font-size: var(--t-xs); color: var(--muted); font-weight: 500; white-space: nowrap; }
+.kpi .ks { display: block; margin-top: 2px; font-size: var(--t-xs); line-height: 1.35; color: var(--muted); font-weight: 500; white-space: nowrap; }
 .kpi .ks b { font-weight: 700; }
 .lnk { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .lnk:hover { filter: brightness(1.2); }
@@ -146,8 +181,17 @@ button { font-family: inherit; cursor: pointer; }
 .pcard:hover { border-color: var(--border-2); transform: translateY(-1px); }
 .pcard.on { border-color: var(--accent); }
 .pcard .broker { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border: 1px solid var(--border); border-radius: var(--r1); padding: 1px 6px; }
-.pcard .peq { font-size: var(--t-lg); font-weight: 800; }
-.pcard .pall { font-size: var(--t-sm); font-weight: 600; white-space: nowrap; }
+.pcard .peq { font-size: var(--t-lg); line-height: 1.15; font-weight: 800; }
+.pcard .pline { display: flex; align-items: baseline; gap: var(--s2); white-space: nowrap; }
+.pcard .pall { font-size: var(--t-sm); font-weight: 700; white-space: nowrap; }
+.pcard .pall .ptot { font-size: var(--t-xs); font-weight: 500; }
+/* Phones: the equity/P&L line may wrap — nowrap made the cards 444px wide on
+   a 390px screen. */
+@media (max-width: 640px) {
+  .pcard { gap: var(--s2); }
+  .pcard .pcol-l { flex-shrink: 1; }
+  .pcard .pline { flex-wrap: wrap; row-gap: 0; }
+}
 .chip { font-size: 10px; border: 1px solid var(--border); border-radius: var(--r1); padding: 1px 6px; color: var(--text-2); font-family: var(--mono); }
 .live { display: inline-flex; align-items: center; gap: 5px; font-size: var(--t-xs); color: var(--up); }
 .live .d { width: 6px; height: 6px; border-radius: 50%; background: var(--up); }
@@ -164,6 +208,14 @@ tr:last-child td { border-bottom: none; }
 tfoot tr.totals td { border-top: 1px solid var(--border); border-bottom: none; font-weight: 700; background: var(--bg); position: sticky; bottom: 0; }
 tfoot tr.totals .muted { font-weight: 500; }
 .scroll { overflow: auto; }
+/* Volumen y embudo (P0 2026-10-09): blocks column is prose, not a figure.
+   Since 2026-10-12 it is the analytics card's "Volume" tab (it used to be a
+   card under Positions/Trades and crushed that table in the 100dvh lock). */
+#funnelPanel th.blocks, #funnelPanel td.blocks { text-align: left; max-width: 340px; }
+#funnelPanel td, #funnelPanel th { padding: 4px var(--s2); font-size: var(--t-xs); white-space: nowrap; }
+#funnelPanel .funnel-total { margin-top: var(--s2); color: var(--muted); font-size: var(--t-xs); }
+#funnelPanel .funnel-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); margin-bottom: var(--s2); }
+.ops-wrap { display: flex; flex-direction: column; gap: var(--s4); }
 .badge { display: inline-flex; padding: 1px 6px; border-radius: var(--r1); font-size: 10px; font-weight: 700; }
 .badge.l { background: var(--up-soft); color: var(--up); } .badge.s { background: var(--down-soft); color: var(--down); }
 /* Positions table: per-row sleeve badge (which sleeve owns this row — e.g. a
@@ -201,6 +253,27 @@ tfoot tr.totals .muted { font-weight: 500; }
    own box so the header and totals have something to stick to. The
    viewport-locked layout below lifts the cap and lets the box fill the card. */
 #opsBody > .scroll { max-height: min(70vh, 720px); }
+/* Desktop: one line per row (2026-10-12) — the SL cell ("$498.94 15.4%")
+   wrapped, so every row was ~56px and the one-screen Overview showed half the
+   rows. Columns give way as the two-column layout narrows, so a row never
+   needs a sideways scroll: the sleeve code first (its colour dot stays; the
+   exposure chips are the legend), then qty/entry/now and trade prices, then
+   the trade's strategy. Phones keep wrapping rows (the page scrolls there). */
+@media (min-width: 981px) {
+  #opsBody td { white-space: nowrap; padding: 6px var(--s2); }
+}
+@media (min-width: 981px) and (max-width: 1600px) { #opsBody .sbadge .sb-t { display: none; } #opsBody .sbadge { padding: 2px 3px; } }
+@media (min-width: 981px) and (max-width: 1366px) { #opsBody .opt3 { display: none; } }
+@media (min-width: 981px) and (max-width: 1500px) { #opsBody .opt4 { display: none; } }
+@media (max-width: 480px) { #opsBody .opt3, #opsBody .opt4 { display: none; } }
+/* Exposure chips: compact (sleeve, ratio, cap; the $ deployed rides in the
+   tooltip) so four fit on one line; the cap gives way on mid widths. */
+.chips.xchips { gap: var(--s1) var(--s2); margin-bottom: var(--s2); }
+@media (max-width: 1366px) { .xchip .xcap { display: none; } }
+.xchip { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; padding: 3px var(--s2); flex-shrink: 0; }
+.xchip .l { display: inline; }
+.xchip .d { width: 7px; height: 7px; border-radius: 50%; align-self: center; flex-shrink: 0; }
+.xchip .xcap { font-size: var(--t-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
 
 /* tabs */
 .tabs { display: flex; gap: var(--s4); flex-wrap: wrap; border-bottom: 1px solid var(--border); margin-bottom: var(--s3); }
@@ -280,14 +353,23 @@ tfoot tr.totals .muted { font-weight: 500; }
 .so-body label { display: block; color: var(--muted); font-size: var(--t-xs); text-transform: uppercase; letter-spacing: .05em; margin: var(--s4) 0 var(--s2); }
 .so-body label:first-child { margin-top: 0; }
 
-/* news */
-.news-scroll { display: flex; gap: var(--s3); overflow-x: auto; padding-bottom: var(--s2); scrollbar-width: thin; }
-.news-card { flex: 0 0 260px; background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r2); padding: var(--s3); transition: border-color var(--dur), transform var(--dur); }
+/* news — one row: toggle on the left, two-line cards scrolling to the right
+   (2026-10-12; source + age on the first line, the headline on two). */
+#newsBar { margin-top: var(--s4); }
+.news-bar { display: flex; align-items: stretch; gap: var(--s3); padding: var(--s2) var(--s3); }
+.news-bar.closed { align-items: center; }
+.news-h { appearance: none; background: none; border: none; padding: 0 var(--s1) 0 0; margin: 0; cursor: pointer; font-family: inherit; flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; border-right: 1px solid var(--border); padding-right: var(--s3); }
+.news-h:hover { color: var(--text-2); }
+.news-caret { display: inline-block; transition: transform var(--dur); }
+.news-scroll { display: flex; gap: var(--s2); overflow-x: auto; scrollbar-width: none; min-width: 0; flex: 1 1 auto; }
+.news-scroll::-webkit-scrollbar { display: none; }
+.news-card { flex: 0 0 280px; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "src time" "title title"; column-gap: var(--s2); row-gap: 2px; align-content: start; background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r2); padding: 6px var(--s3); transition: border-color var(--dur), transform var(--dur); }
 .news-card:hover { border-color: var(--border-2); transform: translateY(-1px); }
-.news-card .n-src { font-size: var(--t-xs); color: var(--accent); font-weight: 600; margin-bottom: var(--s1); display: flex; gap: var(--s2); align-items: center; }
+.news-card .n-src { grid-area: src; font-size: var(--t-xs); line-height: 1.4; color: var(--accent); font-weight: 600; display: flex; gap: var(--s2); align-items: center; min-width: 0; white-space: nowrap; overflow: hidden; }
 .news-card .n-lang { font-size: 9px; color: var(--muted); border: 1px solid var(--border); border-radius: var(--r1); padding: 0 4px; }
-.news-card .n-title { font-size: var(--t-sm); line-height: 1.35; margin-bottom: var(--s2); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.news-card .n-time { font-size: var(--t-xs); color: var(--muted); }
+.news-card .n-title { grid-area: title; font-size: var(--t-sm); line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.news-card .n-time { grid-area: time; font-size: var(--t-xs); line-height: 1.4; color: var(--muted); white-space: nowrap; }
+@media (max-width: 640px) { .news-bar { flex-direction: column; } .news-h { border-right: none; padding-right: 0; } .news-card { flex-basis: 240px; } }
 .news-card[data-src="cointelegraph"] { border-left: 2px solid #4c9cff; }
 .news-card[data-src="coindesk"] { border-left: 2px solid #f7931a; }
 .news-card[data-src="bloomberg"] { border-left: 2px solid #ff5c5c; }
@@ -312,13 +394,13 @@ code { font-family: var(--mono); background: var(--bg-2); padding: 1px 5px; bord
 .ticker { border-top: 1px solid var(--border); background: var(--bg-1); overflow: hidden; flex-shrink: 0; }
 /* duration is a JS-set inline override (sizeTicker in main.js): proportional
    to the half's real width so the speed is ~40px/s on every viewport. */
-.ticker-in { display: flex; padding: var(--s2) 0; white-space: nowrap; animation: tick 80s linear infinite; }
+.ticker-in { display: flex; padding: 5px 0; white-space: nowrap; animation: tick 80s linear infinite; }
 .ticker-half { display: flex; gap: var(--s5); padding-right: var(--s5); flex-shrink: 0; }
 .ticker .t { font-size: var(--t-xs); color: var(--text-2); }
 .ticker:hover .ticker-in { animation-play-state: paused; }
 @media (prefers-reduced-motion: reduce) { .ticker-in { animation: none; } }
 @keyframes tick { from { transform: translateX(0); } to { transform: translateX(-50%); } }
-.disclaimer { display: flex; align-items: center; justify-content: center; gap: var(--s2); color: var(--muted); font-size: 10px; padding: var(--s2) var(--s4); border-top: 1px solid var(--border); }
+.disclaimer { display: flex; align-items: center; justify-content: center; gap: var(--s2); color: var(--muted); font-size: 10px; line-height: 1.4; padding: 4px var(--s4); border-top: 1px solid var(--border); }
 .disclaimer svg { flex-shrink: 0; }
 .disclaimer span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 640px) { .disclaimer span { white-space: normal; } }
@@ -355,17 +437,31 @@ code { font-family: var(--mono); background: var(--bg-2); padding: 1px 5px; bord
 .skel { position: relative; overflow: hidden; background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r3); }
 .skel::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--bg-2), transparent); background-size: 200px 100%; animation: shimmer 1.2s infinite; }
 
-/* 100dvh viewport lock (desktop, tall enough): fill the screen, cards scroll
-   internally, no page scroll. Narrow / short / portrait opt OUT to normal
-   scroll (v3 learned this). */
-@media (min-width: 981px) and (min-height: 660px) {
+/* 100dvh viewport lock: every desktop page fills exactly one screen, cards
+   scroll internally, the page never does (owner, 2026-10-12: "en Overview
+   tenemos que tener el 100% de alto siempre"). Phones/tablets (≤ 980px)
+   scroll naturally — one column of stacked cards — and so does a desktop
+   window under 540px tall, where not a single position row would fit.
+   History: the floor was 660px; the 2026-10-12 audit raised it to 960px
+   because the fixed chrome (header 220, broker cards 90, news 174, ticker +
+   footer 66) left the Positions table two rows at 875px — and the owner's
+   ~890px window then fell back to page scroll, with the analytics card
+   growing thousands of px past the empty left column. The chrome is now
+   ~45% smaller (nav in the header row, scaled KPIs, two-line broker cards,
+   one-row news, single-line table rows) and the floor is back down. */
+@media (min-width: 981px) and (min-height: 540px) {
   html, body { height: 100dvh; overflow: hidden; }
   .app { height: 100dvh; }
   .content { flex: 1 1 auto; min-height: 0; overflow: hidden; padding-bottom: 0; }
-  .content > .wrap { height: 100%; display: flex; flex-direction: column; min-height: 0; gap: var(--s4); padding: var(--s4) var(--s4) 0; }
+  .content > .wrap { height: 100%; display: flex; flex-direction: column; min-height: 0; gap: var(--s3); padding: var(--s3) var(--s4); }
   .main-area { padding-top: 0; flex: 1 1 auto; min-height: 0; align-items: stretch; }
   #profiles { flex-shrink: 0; padding-top: 0; }
-  #opsWrap > .card, #analyticsCol > .card { height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  #opsWrap > .card, #analyticsCol > .card { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  #analyticsCol > .card { height: 100%; }
+  /* Positions/Trades owns the whole left column (the funnel card that shared
+     it until 2026-10-12 crushed the table to its tabs at 875px; it is now the
+     analytics card's "Volume" tab). */
+  #opsWrap > #opsCard { flex: 1 1 0; }
   #opsWrap > .card > .tabs, #analyticsCol > .card > .an-head { flex-shrink: 0; }
   /* flex-basis 0 (not auto!): with the inner max-height caps gone, `auto`
      made each card contribute its FULL table height (~1500px) to .content's
@@ -395,32 +491,45 @@ code { font-family: var(--mono); background: var(--bg-2); padding: 1px 5px; bord
   #anBody { display: flex; flex-direction: column; }
   #anBody > * { flex-shrink: 0; }
   #anBody .lwchart { flex: 1 1 auto; height: auto !important; min-height: 140px; }
-  #newsBar { flex-shrink: 0; }
-  #newsBar .card { padding: var(--s3); }
-  .news-scroll { padding-bottom: 0; }
+  #newsBar { flex-shrink: 0; margin-top: 0; }
   /* full pages fill the viewport-locked column and scroll internally */
   .page-card { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; margin-top: 0; }
   .page-card > h3 { flex-shrink: 0; }
   .page-body { flex: 1 1 0; min-height: 0; overflow-y: auto; }
 }
+/* Short desktop windows (a 1366×768 laptop leaves ~650px under the browser's
+   bars): tighter spacing and one-line headlines; under 700px the broker cards
+   give way — their totals and connection status stay in the header pills. */
+@media (min-width: 981px) and (min-height: 540px) and (max-height: 820px) {
+  .content > .wrap { gap: var(--s2); padding: var(--s2) var(--s4); }
+  #opsCard, #analyticsCard { padding: var(--s3); }
+  #opsCard > .tabs, #analyticsCard .an-head { margin-bottom: var(--s2); }
+  .news-card .n-title { -webkit-line-clamp: 1; }
+}
+@media (min-width: 981px) and (min-height: 540px) and (max-height: 700px) {
+  #profiles { display: none; }
+}
 
 /* responsive */
-/* Below ~1360px the merged top row can't fit brand + 7 KPIs + actions without
-   clipping/overlapping — drop the KPI strip to its own full-width second line
-   (brand + icon actions stay on the top line). Wide screens keep ONE row. */
-@media (max-width: 1360px) {
-  .hdr { order: 1; }
-  .hdr-actions { order: 2; margin-left: auto; }
-  .kpis { order: 3; flex-basis: 100%; border-left: none; padding-left: 0; }
-}
-/* Above that, the KPI strip never shrinks: with labeled actions (2026-10-07)
-   a squeezed strip scrolled "Abiertas"/"Trades" out of sight at 1769px. When
-   brand + KPIs + actions don't fit on one row, the actions wrap to their own
-   line, right-aligned. */
-@media (min-width: 1361px) {
-  .kpis { min-width: max-content; }
-  .hdr-actions { margin-left: auto; }
-}
+/* Header (2026-10-12): row 1 = brand | nav | actions, row 2 = the KPI strip
+   on its own full-width line. Ten KPIs never fit beside the brand AND the
+   actions inside the 1720px wrap (the old wide-screen rule pushed the
+   actions onto a third row, and at 1361–1500px clipped the strip). The nav
+   joined row 1 the same day; on phones and tablets it drops below the KPIs. */
+.hdr { order: 1; }
+.nav { order: 2; flex: 1 1 auto; min-width: 0; }
+.hdr-actions { order: 3; margin-left: auto; }
+.kpis { order: 4; flex-basis: 100%; border-left: none; padding-left: 0; }
+@media (max-width: 980px) { .nav { order: 5; flex-basis: 100%; } }
+/* Narrower desktops: tighter KPI padding so the whole strip still fits
+   (≈1280px of strip at ≤1600px instead of ≈1520px). */
+@media (max-width: 1600px) { .kpi { padding-right: var(--s3); } .kpi + .kpi { padding-left: var(--s3); } }
+@media (max-width: 1440px) { .kpi .kv { font-size: clamp(18px, 2.3vh, 22px); } }
+@media (max-width: 1300px) { .kpi { padding-right: var(--s2); } .kpi + .kpi { padding-left: var(--s2); } }
+/* Below 1366px the ten KPIs no longer fit: days running and Fear & Greed
+   (context, not the book) give way instead of being clipped off the edge. */
+@media (max-width: 1366px) { .kpi.lo { display: none; } }
+@media (min-width: 981px) and (max-width: 1200px) { .kpi.lo2 { display: none; } }
 @media (max-width: 1100px) { .grid.cols-4 { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 980px) { .grid.cols-2 { grid-template-columns: 1fr; } .kpi .kv { font-size: var(--t-lg); } }
 @media (max-width: 560px) { .grid.cols-4 { grid-template-columns: 1fr; } .wrap { padding: 0 var(--s3); } .hdr { gap: var(--s2); } .hdr .clock, .hdr .pill { display: none; } }
@@ -433,6 +542,16 @@ code { font-family: var(--mono); background: var(--bg-2); padding: 1px 5px; bord
 .acc-sub code { font-family: var(--mono); }
 .acc-err { color: var(--down); margin-top: 2px; word-break: break-word; }
 .acc-actions { display: flex; gap: var(--s2); margin-top: var(--s3); }
+.acc-add { margin-top: var(--s4); }
+/* Broker accounts as an Ajustes card (2026-10-11): the same component as the
+   retired Cuentas page, at card density. */
+.set-card .acc-list { gap: var(--s2); margin-top: var(--s2); }
+.set-card .acc-row { padding: var(--s2) var(--s3); }
+.set-card .acc-main { row-gap: var(--s1); }
+.set-card .acc-actions { margin-top: var(--s2); flex-wrap: wrap; }
+.set-card .acc-actions .acc-btn, .set-card .acc-add { display: inline-flex; align-items: center; padding: 2px 8px; font-size: var(--t-xs); }
+.set-card .acc-add { margin-top: var(--s3); }
+.set-card .acc-note { margin: var(--s2) 0 var(--s1); }
 .acc-status { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: var(--r1); }
 .acc-status.ok { background: var(--up-soft); color: var(--up); }
 .acc-status.err { background: var(--down-soft); color: var(--down); }

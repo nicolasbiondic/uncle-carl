@@ -60,6 +60,7 @@ import {
   reconcilePortfolioInvariants, setBrokerTruthAvailable, isBrokerTruthAvailable,
 } from "../portfolio/truth";
 import { heartbeats } from "../ops/heartbeat";
+import { grossCapOf } from "../ops/grossCaps";
 import { publishInstanceManifest } from "../ops/instanceManifest";
 import { checkPrice, DEFAULT_PLAUSIBILITY, plausibilityMode, RejectionTally } from "../market/plausibility";
 import { createLogger } from "../utils/logger";
@@ -2732,6 +2733,11 @@ export class AccountManager {
         initialEquity: acc.equity.initialEquity,
         totalPnl: acc.equity.totalPnl, totalPnlPct: acc.equity.totalPnlPct,
         positions: acc.positions.size,
+        // The sleeve engine's gross cap and the base it multiplies — dashboard
+        // exposure chips colour by its share (src/ops/grossCaps.ts; null
+        // until registered).
+        grossCapMult: grossCapOf(id)?.mult ?? null,
+        grossCapBase: grossCapOf(id)?.base ?? null,
         paused: circuits[id]?.paused ?? false,
         todayTrades: stats.todayTrades,
         // "live" (default, every always-on sleeve) | "close-only" (flag off,

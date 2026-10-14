@@ -20,6 +20,7 @@ import type { AlpacaExecutor } from "../../executor/alpaca-executor";
 import type { BinanceExecutor } from "../../executor/binance-executor";
 import { SYMBOL_MAP } from "../../executor/binance-executor";
 import { isUnknownOrder } from "../../executor/executionPolicy";
+import { beginEngineClose, endEngineClose } from "../../sync/inflightCloses";
 import type { QuoteAsset } from "../../executor/binance/quoteAsset";
 import { USDC_SYMBOL_MAP } from "../../executor/binance/quoteAsset";
 import { binanceKlinesEnabled, fetchBinanceKlines } from "../../market/binanceKlines";
@@ -575,48 +576,58 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
       } catch (e: any) { log.debug(`pre-close quote fetch failed for ${binanceSym}: ${e.message}`); }
     }
 
-    const result = await this.binance.closePosition(action.symbol, qty, action.side);
-    if (!result.success || result.filledPrice <= 0) return { ok: false, reason: "broker did not confirm close" };
-
-    // Clear the native SL left behind (closePosition=true stops don't
-    // auto-cancel when the position is closed by another order). Our
-    // position is gone, so our stop MUST go too — a stale reduceOnly stop
-    // would later fire against whatever the aggregate still holds (a
-    // manual/unknown position) or a FUTURE position of ours. The aggregate
-    // may not be flat here, so this is the scoped form: our stamped stops
-    // only, never anonymous ones.
-    await this.binance.cancelAllOrders(action.symbol);
-
-    // Close the DB row with the broker's realised PnL.
+    // P0 fix (2026-10-02): register this close BEFORE the broker mutation so
+    // the 60s sync (BinanceSleeveReconciler.closeFlatRow) doesn't attribute
+    // our own fill as MANUAL_CLOSE in the window between the broker fill and
+    // the DB write below. Cleared in `finally` — on ANY failure path the
+    // reconciler takes over on its next pass, exactly as before.
+    beginEngineClose(this.cfg.accountId, action.symbol);
     try {
-      const netPnl = result.realizedPnl - result.commission - (row.open_commission || 0);
-      const closeTime = Date.now();
-      const closed = closeTrade(row.id, result.filledPrice, closeTime, result.commission, netPnl);
-      if (!closed) throw new Error("DB close returned no row");
-      if (closed?.closeReason !== "MANUAL_CLOSE_UNRECONCILED") {
-        updateTradeCloseReason(row.id, closeReason);
-      }
+      const result = await this.binance.closePosition(action.symbol, qty, action.side);
+      if (!result.success || result.filledPrice <= 0) return { ok: false, reason: "broker did not confirm close" };
+
+      // Clear the native SL left behind (closePosition=true stops don't
+      // auto-cancel when the position is closed by another order). Our
+      // position is gone, so our stop MUST go too — a stale reduceOnly stop
+      // would later fire against whatever the aggregate still holds (a
+      // manual/unknown position) or a FUTURE position of ours. The aggregate
+      // may not be flat here, so this is the scoped form: our stamped stops
+      // only, never anonymous ones.
+      await this.binance.cancelAllOrders(action.symbol);
+
+      // Close the DB row with the broker's realised PnL.
       try {
-        if ((result.submittedPx ?? 0) > 0) recordFill({
-          tradeId: row.id, orderId: result.orderId ?? row.id, accountId: this.cfg.accountId,
-          symbol: action.symbol, side: closeSide, market: "crypto",
-          expectedPx: preCloseExpectedPx ?? result.submittedPx!, submittedPx: result.submittedPx!,
-          filledPx: result.filledPrice, filledQty: result.filledQty ?? row.quantity,
-          fillTime: result.exitTime ?? closeTime, latencyMs: Math.max(0, (result.exitTime ?? closeTime) - (result.submittedAt ?? closeTime)),
-          broker: "binance", estPx: result.estPx,
+        const netPnl = result.realizedPnl - result.commission - (row.open_commission || 0);
+        const closeTime = Date.now();
+        const closed = closeTrade(row.id, result.filledPrice, closeTime, result.commission, netPnl);
+        if (!closed) throw new Error("DB close returned no row");
+        if (closed?.closeReason !== "MANUAL_CLOSE_UNRECONCILED") {
+          updateTradeCloseReason(row.id, closeReason);
+        }
+        try {
+          if ((result.submittedPx ?? 0) > 0) recordFill({
+            tradeId: row.id, orderId: result.orderId ?? row.id, accountId: this.cfg.accountId,
+            symbol: action.symbol, side: closeSide, market: "crypto",
+            expectedPx: preCloseExpectedPx ?? result.submittedPx!, submittedPx: result.submittedPx!,
+            filledPx: result.filledPrice, filledQty: result.filledQty ?? row.quantity,
+            fillTime: result.exitTime ?? closeTime, latencyMs: Math.max(0, (result.exitTime ?? closeTime) - (result.submittedAt ?? closeTime)),
+            broker: "binance", estPx: result.estPx,
+          });
+        } catch (e: any) { log.warn(`exit fill telemetry failed for ${action.symbol}: ${e.message}`); }
+        if (closed) eventBus.emit(EVENTS.POSITION_CLOSED, { ...closed, accountId: this.cfg.accountId, close_reason: closed.closeReason ?? closeReason });
+      } catch (e: any) {
+        log.error(`Broker closed ${action.symbol}, but DB close failed: ${e.message}`);
+        eventBus.emit(EVENTS.ERROR_BURST, {
+          context: "BinanceMomentumAdapter",
+          message: `DB close persist failed: ${action.symbol} @ ${result.filledPrice}`,
+          count: 1, windowMs: 0, firstAt: Date.now(), lastAt: Date.now(),
         });
-      } catch (e: any) { log.warn(`exit fill telemetry failed for ${action.symbol}: ${e.message}`); }
-      if (closed) eventBus.emit(EVENTS.POSITION_CLOSED, { ...closed, accountId: this.cfg.accountId, close_reason: closed.closeReason ?? closeReason });
-    } catch (e: any) {
-      log.error(`Broker closed ${action.symbol}, but DB close failed: ${e.message}`);
-      eventBus.emit(EVENTS.ERROR_BURST, {
-        context: "BinanceMomentumAdapter",
-        message: `DB close persist failed: ${action.symbol} @ ${result.filledPrice}`,
-        count: 1, windowMs: 0, firstAt: Date.now(), lastAt: Date.now(),
-      });
-      return { ok: false, reason: "broker closed; DB reconciliation pending" };
+        return { ok: false, reason: "broker closed; DB reconciliation pending" };
+      }
+      return { ok: true };
+    } finally {
+      endEngineClose(this.cfg.accountId, action.symbol);
     }
-    return { ok: true };
   }
 
   async fetchCandles(symbol: string, bars: number): Promise<OHLCV[]> {

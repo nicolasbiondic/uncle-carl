@@ -1,0 +1,68 @@
+{
+  "name": "stocks-streversal-b2-v1",
+  "sleeve": "streversal",
+  "description": "PRE-REGISTRADO (2026-10-10, B2 de V-plan §12-bis, malla CERRADA por el director) ANTES de correr ningun trial. B2 corrige SOLO el fallo identificado en B (LB-acciones-reversion.md: 4+4/6+6 nombres con nocional fijo a 3x que no se reduce al caer el capital -> ruina en marzo 2020); todo lo demas se mantiene: misma señal de reversion residual por sector (retorno k-sesiones del stock menos el del ETF sectorial asignado por correlacion pasada 126/21 sesiones, solo datos anteriores a cada decision), mismo universo S&P 500 PIT menos los 43 simbolos vivos, mismos costes §12 linea B (base 2 bps/lado + prestamo de cortos 0.5%/año; stress 5 bps + 1%/año) y mismo capital §13 ($8,300). DISEÑO FIJO §12-bis: >= 20 nombres por lado; tamaño proporcional al patrimonio en cada rebalanceo (slot = patrimonio a la decision, marcado al ultimo cierre completado, x bruto / (2 x N) — la exposicion se des-apalanca en drawdown); bruto 2x; cortos SOLO con acciones enteras que quepan en el slot y precio >= $5 (los largos dimensionan exacto: fraccionados, Alpaca lo permite en largos — declarado). MALLA CERRADA de 4 candidatos: N en {20, 30} x mantenimiento en {3, 5} sesiones, con horizonte de señal k = mantenimiento. CRITERIOS: los comunes 1-8 de §12 sin cambios (mismos gates que stocks-streversal-v1: Sharpe >= 1.0 base y PSR >= 0.95; Sharpe >= 0.5 stress; break-even adicional >= 2x base; |corr| vs cartera viva <= 0.30; maxDD <= 25%; ningun año > 50% del P&L y sin el top-10% de simbolos Sharpe >= 0.5; ordenes/dia reportadas sin minimo). TRIAL ACCOUNTING: base 331 (tras linea C, 327 -> 331); 4 candidatos nuevos -> 335.",
+  "trialAccounting": {
+    "priorUniqueTrials": 331,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/hist-sp500.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "refSymbol": "SPY",
+    "sectorEtfs": ["XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU", "XLV", "XLY"],
+    "membership": {
+      "index": "sp500",
+      "exclude": [
+        "SPY", "QQQ", "IWM", "GLD", "AAPL", "MSFT", "NVDA", "META", "GOOGL", "AMZN", "SMH",
+        "ABBV", "AVGO", "BAC", "CAT", "COST", "CVX", "DIS", "GE", "HD", "HON", "JNJ", "JPM",
+        "KO", "LLY", "MA", "MCD", "MRK", "NFLX", "NKE", "ORCL", "PG", "QCOM", "UNH", "V",
+        "WMT", "XLE", "XLF", "XLI", "XLP", "XLV", "XOM", "SLV"
+      ]
+    },
+    "corrLookbackSessions": 126,
+    "sectorRefreshSessions": 21
+  },
+  "asOf": "2026-10-08T00:00:00Z",
+  "window": {
+    "from": "2017-01-01",
+    "to": "2026-10-01",
+    "outerFoldCount": 6,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": { "perSideBps": 2, "shortBorrowAnnual": 0.005 },
+    "stress": { "perSideBps": 5, "shortBorrowAnnual": 0.01 }
+  },
+  "ledger": {
+    "initialEquity": 8300,
+    "maxGrossMult": 2,
+    "sizing": "equityProportional",
+    "fractionalLongs": true
+  },
+  "candidates": [
+    { "name": "b2-n20-h3", "lookbackDays": 3, "holdDays": 3, "residual": "sector", "slotsPerSide": 20 },
+    { "name": "b2-n20-h5", "lookbackDays": 5, "holdDays": 5, "residual": "sector", "slotsPerSide": 20 },
+    { "name": "b2-n30-h3", "lookbackDays": 3, "holdDays": 3, "residual": "sector", "slotsPerSide": 30 },
+    { "name": "b2-n30-h5", "lookbackDays": 5, "holdDays": 5, "residual": "sector", "slotsPerSide": 30 }
+  ],
+  "liveArtifacts": [
+    { "sleeve": "momentum_stocks", "path": "data/backtests/5f03d68daed8572ebb73d5c283dfd80ec1064d5b47e8afb9c1f871d8537f091d", "capitalUsd": 50000 },
+    { "sleeve": "meanrev_stocks", "path": "data/backtests/624d50e930d47ef55e42f16e6537e0e895dec847fb0b709c26b2ecd94ea37db7", "capitalUsd": 50000 },
+    { "sleeve": "momentum_crypto", "path": "data/backtests/06e1a160c3556102aa2fff769f9e4c2a3d27d09a6f3874841286426425faf6e4", "capitalUsd": 5000 },
+    { "sleeve": "momentum_crypto_usdc", "path": "data/backtests/413ffb90cd968bfdfe51f1b1eebc87612f262ce9ecb7d2ca82fd59383a704625", "capitalUsd": 5000 }
+  ],
+  "acceptance": {
+    "minSharpe": 1.0,
+    "minOuterPsr": 0.95,
+    "stressMinSharpe": 0.5,
+    "minBreakEvenExtraBpsPerSide": 4,
+    "maxCorrVsLive": 0.30,
+    "maxDrawdown": 0.25,
+    "maxYearPnlShare": 0.50,
+    "exTopDecileMinSharpe": 0.5
+  }
+}

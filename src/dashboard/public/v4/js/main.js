@@ -9,16 +9,17 @@ import { renderPositions } from "./components/positions.js";
 import { renderTrades } from "./components/trades.js";
 import { renderAnalyticsShell, loadTab, setMonthlyReturnsProfile } from "./components/analytics.js";
 import { renderNewsBar, loadNews, toggleNews } from "./components/news.js";
+import { setFunnelDays } from "./components/funnel.js";
 import { loadFng } from "./components/fng.js";
 import { connectWS } from "./ws.js";
 import { bindPalette } from "./components/palette.js";
 import { openCandles } from "./components/candle.js";
 import { openBrokerModal } from "./components/broker-modal.js";
 import { mountSettings } from "./components/settings.js";
-import { mountAccounts, setPendingOauthResult, oauthResultFromSearch } from "./components/accounts.js";
+import { setPendingOauthResult, oauthResultFromSearch } from "./components/accounts.js";
 import { mountPortfolios } from "./components/portfolios.js";
 import { mountActivity } from "./components/activity.js";
-import { pageFromHash } from "./router.js";
+import { isAliasHash, normalizePage, pageFromHash } from "./router.js";
 import { num, n } from "./fmt.js";
 
 let opsTab = "positions";
@@ -121,9 +122,35 @@ function withOpsScroll(fn) {
   }
 }
 
-// ── hash router (#/resumen · #/portafolios · #/cuentas · #/actividad ·
-// #/ajustes). The hash is the source of truth; the store remembers the last
-// page for hash-less loads (PERSIST). Back/forward work via hashchange. ──
+// ── hash router (#/resumen · #/portafolios · #/actividad · #/ajustes). The
+// hash is the source of truth; the store remembers the last page for
+// hash-less loads (PERSIST). Back/forward work via hashchange. #/cuentas is
+// an alias: broker accounts live in Ajustes since 2026-10-11. ──
+
+/** Set when the user arrived through #/cuentas (or the OAuth round trip):
+ *  the next Ajustes mount brings the broker-accounts card into view. */
+let focusBrokers = false;
+
+/** Rewrites a retired hash (#/cuentas) to its page and asks for the
+ *  broker-accounts card. */
+function absorbAliasHash() {
+  if (!isAliasHash(location.hash)) return;
+  focusBrokers = true;
+  history.replaceState(null, "", "#/" + pageFromHash(location.hash));
+}
+
+/** Brings the broker-accounts card into view. On phones the window scrolls
+ *  under the sticky header, so the card's scroll margin clears it; in the
+ *  desktop layout the page body scrolls below the header. */
+function revealBrokersCard() {
+  const card = byId("setBrokers")?.closest(".set-card");
+  if (!card) return;
+  const body = byId("pageBody");
+  const bodyScrolls = !!body && getComputedStyle(body).overflowY !== "visible";
+  const stickyH = document.querySelector(".sticky")?.getBoundingClientRect().height ?? 0;
+  card.style.scrollMarginTop = `${Math.round((bodyScrolls ? 0 : stickyH) + 8)}px`;
+  card.scrollIntoView({ block: "start" });
+}
 function pageShell(iconName, title) {
   return `<div class="card page-card"><h3><span style="display:inline-flex;align-items:center;gap:6px">${icon(iconName, 15)} ${esc(title)}</span></h3><div class="page-body" id="pageBody"><div class="muted">…</div></div></div>`;
 }
@@ -145,15 +172,16 @@ function renderPage() {
   if (page === "portafolios") {
     host.innerHTML = pageShell("briefcase", t("Portfolios", "Portafolios"));
     mountPortfolios(byId("pageBody"));
-  } else if (page === "cuentas") {
-    host.innerHTML = pageShell("box", t("Broker accounts", "Cuentas de broker"));
-    mountAccounts(byId("pageBody"));
   } else if (page === "actividad") {
     host.innerHTML = pageShell("list", t("Activity", "Actividad"));
     mountActivity(byId("pageBody"), tradesCache);
   } else if (page === "ajustes") {
     host.innerHTML = pageShell("settings", t("Settings", "Ajustes"));
     mountSettings(byId("pageBody"), (key) => { if (key === "period") refresh().then(render); else render(); });
+    if (focusBrokers) {
+      focusBrokers = false;
+      revealBrokersCard();
+    }
   } else {
     // Resumen — the original monitor screen.
     withOpsScroll(() => {
@@ -161,6 +189,9 @@ function renderPage() {
         <div class="main-area" id="mainArea"><div class="ops-wrap" id="opsWrap"></div><div class="an-col" id="analyticsCol"></div></div>
         <div id="newsBar"></div>`;
       byId("profiles").innerHTML = renderProfiles();
+      // Positions/Trades owns the left column. The funnel is the analytics
+      // card's "Volume" tab since 2026-10-12: as a card below this one it
+      // crushed the positions table to its tabs at 875px tall.
       byId("opsWrap").innerHTML = renderOps();
     });
     byId("analyticsCol").innerHTML = `<div class="card" id="analyticsCard">${renderAnalyticsShell()}</div>`;
@@ -180,15 +211,16 @@ let reqSeq = 0;
 async function refresh() {
   const my = ++reqSeq;
   try {
-    const [dash, profiles, conns, trades] = await Promise.all([
+    const [dash, profiles, conns, trades, kpis] = await Promise.all([
       api.dashboard(store.state.view),
       api.profilesV2(store.state.period), // 0 = all-time; the route now accepts it directly
       api.connections(),
       api.trades(120, store.state.view === "consolidated" ? undefined : store.state.view),
+      api.kpis(), // owner KPIs (volume/return/risk vs goals) — soft: null on old servers
     ]);
     if (my !== reqSeq) return;
     tradesCache = trades || [];
-    store.set({ dashboard: dash, profiles: profiles || [], connections: conns || {}, daysRunning: dash?.daysRunning || 0 });
+    store.set({ dashboard: dash, profiles: profiles || [], connections: conns || {}, daysRunning: dash?.daysRunning || 0, kpis });
   } catch (e) { console.error("refresh failed", e); }
 }
 
@@ -220,8 +252,11 @@ function wireEvents() {
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") toggleUserMenu(false); });
   // Router: back/forward + direct links.
   window.addEventListener("hashchange", () => {
+    const alias = isAliasHash(location.hash);
     const p = pageFromHash(location.hash);
+    absorbAliasHash();
     if (p && p !== store.state.page) { store.set({ page: p }); render(); }
+    else if (alias) { focusBrokers = false; revealBrokersCard(); }
   });
   on(app, "click", "[data-sym]", (e, el) => openCandles(el.dataset.sym));
   on(app, "keydown", "[data-sym]", (e, el) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCandles(el.dataset.sym); } });
@@ -230,6 +265,7 @@ function wireEvents() {
   on(app, "click", "[data-opstab]", (e, el) => { opsTab = el.dataset.opstab; byId("opsCard").outerHTML = renderOps(); });
   on(app, "click", "[data-atab]", (e, el) => setTab(el.dataset.atab));
   on(app, "click", "[data-period]", (e, el) => { store.set({ period: +el.dataset.period }); refresh().then(render); });
+  on(app, "click", "[data-fdays]", (e, el) => setFunnelDays(+el.dataset.fdays));
   on(app, "click", "[data-mr]", (e, el) => { setMonthlyReturnsProfile(el.dataset.mr); loadTab(); });
 }
 
@@ -280,9 +316,11 @@ async function boot() {
   if (!me) { location.href = "/login"; return; }
   setCsrf(me.csrfToken);
   store.set({ me });
-  // Router init: an explicit hash wins; otherwise restore the remembered page.
+  // Router init: an explicit hash wins; otherwise restore the remembered page
+  // (normalized — a browser may remember the retired "cuentas" page).
   const hashPage = pageFromHash(location.hash);
-  const page = hashPage || store.state.page || "resumen";
+  absorbAliasHash();
+  const page = hashPage || normalizePage(store.state.page);
   store.set({ page });
   if (!hashPage) history.replaceState(null, "", "#/" + page);
   wireEvents();
@@ -299,13 +337,15 @@ async function boot() {
   loadFng(rerenderKpis);
   wireWS();
   // OAuth round-trip deep link: the accounts callback redirects to
-  // /?accounts_oauth=…; land on the Accounts page with the result banner and
-  // strip the params so a reload doesn't replay it.
+  // /?accounts_oauth=…; land on Ajustes with the broker-accounts card (and its
+  // result banner) in view, and strip the params so a reload doesn't replay it.
   const oauthRes = oauthResultFromSearch(location.search);
   if (oauthRes) {
     setPendingOauthResult(oauthRes);
-    history.replaceState(null, "", location.pathname + "#/cuentas");
-    if (store.state.page !== "cuentas") { store.set({ page: "cuentas" }); render(); }
+    history.replaceState(null, "", location.pathname + "#/ajustes");
+    focusBrokers = true;
+    store.set({ page: "ajustes" });
+    render();
   }
   // Periodic refresh repaints the whole Resumen; on other pages only the
   // chrome (header/KPIs) — a full repaint would wipe form/scroll state.

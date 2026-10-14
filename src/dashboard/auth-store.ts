@@ -4,6 +4,7 @@ import type express from "express";
 import { createLogger } from "../utils/logger";
 import { getClientIp } from "./dashboard-utils";
 import { loadInstanceConfig } from "../platform/instance";
+import { hashSid, type SessionStore, type StoredSession } from "./sessionPersistence";
 
 const log = createLogger("Dashboard");
 
@@ -56,10 +57,132 @@ export const LOGIN_WINDOW_MS = envInt("DASHBOARD_LOGIN_WINDOW_MS", 15 * 60_000, 
 export const LOGIN_LOCK_MS   = envInt("DASHBOARD_LOGIN_LOCK_MS",   15 * 60_000, 1_000);
 export const LOGIN_MAX_ATTEMPTS = envInt("DASHBOARD_LOGIN_MAX_ATTEMPTS", 8, 1);
 
-// ── Stores (in-memory; replaced by DB-backed users in a future phase) ──────
+// ── Stores ─────────────────────────────────────────────────────────────────
+//
+// Live sessions sit in memory, keyed by the raw sid (the cookie value). Since
+// 2026-10-11 they are also mirrored to SQLite when index.ts attaches a store
+// (src/dashboard/sessionPersistence.ts), so a restart no longer logs anyone
+// out: stored sessions load as DORMANT (only their sha256 is known) and the
+// first request carrying the cookie promotes them back (getSessionBySid).
+// With no store attached (tests, scripts) everything stays in memory, exactly
+// as before.
 
-export const sessions      = new Map<string, Session>();
+let sessionStore: SessionStore | null = null;
+/** Stored sessions not seen since this process started: sha256(sid) → session. */
+const dormant = new Map<string, StoredSession>();
+
+function persist(op: (store: SessionStore) => void, what: string): void {
+  if (!sessionStore) return;
+  try {
+    op(sessionStore);
+  } catch (e: any) {
+    log.warn(`Dashboard: session ${what} not persisted (${e?.message ?? e}) — it stays valid in memory until a restart`);
+  }
+}
+
+const ttlOf = (s: { rememberMe: boolean }) => (s.rememberMe ? REMEMBER_ME_TTL : SESSION_TTL);
+
+/** set/delete write through to the attached store; clear() only forgets
+ *  memory (tests use it to simulate a restart). */
+class SessionMap extends Map<string, Session> {
+  override set(sid: string, s: Session): this {
+    super.set(sid, s);
+    persist((st) => st.upsert(sid, s), "save");
+    return this;
+  }
+  override delete(sid: string): boolean {
+    const had = super.delete(sid);
+    persist((st) => st.remove(sid), "delete");
+    return had;
+  }
+}
+
+export const sessions      = new SessionMap();
 export const loginAttempts = new Map<string, LoginAttemptState>();
+
+/**
+ * Wires persistence (index.ts, at boot): stored sessions load as dormant,
+ * expired rows are deleted, and any session already live is saved.
+ */
+export function attachSessionPersistence(store: SessionStore): { restored: number; expired: number } {
+  sessionStore = store;
+  dormant.clear();
+  const live = new Set([...sessions.keys()].map(hashSid));
+  const now = Date.now();
+  let restored = 0;
+  let expired = 0;
+  for (const d of store.loadAll()) {
+    if (live.has(d.sidHash)) continue;
+    if (now - d.lastActivity > ttlOf(d)) {
+      persist((st) => st.removeByHash(d.sidHash), "prune");
+      expired++;
+      continue;
+    }
+    dormant.set(d.sidHash, d);
+    restored++;
+  }
+  for (const [sid, s] of sessions) persist((st) => st.upsert(sid, s), "save");
+  return { restored, expired };
+}
+
+/** Tests: drop the store and the dormant sessions (live ones stay in memory). */
+export function detachSessionPersistence(): void {
+  sessionStore = null;
+  dormant.clear();
+}
+
+/** Opaque per-session handle: NEVER the raw sid (a sid is a bearer token).
+ *  The first 16 hex chars of sha256(sid), so a dormant session (only its hash
+ *  is known) shows the same handle it will have once live. */
+export function sessionHandle(sid: string): string {
+  return hashSid(sid).slice(0, 16);
+}
+
+export interface UserSessionView {
+  handle: string;
+  /** Raw sid when live in this process; null for a restored session whose
+   *  browser hasn't come back since the restart. */
+  sid: string | null;
+  session: Omit<Session, "id">;
+}
+
+/** One user's sessions, live and dormant (Ajustes → Sessions). */
+export function sessionsOfUser(username: string): UserSessionView[] {
+  const out: UserSessionView[] = [];
+  for (const [sid, s] of sessions) if (s.username === username) out.push({ handle: sessionHandle(sid), sid, session: s });
+  for (const [h, d] of dormant) if (d.username === username) out.push({ handle: h.slice(0, 16), sid: null, session: d });
+  return out;
+}
+
+/** Revokes one of `username`'s sessions by handle; null when it isn't theirs or doesn't exist. */
+export function revokeSessionByHandle(username: string, handle: string): { sid: string | null } | null {
+  for (const [sid, s] of sessions) {
+    if (s.username === username && sessionHandle(sid) === handle) {
+      sessions.delete(sid);
+      return { sid };
+    }
+  }
+  for (const [h, d] of dormant) {
+    if (d.username === username && h.slice(0, 16) === handle) {
+      dormant.delete(h);
+      persist((st) => st.removeByHash(h), "delete");
+      return { sid: null };
+    }
+  }
+  return null;
+}
+
+/** Revokes every session of `username` except `keepSid`; returns how many. */
+export function revokeOtherSessions(username: string, keepSid: string): number {
+  let n = 0;
+  for (const [sid, s] of sessions) {
+    if (s.username === username && sid !== keepSid) { sessions.delete(sid); n++; }
+  }
+  for (const [h, d] of dormant) {
+    if (d.username === username) { dormant.delete(h); persist((st) => st.removeByHash(h), "delete"); n++; }
+  }
+  return n;
+}
 
 /**
  * Loads dashboard users from env. Backward compatible: the admin is still
@@ -176,11 +299,26 @@ export function getSession(req: express.Request): Session | null {
  */
 export function getSessionBySid(sid: string | undefined | null): Session | null {
   if (!sid) return null;
-  const s = sessions.get(sid);
+  const s = sessions.get(sid) ?? promoteDormant(sid);
   if (!s) return null;
   const ttl = s.rememberMe ? REMEMBER_ME_TTL : SESSION_TTL;
   if (Date.now() - s.lastActivity > ttl) { sessions.delete(sid); return null; }
   s.lastActivity = Date.now();
+  persist((st) => st.touch(sid, s), "activity");
+  return s;
+}
+
+/** A restored session whose cookie just came back becomes live again (its
+ *  row already exists — no write). */
+function promoteDormant(sid: string): Session | null {
+  if (dormant.size === 0) return null;
+  const h = hashSid(sid);
+  const d = dormant.get(h);
+  if (!d) return null;
+  dormant.delete(h);
+  const { sidHash: _sidHash, ...rest } = d;
+  const s: Session = { ...rest, id: sid };
+  Map.prototype.set.call(sessions, sid, s);
   return s;
 }
 
@@ -219,6 +357,9 @@ export function sweepStaleSessions(): void {
   for (const [k, s] of sessions) {
     const ttl = s.rememberMe ? REMEMBER_ME_TTL : SESSION_TTL;
     if (now - s.lastActivity > ttl) sessions.delete(k);
+  }
+  for (const [h, d] of dormant) {
+    if (now - d.lastActivity > ttlOf(d)) { dormant.delete(h); persist((st) => st.removeByHash(h), "prune"); }
   }
   for (const [k, attempt] of loginAttempts) {
     const stale   = now - attempt.firstAttemptAt > LOGIN_WINDOW_MS * 2;

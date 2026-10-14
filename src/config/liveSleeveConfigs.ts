@@ -115,7 +115,9 @@ export const MEANREV_STOCKS_VOL_STOP = { kSigma: 3, lookbackBars: 20, minPct: 2,
 // ── authoritative manifests ─────────────────────────────────────────────
 /** Paths are repo-root relative (the convention every script here uses). */
 export const LIVE_SLEEVE_MANIFESTS = {
-  momentum_stocks: "experiments/momentum-stocks-daily-blend3-pure-v1.json",
+  // k = 1.5 since 2026-10-10 (line E); the k = 1 chain was
+  // momentum-stocks-daily-blend3-pure-v1 (same candidate, slot 0.125).
+  momentum_stocks: "experiments/momentum-stocks-daily-blend3-k150-exposure-v1.json",
   // 7 × 0.12 since 2026-09-28 (supersedes breadth7 7 × 0.10; see DEFAULT_MEANREV_CONFIG).
   meanrev_stocks: "experiments/meanrev-slot12-pure-v1.json",
   // Same candidate as momentum-crypto-vt35-pure-v1 (asOf 2026-07-15), re-run

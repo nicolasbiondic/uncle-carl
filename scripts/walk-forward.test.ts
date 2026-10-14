@@ -38,6 +38,7 @@ import {
   type WalkForwardSummary,
   type ReplayRunner,
   type AcceptanceConfig,
+  DEFAULT_CODE_FILES,
 } from "./walk-forward";
 import { hashReplayConfig, type ReplayResult } from "./backtest-momentum-wf";
 import { INITIAL_RISK_STATE, type RiskState } from "../src/strategies/momentum/RiskGuard";
@@ -1823,11 +1824,15 @@ describe("meanrev sleeve manifest validation", () => {
     expect(() => validateCandidate({ ...meanrevCandidate, cooldownBarsAfterStop: 4 })).toThrow(/momentum-only/);
   });
 
-  test("meanrev manifests reject costs.marginInterest (financing not modeled by the meanrev runner)", () => {
+  test("meanrev manifests accept costs.marginInterest since 2026-10-09 (línea E: SimMeanRevBroker models Reg-T financing — scripts/meanrev-replay.marginInterest.test.ts locks the engine behavior); bounds still enforced", () => {
     expect(() => validateManifest({
       ...meanrevManifest,
-      costs: { ...meanrevManifest.costs, base: { ...meanrevManifest.costs.base, marginInterest: { annualRate: 0.075 } } },
-    })).toThrow(/must not set costs.base.marginInterest/);
+      costs: { ...meanrevManifest.costs, base: { ...meanrevManifest.costs.base, marginInterest: { annualRate: 0.065 } } },
+    })).not.toThrow();
+    expect(() => validateManifest({
+      ...meanrevManifest,
+      costs: { ...meanrevManifest.costs, base: { ...meanrevManifest.costs.base, marginInterest: { annualRate: 6.5 } } },
+    })).toThrow(/fraction/);
   });
 });
 
@@ -2338,13 +2343,96 @@ describe("profitLock candidate axis (2026-09, third stop mechanism)", () => {
   });
 });
 
+describe("line-S short axes (2026-10-10: shortEntryPct/shortExitPct/shortRegime/shortUniverse + costs.shortBorrow)", () => {
+  const momentumCand: CandidateConfig = {
+    name: "t", cadenceMin: 60, entryPct: 5, exitPct: -2, maxLongs: 2, maxShorts: 0,
+  };
+  const shortCand: CandidateConfig = { ...momentumCand, maxShorts: 2 };
+  const meanrevCand: CandidateConfig = {
+    name: "mr", cadenceMin: 1440,
+    meanrev: { entryRsi: 5, smaLong: 200, smaExit: 5, timeStopDays: 10, maxPositions: 5, slotPct: 0.1 },
+  };
+
+  test("valid short axes pass; shapes/bounds are strict", () => {
+    expect(() => validateCandidate({ ...shortCand, shortEntryPct: -5, shortExitPct: 2, shortRegime: { refSymbol: "BTC/USD", maDays: 200 }, shortUniverse: ["SPY", "QQQ"] })).not.toThrow();
+    expect(() => validateCandidate({ ...shortCand, shortEntryPct: 5 })).toThrow(/NEGATIVE/);
+    expect(() => validateCandidate({ ...shortCand, shortEntryPct: -5, shortExitPct: -6 })).toThrow(/shortExitPct/);
+    expect(() => validateCandidate({ ...shortCand, shortRegime: { refSymbol: "", maDays: 200 } })).toThrow(/refSymbol/);
+    expect(() => validateCandidate({ ...shortCand, shortRegime: { refSymbol: "BTC/USD", maDays: 1 } })).toThrow(/maDays/);
+    expect(() => validateCandidate({ ...shortCand, shortRegime: { refSymbol: "BTC/USD", maDays: 200, extra: 1 } as any })).toThrow(/unknown keys/);
+    expect(() => validateCandidate({ ...shortCand, shortUniverse: [] })).toThrow(/shortUniverse/);
+    expect(() => validateCandidate({ ...shortCand, shortUniverse: ["SPY", "SPY"] })).toThrow(/duplicates/);
+  });
+
+  test("short axes are INERT without maxShorts >= 1 — rejected (config that changes nothing)", () => {
+    expect(() => validateCandidate({ ...momentumCand, shortEntryPct: -5 })).toThrow(/maxShorts/);
+    expect(() => validateCandidate({ ...momentumCand, shortRegime: { refSymbol: "BTC/USD", maDays: 200 } })).toThrow(/maxShorts/);
+    expect(() => validateCandidate({ ...momentumCand, shortStop: { mode: "fixed", pct: 0.08 } })).toThrow(/maxShorts/);
+  });
+
+  test("shortStop (S-bis): valid forms pass; strict per-mode shapes and bounds", () => {
+    expect(() => validateCandidate({ ...shortCand, shortStop: { mode: "fixed", pct: 0.08 } })).not.toThrow();
+    expect(() => validateCandidate({ ...shortCand, shortStop: { mode: "volScaled", kSigma: 3, lookbackDays: 20, minPct: 6, maxPct: 20 } })).not.toThrow();
+    expect(() => validateCandidate({ ...shortCand, shortStop: { mode: "fixed", pct: 8 } as any })).toThrow(/fraction/);
+    expect(() => validateCandidate({ ...shortCand, shortStop: { mode: "volScaled", kSigma: 3, lookbackDays: 1, minPct: 6, maxPct: 20 } as any })).toThrow(/lookbackDays/);
+    expect(() => validateCandidate({ ...shortCand, shortStop: { mode: "volScaled", kSigma: 3, lookbackDays: 20, minPct: 6, maxPct: 5 } as any })).toThrow(/maxPct/);
+    expect(() => validateCandidate({ ...shortCand, shortStop: { mode: "fixed", pct: 0.08, extra: 1 } as any })).toThrow(/unknown keys/);
+    expect(() => validateCandidate({ ...shortCand, shortStop: { mode: "trailing" } as any })).toThrow(/shortStop.mode/);
+    expect(() => validateCandidate({ ...meanrevCand, shortStop: { mode: "fixed", pct: 0.08 } })).toThrow("momentum-only");
+    // Mapping: absent keeps the legacy hash; present changes it.
+    const m = { ...baseManifest };
+    const legacy = candidateToReplayConfig(m, shortCand, "base");
+    const withStop = candidateToReplayConfig(m, { ...shortCand, shortStop: { mode: "fixed", pct: 0.08 } }, "base");
+    expect(withStop.shortStop).toEqual({ mode: "fixed", pct: 0.08 });
+    expect(hashReplayConfig(withStop)).not.toBe(hashReplayConfig(legacy));
+  });
+
+  test("short axes are FORBIDDEN on meanrev candidates", () => {
+    expect(() => validateCandidate({ ...meanrevCand, shortRegime: { refSymbol: "SPY", maDays: 200 } })).toThrow("momentum-only");
+    expect(() => validateCandidate({ ...meanrevCand, shortUniverse: ["SPY"] })).toThrow("momentum-only");
+  });
+
+  test("candidateToReplayConfig forwards the axes; absent keys keep the legacy hash", () => {
+    const m = { ...baseManifest };
+    const legacy = candidateToReplayConfig(m, shortCand, "base");
+    expect(canonicalJson(JSON.parse(JSON.stringify(legacy)))).not.toContain("shortRegime");
+    const withShort = candidateToReplayConfig(m, {
+      ...shortCand, shortEntryPct: -10, shortExitPct: 0,
+      shortRegime: { refSymbol: "BTC/USD", maDays: 200 }, shortUniverse: ["BTC/USD"],
+    }, "base");
+    expect(withShort.shortEntryPct).toBe(-10);
+    expect(withShort.shortRegime).toEqual({ refSymbol: "BTC/USD", maDays: 200 });
+    expect(hashReplayConfig(withShort)).not.toBe(hashReplayConfig(legacy));
+    // The hash of a legacy candidate is unchanged by the new mapping code.
+    const hashes = new Set([
+      hashReplayConfig(legacy),
+      hashReplayConfig(candidateToReplayConfig(m, { ...shortCand, shortEntryPct: -5, shortExitPct: 2 }, "base")),
+      hashReplayConfig(withShort),
+    ]);
+    expect(hashes.size).toBe(3);
+  });
+
+  test("costs.shortBorrow: strict shape, rides the cost tier into the config hash, meanrev-forbidden", () => {
+    const m: ExperimentManifest = JSON.parse(JSON.stringify(baseManifest));
+    m.costs.base.shortBorrow = { annualRate: 0.005 };
+    expect(() => validateManifest(m)).not.toThrow();
+    const withBorrow = candidateToReplayConfig(m, shortCand, "base");
+    expect(withBorrow.shortBorrow).toEqual({ annualRate: 0.005 });
+    expect(hashReplayConfig(withBorrow)).not.toBe(hashReplayConfig(candidateToReplayConfig({ ...m, costs: { ...m.costs, base: { ...m.costs.base, shortBorrow: undefined } } }, shortCand, "base")));
+    m.costs.base.shortBorrow = { annualRate: 5 } as any;
+    expect(() => validateManifest(m)).toThrow(/fraction/);
+    m.costs.base.shortBorrow = { annualRate: 0.005, extra: 1 } as any;
+    expect(() => validateManifest(m)).toThrow(/unknown keys/);
+  });
+});
+
 describe("hashCodeFiles pins engine-adjacent modules (2026-09)", () => {
   test("clock/config/sleeveOutput/events are in the default hash list", () => {
-    const src = readFileSync(join(import.meta.dir, "walk-forward.ts"), "utf-8");
-    const fnStart = src.indexOf("export async function hashCodeFiles");
-    const defaultList = src.slice(fnStart, src.indexOf("].sort()", fnStart));
+    // The list moved to the exported DEFAULT_CODE_FILES (2026-10-09, line-A
+    // opts.codeFiles) — assert membership on the real constant instead of
+    // slicing the source, same pin with less brittleness.
     for (const f of ["src/utils/clock.ts", "src/config/index.ts", "src/ops/sleeveOutput.ts", "src/utils/events.ts"]) {
-      expect(defaultList).toContain(f);
+      expect(DEFAULT_CODE_FILES).toContain(f);
     }
   });
 });
@@ -2491,9 +2579,28 @@ describe("break-even curve integration (runWalkForward)", () => {
 describe("experiments/ manifests stay loadable under the extended validator", () => {
   test("every committed manifest validates and keeps unique effective candidates", () => {
     const dir = join(import.meta.dir, "..", "experiments");
-    const files = readdirSync(dir).filter(f => f.endsWith(".json") && !f.startsWith("historical-hypothesis-ledger"));
+    // "intraday-*" manifests belong to Line C's own kernel (scripts/intraday-wf.ts,
+    // docs/reports/LC-intradia.md) — a deliberately different, independent
+    // schema (no `sleeve` field; validateManifest's stocks/crypto/meanrev
+    // dispatch does not apply), validated by that kernel itself, not this one.
+    const files = readdirSync(dir).filter(f => f.endsWith(".json") && !f.startsWith("historical-hypothesis-ledger") && !f.startsWith("intraday-"));
     expect(files.length).toBeGreaterThan(0);
     for (const f of files) {
+      const raw = JSON.parse(readFileSync(join(dir, f), "utf8"));
+      // Line-B reversal manifests (sleeve "streversal") run through their own
+      // driver/validator (scripts/stocks-reversal-wf.ts), not this harness.
+      if (raw.sleeve === "streversal") {
+        const { validateStManifest, candidateToStConfig } = require("./stocks-reversal-wf") as typeof import("./stocks-reversal-wf");
+        const { hashStConfig } = require("./stocks-reversal-replay") as typeof import("./stocks-reversal-replay");
+        const sm = validateStManifest(raw);
+        const seen = new Set<string>();
+        for (const c of sm.candidates) {
+          const h = hashStConfig(candidateToStConfig(sm, c, "base"));
+          expect(seen.has(h)).toBe(false);
+          seen.add(h);
+        }
+        continue;
+      }
       const m = loadManifest(join(dir, f));
       validateUniqueCandidates(m);
     }

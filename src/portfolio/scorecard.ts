@@ -65,9 +65,13 @@ export const V8_START = "2026-07-10";
  * First SESSION attributable to the currently-wired model of each live
  * sleeve (the window's daily returns start with this session's close vs the
  * prior session's close — the base mark is the last session BEFORE it):
- *  • momentum_stocks  2026-09-28 — blend-63/126/252 daily kernel (artifact
- *    cc2f5d69…) wired 2026-09-25 after the close; first full session is
- *    Monday 2026-09-28.
+ *  • momentum_stocks  2026-10-13 — k = 1.5 (line E, artifact cb516547…).
+ *    The 10-12 pass re-underwrites the whole book at the new slot
+ *    (MODEL_CUTOVER) and re-anchors the RiskState, so 10-13 is the first full
+ *    session after inherited positions AND inherited risk state are gone (the
+ *    rule below). If that cutover lands later, move this to the first full
+ *    session after it. Was 2026-09-28 (blend-63/126/252 at k = 1, wired
+ *    2026-09-25 after the close).
  *  • meanrev_stocks   2026-09-28 — 7 slots × 0.12 (artifact 624d50e9…) wired
  *    2026-09-28 before the open; the band is that chain, so the window starts
  *    with it (7 × 0.10 ran 2026-09-25 only).
@@ -91,7 +95,7 @@ export const V8_START = "2026-07-10";
  *    70 days of hourly returns.)
  */
 export const MODEL_START: Record<string, string> = {
-  momentum_stocks: "2026-09-28",
+  momentum_stocks: "2026-10-13",
   meanrev_stocks: "2026-09-28",
   momentum_crypto: "2026-09-27",
   momentum_crypto_usdc: "2026-09-29",
@@ -165,11 +169,13 @@ export function sleeveExpectationArtifacts(): Record<string, ArtifactRef> {
     // supersedes the pre-fix chain named in its comment; the pre-fix re-run on
     // the same base is cited for comparison.
     momentum_stocks: {
-      // 5f03d68d… supersedes cc2f5d69… (same base pre-fix f418e295…:
-      // +352.6% / 1.19 → +351.3% / 1.19, no gate change).
-      dir: env("MOMENTUM_STOCKS") ?? "data/backtests/5f03d68daed8572ebb73d5c283dfd80ec1064d5b47e8afb9c1f871d8537f091d",
+      // k = 1.5 since 2026-10-10 (line E): cb516547… is the same chain as
+      // 5f03d68d… (k = 1, reproduced bit for bit by line E as d146f3b0…) with
+      // slot × 1.5, gross cap × 1.5 and 6.5% Reg-T interest: +563.2% / 1.12 /
+      // DD 31.2%. 5f03d68d… had superseded cc2f5d69… (pre-fix f418e295…).
+      dir: env("MOMENTUM_STOCKS") ?? "data/backtests/cb516547be365b7080cb56357a391ae73535aa3db3f83295fe9c935b7a7ed031",
       shiftDays: -1,
-      manifest: "experiments/momentum-stocks-daily-blend3-pure-v1.json",
+      manifest: "experiments/momentum-stocks-daily-blend3-k150-exposure-v1.json",
     },
     meanrev_stocks: {
       // 624d50e9… = 7 × 0.12 pure chain on the adjustment=all research DB

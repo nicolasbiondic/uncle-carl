@@ -40,6 +40,7 @@ import { ALL_PROFILE_IDS, RISK_PROFILES } from "../config/riskProfiles";
 import type { PortfolioState } from "../utils/types";
 import type { Database } from "bun:sqlite";
 import { computeRealizedAttribution, windowStartFor } from "../portfolio/pnlBreakdown";
+import { computeKpiSnapshot } from "../portfolio/kpis";
 
 const log = createLogger("Telegram");
 const API = "https://api.telegram.org/bot";
@@ -570,6 +571,11 @@ export class TelegramReporter {
         `${totalPos} ${pluralize(totalPos, "posición abierta", "posiciones abiertas")}`
     );
 
+    // P0 (2026-10-09): owner KPIs vs goals — volume (executed orders),
+    // 30-day return, drawdown vs budget. Fail-soft: a broken KPI read never
+    // tumbles the digest (same discipline as the scorecard section below).
+    for (const l of this.kpiDigestLines()) lines.push(l);
+
     if (sleeveRows.length > 0) {
       lines.push("");
       lines.push("<b>Rendimiento 7D realizado</b>");
@@ -601,6 +607,43 @@ export class TelegramReporter {
     );
 
     return lines.join("\n");
+  }
+
+  /**
+   * P0 KPI lines for the digest (volume / return / drawdown vs the owner's
+   * goals). Figures come from src/portfolio/kpis.ts — the SAME computation
+   * GET /api/kpis serves, so Telegram and the dashboard can't disagree.
+   * Targets unset (fresh install/fork) → the raw figures, no goal. Fail-soft:
+   * [] on any throw.
+   */
+  private kpiDigestLines(): string[] {
+    try {
+      const k = computeKpiSnapshot();
+      const t = k.targets;
+      const lines: string[] = [];
+      const vol7 = fmtNum(k.volume.avg7d, 1);
+      lines.push(t.tradesPerDay
+        ? `🎯 Volumen ${k.volume.today}/${t.tradesPerDay} ${pluralize(k.volume.today, "orden", "órdenes")} hoy (${Math.round((k.volume.today / t.tradesPerDay) * 100)}%) · media 7D ${vol7} (${Math.round((k.volume.avg7d / t.tradesPerDay) * 100)}%)`
+        : `🎯 Volumen ${k.volume.today} ${pluralize(k.volume.today, "orden", "órdenes")} hoy · media 7D ${vol7}`);
+      if (k.ret.dailyAvgPct30d != null) {
+        const r = k.ret.dailyAvgPct30d;
+        lines.push(t.dailyReturnPct
+          ? `📈 Rentabilidad 30D ${fmtPct2(r)}/día vs meta ${fmtPct2(t.dailyReturnPct)} (${r > 0 ? Math.round((r / t.dailyReturnPct) * 100) : 0}%)`
+          : `📈 Rentabilidad 30D ${fmtPct2(r)}/día`);
+      }
+      if (k.risk.drawdownPct != null) {
+        const dd = k.risk.drawdownPct;
+        lines.push(t.riskBudgetDdPct
+          ? `🛡 Drawdown ${fmtNum(dd, 1)}% desde el pico · presupuesto ${fmtNum(t.riskBudgetDdPct, 0)}% (${Math.round((dd / t.riskBudgetDdPct) * 100)}% usado)`
+          : `🛡 Drawdown ${fmtNum(dd, 1)}% desde el pico`);
+        const alert = riskAlertLine(dd, t.riskBudgetDdPct);
+        if (alert) lines.push(alert);
+      }
+      return lines;
+    } catch (e: any) {
+      log.warn(`KPI digest lines unavailable: ${e?.message ?? e}`);
+      return [];
+    }
   }
 
   /**
@@ -870,6 +913,18 @@ function fmtMoneyGrouped(n: number): string {
 function fmtNum(n: number, decimals = 2): string {
   if (typeof n !== "number" || isNaN(n)) return "0";
   return n.toFixed(decimals);
+}
+
+/** Early warning at 60% of the declared drawdown budget — 15% of the owner's
+ *  25% (plan V §9); a condition of the line E quorum (2026-10-10). No budget
+ *  configured → no alert. */
+export const RISK_ALERT_SHARE_OF_BUDGET = 0.6;
+
+export function riskAlertLine(drawdownPct: number | null, budgetPct: number | null): string | null {
+  if (drawdownPct == null || !budgetPct) return null;
+  const alertAt = budgetPct * RISK_ALERT_SHARE_OF_BUDGET;
+  if (drawdownPct < alertAt) return null;
+  return `⚠️ Alerta: drawdown ${fmtNum(drawdownPct, 1)}% ≥ ${fmtNum(alertAt, 0)}% (alerta temprana del presupuesto de ${fmtNum(budgetPct, 0)}%): revisar la exposición`;
 }
 
 function signNum(n: number, decimals = 2): string {

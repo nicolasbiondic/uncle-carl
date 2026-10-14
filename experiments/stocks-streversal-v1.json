@@ -1,0 +1,66 @@
+{
+  "name": "stocks-streversal-v1",
+  "sleeve": "streversal",
+  "description": "PRE-REGISTRADO (2026-10-09, linea B de V-plan §12) ANTES de correr ningun trial. HIPOTESIS: reversion de corto plazo (1-5 sesiones) largo/corto, dolar-neutral, sobre los miembros point-in-time del S&P 500 (data/hist-sp500.db, index_membership sp500 @ fja05680/sp500 a2430f2) MENOS los 43 simbolos vivos (11 momentum_stocks + 32 meanrev_stocks, cartera Alpaca compartida), con residuo sectorial: score = retorno k-sesiones del stock MENOS el del ETF sectorial asignado por correlacion pasada (126 sesiones, refresco cada 21, solo datos anteriores a cada decision; sin ETF computable cae al score bruto). Largo los peores scores, corto los mejores; slots de nocional fijo = initialEquity*maxGrossMult/(2*slotsPerSide); salida temporal a la apertura de la sesion holdDays; acciones enteras (floor en la apertura cruda, excluido por precio lo que no quepa; cortos ademas requieren apertura >= $5); DELISTED cierra a la ultima barra (OPTIMISTA declarado). Decisiones sobre barras completadas, fills a la apertura de hoy +/- slippage (disciplina diaria del proyecto). COSTES §12 linea B: base 2 bps por lado + prestamo de cortos 0.5%/año (devengo por dia natural sobre el corto marcado al ultimo cierre completado); stress 5 bps + 1%/año. El interes de margen Reg-T NO esta en los costes pre-registrados de B y no se modela (libro dolar-neutral, debito neto ~0, declarado). CAPITAL §13: $8,300 con bruto hasta 3x. CRITERIOS PRE-REGISTRADOS (§12 comunes 1-8, VALIDADO solo si cumple 1-7): cadena OOS pura (este protocolo, 6 folds outer, seleccion solo inner, outerSelection persistido); Sharpe OOS cosido >= 1.0 con coste base y PSR outer >= 0.95; Sharpe >= 0.5 con coste stress; punto de equilibrio (bps ADICIONALES por lado hasta Sharpe 0) >= 2x el coste base (>= 4 bps); correlacion diaria OOS con la cartera viva combinada (4 cadenas autoritativas ponderadas por capital 50k/50k/5k/5k) <= 0.30 en valor absoluto; maxDD OOS <= 25% al tamaño propuesto; robustez: ningun año natural > 50% del P&L OOS y sin el 10% de simbolos con mas P&L Sharpe >= 0.5 (re-run de la cadena OOS con esos simbolos excluidos); se reportan las ordenes ejecutadas/dia del OOS (sin minimo). TRIAL ACCOUNTING: base 323 (tras gross-cap-fidelity-diagnostic-2026-10-05, 319->323); este manifest declara 4 candidatos nuevos -> 327.",
+  "trialAccounting": {
+    "priorUniqueTrials": 323,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/hist-sp500.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "refSymbol": "SPY",
+    "sectorEtfs": ["XLB", "XLC", "XLE", "XLF", "XLI", "XLK", "XLP", "XLRE", "XLU", "XLV", "XLY"],
+    "membership": {
+      "index": "sp500",
+      "exclude": [
+        "SPY", "QQQ", "IWM", "GLD", "AAPL", "MSFT", "NVDA", "META", "GOOGL", "AMZN", "SMH",
+        "ABBV", "AVGO", "BAC", "CAT", "COST", "CVX", "DIS", "GE", "HD", "HON", "JNJ", "JPM",
+        "KO", "LLY", "MA", "MCD", "MRK", "NFLX", "NKE", "ORCL", "PG", "QCOM", "UNH", "V",
+        "WMT", "XLE", "XLF", "XLI", "XLP", "XLV", "XOM", "SLV"
+      ]
+    },
+    "corrLookbackSessions": 126,
+    "sectorRefreshSessions": 21
+  },
+  "asOf": "2026-10-08T00:00:00Z",
+  "window": {
+    "from": "2017-01-01",
+    "to": "2026-10-01",
+    "outerFoldCount": 6,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": { "perSideBps": 2, "shortBorrowAnnual": 0.005 },
+    "stress": { "perSideBps": 5, "shortBorrowAnnual": 0.01 }
+  },
+  "ledger": {
+    "initialEquity": 8300,
+    "maxGrossMult": 3
+  },
+  "candidates": [
+    { "name": "rev5-sector-h5", "lookbackDays": 5, "holdDays": 5, "residual": "sector", "slotsPerSide": 4 },
+    { "name": "rev3-sector-h3", "lookbackDays": 3, "holdDays": 3, "residual": "sector", "slotsPerSide": 4 },
+    { "name": "rev2-sector-h2-b6", "lookbackDays": 2, "holdDays": 2, "residual": "sector", "slotsPerSide": 6 },
+    { "name": "rev5-raw-h5", "lookbackDays": 5, "holdDays": 5, "residual": "none", "slotsPerSide": 4 }
+  ],
+  "liveArtifacts": [
+    { "sleeve": "momentum_stocks", "path": "data/backtests/5f03d68daed8572ebb73d5c283dfd80ec1064d5b47e8afb9c1f871d8537f091d", "capitalUsd": 50000 },
+    { "sleeve": "meanrev_stocks", "path": "data/backtests/624d50e930d47ef55e42f16e6537e0e895dec847fb0b709c26b2ecd94ea37db7", "capitalUsd": 50000 },
+    { "sleeve": "momentum_crypto", "path": "data/backtests/06e1a160c3556102aa2fff769f9e4c2a3d27d09a6f3874841286426425faf6e4", "capitalUsd": 5000 },
+    { "sleeve": "momentum_crypto_usdc", "path": "data/backtests/413ffb90cd968bfdfe51f1b1eebc87612f262ce9ecb7d2ca82fd59383a704625", "capitalUsd": 5000 }
+  ],
+  "acceptance": {
+    "minSharpe": 1.0,
+    "minOuterPsr": 0.95,
+    "stressMinSharpe": 0.5,
+    "minBreakEvenExtraBpsPerSide": 4,
+    "maxCorrVsLive": 0.30,
+    "maxDrawdown": 0.25,
+    "maxYearPnlShare": 0.50,
+    "exTopDecileMinSharpe": 0.5
+  }
+}

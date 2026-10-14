@@ -23,12 +23,14 @@ import { registerOAuthRoutes } from "./routes/oauth";
 import { registerSetupRoutes, announceSetupTokenIfNeeded, needsFirstRunSetup } from "./routes/setup";
 import { registerDataRoutes } from "./routes/data";
 import { registerStrategyRoutes } from "./routes/strategies";
+import { registerKpiRoutes } from "./routes/kpis";
 import { registerProfileRoutes } from "./routes/profiles";
 import { registerAnalyticsRoutes } from "./routes/analytics";
 import { registerAdminRoutes } from "./routes/admin";
 import { registerHealthRoutes } from "./routes/health";
 import { registerCandlesRoutes } from "./routes/candles";
 import { registerNewsRoutes } from "./routes/news";
+import { registerAiQuorumRoutes } from "./routes/aiQuorum";
 import { registerPlatformRoutes } from "./routes/platform";
 import { registerPlatformAccountsRoutes, PLATFORM_ACCOUNTS_PUBLIC_PATHS } from "./routes/accounts";
 import { registerPlatformPortfoliosRoutes } from "./routes/portfolios";
@@ -277,6 +279,8 @@ export class DashboardServer {
     // ── Route modules ─────────────────────────────────────────────────────
     registerDataRoutes(this.app, this.am);
     registerStrategyRoutes(this.app, this.am);
+    // Owner KPIs + decision funnel (P0, 2026-10-09).
+    registerKpiRoutes(this.app);
     registerProfileRoutes(this.app, this.am);
     registerAnalyticsRoutes(this.app, this.am);
     registerAdminRoutes(this.app, this.am);
@@ -285,6 +289,9 @@ export class DashboardServer {
     // Server-side news aggregation (10-min cache, 8s per-feed timeout) — the
     // v4 news bar reads /api/news instead of hitting rss2json client-side.
     registerNewsRoutes(this.app);
+    // Línea D — read-only summary of the shadow AI-quorum experiment
+    // (data/ai-quorum.db, written only by scripts/ai-quorum.ts from cron).
+    registerAiQuorumRoutes(this.app);
     // Platform identity + sessions (Ajustes page): /api/platform/me,
     // /api/platform/sessions[…]. Behind the wall; CSRF covers the mutations.
     registerPlatformRoutes(this.app);

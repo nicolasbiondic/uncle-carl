@@ -26,7 +26,6 @@ const PAGES: Record<string, { hash: string; prep?: (page: any) => Promise<void> 
   resumen:     { hash: "#/resumen" },
   performance: { hash: "#/resumen", prep: async (p) => { await p.click('[data-atab="performance"]').catch(() => {}); await p.waitForTimeout(700); } },
   portafolios: { hash: "#/portafolios" },
-  cuentas:     { hash: "#/cuentas" },
   actividad:   { hash: "#/actividad" },
   ajustes:     { hash: "#/ajustes" },
 };

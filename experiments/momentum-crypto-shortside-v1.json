@@ -1,0 +1,189 @@
+{
+  "name": "momentum-crypto-shortside-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTRO 2026-10-10 (linea S1 de docs/reports/V-plan-volumen-rentabilidad.md SS12-quinquies, malla CERRADA por el director; commiteado ANTES de correr). EL LADO CORTO REDISENADO sobre momentum_crypto: cada candidato es el kernel vivo vt-35 (el candidato del control 06e1a160, byte a byte) MAS los ejes cortos de SS12-quinquies \u2014 shortRegime {BTC/USD, SMA200 de cierres diarios UTC CERRADOS, fail-closed: sin regimen bajista verificable no hay cortos y un corto abierto se cubre en la siguiente decision}, umbrales propios del corto y maxShorts propio. MALLA CERRADA de 4: maxShorts {2,4} x (shortEntryPct, shortExitPct) {(-5,+2),(-10,0)}. El tope bruto del control (no hay: el control corre sin maxGrossExposureMult) se mantiene igual; costes identicos al control (funding real liquidado \u2014 los cortos COBRAN funding positivo via shortFunding=credit, la convencion de siempre del sim; sin shortBorrow: en perps no hay prestamo). VENTANA/folds/datos/asOf identicos al control (hist-sp500.db, dataHash 50ad44f0 reproducido por la linea E y re-verificado en esta rama antes de correr los candidatos). CRITERIOS SS12-quinquies (VALIDADO solo si cumple TODOS, evaluados por scripts/short-side-eval.ts contra el control en la misma ventana): (1) cadena OOS pura; (2) Sharpe OOS base >= control (1.3126); (3) maxDD OOS <= control (32.58%); (4) P&L neto de los cortos > 0 en el OOS con costes y funding; (5) Sharpe stress >= control stress (1.1083); (6) PSR outer >= 0.95. SE REPORTA: ordenes/dia anadidas, P&L de cortos por anio, tiempo en regimen bajista, vetos del tope bruto a cortos. Los gates del manifest son los del control (sin cambios; no son el criterio de la linea). TRIAL ACCOUNTING: +4 hipotesis nuevas; base 359 (SS12-quinquies: tras F2 y F) -> 363 de este lote (S2 corre en paralelo con la misma base; el director resuelve el conteo al integrar). complete=false.",
+  "trialAccounting": {
+    "priorUniqueTrials": 359,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "latest",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "s1-ms2-e5x2",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 2,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "shortEntryPct": -5,
+      "shortExitPct": 2,
+      "shortRegime": {
+        "refSymbol": "BTC/USD",
+        "maDays": 200
+      }
+    },
+    {
+      "name": "s1-ms2-e10x0",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 2,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "shortEntryPct": -10,
+      "shortExitPct": 0,
+      "shortRegime": {
+        "refSymbol": "BTC/USD",
+        "maDays": 200
+      }
+    },
+    {
+      "name": "s1-ms4-e5x2",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 4,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "shortEntryPct": -5,
+      "shortExitPct": 2,
+      "shortRegime": {
+        "refSymbol": "BTC/USD",
+        "maDays": 200
+      }
+    },
+    {
+      "name": "s1-ms4-e10x0",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 4,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "shortEntryPct": -10,
+      "shortExitPct": 0,
+      "shortRegime": {
+        "refSymbol": "BTC/USD",
+        "maDays": 200
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

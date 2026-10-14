@@ -248,6 +248,8 @@ export class SimMeanRevBroker implements MeanRevBrokerAdapter {
   feesPaid = 0;
   /** Net settled funding paid so far (positive = cost; 0 without a book). */
   fundingPaid = 0;
+  /** Total Reg-T margin interest charged so far (línea E axis; 0 when off). */
+  marginInterestPaid = 0;
   fundingBySymbol = new Map<string, number>();
   /** ET date currently being replayed and its sim timestamp (max in-window
    *  bar timestamp for the date — same stamp the old replay used). */
@@ -410,11 +412,39 @@ export class SimMeanRevBroker implements MeanRevBrokerAdapter {
    *  P&L marked at the last COMPLETED close — exactly what live's ~09:35 ET
    *  ledger read knows before today's bar exists. */
   async getEquity(): Promise<number> {
-    let eq = this.cfg.initialEquity + this.realizedGross - this.feesPaid - this.fundingPaid;
+    let eq = this.cfg.initialEquity + this.realizedGross - this.feesPaid - this.fundingPaid - this.marginInterestPaid;
     for (const p of this.positions) {
       eq += ((this.lastCompletedClose(p.symbol) ?? p.mark) - p.entryPrice) * p.qty;
     }
     return eq;
+  }
+
+  /**
+   * Reg-T financing on the borrowed balance (línea E, 2026-10-09 — mirrors
+   * SimBroker.accrueMarginInterest, same documented day-count): charge
+   * debit × annualRate/365 per CALENDAR day (UTC-midnight crossings — a
+   * Fri→Mon hold pays 3 days), where debit = marked gross book − equity,
+   * both at the last COMPLETED close (the same decision-time marks
+   * getEquity and applyFunding use — today's bar hasn't printed at the
+   * pre-pass accrual point). Rate 0 / absent cfg.marginInterest = strict
+   * no-op, byte-identical legacy (and the legacy config hash: the key is
+   * manifest-level `costs.<tier>.marginInterest`, dropped when undefined).
+   */
+  accrueMarginInterest(prevT: number, t: number): void {
+    const rate = this.cfg.marginInterest?.annualRate ?? 0;
+    if (rate <= 0 || prevT <= 0 || this.positions.length === 0) return;
+    const days = Math.floor(t / 86_400_000) - Math.floor(prevT / 86_400_000);
+    if (days <= 0) return;
+    let gross = 0;
+    let equity = this.cfg.initialEquity + this.realizedGross - this.feesPaid - this.fundingPaid - this.marginInterestPaid;
+    for (const p of this.positions) {
+      const mark = this.lastCompletedClose(p.symbol) ?? p.mark;
+      gross += p.qty * mark;
+      equity += (mark - p.entryPrice) * p.qty;
+    }
+    const debit = gross - equity;
+    if (debit <= 0) return;
+    this.marginInterestPaid += debit * (rate / 365) * days;
   }
 
   /** Sim clock is quantized: every fill of a day shares that day's single
@@ -499,7 +529,7 @@ export class SimMeanRevBroker implements MeanRevBrokerAdapter {
   /** End-of-day equity at today's closes (falls back to the last mark on a
    *  holed date) — feeds the equity curve, never the engine. */
   markToMarket(): number {
-    let eq = this.cfg.initialEquity + this.realizedGross - this.feesPaid - this.fundingPaid;
+    let eq = this.cfg.initialEquity + this.realizedGross - this.feesPaid - this.fundingPaid - this.marginInterestPaid;
     for (const position of this.positions) {
       const i = this.todayIndex(position.symbol);
       if (i !== undefined) position.mark = this.series.get(position.symbol)!.bars[i].close;
@@ -734,6 +764,11 @@ export async function runMeanRevReplay(
         // Applied before the gap stops: a position stopped at today's open
         // held through the settlement instant that stamps the open.
         broker.applyFunding(prevDayTs, broker.dayTs);
+        // Reg-T financing accrues over the same pre-pass range, so the
+        // RiskGuard equity read inside runDaily already includes it (same
+        // placement as runWithConfig's accrueMarginInterest call). No-op
+        // unless costs.<tier>.marginInterest set a nonzero rate (línea E).
+        broker.accrueMarginInterest(prevDayTs, broker.dayTs);
         prevDayTs = broker.dayTs;
 
         // Delisting (membership mode only): a held symbol whose tape is
@@ -799,6 +834,8 @@ export async function runMeanRevReplay(
       if (broker.positions.length > 0 && prevDayTs > 0) {
         broker.currentDate = "9999-12-31";
         broker.applyFunding(prevDayTs, toMs - 1);
+        // Terminal financing over the same capped range (línea E).
+        broker.accrueMarginInterest(prevDayTs, toMs - 1);
       }
       for (const position of [...broker.positions]) {
         const item = series.get(position.symbol)!;
@@ -810,7 +847,7 @@ export async function runMeanRevReplay(
     }
     const finalEq = ruined
       ? Math.max(0, equity)
-      : cfg.initialEquity + broker.realizedGross - broker.feesPaid - broker.fundingPaid;
+      : cfg.initialEquity + broker.realizedGross - broker.feesPaid - broker.fundingPaid - broker.marginInterestPaid;
     equityHistory.push({ t: toMs, eq: finalEq });
     peakEquity = Math.max(peakEquity, finalEq);
     maxDrawdown = Math.max(maxDrawdown, (peakEquity - finalEq) / peakEquity);
@@ -874,6 +911,7 @@ export async function runMeanRevReplay(
       expectancy: closed.length ? closed.reduce((s, t) => s + t.pnl, 0) / closed.length : 0,
       fees: broker.feesPaid,
       funding: broker.fundingPaid,
+      marginInterest: broker.marginInterestPaid,
       liquidations: 0,
       marginRejects: 0,
       ruined,
