@@ -26,8 +26,9 @@ import type { EquitySemantics } from "../strategies/momentum/RiskGuard";
 import type { AlpacaMomentumAdapterConfig } from "../strategies/momentum/AlpacaMomentumAdapter";
 import type { BinanceMomentumAdapterConfig } from "../strategies/momentum/BinanceMomentumAdapter";
 import type { BinanceCoinMMomentumAdapterConfig } from "../strategies/momentum/BinanceCoinMMomentumAdapter";
+import type { PortfolioStrategyConfig, VenueId } from "../portfolio-engine/types";
 
-export type PortfolioTemplate = "momentum_tsm" | "meanrev_connors";
+export type PortfolioTemplate = "momentum_tsm" | "meanrev_connors" | "portfolio";
 
 /** Broker accounts the runtime knows how to wire today. */
 export type PortfolioAccountId = "alpaca_main" | "binance_usdt" | "binance_usdc" | "binance_coinm";
@@ -103,7 +104,28 @@ export interface MeanRevConnorsParams {
   governor: PortfolioGovernorSpec;
 }
 
-export type PortfolioParams = MomentumTsmParams | MeanRevConnorsParams;
+/** RW (2026-10-20): a sleeve run by the portfolio engine
+ *  (src/portfolio-engine/live). `strategy` is the manifest candidate's
+ *  `portfolio` block; `runMode` observer computes and persists, submits
+ *  nothing. NOT wired to any sleeve yet — the director does that at cutover. */
+export interface PortfolioEngineParams {
+  engine: "portfolio";
+  strategy: PortfolioStrategyConfig;
+  venue: VenueId;
+  runMode: "observer" | "live";
+  strategyVersion: string;
+  heartbeatName: string;
+  loggerContext: string;
+  /** Venue order rules the design was validated with. */
+  minOrderNotional: number;
+  rebalanceBand: number;
+  /** Universe symbols allowed to be stale before the pass is skipped (default 0). */
+  maxStaleSymbols?: number;
+  /** Strategy symbol → historical_bars symbol (e.g. {"BTC": "BTC/USD"}). */
+  dataSymbols?: Record<string, string>;
+}
+
+export type PortfolioParams = MomentumTsmParams | MeanRevConnorsParams | PortfolioEngineParams;
 
 export interface PortfolioDefinition {
   id: string;
@@ -186,4 +208,15 @@ export interface MeanRevPortfolioPlan {
   scheduler: SchedulerSpec;
 }
 
-export type PortfolioBuildPlan = MomentumPortfolioPlan | MeanRevPortfolioPlan;
+/** Build plan of a portfolio-engine sleeve: everything the live factory
+ *  (src/portfolio-engine/live/factory.ts) needs besides the venue instances. */
+export interface PortfolioEnginePlan {
+  template: "portfolio";
+  portfolioId: string;
+  account: PortfolioAccountId;
+  capital: number;
+  params: PortfolioEngineParams;
+  heartbeat: HeartbeatSpec;
+}
+
+export type PortfolioBuildPlan = MomentumPortfolioPlan | MeanRevPortfolioPlan | PortfolioEnginePlan;

@@ -33,7 +33,6 @@ if [ -z "$BUN_BIN" ] || [ ! -x "$BUN_BIN" ]; then
 fi
 
 # Pull only incremental gaps after the first source migration.
-"$BUN_BIN" run scripts/backfill-historical.ts --stocks-only
 "$BUN_BIN" run scripts/backfill-historical.ts --vix-only
 "$BUN_BIN" run scripts/backfill-historical.ts --crypto-only
 "$BUN_BIN" run scripts/download-funding-history.ts
@@ -49,7 +48,10 @@ fi
 "$BUN_BIN" run scripts/refresh-crypto-universe.ts \
   || echo "⚠️ refresh-crypto-universe reported per-symbol failures — see log above, continuing"
 "$BUN_BIN" run scripts/backfill-intraday.ts
-# alpaca_wide dailies (~240 series) — the base of every meanrev backtest. Was
-# missing here, so the series froze at their last manual run (2026-07-17).
-# Atomic fetch-validate-replace; fails closed for MeanRev universe symbols.
-"$BUN_BIN" run scripts/download-stock-dailies.ts
+# --stocks-only refreshes the all-adjusted SIP dailies once: legacy wide
+# universe + the 18 D1 ETFs + date-current PIT S&P 500 members. Full-series
+# atomic upserts also rebase past bars after corporate actions. It is the
+# heaviest step and the only one that stops at the first Alpaca 429, so it runs
+# LAST, where download-stock-dailies.ts ran: under `set -e` its failure cannot
+# skip the VIX, crypto, funding and intraday refreshes above.
+"$BUN_BIN" run scripts/backfill-historical.ts --stocks-only

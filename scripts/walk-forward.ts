@@ -56,6 +56,7 @@ import { hashCloseSlices } from "./lib/closeSlices";
 import type { MarketTrendGateConfig, ShortStopSpec, TimeStopConfig, TrailStopConfig, VolSizingConfig, VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
 import type { RiskGuardConfig, RiskState } from "../src/strategies/momentum/RiskGuard";
 import { getETDateKey } from "../src/db/database";
+import type { PortfolioStrategyConfig, VenueRules } from "../src/portfolio-engine/types";
 
 // ── CLI ───────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -184,6 +185,33 @@ export interface CandidateConfig {
    *  only; mapped into meanrev sim params. Absent = legacy iteration
    *  order (legacy hash). */
   deterministicTieBreak?: boolean;
+  /** RW portfolio engine (docs/reports/RW-reescritura-rentable.md §2, 2026-10-20):
+   *  the candidate IS a pure PortfolioStrategyConfig (D1 xassetTrend / D2
+   *  factorCore / D3 cryptoTrend) plus the simulator's venue rules. Present
+   *  ⇒ the candidate runs ONLY through scripts/portfolio-replay.ts (driver
+   *  scripts/portfolio-wf.ts; defaultReplayRunner refuses it) and every
+   *  momentum/meanrev knob is FORBIDDEN (config that changes nothing). The
+   *  cost model derives from costs.{base,stress} + data.funding. Absent =
+   *  legacy candidate AND legacy hash (canonicalJson drops undefined). */
+  portfolio?: PortfolioCandidateBlock;
+}
+
+/** The candidate `portfolio` block — see CandidateConfig.portfolio. Both
+ *  parts enter the candidate identity (hashReplayConfig over
+ *  PortfolioReplayConfig.portfolio): two candidates differing only in a venue
+ *  rule execute differently and must hash differently. */
+export interface PortfolioCandidateBlock {
+  strategy: PortfolioStrategyConfig;
+  venue: VenueRules;
+}
+
+/** A resolved replay config carrying a portfolio candidate. Structurally a
+ *  ReplayConfig (the protocol's runner signature is unchanged); the portfolio
+ *  runner narrows with isPortfolioReplayConfig and fails closed otherwise. */
+export type PortfolioReplayConfig = ReplayConfig & { portfolio: PortfolioCandidateBlock };
+
+export function isPortfolioReplayConfig(cfg: ReplayConfig): cfg is PortfolioReplayConfig {
+  return (cfg as PortfolioReplayConfig).portfolio !== undefined;
 }
 
 /**
@@ -222,6 +250,7 @@ const VALID_CANDIDATE_KEYS = new Set<keyof CandidateConfig>([
   "maxGrossExposureMult",
   "rsiMethod",
   "deterministicTieBreak",
+  "portfolio",
 ]);
 
 /**
@@ -443,6 +472,135 @@ const VALID_MEANREV_KEYS = new Set<keyof MeanRevSimParams>([
   "execution",
 ]);
 
+// ── RW portfolio candidate block (strict shapes; unknown key = config that
+// changes nothing = rejected, like every other axis in this file) ──────────
+const posInt = (v: unknown, min = 1) => Number.isInteger(v) && (v as number) >= min;
+const finiteIn = (v: unknown, lo: number, hi: number, loOpen = false, hiOpen = false) =>
+  Number.isFinite(v) && (loOpen ? (v as number) > lo : (v as number) >= lo) && (hiOpen ? (v as number) < hi : (v as number) <= hi);
+
+function assertKeys(obj: Record<string, unknown>, allowed: readonly string[], where: string): void {
+  const unknown = Object.keys(obj).filter(k => !allowed.includes(k));
+  if (unknown.length > 0) throw new Error(`${where} has unknown keys: ${unknown.join(", ")}`);
+}
+
+function assertSymbolList(v: unknown, where: string, allowEmpty = false): void {
+  if (!Array.isArray(v) || (!allowEmpty && v.length === 0) || v.some(s => typeof s !== "string" || s.length === 0)) {
+    throw new Error(`${where} must be a${allowEmpty ? "n" : " non-empty"} array of symbol strings`);
+  }
+  if (new Set(v).size !== v.length) throw new Error(`${where} must not contain duplicates`);
+}
+
+function validateTrendSignal(s: Record<string, unknown>, where: string): void {
+  const bh = s.blendHorizons;
+  if (!Array.isArray(bh) || bh.length === 0 || bh.some(h => !posInt(h))) throw new Error(`${where}.blendHorizons must be a non-empty array of positive integers`);
+  if (new Set(bh).size !== bh.length) throw new Error(`${where}.blendHorizons must be distinct`);
+  if (!posInt(s.maLong, 2)) throw new Error(`${where}.maLong must be an integer >= 2`);
+  if (!finiteIn(s.signalBandPct, 0, 100)) throw new Error(`${where}.signalBandPct must be a percent in [0, 100] (0 = no band)`);
+}
+
+function validateTrendConstruction(s: Record<string, unknown>, where: string): void {
+  assertSymbolList(s.universe, `${where}.universe`);
+  if (!posInt(s.inceptionGuardBars)) throw new Error(`${where}.inceptionGuardBars must be a positive integer`);
+  if (!posInt(s.volLookback, 2)) throw new Error(`${where}.volLookback must be an integer >= 2`);
+  if (!posInt(s.covLookback, 2)) throw new Error(`${where}.covLookback must be an integer >= 2`);
+  if (!finiteIn(s.portfolioVolTarget, 0, 2, true, true)) throw new Error(`${where}.portfolioVolTarget must be an annualized FRACTION in (0, 2), e.g. 0.12`);
+  if (!finiteIn(s.perAssetCap, 0, 10, true)) throw new Error(`${where}.perAssetCap must be a positive weight fraction`);
+  if (!finiteIn(s.maxGross, 0, 10, true)) throw new Error(`${where}.maxGross must be a positive gross fraction`);
+}
+
+function validateStopConfig(st: unknown, where: string): void {
+  if (!st || typeof st !== "object" || Array.isArray(st)) throw new Error(`${where} must be an object`);
+  const s = st as Record<string, unknown>;
+  if (s.mode === "none") { assertKeys(s, ["mode"], where); return; }
+  if (s.mode === "fixed") {
+    assertKeys(s, ["mode", "pct"], where);
+    if (!finiteIn(s.pct, 0, 100, true)) throw new Error(`${where}.pct must be a PERCENT in (0, 100], e.g. 4`);
+    return;
+  }
+  if (s.mode === "volScaled") {
+    assertKeys(s, ["mode", "kSigma", "lookbackBars", "minPct", "maxPct"], where);
+    if (!finiteIn(s.kSigma, 0, 100, true)) throw new Error(`${where}.kSigma must be positive`);
+    if (!posInt(s.lookbackBars, 2)) throw new Error(`${where}.lookbackBars must be an integer >= 2`);
+    if (!finiteIn(s.minPct, 0, 100, true) || !finiteIn(s.maxPct, 0, 100, true) || (s.maxPct as number) < (s.minPct as number)) {
+      throw new Error(`${where}.minPct/maxPct must be PERCENTS in (0, 100] with maxPct >= minPct`);
+    }
+    return;
+  }
+  throw new Error(`${where}.mode must be "none", "fixed" or "volScaled"`);
+}
+
+function validatePortfolioStrategy(st: unknown, where: string): void {
+  if (!st || typeof st !== "object" || Array.isArray(st)) throw new Error(`${where} must be an object`);
+  const s = st as Record<string, unknown>;
+  const trendKeys = ["kind", "universe", "inceptionGuardBars", "volLookback", "covLookback", "portfolioVolTarget", "perAssetCap", "maxGross", "blendHorizons", "maLong", "signalBandPct"];
+  if (s.kind === "xassetTrend") {
+    assertKeys(s, trendKeys, where);
+    validateTrendSignal(s, where);
+    validateTrendConstruction(s, where);
+    return;
+  }
+  if (s.kind === "cryptoTrend") {
+    assertKeys(s, [...trendKeys, "stop"], where);
+    validateTrendSignal(s, where);
+    validateTrendConstruction(s, where);
+    validateStopConfig(s.stop, `${where}.stop`);
+    return;
+  }
+  if (s.kind === "factorCore") {
+    assertKeys(s, ["kind", "exclude", "topN", "score", "momentumWindow", "volWindow", "weightVolLookback", "perNameCap", "minPrice", "minPriorCloses", "overlay"], where);
+    assertSymbolList(s.exclude, `${where}.exclude`, true);
+    if (!posInt(s.topN)) throw new Error(`${where}.topN must be a positive integer`);
+    if (s.score !== "momentum" && s.score !== "lowvol" && s.score !== "momentum+lowvol") throw new Error(`${where}.score must be "momentum", "lowvol" or "momentum+lowvol"`);
+    const mw = s.momentumWindow;
+    if (!Array.isArray(mw) || mw.length !== 2 || !posInt(mw[0]) || !posInt(mw[1], 0) || mw[0] <= mw[1]) {
+      throw new Error(`${where}.momentumWindow must be [long, skip] integers with long > skip >= 0 (12-1 = [252, 21])`);
+    }
+    if (!posInt(s.volWindow, 2)) throw new Error(`${where}.volWindow must be an integer >= 2`);
+    if (!posInt(s.weightVolLookback, 2)) throw new Error(`${where}.weightVolLookback must be an integer >= 2`);
+    if (!finiteIn(s.perNameCap, 0, 1, true)) throw new Error(`${where}.perNameCap must be a weight FRACTION in (0, 1], e.g. 0.04`);
+    if (!finiteIn(s.minPrice, 0, Infinity)) throw new Error(`${where}.minPrice must be a non-negative price`);
+    if (!posInt(s.minPriorCloses)) throw new Error(`${where}.minPriorCloses must be a positive integer`);
+    if (s.overlay !== null) {
+      if (!s.overlay || typeof s.overlay !== "object" || Array.isArray(s.overlay)) throw new Error(`${where}.overlay must be null or an object`);
+      const o = s.overlay as Record<string, unknown>;
+      assertKeys(o, ["ref", "ma", "bandPct", "onExposure", "offExposure"], `${where}.overlay`);
+      if (typeof o.ref !== "string" || o.ref.length === 0) throw new Error(`${where}.overlay.ref must be a symbol`);
+      if (!posInt(o.ma, 2)) throw new Error(`${where}.overlay.ma must be an integer >= 2`);
+      if (!finiteIn(o.bandPct, 0, 100)) throw new Error(`${where}.overlay.bandPct must be a percent in [0, 100]`);
+      if (!finiteIn(o.onExposure, 0, 10) || !finiteIn(o.offExposure, 0, 10)) throw new Error(`${where}.overlay.onExposure/offExposure must be exposure fractions >= 0`);
+    }
+    return;
+  }
+  throw new Error(`${where}.kind must be "xassetTrend", "factorCore" or "cryptoTrend"`);
+}
+
+function validateVenueRules(v: unknown, where: string): void {
+  if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error(`${where} must be an object`);
+  const r = v as Record<string, unknown>;
+  assertKeys(r, ["venue", "fractional", "minOrderNotional", "rebalanceBand", "qtyStep", "minNotional"], where);
+  if (r.venue !== "alpaca" && r.venue !== "binance_usdm" && r.venue !== "binance_usdc") throw new Error(`${where}.venue must be "alpaca", "binance_usdm" or "binance_usdc"`);
+  if (typeof r.fractional !== "boolean") throw new Error(`${where}.fractional must be boolean`);
+  if (!finiteIn(r.minOrderNotional, 0, Infinity)) throw new Error(`${where}.minOrderNotional must be a non-negative notional`);
+  if (!finiteIn(r.rebalanceBand, 0, 1, false, true)) throw new Error(`${where}.rebalanceBand must be an absolute weight in [0, 1)`);
+  for (const k of ["qtyStep", "minNotional"] as const) {
+    if (r[k] === undefined) continue;
+    const rec = r[k];
+    if (!rec || typeof rec !== "object" || Array.isArray(rec)) throw new Error(`${where}.${k} must be a symbol → positive number record`);
+    for (const [sym, val] of Object.entries(rec as Record<string, unknown>)) {
+      if (!finiteIn(val, 0, Infinity, true)) throw new Error(`${where}.${k}.${sym} must be a positive number`);
+    }
+  }
+}
+
+export function validatePortfolioBlock(p: unknown, where = "CandidateConfig.portfolio"): PortfolioCandidateBlock {
+  if (!p || typeof p !== "object" || Array.isArray(p)) throw new Error(`${where} must be an object { strategy, venue }`);
+  const b = p as Record<string, unknown>;
+  assertKeys(b, ["strategy", "venue"], where);
+  validatePortfolioStrategy(b.strategy, `${where}.strategy`);
+  validateVenueRules(b.venue, `${where}.venue`);
+  return b as unknown as PortfolioCandidateBlock;
+}
+
 /**
  * Validates a CandidateConfig object and rejects unknown keys.
  * Ensures all fields that change execution behavior are accounted for.
@@ -460,6 +618,16 @@ export function validateCandidate(c: unknown): CandidateConfig {
   // Type-check required fields
   if (typeof obj.name !== "string") throw new Error("CandidateConfig.name must be a string");
   if (!Number.isFinite(obj.cadenceMin) || (obj.cadenceMin as number) <= 0) throw new Error("CandidateConfig.cadenceMin must be positive");
+
+  if (obj.portfolio !== undefined) {
+    // RW portfolio candidate: the strategy config IS the whole surface. Every
+    // momentum/meanrev knob is config that changes nothing here → forbidden.
+    const foreign = Object.keys(obj).filter(k => k !== "name" && k !== "cadenceMin" && k !== "portfolio");
+    if (foreign.length > 0) throw new Error(`portfolio CandidateConfig must not set momentum/meanrev keys: ${foreign.join(", ")}`);
+    if (obj.cadenceMin !== 1440) throw new Error("portfolio CandidateConfig.cadenceMin must be 1440 (one decision per session)");
+    validatePortfolioBlock(obj.portfolio);
+    return obj as CandidateConfig;
+  }
 
   // The hard-stop axis is sleeve-agnostic: validated here, BEFORE the
   // meanrev branch (it is deliberately NOT in that branch's forbidden list).
@@ -652,6 +820,12 @@ export interface DataConfig {
    *  excluded from manifestIdentity; the slice ROWS enter the data identity
    *  via hashCloseSlices in runWalkForward. Absent = legacy. */
   sliceDb?: string;
+  /** RW portfolio manifests only — REPORTING labels for the "P&L por clase
+   *  de activo" diagnostic (symbol → class, e.g. "SPY": "equity"). Part of
+   *  the manifest identity (configHash) like every declared field, never of
+   *  a candidate hash (not forwarded to the replay config). Absent = every
+   *  symbol reports under its sleeve. */
+  assetClasses?: Record<string, string>;
 }
 
 export interface WindowConfig {
@@ -1122,7 +1296,16 @@ export function validateManifest(m: ExperimentManifest): ExperimentManifest {
   if (!Array.isArray(m.candidates) || m.candidates.length === 0) {
     throw new Error("candidates must not be empty");
   }
-  if (!(m.ledger?.initialEquity > 0) || !(m.ledger.leverage > 0) || !(m.ledger.hardStopPct > 0 && m.ledger.hardStopPct < 1)) {
+  // RW portfolio manifests (every candidate carries `portfolio`): the daily
+  // simulator has no leverage knob and no hard stop (stops are the design's,
+  // inside the strategy config), so those ledger keys are forbidden there —
+  // config that changes nothing. Legacy manifests keep the exact check below.
+  const isPortfolioManifest = m.candidates.some(c => c && typeof c === "object" && (c as CandidateConfig).portfolio !== undefined);
+  if (isPortfolioManifest) {
+    if (!(m.ledger?.initialEquity > 0)) throw new Error("ledger.initialEquity must be positive");
+    const extra = Object.keys(m.ledger).filter(k => k !== "initialEquity");
+    if (extra.length > 0) throw new Error(`portfolio manifests set ledger.initialEquity only (unused keys: ${extra.join(", ")})`);
+  } else if (!(m.ledger?.initialEquity > 0) || !(m.ledger.leverage > 0) || !(m.ledger.hardStopPct > 0 && m.ledger.hardStopPct < 1)) {
     throw new Error("ledger values must be positive and hardStopPct must be below 1");
   }
   // A3 margin-interest cost knob: strict keys and fraction bounds (0.075 =
@@ -1217,6 +1400,15 @@ export function validateManifest(m: ExperimentManifest): ExperimentManifest {
       throw new Error(`Candidate ${i} (${(m.candidates[i] as any).name ?? "unnamed"}): ${(e as Error).message}`);
     }
   }
+  if (isPortfolioManifest) validatePortfolioManifest(m);
+  if (m.data.assetClasses !== undefined) {
+    if (!isPortfolioManifest) throw new Error("data.assetClasses is portfolio-manifest-only (reporting labels for the RW diagnostics)");
+    const ac = m.data.assetClasses;
+    if (!ac || typeof ac !== "object" || Array.isArray(ac)) throw new Error("data.assetClasses must be a symbol → class record");
+    for (const [sym, cls] of Object.entries(ac)) {
+      if (typeof cls !== "string" || cls.length === 0) throw new Error(`data.assetClasses.${sym} must be a non-empty class label`);
+    }
+  }
   // §12-septies G0: the 15:45-slice DB and the close1545 execution mode come
   // and go together (a slice DB no candidate reads would be config that
   // changes nothing; a close1545 candidate without the DB fails the replay).
@@ -1268,6 +1460,59 @@ export function validateManifest(m: ExperimentManifest): ExperimentManifest {
     throw new Error("acceptance.maxObservedDdPercentile must be a probability in (0, 1], e.g. 0.975");
   }
   return m;
+}
+
+/**
+ * Manifest-level consistency of an RW portfolio manifest (every candidate
+ * carries `portfolio`). One design per manifest; the data block must cover
+ * every symbol the strategy can touch (so hashDataSnapshot's identity covers
+ * the replay's inputs), daily bars only, and the cost/venue surface must match
+ * the design's venue. Called by validateManifest after the per-candidate pass.
+ */
+export function validatePortfolioManifest(m: ExperimentManifest): void {
+  const blocks = m.candidates.map(c => c.portfolio);
+  if (blocks.some(b => b === undefined)) throw new Error("portfolio manifests require EVERY candidate to carry `portfolio` (one engine per manifest)");
+  const kinds = new Set(blocks.map(b => b!.strategy.kind));
+  if (kinds.size !== 1) throw new Error(`portfolio manifests hold ONE design: candidates mix kinds ${[...kinds].join(", ")}`);
+  const kind = [...kinds][0];
+  const isCrypto = kind === "cryptoTrend";
+  if (isCrypto ? m.sleeve !== "crypto" : m.sleeve !== "stocks") {
+    throw new Error(`portfolio kind "${kind}" requires sleeve "${isCrypto ? "crypto" : "stocks"}" (annualization/calendar), got "${m.sleeve}"`);
+  }
+  if (m.data.timeframe !== "1d" || m.data.barMinutes !== 1440 || m.data.rthOnly) {
+    throw new Error("portfolio manifests require daily bars: data.timeframe=\"1d\", barMinutes=1440, rthOnly=false");
+  }
+  if (m.data.funding !== isCrypto) {
+    throw new Error(isCrypto
+      ? "cryptoTrend requires data.funding=true (real funding is part of the pre-registered cost model)"
+      : `${kind} requires data.funding=false (no perpetuals)`);
+  }
+  if (m.data.perpsMembership !== undefined || m.data.liquidityRank !== undefined) {
+    throw new Error("portfolio manifests do not use data.perpsMembership / data.liquidityRank (momentum-kernel axes; config that changes nothing here)");
+  }
+  if (kind === "factorCore") {
+    if (m.data.membership === undefined) throw new Error("factorCore requires data.membership (point-in-time index universe)");
+  } else if (m.data.membership !== undefined) {
+    throw new Error(`${kind} must not set data.membership (its universe is the explicit strategy.universe)`);
+  }
+  const declared = new Set(m.data.universe);
+  for (const c of m.candidates) {
+    const s = c.portfolio!.strategy;
+    const where = `candidate "${c.name}"`;
+    if (s.kind === "factorCore") {
+      if (s.overlay && !declared.has(s.overlay.ref)) throw new Error(`${where}: overlay.ref ${s.overlay.ref} must be in data.universe`);
+    } else {
+      const missing = s.universe.filter(sym => !declared.has(sym));
+      if (missing.length > 0) throw new Error(`${where}: strategy.universe symbols missing from data.universe: ${missing.join(", ")}`);
+    }
+    const venue = c.portfolio!.venue.venue;
+    if (isCrypto ? venue === "alpaca" : venue !== "alpaca") {
+      throw new Error(`${where}: venue "${venue}" does not match design kind "${kind}"`);
+    }
+  }
+  for (const tier of ["base", "stress"] as const) {
+    if (m.costs?.[tier]?.shortBorrow !== undefined) throw new Error(`portfolio manifests are long-only: costs.${tier}.shortBorrow is config that changes nothing`);
+  }
 }
 
 export function loadManifest(path: string): ExperimentManifest {
@@ -1360,7 +1605,7 @@ export function candidateToReplayConfig(
   dbPathOverride?: string,
 ): ReplayConfig {
   const cost = costTier === "base" ? m.costs.base : m.costs.stress;
-  return {
+  const base: ReplayConfig = {
     sleeve: m.sleeve,
     universe: [...m.data.universe],
     timeframe: m.data.timeframe,
@@ -1442,6 +1687,15 @@ export function candidateToReplayConfig(
     // hashReplayConfig alongside dbPath; absent = legacy).
     sliceDbPath: m.data.sliceDb,
   };
+  // RW portfolio candidate (2026-10-20): the strategy config + venue rules
+  // ride on the resolved config so hashReplayConfig covers them (candidate
+  // identity) and the portfolio runner reads them. Absent = the exact legacy
+  // object above AND every legacy hash (the key is never added).
+  if (c.portfolio !== undefined) {
+    const withPortfolio: PortfolioReplayConfig = { ...base, portfolio: c.portfolio };
+    return withPortfolio;
+  }
+  return base;
 }
 
 export function validateUniqueCandidates(m: ExperimentManifest): void {
@@ -1502,8 +1756,15 @@ export function ledgerComplete(ledger: TrialRecord[] | undefined): boolean {
  * replays through the verbatim Connors daily simulator. Tests inject their
  * own ReplayRunner via opts.runner, bypassing this dispatch entirely.
  */
-export const defaultReplayRunner: ReplayRunner = (cfg, win, initialRiskState) =>
-  cfg.sleeve === "meanrev" ? runMeanRevReplay(cfg, win, initialRiskState) : runWithConfig(cfg, win, initialRiskState);
+export const defaultReplayRunner: ReplayRunner = (cfg, win, initialRiskState) => {
+  // RW portfolio candidates have their own daily simulator; running them
+  // through the momentum/meanrev engines would silently ignore `portfolio`
+  // (config that changes nothing, wearing a different candidate hash).
+  if (isPortfolioReplayConfig(cfg)) {
+    return Promise.reject(new Error("portfolio candidates run through scripts/portfolio-wf.ts (runPortfolioReplay), not `bun run experiment:wf`"));
+  }
+  return cfg.sleeve === "meanrev" ? runMeanRevReplay(cfg, win, initialRiskState) : runWithConfig(cfg, win, initialRiskState);
+};
 
 export async function runTrial(
   m: ExperimentManifest,

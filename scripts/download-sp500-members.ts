@@ -48,13 +48,13 @@
  * failures skip the write and are reported; nothing here fail-closed exits
  * (that discipline belongs to the live-universe script).
  *
- * Rate limit: ≤ ~170 req/min (350 ms sleep between requests), under
- * Alpaca's 200/min.
+ * Rate limit: ≤150 req/min (400 ms before every request). The first 429
+ * aborts the whole download without retries (the live key is shared).
  *
  * Output: per-tramo coverage report (expected sessions = SPY's calendar)
  * printed and written to data/backtests/sp500-members-coverage.json.
  *
- * Usage: bun run scripts/download-sp500-members.ts [--db ./data/historical.db] [--force]
+ * Usage: bun run scripts/download-sp500-members.ts [--db ./data/historical.db] [--force] [--end <ISO>] [--asof <date>]
  */
 
 import { writeFileSync, mkdirSync } from "node:fs";
@@ -66,7 +66,8 @@ import {
   closeHistoricalStore,
 } from "../src/data/HistoricalStore";
 import type { BarRow } from "../src/data/HistoricalStore";
-import { mergeBarPages } from "./download-stock-dailies";
+import { mergeBarPages } from "./lib/researchData";
+import { WIDE_UNIVERSE, MOMENTUM_SYMBOLS } from "../src/config/wideUniverse";
 
 const WINDOW_START = "2016-01-01";
 const DAY = 86_400_000;
@@ -187,13 +188,13 @@ async function fetchBars(
     u.searchParams.set("limit", "10000");
     if (asof) u.searchParams.set("asof", asof);
     if (pageToken) u.searchParams.set("page_token", pageToken);
+    await Bun.sleep(400);
     const res = await fetch(u, { headers: { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": sec } });
-    if (res.status === 429) { await Bun.sleep(10_000); continue; }
+    if (res.status === 429) throw new Error("ALPACA_RATE_LIMIT_429: download stopped");
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
     const j: any = await res.json();
     rawPages.push(j.bars ?? {});
     pageToken = j.next_page_token ?? undefined;
-    await Bun.sleep(350); // ~170 req/min < 200 limit
   } while (pageToken);
   return mergeBarPages(rawPages);
 }
@@ -207,7 +208,7 @@ if (import.meta.main) {
   // universe's symbols (WIDE_UNIVERSE ∪ MOMENTUM_SYMBOLS — those series are
   // prod's, refreshed by download-stock-dailies.ts and left alone here).
   const redoMembers = process.argv.includes("--redo-members");
-  const sipEnd = new Date(Date.now() - 16 * 60_000).toISOString();
+  const sipEnd = argOf("--end") ?? new Date(Date.now() - 16 * 60_000).toISOString();
   const todayKey = sipEnd.slice(0, 10);
 
   const db = initHistoricalStore(dbPath);
@@ -224,7 +225,6 @@ if (import.meta.main) {
   console.log(`${tramos.length} tramos overlapping ${WINDOW_START}+ across ${byTicker.size} tickers`);
 
   // ── classify ─────────────────────────────────────────────────────────
-  const { WIDE_UNIVERSE, MOMENTUM_SYMBOLS } = await import("./download-stock-dailies");
   const existing = redoMembers
     ? new Set<string>([...WIDE_UNIVERSE, ...MOMENTUM_SYMBOLS])
     : new Set(
@@ -291,9 +291,10 @@ if (import.meta.main) {
   for (let i = 0; i < current.length; i += 50) {
     const batch = current.slice(i, i + 50);
     try {
-      const bySym = await fetchBars(batch, KEY, SEC, sipEnd);
+      const bySym = await fetchBars(batch, KEY, SEC, sipEnd, argOf("--asof"));
       for (const sym of batch) writeSeries(sym, bySym[sym] ?? []);
     } catch (e: any) {
+      if (e.message.includes("ALPACA_RATE_LIMIT_429")) throw e;
       console.error(`  batch FAILED (${batch[0]}…): ${e.message}`);
       failures.push(...batch.map(symbol => ({ symbol, error: `batch: ${e.message}` })));
     }
@@ -315,6 +316,7 @@ if (import.meta.main) {
       }
       writeSeries(ticker, bars);
     } catch (e: any) {
+      if (e.message.includes("ALPACA_RATE_LIMIT_429")) throw e;
       console.error(`  ${ticker.padEnd(6)} FAILED: ${e.message}`);
       failures.push({ symbol: ticker, error: e.message });
     }

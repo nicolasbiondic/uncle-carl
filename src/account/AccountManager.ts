@@ -49,7 +49,7 @@ import {
   saveEquitySnapshot,
   getRecentSignals, getRecentTrades, getV8StartedAt,
   insertActivity, updateTradeCloseReason, updateTradeStopLoss,
-  getETDateKey, getETDayBounds, pruneOldData, recordFill, isSyncOwned, pnlOf,
+  getETDateKey, getETDayBounds, pruneOldData, recordFill, isSyncOwned, isPortfolioEngineRow, pnlOf,
   getAlpacaV8StartEquity,
   recordCorporateAction, markCorporateActionApplied, applySplitToOpenStockTrades,
 } from "../db/database";
@@ -801,6 +801,10 @@ export class AccountManager {
           // depth as runAlpacaNativeStopsPass (the sweep keeps no trades
           // row; this only fires on a manual/legacy row).
           if (isTreasurySymbol(trade.symbol)) continue;
+          // Portfolio-engine rows (RW, 2026-10-20): no fixed/fallback hard
+          // stop — the design's own stops live at the venue (syncStops).
+          // See isPortfolioEngineRow in db/database.ts.
+          if (isPortfolioEngineRow(trade)) continue;
           // In scope regardless of skip/continue below — a PDT-blocked or
           // market-closed position is still open and must not be pruned.
           openDeferKeys.add(`${id}:${trade.symbol}:STOP_LOSS`);
@@ -2070,6 +2074,9 @@ export class AccountManager {
         // arm a GTC stop on the cash-parking position (a fired stop would
         // dump the whole park into a spread spike). TreasurySweep.test.ts.
         if (isTreasurySymbol(trade.symbol)) continue;
+        // Portfolio-engine rows: never armed with a GTC fallback stop (the
+        // 15s loop skips them too — same predicate, db/database.ts).
+        if (isPortfolioEngineRow(trade)) continue;
         rows.push({ acc, trade });
       }
     }

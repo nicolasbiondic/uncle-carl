@@ -32,6 +32,8 @@ import type {
   PortfolioBuildPlan,
   PortfolioCutoverSpec,
   PortfolioDefinition,
+  PortfolioEngineParams,
+  PortfolioEnginePlan,
   SchedulerSpec,
   ShadowSpec,
 } from "./types";
@@ -207,12 +209,29 @@ function buildMeanRevPlan(def: PortfolioDefinition): MeanRevPortfolioPlan {
   };
 }
 
+function buildPortfolioEnginePlan(def: PortfolioDefinition): PortfolioEnginePlan {
+  const p = def.params as PortfolioEngineParams;
+  if (p.engine !== "portfolio") throw new Error(`portfolio '${def.id}': template 'portfolio' needs params.engine = "portfolio"`);
+  return {
+    template: "portfolio",
+    portfolioId: def.id,
+    account: def.account,
+    capital: def.capital,
+    params: p,
+    // Once-a-day loop: same cadence/grace as the daily stock sleeves.
+    heartbeat: { name: p.heartbeatName, intervalMs: 86_400_000, graceMultiplier: 5 },
+  };
+}
+
 /** Build the full plan for one portfolio. `nowMs` only resolves the
  *  self-expiring cutover window; everything else is pure data. */
 export function buildPortfolioPlan(def: PortfolioDefinition, nowMs: number): PortfolioBuildPlan {
   switch (def.template) {
     case "momentum_tsm": return buildMomentumPlan(def, nowMs);
     case "meanrev_connors": return buildMeanRevPlan(def);
+    // RW: the portfolio engine's plan is pure data + heartbeat; the engine
+    // itself is built by src/portfolio-engine/live/factory.ts with the venue.
+    case "portfolio": return buildPortfolioEnginePlan(def);
     default:
       throw new Error(`buildPortfolioPlan: unknown template '${(def as PortfolioDefinition).template}' (portfolio '${(def as PortfolioDefinition).id}')`);
   }

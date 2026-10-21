@@ -26,6 +26,7 @@ import type {
   MeanRevConnorsParams,
   MomentumTsmParams,
   PortfolioAccountId,
+  PortfolioEngineParams,
   PortfolioParams,
   PortfolioTemplate,
 } from "./types";
@@ -111,6 +112,12 @@ function checkTrailStop(label: string, s: any, errors: string[]): void {
  *  single source is DEFAULT_MEANREV_CONFIG (index.ts never overrode it). */
 export function portfolioUniverse(template: PortfolioTemplate, params: PortfolioParams): string[] {
   if (template === "meanrev_connors") return [...DEFAULT_MEANREV_CONFIG.universe];
+  if (template === "portfolio") {
+    // RW portfolio engine: the trend designs carry their universe; the
+    // point-in-time core (factorCore) has none to declare here.
+    const s = (params as PortfolioEngineParams).strategy;
+    return s && s.kind !== "factorCore" && Array.isArray(s.universe) ? [...s.universe] : [];
+  }
   const u = (params as MomentumTsmParams).universe;
   return Array.isArray(u) ? u : [];
 }

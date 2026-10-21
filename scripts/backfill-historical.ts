@@ -3,7 +3,7 @@
  * Backfill historical OHLCV bars for backtesting + regime analysis.
  *
  * Sources:
- *   Stocks/ETFs (FMP)        — 10y daily for SPY, QQQ, IWM, GLD, XLE, XLF
+ *   Stocks/ETFs (Alpaca SIP) — all-adjusted daily, D1 + wide + current S&P 500
  *   Crypto (Binance USD-M)   — futures klines matching live execution, 1h + 1d
  *   ^VIX (Alpha Vantage)     — 20+y daily
  *
@@ -18,13 +18,9 @@
 import { initHistoricalStore, upsertBars, replaceBars, getCoverage, listSymbols } from "../src/data/HistoricalStore";
 import * as yahoo from "../src/data/fetchers/YahooFetcher";
 import * as bin from "../src/data/fetchers/BinancePublicFetcher";
+import { refreshStockDailies } from "./download-stock-dailies";
 
 // ── Config ─────────────────────────────────────────────────────────
-const STOCKS = ["SPY", "QQQ", "IWM", "GLD", "XLE", "XLF",
-  // 2026-06-05: mega-caps added for the v6.1 regression backtest. These were
-  // alpaca_low's April profit engine (META/AAPL/GOOGL/NVDA/MSFT/AMZN) but had
-  // no historical bars, so backtests silently fell back to synthetic data.
-  "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "NFLX", "ORCL", "PLTR", "V", "MA", "SLV"];
 const CRYPTO = ["BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD", "AVAX/USD", "LINK/USD", "XRP/USD", "DOGE/USD"];
 const VIX = "^VIX";
 
@@ -60,42 +56,26 @@ const skipCrypto = stocksOnly || vixOnly;
 const skipStocks = cryptoOnly || vixOnly;
 const skipVix = cryptoOnly || stocksOnly;
 
+// Stocks are always one all-adjusted SIP series. Appending Yahoo bars would
+// mix adjustment bases, and fetching only a tail misses historical splits /
+// dividends (notably HON's spin-off). The batched refresh atomically upserts
+// full validated series, including D1 ETFs and date-current PIT S&P members.
+const stockBarsWritten = skipStocks ? 0 : await refreshStockDailies();
 const historicalDb = initHistoricalStore();
 
 console.log("══════════════════════════════════════════════");
 console.log("  Uncle Carl historical backfill");
 console.log("══════════════════════════════════════════════");
-console.log(`Stocks (FMP):      ${skipStocks ? "skipped" : STOCKS.join(", ")}`);
+console.log(`Stocks (Alpaca):   ${skipStocks ? "skipped" : "refreshed (wide + D1 + current S&P 500)"}`);
 console.log(`Crypto (Binance):  ${skipCrypto ? "skipped" : CRYPTO.join(", ")}`);
 console.log(`VIX (AV):          ${skipVix ? "skipped" : VIX}`);
 console.log(`Range: ${new Date(TEN_Y_AGO).toISOString().slice(0,10)} → ${new Date(NOW).toISOString().slice(0,10)}`);
 console.log();
 
-let totalWritten = 0;
+let totalWritten = stockBarsWritten;
 let totalSkipped = 0;
 
-// ── Stocks + VIX (daily) via Yahoo ─────────────────────────────────
-if (!skipStocks) {
-  console.log("── Stocks daily (Yahoo) ────────────────────────");
-  for (const sym of STOCKS) {
-    try {
-      const cov = getCoverage(sym, "1d");
-      const from = cov.lastMs ? cov.lastMs + 1 : TEN_Y_AGO;
-      if (from >= NOW) {
-        console.log(`  ${sym.padEnd(6)} up-to-date (${cov.count} bars)`);
-        continue;
-      }
-      const bars = await yahoo.fetchBars(sym, "1d", from, NOW);
-      const r = upsertBars(bars);
-      totalWritten += r.written; totalSkipped += r.skipped;
-      console.log(`  ${sym.padEnd(6)} +${r.written} bars (skipped ${r.skipped})`);
-    } catch (e: any) {
-      console.error(`  ${sym.padEnd(6)} FAILED: ${e.message}`);
-    }
-  }
-  console.log();
-}
-
+// ── VIX (daily) via Yahoo ─────────────────────────────────────────
 if (!skipVix) {
   console.log("── VIX daily (Yahoo) ───────────────────────────");
   try {

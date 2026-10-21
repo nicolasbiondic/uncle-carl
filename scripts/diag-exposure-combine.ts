@@ -25,6 +25,7 @@
  */
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { shiftDailyReturnDate } from "./lib/combinedPortfolioReturns";
 
 // ── declared parameters ───────────────────────────────────────────────
 /** Capital per portfolio (§13 V-plan): Alpaca $100k assigned 50/50 to the
@@ -54,11 +55,6 @@ interface Diag {
   dailyCloses: Array<{ date: string; eq: number }>;
 }
 
-function shiftDate(date: string, days: number): string {
-  if (days === 0) return date;
-  return new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
-}
-
 const diag = new Map<string, Diag>();
 for (const p of PORTFOLIOS) for (const k of KS) {
   const path = join("data", "backtests", `diag-exposure-${CHAINS[p][k]}.json`);
@@ -72,7 +68,7 @@ function seriesFor(p: string, k: number): Map<string, number> {
   const d = diag.get(`${p}|${k}`)!;
   const out = new Map<string, number>();
   const e0 = d.dailyCloses[0].eq;
-  for (const { date, eq } of d.dailyCloses) out.set(shiftDate(date, SHIFT_DAYS[p as keyof typeof SHIFT_DAYS]), eq / e0);
+  for (const { date, eq } of d.dailyCloses) out.set(shiftDailyReturnDate(date, SHIFT_DAYS[p as keyof typeof SHIFT_DAYS]), eq / e0);
   return out;
 }
 for (const p of PORTFOLIOS) {

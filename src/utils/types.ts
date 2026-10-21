@@ -132,6 +132,9 @@ export interface TradeRecord {
   stopLoss?: number;
   takeProfit?: number;
   closeReason?: string;
+  /** Model version that opened the row (trades.strategy_version). Omit: insertTrade
+   *  stamps the sleeve's current version (portfolio/modelVersions.ts). */
+  strategyVersion?: string;
   /** Exact margin/cash deducted at open; credited back verbatim on close. */
   marginUsed?: number;
 }

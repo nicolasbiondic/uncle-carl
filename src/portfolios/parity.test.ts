@@ -16,7 +16,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { buildPortfolioPlan, cutoverReunderwriteBefore } from "./factory";
 import { builtinPortfolio, builtinPortfolios } from "./builtin";
-import type { MomentumPortfolioPlan, MomentumTsmParams, PortfolioBuildPlan } from "./types";
+import type { MeanRevPortfolioPlan, MomentumPortfolioPlan, MomentumTsmParams } from "./types";
 import {
   momentumCryptoPortfolioPlan,
   momentumUsdcPortfolioPlan,
@@ -34,7 +34,8 @@ import { RISK_PROFILES, ALL_PROFILE_IDS, MOMENTUM_STOCKS_UNIVERSE, MOMENTUM_CRYP
 import { USDC_SYMBOL_MAP } from "../executor/binance/quoteAsset";
 import { EQUITY_SEMANTICS } from "../strategies/momentum/RiskGuard";
 
-const PURE: Record<string, () => PortfolioBuildPlan> = {
+// The five hand-wired sleeves (the "portfolio" template has no index.ts counterpart yet).
+const PURE: Record<string, () => MomentumPortfolioPlan | MeanRevPortfolioPlan> = {
   momentum_crypto: momentumCryptoPortfolioPlan,
   momentum_crypto_usdc: momentumUsdcPortfolioPlan,
   momentum_btc: momentumBtcPortfolioPlan,

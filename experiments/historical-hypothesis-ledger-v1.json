@@ -976,6 +976,66 @@
       "resultsComplete": false,
       "executionReported": true,
       "evidence": "LINEA H, malla CERRADA k {3,4} x h {4,12} horas. Compra al cierre tras z<=-k (log retorno / sd muestral de las 720 horas previas excluyendo t, >=600 validos) solo si z BTC misma hora >-2. PIT de A, sin los 8 majors; 5 slots equity/5, bruto de entradas <=1x tras costes, una posicion por simbolo, sin stop. Capital 1600; mismos datos, ventana, folds, costes y acceptance de A. Funding fresco <=9h solo al entrar, gap retenido=0 optimista, delist tras 24h sin barra al ultimo precio; epsilon settlement 60s heredado de A. LOO COMPLETO 357 simbolos. Kernel y evaluador compartidos opt-in, fingerprints A/F2 originales 0394628 reproducidos. +4: 380->384 segun SS12-septies; G0/G son lotes paralelos y se integran aparte, no se inventan aqui. RESULTADO REFUTADO: falla 2,3,4,6,7; cadena uniforme k3-h12 en 3 folds, Sharpe -0.159, stress -0.487, PSR 0.369, maxDD 80.11%, retorno -67.20%, 2.76 ordenes/dia. BTC bloquea 4593 de 7601 senales, rebote bruto a 12h -0.050%; NO SE CABLEA. authoritativeArtifactCryptoDropReversal y LH."
+    },
+    {
+      "id": "rw-d1-xasset-etf-trend-2026-10-21",
+      "sourceCommit": "d1a9fa2 (pre-registro vinculante docs/reports/RW-reescritura-rentable.md SS2 @ 00d65b7, manifest d1a9fa2 ANTES de todo ensayo; window.from 2016-01-04 -> 2017-02-27 en 57c17ed, correccion de codificacion tras un crash en el primer ensayo, sin resultado)",
+      "sourcePaths": [
+        "experiments/rw-d1-xasset-etf-trend-v1.json",
+        "scripts/portfolio-replay.ts",
+        "scripts/portfolio-wf.ts",
+        "scripts/portfolio-criteria.ts",
+        "scripts/lib/portfolioData.ts",
+        "src/portfolio-engine/decide.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 4,
+      "priorUniqueTrials": 384,
+      "resultingUniqueTrials": 388,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW D1, rediseno de momentum_stocks: la regla de tendencia viva (blend 63/126/252 sobre SMA200, histeresis) en 18 ETFs multi-activo, pesos senal/sigma63, una escala a la vol objetivo de cartera (cov 63d), tope 1.0, bruto <=1.8, rebalanceo diario, sin stops; malla CERRADA vol {12%,15%} x banda {0,1%}; costes 2/5 bps + margen 6.5%/8% anual. +4: 384->388. RESULTADO REFUTADO: cadena mixta vt15-band1/vt12-band0/vt12-band1/vt15-band1, retorno OOS +5.34%, Sharpe 0.127, DD 20.98%, PSR 0.632 frente a SPY +212.5%/0.88 y 60/40 0.905 los mismos dias; falla C1-C7 (C4 senal 0.121 vs pasivo 0.146; stress -0.11; break-even extra 3.27 bps). C8 no se calcula: no cambia el veredicto. Con bruto medio 1.7 el interes de margen ($17901) se comio casi todo el P&L por simbolo ($20813) de los 4 folds. 10.8 ordenes/sesion. NO SE CABLEA. authoritativeArtifactRwD1 y RW SS7."
+    },
+    {
+      "id": "rw-d2-sp500-core-2026-10-21",
+      "sourceCommit": "d1a9fa2 (pre-registro vinculante docs/reports/RW-reescritura-rentable.md SS2 @ 00d65b7, manifest d1a9fa2 ANTES de todo ensayo; window.from corregido en 57c17ed antes de cualquier resultado)",
+      "sourcePaths": [
+        "experiments/rw-d2-sp500-core-v1.json",
+        "scripts/portfolio-replay.ts",
+        "scripts/portfolio-wf.ts",
+        "scripts/portfolio-criteria.ts",
+        "scripts/lib/portfolioData.ts",
+        "src/portfolio-engine/decide.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 4,
+      "priorUniqueTrials": 388,
+      "resultingUniqueTrials": 392,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW D2, rediseno de meanrev_stocks: nucleo largo de 50 miembros point-in-time del S&P 500 (hist-sp500.db; precio >=5, >=252 cierres), reconstitucion mensual por momentum 12-1, baja vol o la suma de rangos, pesos 1/sigma63 tope 4%, overlay SPY/SMA200 banda 1% (1.0/0.5) o sin overlay; 57 nombres excluidos por la cuenta compartida; sin satelite Connors; costes 2/5 bps. +4: 388->392. RESULTADO REFUTADO: cadena mixta momlowvol50-plain/momlowvol50-plain/momlowvol50-plain/lowvol50-overlay/lowvol50-overlay/momlowvol50-plain, retorno OOS +74.29%, Sharpe 0.502, DD 34.5%, PSR 0.897 frente a SPY +209.9%/0.822; falla C1-C5 (C4 senal 0.502 vs equiponderado elegible 0.62; stress 0.482); pasa C6 (0.409), C6b y C7. C8 no se calcula. 34.3 ordenes/sesion. NO SE CABLEA. authoritativeArtifactRwD2 y RW SS7."
+    },
+    {
+      "id": "rw-d3-crypto-daily-trend-2026-10-21",
+      "sourceCommit": "d1a9fa2 (pre-registro vinculante docs/reports/RW-reescritura-rentable.md SS2 @ 00d65b7, manifest d1a9fa2 ANTES de todo ensayo)",
+      "sourcePaths": [
+        "experiments/rw-d3-crypto-daily-trend-v1.json",
+        "scripts/portfolio-replay.ts",
+        "scripts/portfolio-wf.ts",
+        "scripts/portfolio-criteria.ts",
+        "scripts/lib/portfolioData.ts",
+        "src/portfolio-engine/decide.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 4,
+      "priorUniqueTrials": 392,
+      "resultingUniqueTrials": 396,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW D3, rediseno de momentum_crypto y momentum_crypto_usdc: un kernel diario en BTC/ETH/SOL/XRP/DOGE (perpetuos, funding real), senal de D1 sin banda, pesos senal/sigma30, vol objetivo (cov 30d), tope 0.6, bruto <=2, banda de rebalanceo 2%; eje de stop CERRADO: fijo 4%, por volatilidad (3 sigma de 20, 2-12%) o ninguno; candidatos vt30-stop4, vt35-stop4, vt35-volstop, vt35-nostop; costes 5+4 / 10+8 bps. +4: 392->396. RESULTADO REFUTADO: cadena mixta vt35-nostop/vt35-volstop/vt35-nostop, retorno OOS +54.97%, Sharpe 0.452, DD 35.49%, PSR 0.837 frente a BTC +94.9%/0.534; falla C1-C6 (C4 senal 0.452 vs pasivo 0.54; un ano = 92.8% del P&L); pasa C6b y C7. La replica independiente en Python reproduce los 3 folds (|dSharpe| 0.012/0.015/0.026 <= 0.10): motor validado. C8 no se calcula. 0.57 ordenes/sesion. NO SE CABLEA. authoritativeArtifactRwD3 y RW SS7."
     }
   ],
   "trialSensitivityFinding": {
@@ -2620,6 +2680,138 @@
         "minSharpe",
         "stressMinSharpe"
       ]
+    }
+  },
+  "authoritativeArtifactRwD1": {
+    "path": "data/backtests/d9efaf21d5886135c917dfc62cfddb0c1cb48cf5925705a64b204447990472ba/",
+    "manifest": "experiments/rw-d1-xasset-etf-trend-v1.json @ d1a9fa2 (pre-registro antes de correr; window.from corregido en 57c17ed antes de cualquier resultado)",
+    "date": "2026-10-21",
+    "verdict": "REFUTADO por los criterios pre-registrados RW SS2.5: falla C1 (PSR 0.632 < 0.95), C2 (DD 20.98% > 20%), C3 (Sharpe stress -0.11 < 0.5), C4 (senal 0.121 vs pasivo 0.146, exige +0.10), C5 (vs 60/40 0.905), C6 (un ano = 155% del P&L), C6b (Sharpe sin el decil superior -0.058 < 0.3) y C7 (break-even extra 3.27 bps < 4). C8 no se calcula. NO SE CABLEA: momentum_stocks sigue con su configuracion.",
+    "rwD1": {
+      "outerFoldReturnsPct": [
+        7.67,
+        -7.05,
+        1.19,
+        4.02
+      ],
+      "stitchedReturnPct": 5.34,
+      "sharpe": 0.127,
+      "maxDrawdownPct": 20.98,
+      "outerPsr": 0.632,
+      "trades": 448,
+      "criteriaFailed": [
+        "C1_psr",
+        "C2_maxDrawdown",
+        "C3_stressSharpe",
+        "C4_vsPassive",
+        "C5_vsMarket",
+        "C6_yearShare",
+        "C6b_exTopDecile",
+        "C7_breakEvenExtraBps"
+      ],
+      "criteriaVerdict": "FALLA: C1, C2, C3, C4, C5, C6, C6b, C7",
+      "selectedPerFold": [
+        "vt15-band1",
+        "vt12-band0",
+        "vt12-band1",
+        "vt15-band1"
+      ],
+      "c4StrategySharpe": 0.121,
+      "c4PassiveSharpe": 0.146,
+      "c5Benchmark": "sixtyForty",
+      "c5MarketSharpe": 0.905,
+      "stressSharpe": -0.11,
+      "maxYearPnlShare": 1.553,
+      "ordersPerSessionOos": 10.8,
+      "symbolPnlUsd": 20813.04,
+      "marginInterestUsd": 17900.69
+    }
+  },
+  "authoritativeArtifactRwD2": {
+    "path": "data/backtests/8c9b01bc70033f6ccf5b4794c21e9143e20ef0d669d54dce1367be38bbc48933/",
+    "manifest": "experiments/rw-d2-sp500-core-v1.json @ d1a9fa2 (pre-registro antes de correr; window.from corregido en 57c17ed antes de cualquier resultado)",
+    "date": "2026-10-21",
+    "verdict": "REFUTADO por los criterios pre-registrados RW SS2.5: falla C1 (PSR 0.897 < 0.95), C2 (DD 34.5% > 25%), C3 (Sharpe stress 0.482 < 0.5), C4 (senal 0.502 vs equiponderado elegible 0.62) y C5 (vs SPY 0.822, exige +0.05). Pasa C6, C6b y C7. C8 no se calcula. NO SE CABLEA: meanrev_stocks sigue con su configuracion.",
+    "rwD2": {
+      "outerFoldReturnsPct": [
+        13.68,
+        16.02,
+        5.01,
+        -4.74,
+        23.34,
+        7.11
+      ],
+      "stitchedReturnPct": 74.29,
+      "sharpe": 0.502,
+      "maxDrawdownPct": 34.5,
+      "outerPsr": 0.897,
+      "trades": 1221,
+      "criteriaFailed": [
+        "C1_psr",
+        "C2_maxDrawdown",
+        "C3_stressSharpe",
+        "C4_vsPassive",
+        "C5_vsMarket"
+      ],
+      "criteriaVerdict": "FALLA: C1, C2, C3, C4, C5",
+      "selectedPerFold": [
+        "momlowvol50-plain",
+        "momlowvol50-plain",
+        "momlowvol50-plain",
+        "lowvol50-overlay",
+        "lowvol50-overlay",
+        "momlowvol50-plain"
+      ],
+      "c4StrategySharpe": 0.502,
+      "c4PassiveSharpe": 0.62,
+      "c5Benchmark": "spy",
+      "c5MarketSharpe": 0.822,
+      "stressSharpe": 0.482,
+      "maxYearPnlShare": 0.409,
+      "ordersPerSessionOos": 34.3,
+      "symbolPnlUsd": 30560.38,
+      "marginInterestUsd": 352.83
+    }
+  },
+  "authoritativeArtifactRwD3": {
+    "path": "data/backtests/d345ea2ca9178281fe6aee54693cf871f017b370a8cab6d8e01b63b3dd4bc87a/",
+    "manifest": "experiments/rw-d3-crypto-daily-trend-v1.json @ d1a9fa2 (pre-registro antes de correr)",
+    "date": "2026-10-21",
+    "verdict": "REFUTADO por los criterios pre-registrados RW SS2.5: falla C1 (PSR 0.837 < 0.95), C2 (DD 35.49% > 35%), C3 (Sharpe stress 0.395 < 0.6), C4 (senal 0.452 vs pasivo 0.54), C5 (vs BTC 0.534, exige +0.20) y C6 (un ano = 92.8% del P&L). Pasa C6b y C7. Replica independiente: |dSharpe| 0.012/0.015/0.026 por fold. C8 no se calcula. NO SE CABLEA: momentum_crypto y momentum_crypto_usdc siguen con su configuracion.",
+    "rwD3": {
+      "outerFoldReturnsPct": [
+        -14.82,
+        66.59,
+        9.21
+      ],
+      "stitchedReturnPct": 54.97,
+      "sharpe": 0.452,
+      "maxDrawdownPct": 35.49,
+      "outerPsr": 0.837,
+      "trades": 129,
+      "criteriaFailed": [
+        "C1_psr",
+        "C2_maxDrawdown",
+        "C3_stressSharpe",
+        "C4_vsPassive",
+        "C5_vsMarket",
+        "C6_yearShare"
+      ],
+      "criteriaVerdict": "FALLA: C1, C2, C3, C4, C5, C6",
+      "selectedPerFold": [
+        "vt35-nostop",
+        "vt35-volstop",
+        "vt35-nostop"
+      ],
+      "c4StrategySharpe": 0.452,
+      "c4PassiveSharpe": 0.54,
+      "c5Benchmark": "btc",
+      "c5MarketSharpe": 0.534,
+      "stressSharpe": 0.395,
+      "maxYearPnlShare": 0.928,
+      "ordersPerSessionOos": 0.57,
+      "symbolPnlUsd": 3049.22,
+      "marginInterestUsd": 0
     }
   }
 }

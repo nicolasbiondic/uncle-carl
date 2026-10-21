@@ -36,7 +36,8 @@ function makeDb(path = ":memory:"): Database {
       semantics INTEGER, synthetic INTEGER DEFAULT 0);
     CREATE TABLE trades (
       id TEXT PRIMARY KEY, account_id TEXT, entry_price REAL, quantity REAL,
-      entry_time INTEGER, exit_time INTEGER, status TEXT, pnl REAL);
+      entry_time INTEGER, exit_time INTEGER, status TEXT, pnl REAL,
+      strategy_version TEXT DEFAULT 'legacy');
   `);
   return db;
 }

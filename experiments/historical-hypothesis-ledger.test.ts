@@ -1243,4 +1243,75 @@ describe("historical hypothesis ledger", () => {
       expect(normalized).toContainEqual(expected);
     }
   });
+
+  // RW rewrite (docs/reports/RW-reescritura-rentable.md): three designs
+  // pre-registered before any run, chained 384 → 388 → 392 → 396, each failed
+  // by its own §2.5 criteria. The binding verdict is rw-criteria.json, written
+  // next to summary.json by scripts/portfolio-criteria.ts.
+  const rwDesigns = [
+    ["authoritativeArtifactRwD1", "rwD1", "rw-d1-xasset-etf-trend-v1.json", 384, "rw-d1-xasset-etf-trend-2026-10-21"],
+    ["authoritativeArtifactRwD2", "rwD2", "rw-d2-sp500-core-v1.json", 388, "rw-d2-sp500-core-2026-10-21"],
+    ["authoritativeArtifactRwD3", "rwD3", "rw-d3-crypto-daily-trend-v1.json", 392, "rw-d3-crypto-daily-trend-2026-10-21"],
+  ] as const;
+
+  test("RW designs D1/D2/D3 align with their manifests and batches, and stay honest failures (2026-10-21)", () => {
+    for (const [key, claimsKey, manifestFile, prior, batchId] of rwDesigns) {
+      const m = JSON.parse(readFileSync(join(root, "experiments", manifestFile), "utf8"));
+      expect(m.trialAccounting).toEqual({ priorUniqueTrials: prior, complete: false });
+      expect(m.candidates).toHaveLength(4);
+      expect(m.candidates.every((c: any) => c.portfolio !== undefined)).toBe(true);
+      const batch = ledger.batches.find((b: any) => b.id === batchId);
+      expect(batch.hypothesisCount).toBe(m.candidates.length);
+      expect(batch.priorUniqueTrials).toBe(prior);
+      expect(batch.resultingUniqueTrials).toBe(prior + m.candidates.length);
+      expect(batch.inventoryComplete).toBe(false);
+      expect(batch.resultsComplete).toBe(false);
+      expect(batch.executionReported).toBe(true);
+      const art = ledger[key];
+      expect(art.verdict).toContain("REFUTADO");
+      expect(art.verdict).toContain("NO SE CABLEA");
+      // C4 is the common failure: the signal never beat the same book always on.
+      expect(art[claimsKey].c4StrategySharpe).toBeLessThan(art[claimsKey].c4PassiveSharpe);
+      expect(art[claimsKey].criteriaFailed).toContain("C4_vsPassive");
+    }
+  });
+
+  testWithDb("RW designs D1/D2/D3 artifacts exist on disk and reproduce the ledger claims", () => {
+    const normalize = (dir: string) => {
+      const s = JSON.parse(readFileSync(join(dir, "summary.json"), "utf8"));
+      const c = JSON.parse(readFileSync(join(dir, "rw-criteria.json"), "utf8"));
+      const criteria: any[] = Array.isArray(c.criteria) ? c.criteria : Object.values(c.criteria);
+      return {
+        outerFoldReturnsPct: s.outerTests.map((t: { result: { totalReturn: number } }) => round2(t.result.totalReturn * 100)),
+        stitchedReturnPct: round2(s.stitchedOos.totalReturn * 100),
+        sharpe: round3(s.stitchedOos.sharpe),
+        maxDrawdownPct: round2(s.stitchedOos.maxDrawdown * 100),
+        outerPsr: round3(s.outerPsr),
+        trades: s.stitchedOos.trades,
+        criteriaFailed: criteria.filter(x => x.pass === false).map(x => x.id).sort(),
+        criteriaVerdict: c.verdict,
+      };
+    };
+    for (const [key, claimsKey] of rwDesigns) {
+      const art = ledger[key];
+      const claims = art[claimsKey];
+      const expected = {
+        outerFoldReturnsPct: claims.outerFoldReturnsPct,
+        stitchedReturnPct: claims.stitchedReturnPct,
+        sharpe: claims.sharpe,
+        maxDrawdownPct: claims.maxDrawdownPct,
+        outerPsr: claims.outerPsr,
+        trades: claims.trades,
+        criteriaFailed: [...claims.criteriaFailed].sort(),
+        criteriaVerdict: claims.criteriaVerdict,
+      };
+      const normalized = artifactCandidates(art.path)
+        .map(p => join(p, ".."))
+        .filter(dir => existsSync(join(dir, "rw-criteria.json")))
+        .flatMap(dir => {
+          try { return [normalize(dir)]; } catch { return []; }
+        });
+      expect(normalized).toContainEqual(expected);
+    }
+  });
 });

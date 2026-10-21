@@ -8,6 +8,8 @@ import { createLogger } from "../utils/logger";
 import type { Order, Signal, TradeRecord } from "../utils/types";
 // Safe import: riskProfiles is pure config with zero imports (no cycle).
 import { ALL_PROFILE_IDS } from "../config/riskProfiles";
+// Same: modelVersions is a pure table (no imports).
+import { currentModelVersionId } from "../portfolio/modelVersions";
 
 const log = createLogger("Database");
 
@@ -734,6 +736,36 @@ function createTables() {
       slots_total INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_decision_passes_account_ts ON decision_passes(account_id, ts);
+
+    -- ═══ RW (2026-10-20): portfolio-engine decisions ═══
+    -- One row per (sleeve, strategy version, execution session) written by
+    -- src/portfolio-engine/live/PortfolioEngine.ts: the target book, the
+    -- memory the NEXT decision of the SAME version reads back, and every
+    -- order with its deterministic client order id and broker result. The
+    -- UNIQUE key is the restart idempotency: a second pass in the same
+    -- session finds the row and only resumes orders not yet applied to the
+    -- trades rows. Observer mode writes here and nowhere else.
+    CREATE TABLE IF NOT EXISTS portfolio_decisions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id TEXT NOT NULL,
+      strategy_version TEXT NOT NULL,
+      session TEXT NOT NULL,
+      as_of TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      status TEXT NOT NULL,
+      equity REAL NOT NULL,
+      book_json TEXT NOT NULL,
+      weights_json TEXT NOT NULL,
+      stops_json TEXT NOT NULL,
+      memory_json TEXT NOT NULL,
+      diagnostics_json TEXT NOT NULL,
+      orders_json TEXT NOT NULL,
+      note TEXT,
+      decided_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(account_id, strategy_version, session)
+    );
+    CREATE INDEX IF NOT EXISTS idx_portfolio_decisions_account ON portfolio_decisions(account_id, decided_at);
   `);
 }
 
@@ -823,16 +855,27 @@ export function insertTrade(trade: TradeRecord, accountId: string) {
   // its column default 'default' on every insert (323/323 rows pre-fix),
   // breaking any per-profile JOIN against trades. accountId is already the
   // risk-profile id (alpaca_low/_high/binance_low/_high) so we reuse it.
+  // strategy_version (2026-10-20): every row of a live sleeve names the model
+  // that opened it — the id of the version its code runs (portfolio/
+  // modelVersions.ts, the single source). An explicit trade.strategyVersion
+  // wins; broker-adoption rows keep the 'ops_sync' label the init migration
+  // gives them (the scorecard still attributes them to the version live at
+  // their entry); an account that is not a versioned sleeve (shadow books,
+  // test accounts) keeps the column default 'legacy'.
+  const isAdoption = (trade.strategy as string) === "SYNC_RECOVERY" || (trade.strategy as string) === "BROKER_SYNC";
+  const strategyVersion = trade.strategyVersion
+    ?? (isAdoption ? "ops_sync" : currentModelVersionId(accountId))
+    ?? "legacy";
   db.prepare(`
-    INSERT INTO trades (id, symbol, market, side, strategy, entry_price, exit_price, quantity, pnl, pnl_pct, entry_time, exit_time, status, account_id, order_id, open_commission, stop_loss, take_profit, profile_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO trades (id, symbol, market, side, strategy, entry_price, exit_price, quantity, pnl, pnl_pct, entry_time, exit_time, status, account_id, order_id, open_commission, stop_loss, take_profit, profile_id, strategy_version)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     trade.id, trade.symbol, trade.market, trade.side, trade.strategy,
     trade.entryPrice, trade.exitPrice ?? null, trade.quantity, trade.pnl ?? null,
     trade.pnlPct ?? null, trade.entryTime, trade.exitTime ?? null, trade.status,
     accountId, (trade as any).orderId ?? null, (trade as any).openCommission ?? 0,
     (trade as any).stopLoss ?? null, (trade as any).takeProfit ?? null,
-    accountId,
+    accountId, strategyVersion,
   );
 }
 
@@ -850,6 +893,20 @@ export function insertTrade(trade: TradeRecord, accountId: string) {
 // (Sol review, 2026-07-25 round 1).
 export function isSyncOwned(t: { id: string; strategy?: string | null }): boolean {
   return t.id.startsWith("sync_") || t.strategy === "BROKER_SYNC";
+}
+
+/** Strategy tag of every trades row owned by the portfolio engine
+ *  (src/portfolio-engine/live/rows.ts writes it; adoption re-tags a sleeve's
+ *  legacy rows to it). THE one predicate the stop machinery consults
+ *  (AccountManager.checkAllStopLoss + runAlpacaNativeStopsPass): these rows
+ *  get NO 15s hard stop and NO broker-native GTC stop — the only stops a
+ *  portfolio sleeve carries are the ones its design declares
+ *  (TargetBook.stops → VenueAdapter.syncStops). RW-reescritura-rentable §3.
+ *  Data-level on purpose: the exemption must hold whether or not the engine
+ *  process is up (a 4% fallback stop on an unstopped ETF basket is a bug). */
+export const PORTFOLIO_ENGINE_STRATEGY = "PORTFOLIO";
+export function isPortfolioEngineRow(t: { strategy?: string | null }): boolean {
+  return t.strategy === PORTFOLIO_ENGINE_STRATEGY;
 }
 
 /**

@@ -27,6 +27,16 @@ export interface DailyReturnPoint {
   ret: number;
 }
 
+/** Daily-bar momentum replays label a session by its end, one day late. */
+export function dailyReturnShiftDays(config: { timeframe?: unknown; meanrev?: unknown } | undefined): number {
+  return config?.timeframe === "1d" && config.meanrev === undefined ? -1 : 0;
+}
+
+export function shiftDailyReturnDate(date: string, days: number): string {
+  if (days === 0) return date;
+  return new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+}
+
 /** Outer-test (base cost, non-overlapping, fold-ordered) daily returns of one artifact. */
 export function loadArtifactOuterDailyReturns(dir: string): DailyReturnPoint[] {
   const summary = JSON.parse(readFileSync(join(dir, "summary.json"), "utf8"));
@@ -46,7 +56,10 @@ export function loadArtifactOuterDailyReturns(dir: string): DailyReturnPoint[] {
   for (const fp of foldPaths) {
     const r = byFold.get(fp);
     if (!r) throw new Error(`missing complete base-cost outer-test run for foldPath "${fp}" in ${dir}`);
-    for (const d of r.result.dailyReturns as DailyReturnPoint[]) out.push(d);
+    const shiftDays = dailyReturnShiftDays(r.result.config);
+    for (const d of r.result.dailyReturns as DailyReturnPoint[]) {
+      out.push({ ...d, date: shiftDailyReturnDate(d.date, shiftDays) });
+    }
   }
   return out;
 }

@@ -54,6 +54,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, readFileSync } from "fs";
 import { getETDateKey } from "../db/database";
 import { nextGridDay } from "./sleeveReturns";
+import { MODEL_VERSIONS, currentModelStarts, currentModelVersionId, rowModelVersion } from "./modelVersions";
 import { computeTrackRecord, type TrackRecord } from "./trackRecord";
 
 // ── Windows & entities ────────────────────────────────────────────────────
@@ -93,13 +94,13 @@ export const V8_START = "2026-07-10";
  *    f385ab5): 09-29 is the first UTC day on the daily model's own book.
  *    (Was 2026-07-20, the hourly model's launch — a daily-kernel band over
  *    70 days of hourly returns.)
+ *
+ * The dates live in src/portfolio/modelVersions.ts (the version table: the
+ * current version's `modelStart`) — one source for the stamp written on every
+ * trade row and for this window anchor. Moving a sleeve to a new model = append
+ * a version there.
  */
-export const MODEL_START: Record<string, string> = {
-  momentum_stocks: "2026-10-13",
-  meanrev_stocks: "2026-09-28",
-  momentum_crypto: "2026-09-27",
-  momentum_crypto_usdc: "2026-09-29",
-};
+export const MODEL_START: Record<string, string> = currentModelStarts();
 
 export type ScorecardGrid = "trading_days" | "calendar_days";
 
@@ -257,15 +258,58 @@ export interface TradeRow {
   entry_price: number | null; quantity: number | null;
   entry_time: number | null; exit_time: number | null;
   status: string; pnl: number | null;
+  /** trades.strategy_version — the model that OPENED the row (modelVersions.ts). */
+  strategy_version?: string | null;
 }
 
 export function readTrades(db: Database, accountIds: string[]): TradeRow[] {
   if (accountIds.length === 0) return [];
   const ph = accountIds.map(() => "?").join(",");
   return db.prepare(
-    `SELECT entry_price, quantity, entry_time, exit_time, status, pnl
+    `SELECT entry_price, quantity, entry_time, exit_time, status, pnl, strategy_version
      FROM trades WHERE account_id IN (${ph})`
   ).all(...accountIds) as TradeRow[];
+}
+
+/** Live record of one model version of a sleeve: the rows it OPENED, however
+ *  and whenever they closed (a MODEL_CUTOVER close counts for the version that
+ *  opened the row, not the one whose pass closed it). */
+export interface VersionRecord {
+  versionId: string;
+  nOpened: number;
+  nOpen: number;
+  nClosed: number;
+  realizedPnl: number;
+  nWins: number;
+}
+
+/** Pure: per-version records for a sleeve, oldest → newest (every version in
+ *  the table appears, empty ones with zeros). [] for an unversioned entity. */
+export function computeVersionRecords(sleeveId: string, trades: TradeRow[]): VersionRecord[] {
+  const list = MODEL_VERSIONS[sleeveId];
+  if (!list) return [];
+  const byId = new Map<string, VersionRecord>(
+    list.map(v => [v.id, { versionId: v.id, nOpened: 0, nOpen: 0, nClosed: 0, realizedPnl: 0, nWins: 0 }]),
+  );
+  for (const t of trades) {
+    const rec = byId.get(rowModelVersion(sleeveId, t) ?? "");
+    if (!rec) continue;
+    rec.nOpened++;
+    if (t.status === "closed" && t.exit_time != null) {
+      rec.nClosed++;
+      rec.realizedPnl += t.pnl ?? 0;
+      if ((t.pnl ?? 0) > 0) rec.nWins++;
+    } else rec.nOpen++;
+  }
+  return list.map(v => byId.get(v.id)!);
+}
+
+/** Trades of the sleeve's CURRENT version only (other versions' rows — e.g. the
+ *  META/UNI windfalls a MODEL_CUTOVER closed — are not this model's record).
+ *  Sleeves without a version table pass through unfiltered. */
+export function tradesOfCurrentVersion(sleeveId: string, trades: TradeRow[]): TradeRow[] {
+  const cur = currentModelVersionId(sleeveId);
+  return cur ? trades.filter(t => rowModelVersion(sleeveId, t) === cur) : trades;
 }
 
 /**
@@ -574,12 +618,19 @@ export function computeWindowMetrics(
     }
   }
 
+  // The model window judges ONE model: utilization and realized P&L read only
+  // the rows its version opened (the equity marks above are the sleeve's).
+  // Another version's rows — e.g. the +$6,003 stocks / +$2,006 USDC windfalls
+  // MODEL_CUTOVER closed, earned under the previous model — stay out. The
+  // 30d/90d/v8 windows span versions on purpose and keep every row.
+  const wTrades = window === "model" ? tradesOfCurrentVersion(entity.id, trades) : trades;
+
   // Capital utilization: mean(open notional at each window close / equity).
   const utils: number[] = [];
   for (const m of inWindow) {
     if (m.equity <= 0) continue;
     let notional = 0;
-    for (const t of trades) {
+    for (const t of wTrades) {
       if (t.entry_time == null || t.entry_time > m.snapshotTime) continue;
       const open = t.status === "open" || t.exit_time == null || t.exit_time > m.snapshotTime;
       if (!open) continue;
@@ -591,7 +642,7 @@ export function computeWindowMetrics(
 
   // Realized (closed inside the window) vs unrealized (equity move − realized).
   let realized = 0;
-  for (const t of trades) {
+  for (const t of wTrades) {
     if (t.status !== "closed" || t.exit_time == null) continue;
     if (t.exit_time > base.snapshotTime && t.exit_time <= last.snapshotTime) realized += t.pnl ?? 0;
   }
@@ -643,6 +694,10 @@ export interface ExpectationBand {
   reason: string | null;
   artifactDir: string | null;
   manifest: string | null;
+  /** The version the band judges: its id (trades.strategy_version) and window
+   *  anchor. The live return/drawdown are the sleeve's marks from modelStart —
+   *  the first full session of this version's own book. */
+  modelVersion: string | null;
   modelStart: string | null;
   horizonSessions: number;
   liveCumReturnPct: number | null;
@@ -665,6 +720,7 @@ export function computeExpectationBand(
   const base: ExpectationBand = {
     status: "unavailable", reason: null,
     artifactDir: ref?.dir ?? null, manifest: ref?.manifest ?? null,
+    modelVersion: currentModelVersionId(sleeveId),
     modelStart: MODEL_START[sleeveId] ?? null,
     horizonSessions: modelWindow.nObs,
     liveCumReturnPct: modelWindow.totalReturnPct,
@@ -707,8 +763,12 @@ export interface EntityScorecard {
   obsPerYear: 252 | 365;
   benchmarkSymbol: string;
   modelStart: string | null;
+  /** Id of the sleeve's current model version (null for accounts). */
+  modelVersion: string | null;
   windows: ScorecardWindowMetrics[];
   band: ExpectationBand | null;  // sleeves only
+  /** Realized record of every version of the sleeve, by OPENING version. */
+  versionRecords: VersionRecord[];
 }
 
 export interface Scorecard {
@@ -756,7 +816,9 @@ export function computeScorecard(opts: ScorecardOptions): Scorecard {
     return {
       id: def.id, kind: def.kind, label: def.label, grid: def.grid, obsPerYear: def.obsPerYear,
       benchmarkSymbol: def.benchmark.symbol, modelStart: MODEL_START[def.id] ?? null,
+      modelVersion: def.kind === "sleeve" ? currentModelVersionId(def.id) : null,
       windows, band,
+      versionRecords: def.kind === "sleeve" ? computeVersionRecords(def.id, trades) : [],
     };
   });
 

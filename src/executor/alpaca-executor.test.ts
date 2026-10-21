@@ -4,7 +4,12 @@ import { join } from "path";
 import { ALPACA_WS_CONTENDED_DELAY_MS, CLIENT_ORDER_ID_MAX_LEN, stopLossClientOrderId, isWashTrade403, isKnownAlpacaPaperHost, alpacaPaperLiveMismatch , GET_BARS_TIMEOUT_MS, STOCK_BARS_MAX_PAGES, STOCK_BARS_FULL_REFETCH_INTERVAL_MS} from "./alpaca-executor";
 import { AlpacaExecutor } from "./alpaca-executor";
 import { config } from "../config";
-import { fetchT as realFetchT, withTimeout as realWithTimeout } from "../utils/timeout";
+import * as timeoutModule from "../utils/timeout";
+// mock.module rewrites the module's live bindings: a named import would follow
+// the mock, and restoring with it would re-install the mock. Keep the originals
+// by value, read before any mock runs.
+const realFetchT = timeoutModule.fetchT;
+const realWithTimeout = timeoutModule.withTimeout;
 import { fakeAlpacaExecutor as executor, bar, page, quote, rateLimited, fetchQueue } from "../test-support/alpaca";
 import { symbolLocks } from "./symbolLock";
 

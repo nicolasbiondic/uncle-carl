@@ -1,0 +1,262 @@
+{
+  "name": "rw-d1-xasset-etf-trend-v1",
+  "sleeve": "stocks",
+  "description": "PRE-REGISTERED (2026-10-20) BEFORE any run, docs/reports/RW-reescritura-rentable.md §2.2 (published in 00d65b7). D1 redesign of momentum_stocks: the live trend rule (blend of 63/126/252-session returns, on above +band with close > SMA200, off below -band or close <= SMA200, hysteresis inside the band) on 18 ETFs across asset classes instead of 11 tech names; weights proportional to signal / sigma63, one scale to the annualized portfolio vol target (63-day covariance, x sqrt(252)), cap 1.0 per name, gross <= 1.8; daily rebalance with no band, min order 5 USD, fractional shares; no price stops. Candidates: vol target {12%, 15%} x band {0, 1%}. Binding criteria: §2.5 C1-C8, evaluated by scripts/portfolio-criteria.ts (C1-C7) and the independent replication (C8). Benchmarks (not trials): the passive book with the signal always on and the selected candidate's vol target; 60/40 SPY/IEF. Trials 384 -> 388. ENCODING CORRECTION (2026-10-21, before any D1/D2 trial; the first attempt crashed at its first trial with no result): the protocol loads the warmup BEFORE window.from, so window.from moves from 2016-01-04 to 2017-02-27 = the data start (2016-01-04) + the pre-registered 420-day warmup. Same hypothesis, candidates and criteria.",
+  "trialAccounting": {
+    "priorUniqueTrials": 384,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "EFA",
+      "EEM",
+      "SHY",
+      "IEF",
+      "TLT",
+      "LQD",
+      "HYG",
+      "TIP",
+      "GLD",
+      "DBC",
+      "USO",
+      "VNQ",
+      "UUP",
+      "FXE",
+      "FXY"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-10-19T00:00:00Z",
+  "window": {
+    "from": "2017-02-27",
+    "to": "2026-10-19",
+    "outerFoldCount": 4,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 0,
+      "marginInterest": {
+        "annualRate": 0.08
+      }
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000
+  },
+  "candidates": [
+    {
+      "name": "vt12-band0",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": {
+          "kind": "xassetTrend",
+          "universe": [
+            "SPY",
+            "QQQ",
+            "IWM",
+            "EFA",
+            "EEM",
+            "SHY",
+            "IEF",
+            "TLT",
+            "LQD",
+            "HYG",
+            "TIP",
+            "GLD",
+            "DBC",
+            "USO",
+            "VNQ",
+            "UUP",
+            "FXE",
+            "FXY"
+          ],
+          "inceptionGuardBars": 252,
+          "volLookback": 63,
+          "covLookback": 63,
+          "portfolioVolTarget": 0.12,
+          "perAssetCap": 1,
+          "maxGross": 1.8,
+          "blendHorizons": [
+            63,
+            126,
+            252
+          ],
+          "maLong": 200,
+          "signalBandPct": 0
+        },
+        "venue": {
+          "venue": "alpaca",
+          "fractional": true,
+          "minOrderNotional": 5,
+          "rebalanceBand": 0
+        }
+      }
+    },
+    {
+      "name": "vt15-band0",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": {
+          "kind": "xassetTrend",
+          "universe": [
+            "SPY",
+            "QQQ",
+            "IWM",
+            "EFA",
+            "EEM",
+            "SHY",
+            "IEF",
+            "TLT",
+            "LQD",
+            "HYG",
+            "TIP",
+            "GLD",
+            "DBC",
+            "USO",
+            "VNQ",
+            "UUP",
+            "FXE",
+            "FXY"
+          ],
+          "inceptionGuardBars": 252,
+          "volLookback": 63,
+          "covLookback": 63,
+          "portfolioVolTarget": 0.15,
+          "perAssetCap": 1,
+          "maxGross": 1.8,
+          "blendHorizons": [
+            63,
+            126,
+            252
+          ],
+          "maLong": 200,
+          "signalBandPct": 0
+        },
+        "venue": {
+          "venue": "alpaca",
+          "fractional": true,
+          "minOrderNotional": 5,
+          "rebalanceBand": 0
+        }
+      }
+    },
+    {
+      "name": "vt12-band1",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": {
+          "kind": "xassetTrend",
+          "universe": [
+            "SPY",
+            "QQQ",
+            "IWM",
+            "EFA",
+            "EEM",
+            "SHY",
+            "IEF",
+            "TLT",
+            "LQD",
+            "HYG",
+            "TIP",
+            "GLD",
+            "DBC",
+            "USO",
+            "VNQ",
+            "UUP",
+            "FXE",
+            "FXY"
+          ],
+          "inceptionGuardBars": 252,
+          "volLookback": 63,
+          "covLookback": 63,
+          "portfolioVolTarget": 0.12,
+          "perAssetCap": 1,
+          "maxGross": 1.8,
+          "blendHorizons": [
+            63,
+            126,
+            252
+          ],
+          "maLong": 200,
+          "signalBandPct": 1
+        },
+        "venue": {
+          "venue": "alpaca",
+          "fractional": true,
+          "minOrderNotional": 5,
+          "rebalanceBand": 0
+        }
+      }
+    },
+    {
+      "name": "vt15-band1",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": {
+          "kind": "xassetTrend",
+          "universe": [
+            "SPY",
+            "QQQ",
+            "IWM",
+            "EFA",
+            "EEM",
+            "SHY",
+            "IEF",
+            "TLT",
+            "LQD",
+            "HYG",
+            "TIP",
+            "GLD",
+            "DBC",
+            "USO",
+            "VNQ",
+            "UUP",
+            "FXE",
+            "FXY"
+          ],
+          "inceptionGuardBars": 252,
+          "volLookback": 63,
+          "covLookback": 63,
+          "portfolioVolTarget": 0.15,
+          "perAssetCap": 1,
+          "maxGross": 1.8,
+          "blendHorizons": [
+            63,
+            126,
+            252
+          ],
+          "maLong": 200,
+          "signalBandPct": 1
+        },
+        "venue": {
+          "venue": "alpaca",
+          "fractional": true,
+          "minOrderNotional": 5,
+          "rebalanceBand": 0
+        }
+      }
+    }
+  ],
+  "acceptance": {}
+}

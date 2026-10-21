@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 /**
- * Download daily bars 2016-01-01 → today for ~200 liquid US large-caps + sector ETFs
+ * Download daily bars 2016-01-01 → today for the wide universe, 18 D1 ETFs
+ * and date-current S&P 500 members (offline pinned membership, or newer import)
  * from Alpaca data REST, into data/historical.db historical_bars (timeframe='1d',
  * source='alpaca_wide').
  *
@@ -14,9 +15,9 @@
  *
  * Split-adjusted re-download atomically REPLACES existing rows per symbol/timeframe
  * after validation. A failed fetch or a corrupted/invalid series leaves the old
- * history intact (fetch-validate-atomic-replace). Production MeanRev universe symbols
- * fail closed: any validation/network error for a MeanRev symbol causes a non-zero
- * exit so the corrupted series is never silently used.
+ * history intact (fetch-validate-atomic-replace). MeanRev, D1 and current S&P
+ * symbols fail closed; optional legacy wide symbols retain their warning-only
+ * behavior. PIT member tapes use the research downloader's identity preparation.
  *
  * Usage: bun run scripts/download-stock-dailies.ts
  */
@@ -26,54 +27,72 @@ import {
   validateAdjustedDailyBars,
   closeHistoricalStore,
 } from "../src/data/HistoricalStore";
-import type { BarRow } from "../src/data/HistoricalStore";
 import { WIDE_UNIVERSE, MOMENTUM_SYMBOLS } from "../src/config/wideUniverse";
 import { MEANREV_UNIVERSE } from "../src/strategies/meanrev/MeanRevEngine";
+import { prepareMemberSeries } from "./download-sp500-members";
+import { readFileSync } from "node:fs";
+import type { Database } from "bun:sqlite";
+import { parseStartEndCsv, writeMembership, SP500_SOURCE, SP500_SOURCE_COMMIT, VENDORED_START_END } from "./import-sp500-membership";
+import { mergeBarPages } from "./lib/researchData";
+export { mergeBarPages };
 export { WIDE_UNIVERSE, MOMENTUM_SYMBOLS };
 
-export function mergeBarPages(pages: Array<Record<string, any[]>>): Record<string, BarRow[]> {
-  const out: Record<string, BarRow[]> = {};
-  for (const page of pages) {
-    for (const [sym, raw] of Object.entries(page ?? {})) {
-      const rows = raw.map((b: any) => ({
-          symbol: sym,
-          timeframe: "1d" as const,
-          timestamp: Date.parse(b.t),
-          open: b.o,
-          high: b.h,
-          low: b.l,
-          close: b.c,
-          volume: b.v ?? 0,
-          source: "alpaca_wide" as const,
-        }));
-      (out[sym] ??= []).push(...rows);
-    }
+export const RW_D1_ETFS = ["SPY", "QQQ", "IWM", "EFA", "EEM", "SHY", "IEF", "TLT", "LQD", "HYG", "TIP", "GLD", "DBC", "USO", "VNQ", "UUP", "FXE", "FXY"];
+
+/** Bootstrap the pinned PIT membership offline, but never overwrite a newer import. */
+function currentSP500Members(db: Database, date: string): string[] {
+  const hasMembership = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='index_membership'").get();
+  if (!hasMembership || !db.query("SELECT 1 FROM index_membership WHERE index_id='sp500' LIMIT 1").get()) {
+    writeMembership(db, parseStartEndCsv(readFileSync(VENDORED_START_END, "utf8")), {
+      indexId: "sp500", source: SP500_SOURCE, sourceCommit: SP500_SOURCE_COMMIT,
+    });
   }
-  for (const sym of Object.keys(out)) {
-    out[sym].sort((a, b) => a.timestamp - b.timestamp);
-  }
-  return out;
+  const members = db.query(`SELECT DISTINCT ticker FROM index_membership
+    WHERE index_id='sp500' AND start_date <= ? AND (end_date IS NULL OR end_date > ?) ORDER BY ticker`).all(date, date) as Array<{ ticker: string }>;
+  return members.map(m => m.ticker);
 }
 
-if (import.meta.main) {
-  // Bun auto-loads .env
-  const KEY = process.env.ALPACA_API_KEY, SEC = process.env.ALPACA_SECRET_KEY;
-  if (!KEY || !SEC) { console.error("missing ALPACA_API_KEY/ALPACA_SECRET_KEY in env"); process.exit(1); }
+export function stockRefreshUniverse(db: Database, date: string): string[] {
+  return [...new Set([...WIDE_UNIVERSE, ...MOMENTUM_SYMBOLS, ...RW_D1_ETFS, ...currentSP500Members(db, date)])];
+}
 
-  const db = initHistoricalStore("./data/historical.db");
-  const start = "2016-01-01";
+export async function refreshStockDailies(opts: {
+  dbPath?: string; start?: string; end?: string; symbols?: string[];
+  key?: string; secret?: string; fetchFn?: typeof fetch; sleep?: (ms: number) => Promise<unknown>;
+} = {}): Promise<number> {
+  const KEY = opts.key ?? process.env.ALPACA_API_KEY, SEC = opts.secret ?? process.env.ALPACA_SECRET_KEY;
+  if (!KEY || !SEC) throw new Error("missing ALPACA_API_KEY/ALPACA_SECRET_KEY in env");
+  const db = initHistoricalStore(opts.dbPath ?? "./data/historical.db");
+  const start = opts.start ?? "2016-01-01";
   // Free-tier SIP history requires end ≥15 min ago — same 16 min margin as
   // SIP_HISTORY_LAG_MS in src/executor/alpaca-executor.ts.
-  const sipEnd = new Date(Date.now() - 16 * 60_000).toISOString();
-  const uniq = [...new Set([...WIDE_UNIVERSE, ...MOMENTUM_SYMBOLS])];
-  const meanRevSet = new Set(MEANREV_UNIVERSE);
-  console.log(`downloading ${uniq.length} symbols, daily ${start} → today`);
+  const sipEnd = opts.end ?? new Date(Date.now() - 16 * 60_000).toISOString();
+  const uniq = [...new Set(opts.symbols ?? stockRefreshUniverse(db, sipEnd.slice(0, 10)))];
+  const members = new Set(opts.symbols ? [] : currentSP500Members(db, sipEnd.slice(0, 10)));
+  // Resolve PIT tickers at the last known composition date, not at today's
+  // possibly renamed/reused symbol (PSKY→SKYD, DOW's default mapping).
+  const memberAsOf = members.size ? (db.query(`SELECT MAX(day) day FROM (
+    SELECT start_date day FROM index_membership WHERE index_id='sp500'
+    UNION SELECT end_date day FROM index_membership WHERE index_id='sp500'
+  ) WHERE day <= ?`).get(sipEnd.slice(0, 10)) as { day: string }).day : undefined;
+  const strict = new Set<string>([...MEANREV_UNIVERSE, ...RW_D1_ETFS]);
+  const required = new Set(opts.symbols ?? [...strict, ...members]);
+  const fetchFn = opts.fetchFn ?? fetch;
+  const sleep = opts.sleep ?? Bun.sleep;
+  console.log(`downloading ${uniq.length} symbols, daily ${start} → ${sipEnd}`);
 
   let total = 0;
-  const meanrevFailures: string[] = [];
+  const failures: string[] = [];
+  const batches: string[][] = [];
+  // Keep PIT and non-PIT requests separate: the older membership identity
+  // date must not remap an unrelated symbol from the legacy wide universe.
+  for (const group of [uniq.filter(s => !members.has(s)), uniq.filter(s => members.has(s))]) {
+    for (let i = 0; i < group.length; i += 50) batches.push(group.slice(i, i + 50));
+  }
 
-  for (let i = 0; i < uniq.length; i += 50) {
-    const batch = uniq.slice(i, i + 50);
+  try {
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
     const rawPages: Array<Record<string, any[]>> = [];
     let pageToken: string | undefined;
     let pageCount = 0;
@@ -88,35 +107,51 @@ if (import.meta.main) {
         u.searchParams.set("feed", "sip");
         u.searchParams.set("end", sipEnd);
         u.searchParams.set("limit", "10000");
+        if (members.has(batch[0]) && memberAsOf) u.searchParams.set("asof", memberAsOf);
         if (pageToken) u.searchParams.set("page_token", pageToken);
 
-        const res = await fetch(u, { headers: { "APCA-API-KEY-ID": KEY, "APCA-API-SECRET-KEY": SEC } });
-        if (res.status === 429) { await Bun.sleep(10_000); continue; }
+        // Every request (including batch boundaries) is paced; never retry a
+        // 429 against the key shared with the live bot.
+        await sleep(400);
+        const res = await fetchFn(u, { headers: { "APCA-API-KEY-ID": KEY, "APCA-API-SECRET-KEY": SEC } });
+        if (res.status === 429) throw new Error("ALPACA_RATE_LIMIT_429: refresh stopped");
         if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
         const j: any = await res.json();
 
         rawPages.push(j.bars ?? {});
         pageCount++;
         pageToken = j.next_page_token ?? undefined;
-        if (pageToken) await Bun.sleep(350); // ~170 req/min < 200 limit
       } while (pageToken);
 
       const barsBySym = mergeBarPages(rawPages);
 
       for (const sym of batch) {
-        const bars = barsBySym[sym] ?? [];
-        const v = validateAdjustedDailyBars(sym, bars, { maxFlatZeroVolumeRun: 4, maxAdjGapPct: 50 });
-        if (!v.ok) {
-          const msg = v.errors.join("; ");
+        let bars = barsBySym[sym] ?? [];
+        const pit = members.has(sym) && !strict.has(sym);
+        if (pit) {
+          const tramos = db.query("SELECT start_date, end_date FROM index_membership WHERE index_id='sp500' AND ticker=?").all(sym) as Array<{ start_date: string; end_date: string | null }>;
+          const prep = prepareMemberSeries(bars, tramos.map(t => ({
+            fromMs: Math.max(Date.parse(t.start_date), Date.parse(start)),
+            toMs: Math.min(t.end_date ? Date.parse(t.end_date) : Infinity, Date.parse(sipEnd)),
+          })).filter(t => t.fromMs < t.toMs));
+          bars = prep.bars;
+          for (const note of [...prep.notes, ...prep.inSeriesDiscontinuities]) console.warn(`  ${sym}: ${note}`);
+        }
+        const v = validateAdjustedDailyBars(sym, bars, { maxFlatZeroVolumeRun: 4, maxAdjGapPct: pit ? 75 : 50 });
+        // As in the PIT downloader, genuine in-series jumps are reported,
+        // not discarded; filler/empty/invalid tapes still fail closed.
+        const errors = pit ? v.errors.filter(e => !e.includes("gross discontinuity")) : v.errors;
+        if (errors.length > 0) {
+          const msg = errors.join("; ");
           console.error(`  ${sym.padEnd(6)} VALIDATION FAILED: ${msg}`);
-          if (meanRevSet.has(sym)) meanrevFailures.push(sym);
+          failures.push(sym);
           continue;
         }
 
         const r = replaceBars(sym, "1d", bars);
         if (r.error) {
           console.error(`  ${sym.padEnd(6)} REPLACE FAILED: ${r.error}`);
-          if (meanRevSet.has(sym)) meanrevFailures.push(sym);
+          failures.push(sym);
           continue;
         }
 
@@ -124,11 +159,11 @@ if (import.meta.main) {
         console.log(`  ${sym.padEnd(6)} replaced ${r.deleted} rows with ${r.written} all-adjusted SIP bars (${pageCount} page${pageCount > 1 ? "s" : ""})`);
       }
     } catch (e: any) {
-      console.error(`  batch ${i / 50 + 1} FAILED: ${e.message} — old data left intact`);
-      const batchMeanRev = batch.filter(s => meanRevSet.has(s));
-      meanrevFailures.push(...batchMeanRev);
+      if (e.message.includes("ALPACA_RATE_LIMIT_429")) throw e;
+      console.error(`  batch ${i + 1} FAILED: ${e.message} — old data left intact`);
+      failures.push(...batch);
     }
-    console.log(`batch ${i / 50 + 1}/${Math.ceil(uniq.length / 50)} done (${total} bars so far)`);
+    console.log(`batch ${i + 1}/${batches.length} done (${total} bars so far)`);
   }
 
   const counts = db.query(
@@ -141,10 +176,17 @@ if (import.meta.main) {
   const noData = uniq.filter(s => !counts.some(c => c.symbol === s));
   console.log(`no data at all: ${noData.join(" ") || "none"}`);
 
-  closeHistoricalStore();
-
-  if (meanrevFailures.length > 0) {
-    console.error(`\nFAIL-CLOSED: ${meanrevFailures.length} MeanRev universe symbol(s) failed: ${[...new Set(meanrevFailures)].join(", ")}`);
-    process.exit(1);
+  const requiredFailures = [...new Set(failures)].filter(s => required.has(s));
+  if (requiredFailures.length > 0) {
+    throw new Error(`FAIL-CLOSED: stock refresh failed for ${requiredFailures.join(", ")}`);
   }
+  return total;
+  } finally {
+    closeHistoricalStore();
+  }
+}
+
+if (import.meta.main) {
+  const argOf = (flag: string) => { const i = process.argv.indexOf(flag); return i < 0 ? undefined : process.argv[i + 1]; };
+  await refreshStockDailies({ dbPath: argOf("--db"), start: argOf("--start"), end: argOf("--end"), symbols: argOf("--symbols")?.split(",") });
 }

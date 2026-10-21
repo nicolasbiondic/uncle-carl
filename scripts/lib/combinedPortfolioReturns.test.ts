@@ -9,12 +9,12 @@ import {
   alignSeries,
 } from "./combinedPortfolioReturns";
 
-function makeArtifact(dir: string, folds: Array<{ foldPath: string; dailyReturns: Array<{ date: string; ret: number }> }>) {
+function makeArtifact(dir: string, folds: Array<{ foldPath: string; dailyReturns: Array<{ date: string; ret: number }>; config?: object }>) {
   const summary = { outerTests: folds.map(f => ({ foldPath: f.foldPath, result: {} })) };
   writeFileSync(join(dir, "summary.json"), JSON.stringify(summary));
   const runs = folds.map(f => ({
     foldPath: f.foldPath, costTier: "base", status: "complete",
-    result: { dailyReturns: f.dailyReturns },
+    result: { dailyReturns: f.dailyReturns, config: f.config },
   }));
   // also add a decoy inner-fold / stress run that must be IGNORED
   runs.push({ foldPath: folds[0].foldPath, costTier: "stress", status: "complete", result: { dailyReturns: [{ date: "1999-01-01", ret: 99 }] } } as any);
@@ -33,6 +33,24 @@ describe("loadArtifactOuterDailyReturns", () => {
       expect(series).toEqual([
         { date: "2022-01-03", ret: 0.01 },
         { date: "2023-01-03", ret: -0.02 },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("aligns daily-bar momentum returns from their result config, but not meanrev or hourly returns", () => {
+    const dir = mkdtempSync(join(tmpdir(), "artifact-"));
+    try {
+      makeArtifact(dir, [
+        { foldPath: "0/test", dailyReturns: [{ date: "2024-01-03", ret: 0.01 }], config: { timeframe: "1d" } },
+        { foldPath: "1/test", dailyReturns: [{ date: "2024-01-03", ret: 0.02 }], config: { timeframe: "1d", meanrev: {} } },
+        { foldPath: "2/test", dailyReturns: [{ date: "2024-01-03", ret: 0.03 }], config: { timeframe: "1h" } },
+      ]);
+      expect(loadArtifactOuterDailyReturns(dir)).toEqual([
+        { date: "2024-01-02", ret: 0.01 },
+        { date: "2024-01-03", ret: 0.02 },
+        { date: "2024-01-03", ret: 0.03 },
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });

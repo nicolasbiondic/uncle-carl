@@ -1,0 +1,59 @@
+{
+  "name": "rw-d3-crypto-daily-trend-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTERED (2026-10-20) BEFORE any run, docs/reports/RW-reescritura-rentable.md §2.4 (published in 00d65b7). D3 redesign of momentum_crypto and momentum_crypto_usdc: one daily kernel on BTC, ETH, SOL, XRP, DOGE perpetuals (enter after 252 bars); the D1 trend signal with no band; weights proportional to signal / sigma30 (x sqrt(365)), one scale to the portfolio vol target (30-day covariance), cap 0.6 per name, gross <= 2.0; decision at 00:00 UTC on the closed candle, fills at the day's open; rebalance band 2% of weight, min order 5 USD, Binance quantity steps; real funding. Stop axis: none, fixed 4% from the average entry, or volatility-scaled (3 sigma of 20 returns, 2%-12%, set at each increase); after a stop the symbol may return at the next decision if the signal is still on. Candidates: vt30-stop4, vt35-stop4, vt35-volstop, vt35-nostop. Binding criteria: §2.5 C1-C8. Benchmarks (not trials): BTC buy-and-hold; the passive book with the signal always on. Trials 392 -> 396.",
+  "trialAccounting": { "priorUniqueTrials": 392, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1d",
+    "universe": ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "DOGE/USD"],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-10-19T00:00:00Z",
+  "window": { "from": "2020-10-01", "to": "2026-10-19", "outerFoldCount": 3, "innerFoldCount": 3, "purgeYears": 0.25, "warmupDays": 300 },
+  "costs": {
+    "base": { "slippageBps": 5, "commissionBps": 4 },
+    "stress": { "slippageBps": 10, "commissionBps": 8 }
+  },
+  "ledger": { "initialEquity": 5000 },
+  "candidates": [
+    {
+      "name": "vt30-stop4",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": { "kind": "cryptoTrend", "universe": ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "DOGE/USD"], "inceptionGuardBars": 252, "volLookback": 30, "covLookback": 30, "portfolioVolTarget": 0.30, "perAssetCap": 0.6, "maxGross": 2, "blendHorizons": [63, 126, 252], "maLong": 200, "signalBandPct": 0, "stop": { "mode": "fixed", "pct": 4 } },
+        "venue": { "venue": "binance_usdm", "fractional": false, "minOrderNotional": 5, "rebalanceBand": 0.02, "qtyStep": { "BTC/USD": 0.001, "ETH/USD": 0.001, "SOL/USD": 1, "XRP/USD": 0.1, "DOGE/USD": 1 } }
+      }
+    },
+    {
+      "name": "vt35-stop4",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": { "kind": "cryptoTrend", "universe": ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "DOGE/USD"], "inceptionGuardBars": 252, "volLookback": 30, "covLookback": 30, "portfolioVolTarget": 0.35, "perAssetCap": 0.6, "maxGross": 2, "blendHorizons": [63, 126, 252], "maLong": 200, "signalBandPct": 0, "stop": { "mode": "fixed", "pct": 4 } },
+        "venue": { "venue": "binance_usdm", "fractional": false, "minOrderNotional": 5, "rebalanceBand": 0.02, "qtyStep": { "BTC/USD": 0.001, "ETH/USD": 0.001, "SOL/USD": 1, "XRP/USD": 0.1, "DOGE/USD": 1 } }
+      }
+    },
+    {
+      "name": "vt35-volstop",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": { "kind": "cryptoTrend", "universe": ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "DOGE/USD"], "inceptionGuardBars": 252, "volLookback": 30, "covLookback": 30, "portfolioVolTarget": 0.35, "perAssetCap": 0.6, "maxGross": 2, "blendHorizons": [63, 126, 252], "maLong": 200, "signalBandPct": 0, "stop": { "mode": "volScaled", "kSigma": 3, "lookbackBars": 20, "minPct": 2, "maxPct": 12 } },
+        "venue": { "venue": "binance_usdm", "fractional": false, "minOrderNotional": 5, "rebalanceBand": 0.02, "qtyStep": { "BTC/USD": 0.001, "ETH/USD": 0.001, "SOL/USD": 1, "XRP/USD": 0.1, "DOGE/USD": 1 } }
+      }
+    },
+    {
+      "name": "vt35-nostop",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": { "kind": "cryptoTrend", "universe": ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "DOGE/USD"], "inceptionGuardBars": 252, "volLookback": 30, "covLookback": 30, "portfolioVolTarget": 0.35, "perAssetCap": 0.6, "maxGross": 2, "blendHorizons": [63, 126, 252], "maLong": 200, "signalBandPct": 0, "stop": { "mode": "none" } },
+        "venue": { "venue": "binance_usdm", "fractional": false, "minOrderNotional": 5, "rebalanceBand": 0.02, "qtyStep": { "BTC/USD": 0.001, "ETH/USD": 0.001, "SOL/USD": 1, "XRP/USD": 0.1, "DOGE/USD": 1 } }
+      }
+    }
+  ],
+  "acceptance": {}
+}
