@@ -533,6 +533,18 @@ function validatePortfolioStrategy(st: unknown, where: string): void {
   if (!st || typeof st !== "object" || Array.isArray(st)) throw new Error(`${where} must be an object`);
   const s = st as Record<string, unknown>;
   const trendKeys = ["kind", "universe", "inceptionGuardBars", "volLookback", "covLookback", "portfolioVolTarget", "perAssetCap", "maxGross", "blendHorizons", "maLong", "signalBandPct"];
+  if (s.kind === "volManaged") {
+    assertKeys(s, ["kind", "universe", "inceptionGuardBars", "volLookback", "covLookback", "portfolioVolTarget", "annualization", "perAssetCap", "maxGross"], where);
+    assertSymbolList(s.universe, `${where}.universe`);
+    for (const key of ["inceptionGuardBars", "volLookback", "covLookback"]) {
+      if (!posInt(s[key])) throw new Error(`${where}.${key} must be a positive integer`);
+    }
+    if (!finiteIn(s.portfolioVolTarget, 0, 2, true)) throw new Error(`${where}.portfolioVolTarget must be an annualized FRACTION in (0, 2]`);
+    if (s.annualization !== 252 && s.annualization !== 365) throw new Error(`${where}.annualization must be 252 or 365`);
+    if (!finiteIn(s.perAssetCap, 0, 1, true)) throw new Error(`${where}.perAssetCap must be a weight FRACTION in (0, 1]`);
+    if (!finiteIn(s.maxGross, 0, 2, true)) throw new Error(`${where}.maxGross must be a gross FRACTION in (0, 2]`);
+    return;
+  }
   if (s.kind === "xassetTrend") {
     assertKeys(s, trendKeys, where);
     validateTrendSignal(s, where);
@@ -571,7 +583,7 @@ function validatePortfolioStrategy(st: unknown, where: string): void {
     }
     return;
   }
-  throw new Error(`${where}.kind must be "xassetTrend", "factorCore" or "cryptoTrend"`);
+  throw new Error(`${where}.kind must be "xassetTrend", "factorCore", "cryptoTrend" or "volManaged"`);
 }
 
 function validateVenueRules(v: unknown, where: string): void {
@@ -1475,7 +1487,7 @@ export function validatePortfolioManifest(m: ExperimentManifest): void {
   const kinds = new Set(blocks.map(b => b!.strategy.kind));
   if (kinds.size !== 1) throw new Error(`portfolio manifests hold ONE design: candidates mix kinds ${[...kinds].join(", ")}`);
   const kind = [...kinds][0];
-  const isCrypto = kind === "cryptoTrend";
+  const isCrypto = kind === "cryptoTrend" || (kind === "volManaged" && m.sleeve === "crypto");
   if (isCrypto ? m.sleeve !== "crypto" : m.sleeve !== "stocks") {
     throw new Error(`portfolio kind "${kind}" requires sleeve "${isCrypto ? "crypto" : "stocks"}" (annualization/calendar), got "${m.sleeve}"`);
   }
@@ -1484,7 +1496,7 @@ export function validatePortfolioManifest(m: ExperimentManifest): void {
   }
   if (m.data.funding !== isCrypto) {
     throw new Error(isCrypto
-      ? "cryptoTrend requires data.funding=true (real funding is part of the pre-registered cost model)"
+      ? `${kind} requires data.funding=true (real funding is part of the pre-registered cost model)`
       : `${kind} requires data.funding=false (no perpetuals)`);
   }
   if (m.data.perpsMembership !== undefined || m.data.liquidityRank !== undefined) {
@@ -1499,6 +1511,9 @@ export function validatePortfolioManifest(m: ExperimentManifest): void {
   for (const c of m.candidates) {
     const s = c.portfolio!.strategy;
     const where = `candidate "${c.name}"`;
+    if (s.kind === "volManaged" && s.annualization !== (isCrypto ? 365 : 252)) {
+      throw new Error(`${where}: volManaged annualization must be ${isCrypto ? 365 : 252} for sleeve "${m.sleeve}"`);
+    }
     if (s.kind === "factorCore") {
       if (s.overlay && !declared.has(s.overlay.ref)) throw new Error(`${where}: overlay.ref ${s.overlay.ref} must be in data.universe`);
     } else {

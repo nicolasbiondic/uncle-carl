@@ -766,6 +766,12 @@ function createTables() {
       UNIQUE(account_id, strategy_version, session)
     );
     CREATE INDEX IF NOT EXISTS idx_portfolio_decisions_account ON portfolio_decisions(account_id, decided_at);
+    -- Binance venue of the portfolio engine: client order ids claimed BEFORE a POST, never
+    -- released (the exchange only enforces uniqueness among OPEN orders).
+    CREATE TABLE IF NOT EXISTS portfolio_order_claims (
+      id TEXT PRIMARY KEY,
+      claimed_at INTEGER NOT NULL
+    );
   `);
 }
 

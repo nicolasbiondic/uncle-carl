@@ -371,4 +371,28 @@ for (const kind of ["legacy", "sdk"] as const) describe(`Binance portfolio venue
     await expect(venue.syncStops([], [{ symbol: "SOL/USD", qty: 1, avgEntryPrice: 10 }])).rejects.toThrow(/outside sleeve/);
     expect(s.requests).toHaveLength(0);
   });
+  test("releaseLegacyStops: cancels ONLY the incumbent's uc- reduce-only SELL stops (both stores) on the given symbols", async () => {
+    const { venue, s } = setup(kind);
+    const stop = (symbol: string, id: number, clientOrderId: string, extra: Record<string, unknown> = {}) =>
+      ({ symbol, orderId: id, clientOrderId, type: "STOP_MARKET", side: "SELL", stopPrice: "95", origQty: "0.5", reduceOnly: "true", workingType: "MARK_PRICE", ...extra });
+    s.regular = [
+      stop("BTCUSDT", 11, "uc-fapi-legacy-1"),                       // the incumbent's: released
+      stop("BTCUSDT", 12, "manual-stop-1"),                          // foreign: never touched
+      stop("BTCUSDT", 13, "uc-fapi-legacy-entry", { reduceOnly: "false" }), // not reduce-only (could be an entry): kept
+      stop("ETHUSDT", 14, "uc-fapi-legacy-eth"),                     // symbol not requested: kept
+    ];
+    s.algo = [{ symbol: "BTCUSDT", algoId: 21, clientAlgoId: "uc-fapi-legacy-algo", orderType: "STOP", side: "SELL", triggerPrice: "94", totalQty: "0.5", reduceOnly: true, workingType: "MARK_PRICE" }];
+    expect((await venue.releaseLegacyStops(["BTC/USD", "SOL/USD"])).sort()).toEqual(["11", "21"]);
+    expect(s.stops().map(o => String(o.orderId ?? o.algoId)).sort()).toEqual(["12", "13", "14"]);
+    expect(s.requests.filter(r => r.method === "DELETE").map(r => r.path).sort()).toEqual(["/fapi/v1/algoOrder", "/fapi/v1/order"]);
+    expect(await venue.releaseLegacyStops(["BTC/USD"])).toEqual([]); // idempotent
+  });
+
+  test("releaseLegacyStops: an unreadable stop book cancels nothing and throws (unknown is not 'no stops')", async () => {
+    const { venue, s } = setup(kind);
+    s.regular = [{ symbol: "BTCUSDT", orderId: 11, clientOrderId: "uc-fapi-legacy-1", type: "STOP_MARKET", side: "SELL", stopPrice: "95", origQty: "0.5", reduceOnly: "true", workingType: "MARK_PRICE" }];
+    s.stopReadError = true;
+    await expect(venue.releaseLegacyStops(["BTC/USD"])).rejects.toThrow();
+    expect(s.requests.some(r => r.method === "DELETE")).toBe(false);
+  });
 });

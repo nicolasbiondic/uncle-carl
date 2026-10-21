@@ -1,0 +1,193 @@
+{
+  "name": "rw2-e3-usdc-volmanaged-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTERED (2026-10-21) BEFORE any run, docs/reports/RW-reescritura-rentable.md §8 (published in e80e72b), owner's choice 'exposición eficiente'. E3 redesign of momentum_crypto_usdc on its own 13 bases (USDT perpetuals as the price proxy, real funding). Always invested, no signal, no stops: every symbol with >= 252 bars, weights proportional to 1/sigma, one scale so the annualized portfolio vol from the 21-day covariance equals the target, per-name cap, gross <= 1.0 (no margin), daily rebalance with a band. Binding criteria: §8.5 R1-R7 (R3: Sharpe not below the current sleeve's on the same days, the control being its own manifest rerun on the same data snapshot). Window and costs are those of the current sleeve's manifest. sigma 30 days, cap 0.25, band 2%, the quantity steps and minimum notionals of Binance's USDC perpetuals; costs 17 + 3 bps (stress 60 + 5) as in the control; window = momentum-crypto-usdc-daily-s5-pure-v1. Candidates: vol target 20% and 30%. Trials 400 -> 402.",
+  "trialAccounting": {
+    "priorUniqueTrials": 400,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1d",
+    "universe": [
+      "ADA/USD",
+      "AVAX/USD",
+      "BCH/USD",
+      "BNB/USD",
+      "BTC/USD",
+      "DOGE/USD",
+      "ETH/USD",
+      "LINK/USD",
+      "LTC/USD",
+      "NEAR/USD",
+      "SOL/USD",
+      "UNI/USD",
+      "XRP/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-26T00:00:00Z",
+  "window": {
+    "from": "2021-08-01",
+    "to": "2026-09-27",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 17,
+      "commissionBps": 3
+    },
+    "stress": {
+      "slippageBps": 60,
+      "commissionBps": 5
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000
+  },
+  "candidates": [
+    {
+      "name": "vt20",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": {
+          "kind": "volManaged",
+          "universe": [
+            "ADA/USD",
+            "AVAX/USD",
+            "BCH/USD",
+            "BNB/USD",
+            "BTC/USD",
+            "DOGE/USD",
+            "ETH/USD",
+            "LINK/USD",
+            "LTC/USD",
+            "NEAR/USD",
+            "SOL/USD",
+            "UNI/USD",
+            "XRP/USD"
+          ],
+          "inceptionGuardBars": 252,
+          "volLookback": 30,
+          "covLookback": 21,
+          "portfolioVolTarget": 0.2,
+          "annualization": 365,
+          "perAssetCap": 0.25,
+          "maxGross": 1
+        },
+        "venue": {
+          "venue": "binance_usdc",
+          "fractional": false,
+          "minOrderNotional": 5,
+          "rebalanceBand": 0.02,
+          "qtyStep": {
+            "ADA/USD": 0.1,
+            "AVAX/USD": 0.01,
+            "BCH/USD": 0.001,
+            "BNB/USD": 0.01,
+            "BTC/USD": 0.001,
+            "DOGE/USD": 1,
+            "ETH/USD": 0.001,
+            "LINK/USD": 0.01,
+            "LTC/USD": 0.001,
+            "NEAR/USD": 1,
+            "SOL/USD": 0.01,
+            "UNI/USD": 1,
+            "XRP/USD": 0.1
+          },
+          "minNotional": {
+            "ADA/USD": 5,
+            "AVAX/USD": 5,
+            "BCH/USD": 5,
+            "BNB/USD": 5,
+            "BTC/USD": 50,
+            "DOGE/USD": 5,
+            "ETH/USD": 20,
+            "LINK/USD": 5,
+            "LTC/USD": 5,
+            "NEAR/USD": 5,
+            "SOL/USD": 5,
+            "UNI/USD": 5,
+            "XRP/USD": 5
+          }
+        }
+      }
+    },
+    {
+      "name": "vt30",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": {
+          "kind": "volManaged",
+          "universe": [
+            "ADA/USD",
+            "AVAX/USD",
+            "BCH/USD",
+            "BNB/USD",
+            "BTC/USD",
+            "DOGE/USD",
+            "ETH/USD",
+            "LINK/USD",
+            "LTC/USD",
+            "NEAR/USD",
+            "SOL/USD",
+            "UNI/USD",
+            "XRP/USD"
+          ],
+          "inceptionGuardBars": 252,
+          "volLookback": 30,
+          "covLookback": 21,
+          "portfolioVolTarget": 0.3,
+          "annualization": 365,
+          "perAssetCap": 0.25,
+          "maxGross": 1
+        },
+        "venue": {
+          "venue": "binance_usdc",
+          "fractional": false,
+          "minOrderNotional": 5,
+          "rebalanceBand": 0.02,
+          "qtyStep": {
+            "ADA/USD": 0.1,
+            "AVAX/USD": 0.01,
+            "BCH/USD": 0.001,
+            "BNB/USD": 0.01,
+            "BTC/USD": 0.001,
+            "DOGE/USD": 1,
+            "ETH/USD": 0.001,
+            "LINK/USD": 0.01,
+            "LTC/USD": 0.001,
+            "NEAR/USD": 1,
+            "SOL/USD": 0.01,
+            "UNI/USD": 1,
+            "XRP/USD": 0.1
+          },
+          "minNotional": {
+            "ADA/USD": 5,
+            "AVAX/USD": 5,
+            "BCH/USD": 5,
+            "BNB/USD": 5,
+            "BTC/USD": 50,
+            "DOGE/USD": 5,
+            "ETH/USD": 20,
+            "LINK/USD": 5,
+            "LTC/USD": 5,
+            "NEAR/USD": 5,
+            "SOL/USD": 5,
+            "UNI/USD": 5,
+            "XRP/USD": 5
+          }
+        }
+      }
+    }
+  ],
+  "acceptance": {}
+}

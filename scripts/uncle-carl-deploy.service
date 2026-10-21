@@ -10,5 +10,20 @@ ExecStart=__REPO__/scripts/auto-deploy.sh
 # Append to the same logs/ dir the bot + backups use (logrotate-managed).
 StandardOutput=append:__REPO__/logs/deploy.log
 StandardError=append:__REPO__/logs/deploy.log
-# A deploy (install + typecheck + tests + restart) should never run long.
-TimeoutStartSec=300
+# The gate (typecheck + the whole test suite) must never compete with the
+# live bot: on 2026-10-21 it ran at normal priority on the shared 4-CPU VM,
+# pushed the load to ~90 (mostly disk wait: its SQLite fixtures write to
+# /tmp, which is on disk), starved the bot's loops for 5 min and the watchdog
+# restarted it. Its temp files now live in RAM, and it runs at the lowest CPU
+# priority and the lowest best-effort IO priority. Not the idle IO class: on
+# this VM the disk is never idle, and the gate stalled in disk wait with 10 s
+# of CPU in 18 min. The bot is restarted through its own unit (start.sh →
+# systemctl --user restart uncle-carl), so it never inherits these.
+Environment=TMPDIR=/dev/shm
+Nice=19
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+# Long enough for a slow gate at that priority. 300 s killed the gate before
+# it finished, and every timer tick retried it: a loop of 5-minute load
+# spikes that never deployed.
+TimeoutStartSec=1800

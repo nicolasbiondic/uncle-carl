@@ -53,5 +53,9 @@ fi
 # atomic upserts also rebase past bars after corporate actions. It is the
 # heaviest step and the only one that stops at the first Alpaca 429, so it runs
 # LAST, where download-stock-dailies.ts ran: under `set -e` its failure cannot
-# skip the VIX, crypto, funding and intraday refreshes above.
-"$BUN_BIN" run scripts/backfill-historical.ts --stocks-only
+# skip the VIX, crypto, funding and intraday refreshes above. Lowest CPU and
+# best-effort IO priority: rewriting ~520 full series must not starve the live
+# bot on the shared prod VM, as the deploy gate's disk load did on 2026-10-21.
+LOWPRI=(nice -n 19)
+if command -v ionice >/dev/null 2>&1; then LOWPRI+=(ionice -c2 -n7); fi
+"${LOWPRI[@]}" "$BUN_BIN" run scripts/backfill-historical.ts --stocks-only

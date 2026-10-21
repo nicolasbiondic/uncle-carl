@@ -9,6 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
 import {
   candidateToReplayConfig,
   canonicalJson,
@@ -20,6 +21,7 @@ import {
   validateCandidate,
   validateManifest,
   validatePortfolioBlock,
+  validatePortfolioManifest,
   type CandidateConfig,
   type ExperimentManifest,
   type PortfolioCandidateBlock,
@@ -41,6 +43,8 @@ const d3: PortfolioCandidateBlock = {
   strategy: { kind: "cryptoTrend", universe: ["BTC/USD", "ETH/USD"], inceptionGuardBars: 252, volLookback: 30, covLookback: 30, portfolioVolTarget: 0.35, perAssetCap: 0.6, maxGross: 2, blendHorizons: [63, 126, 252], maLong: 200, signalBandPct: 0, stop: { mode: "volScaled", kSigma: 3, lookbackBars: 20, minPct: 2, maxPct: 12 } },
   venue: { venue: "binance_usdm", fractional: false, minOrderNotional: 5, rebalanceBand: 0.02, qtyStep: { "BTC/USD": 0.001 } },
 };
+const vm: PortfolioCandidateBlock = { strategy: { kind: "volManaged", universe: ["SPY", "IEF"], inceptionGuardBars: 252,
+  volLookback: 63, covLookback: 21, portfolioVolTarget: 0.15, annualization: 252, perAssetCap: 0.25, maxGross: 1 }, venue };
 
 function manifest(block: PortfolioCandidateBlock, over: Partial<ExperimentManifest> = {}): ExperimentManifest {
   const crypto = block.strategy.kind === "cryptoTrend";
@@ -63,6 +67,37 @@ function manifest(block: PortfolioCandidateBlock, over: Partial<ExperimentManife
 }
 
 describe("portfolio candidate validation", () => {
+  test("RW2 strict bounds, positive integer lookbacks, unknown keys and universe coverage", () => {
+    expect(() => validateManifest(manifest(vm))).not.toThrow();
+    for (const key of ["inceptionGuardBars", "volLookback", "covLookback"]) {
+      for (const value of [0, -1, 1.5, NaN, Infinity, "21"]) expect(() => validatePortfolioBlock({ ...vm, strategy: { ...vm.strategy, [key]: value } })).toThrow(key);
+      expect(() => validatePortfolioBlock({ ...vm, strategy: { ...vm.strategy, [key]: 1 } })).not.toThrow();
+    }
+    for (const [key, hi] of [["portfolioVolTarget", 2], ["perAssetCap", 1], ["maxGross", 2]] as const) {
+      for (const value of [0, -1, hi + 0.001, NaN, Infinity, "0.2"]) expect(() => validatePortfolioBlock({ ...vm, strategy: { ...vm.strategy, [key]: value } })).toThrow(key);
+      expect(() => validatePortfolioBlock({ ...vm, strategy: { ...vm.strategy, [key]: hi } })).not.toThrow();
+    }
+    for (const universe of [[], [""], ["SPY", "SPY"]]) expect(() => validatePortfolioBlock({ ...vm, strategy: { ...vm.strategy, universe } })).toThrow(/universe/);
+    for (const annualization of [0, 253, "252"]) expect(() => validatePortfolioBlock({ ...vm, strategy: { ...vm.strategy, annualization } })).toThrow(/annualization/);
+    for (const key of ["stop", "blendHorizons", "typo"]) expect(() => validatePortfolioBlock({ ...vm, strategy: { ...vm.strategy, [key]: {} } })).toThrow(/unknown keys/);
+    const m = manifest(vm);
+    expect(() => validateManifest({ ...m, data: { ...m.data, universe: ["SPY"] } })).toThrow(/missing from data.universe: IEF/);
+  });
+
+  test("RW2 annualization, venue and real funding cross-check by sleeve, for EVERY candidate", () => {
+    const stocks = manifest(vm);
+    const crypto: ExperimentManifest = { ...stocks, sleeve: "crypto", data: { ...stocks.data, source: "binance_futures", funding: true },
+      candidates: [{ name: "crypto", cadenceMin: 1440, portfolio: { strategy: { ...vm.strategy, annualization: 365 } as PortfolioCandidateBlock["strategy"], venue: { ...venue, venue: "binance_usdc" } } }] };
+    expect(() => validateManifest(crypto)).not.toThrow();
+    for (const m of [stocks, crypto]) {
+      expect(() => validateManifest({ ...m, data: { ...m.data, funding: !m.data.funding } })).toThrow(/funding=/);
+      const block = m.candidates[0].portfolio!;
+      expect(() => validateManifest({ ...m, candidates: [...m.candidates, { name: "wrong-vol", cadenceMin: 1440,
+        portfolio: { ...block, strategy: { ...block.strategy, annualization: m.sleeve === "stocks" ? 365 : 252 } as PortfolioCandidateBlock["strategy"] } }] })).toThrow(/annualization must be/);
+      expect(() => validateManifest({ ...m, candidates: [{ ...m.candidates[0], portfolio: { ...block, venue: { ...venue, venue: m.sleeve === "stocks" ? "binance_usdm" : "alpaca" } } }] })).toThrow(/does not match design/);
+    }
+    expect(() => validatePortfolioManifest({ ...stocks, sleeve: "meanrev" })).toThrow(/requires sleeve/);
+  });
   test("accepts the three designs and rejects foreign knobs, the wrong cadence and unknown keys", () => {
     for (const b of [d1, d2, d3]) expect(() => validateCandidate({ name: "c", cadenceMin: 1440, portfolio: b })).not.toThrow();
     expect(() => validateCandidate({ name: "c", cadenceMin: 1440, portfolio: d1, entryPct: 5 })).toThrow(/must not set momentum\/meanrev keys: entryPct/);
@@ -193,4 +228,32 @@ describe("legacy identity lock — committed manifests keep their configHash and
       expect(m.candidates.map(c => ({ name: c.name, base: hashReplayConfig(candidateToReplayConfig(m, c, "base")), stress: hashReplayConfig(candidateToReplayConfig(m, c, "stress")) }))).toEqual(frozen.candidates);
     });
   }
+});
+
+test("RW1 identity lock — configHash and all base/stress candidate identities frozen before RW2", () => {
+  const frozen = [
+    ["rw-d1-xasset-etf-trend-v1.json", "31b3f4baa7e59b4c004beea79b3d752c383deac5001a2357fddd9ea398c65d9e", "331fb468a3ba5fa679d06332a73bf8070f6df0a08349c3d01964a7c19e543759"],
+    ["rw-d2-sp500-core-v1.json", "5e4564bc439bcdadfa468faebaa2655a5d7a7c4e0361a8efcede6803f53e67dd", "c86b03d62485b9e115fba8c546f27191b73ae501a3420303e94a171da71b5c29"],
+    ["rw-d3-crypto-daily-trend-v1.json", "f4c2adef3d02f343e976693210c7e89b5f953349a8928da420941729448f3a52", "cbb119a5ce147fa379e41bb6ae19de0d99fa0106bffda6c4988350aac114825b"],
+  ];
+  for (const [file, configHash, candidateDigest] of frozen) {
+    const m = loadManifest(join(import.meta.dir, "..", "experiments", file));
+    expect(sha(canonicalJson(manifestIdentity(m, resolveAsOf(m))))).toBe(configHash);
+    expect(sha(canonicalJson(m.candidates.map(c => ({ name: c.name, base: hashReplayConfig(candidateToReplayConfig(m, c, "base")), stress: hashReplayConfig(candidateToReplayConfig(m, c, "stress")) }))))).toBe(candidateDigest);
+  }
+});
+
+test("all 116 pre-RW2 walk-forward manifests retain config/candidate identities (latest pinned, no DB/.env)", () => {
+  const dir = join(import.meta.dir, "..", "experiments");
+  const records = readdirSync(dir).filter(f => f.endsWith(".json") && !f.startsWith("rw2-")).sort().flatMap(file => {
+    const raw = JSON.parse(readFileSync(join(dir, file), "utf8"));
+    // Other protocols (intraday, streversal, hypothesis ledger) have no WF identity.
+    if (!["stocks", "crypto", "meanrev"].includes(raw.sleeve)) return [];
+    const m = loadManifest(join(dir, file));
+    const asOf = m.asOf.toLowerCase() === "latest" ? Date.parse("2026-10-19T00:00:00Z") : resolveAsOf(m);
+    return [{ file, configHash: sha(canonicalJson(manifestIdentity(m, asOf))), candidates: m.candidates.map(c => ({ name: c.name,
+      base: hashReplayConfig(candidateToReplayConfig(m, c, "base")), stress: hashReplayConfig(candidateToReplayConfig(m, c, "stress")) })) }];
+  });
+  expect(records).toHaveLength(116);
+  expect(sha(canonicalJson(records))).toBe("b3ca4808ecd070e245b9b1d00359b9a539746557dcb4a6261af4c7d486d278da");
 });

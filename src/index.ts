@@ -57,6 +57,10 @@ import { CorporateActionsMonitor } from "./market/corporateActions";
 import { heartbeats } from "./ops/heartbeat";
 import { publishInstanceManifest } from "./ops/instanceManifest";
 import { buildPortfolioPlan } from "./portfolios/factory";
+import { resolvePortfolioWiring, restoreIncumbentRows, sleevesWithTwoManagers, PORTFOLIO_SLEEVES, type SleeveManager } from "./portfolio-engine/live/cutover";
+import { buildPortfolioEngines, startPortfolioEngines } from "./portfolio-engine/live/wiring";
+import { stopPriceFromEntry } from "./account/BinanceSleeveReconciler";
+import { fapiClientOrderId } from "./executor/binance-executor";
 import { builtinPortfolio } from "./portfolios/builtin";
 import { initPlatformPortfolios, loadPlatformPortfolioDefinitions, resolvePortfoliosSource } from "./portfolios/store";
 import type { MomentumPortfolioPlan, MeanRevPortfolioPlan, StatePersistenceSpec, PortfolioDefinition } from "./portfolios/types";
@@ -931,6 +935,10 @@ export function meanrevStocksPortfolioPlan(): MeanRevPortfolioPlan {
 // else. With untouched seeded rows the db source builds byte-identical
 // engines (locked by src/portfolios/store.test.ts).
 let dbPortfolioDefs: Map<string, PortfolioDefinition> | null = null;
+/** RW2: sleeves whose incumbent engine is replaced by a LIVE portfolio engine this boot
+ *  (src/portfolio-engine/live/cutover.ts). main() fills it BEFORE any incumbent is built, and only
+ *  with sleeves whose portfolio engine was actually constructed. */
+let portfolioCutoverSleeves: ReadonlySet<string> = new Set();
 function portfolioDefinition(id: string): PortfolioDefinition {
   if (dbPortfolioDefs) {
     const def = dbPortfolioDefs.get(id);
@@ -943,6 +951,7 @@ function portfolioDefinition(id: string): PortfolioDefinition {
  *  db source: the row's enabled flag (owner action via F3d), ANDed with the
  *  same env gates main() already applies. */
 function portfolioEnabled(id: string): boolean {
+  if (portfolioCutoverSleeves.has(id)) return false; // a live portfolio engine manages it: the incumbent runs NO entries or exits
   return dbPortfolioDefs ? dbPortfolioDefs.get(id)?.enabled === true : true;
 }
 function momentumPlanFor(id: string): MomentumPortfolioPlan {
@@ -990,6 +999,7 @@ async function main() {
     stocksDailyInterval?: ReturnType<typeof setInterval>;
     meanrevInterval?: ReturnType<typeof setInterval>;
     treasuryInterval?: ReturnType<typeof setInterval>;
+    stopPortfolioEngines?: () => void;
   } = {};
 
   const shutdown = async () => {
@@ -1002,6 +1012,7 @@ async function main() {
     if (handles.stocksDailyInterval) clearInterval(handles.stocksDailyInterval);
     if (handles.meanrevInterval) clearInterval(handles.meanrevInterval);
     if (handles.treasuryInterval) clearInterval(handles.treasuryInterval);
+    handles.stopPortfolioEngines?.();
     handles.fundingMonitor?.stop();
     handles.corporateActions?.stop();
     handles.governor?.stop();
@@ -1384,6 +1395,65 @@ async function main() {
   log.info("Starting account manager...");
   await accountManager.start();
 
+  // 8b. RW2 — the portfolio engine (docs/reports/RW-reescritura-rentable.md §4, src/portfolio-engine/README.md).
+  // Registry definitions with template "portfolio" (PORTFOLIOS_SOURCE=db) put the engine on an
+  // EXISTING sleeve: observer = computes and persists, sends nothing, the incumbent trades on;
+  // live = it REPLACES the incumbent (portfolioEnabled() above is false for the sleeve), adopts its
+  // rows and takes them out of the stop machinery. Engines are CONSTRUCTED here, before any incumbent:
+  // a definition that is misconfigured or cannot be built leaves its sleeve to the incumbent and pages
+  // (never two engines on one sleeve, never none because of a bad definition). Rollback = the
+  // definition back to observer / removed: the sleeve's PORTFOLIO rows are handed back to the
+  // incumbent below, before it starts. No definition → this whole block is a no-op.
+  const portfolioAlert = (context: string, message: string) => {
+    log.error(`🚨 ${context}: ${message}`);
+    insertActivity(null, "circuit", `${context}: ${message}`);
+    eventBus.emit(EVENTS.ERROR_BURST, { context, message, count: 1, windowMs: 0, firstAt: Date.now(), lastAt: Date.now() });
+  };
+  const peWiring = resolvePortfolioWiring({
+    defs: dbPortfolioDefs ? [...dbPortfolioDefs.values()] : [],
+    venueReady: {
+      alpaca: alpacaVenueLinked ? null : "alpaca venue UNLINKED",
+      binance_usdm: binanceVenueLinked ? null : "binance venue UNLINKED",
+      binance_usdc: usdcExecutor && usdcLive ? null : "momentum_crypto_usdc executor not attached (MOMENTUM_USDC_ENABLED=true and a connected USDC pool required)",
+    },
+  });
+  const peBuilt = buildPortfolioEngines(peWiring, {
+    alpacaExecutor: alpacaVenueLinked ? accountManager.executor.alpaca : null,
+    binanceTransports: {
+      binance_usdm: binanceVenueLinked ? accountManager.executor.binance.venueTransport : null,
+      binance_usdc: usdcExecutor ? usdcExecutor.venueTransport : null,
+    },
+  });
+  for (const p of peBuilt.problems) portfolioAlert("PortfolioCutover", `definition '${p.definitionId}' (${p.sleeve ?? "?"}) ${p.severity === "live_refused" ? "NOT live" : "ignored"}: ${p.message}`);
+  portfolioCutoverSleeves = new Set(peBuilt.live.keys());
+  for (const sleeve of portfolioCutoverSleeves) {
+    log.warn(`🔀 ${sleeve}: LIVE on the portfolio engine — the incumbent engine is not built (no entries, no exits)`);
+    insertActivity(sleeve, "system", `${sleeve} managed by the portfolio engine (live); incumbent engine not built this boot`);
+  }
+  {
+    const incumbentExpected: Record<string, boolean> = {
+      momentum_stocks: alpacaVenueLinked && portfolioEnabled("momentum_stocks"),
+      meanrev_stocks: alpacaVenueLinked && process.env.MEANREV_ENABLED !== "false" && portfolioEnabled("meanrev_stocks"),
+      momentum_crypto: binanceVenueLinked && portfolioEnabled("momentum_crypto"),
+      momentum_crypto_usdc: !!usdcExecutor && usdcLive && portfolioEnabled("momentum_crypto_usdc"),
+    };
+    const managers: Record<string, SleeveManager> = {};
+    for (const sleeve of Object.keys(PORTFOLIO_SLEEVES)) {
+      managers[sleeve] = portfolioCutoverSleeves.has(sleeve) ? "portfolio_live" : incumbentExpected[sleeve] ? "incumbent" : "none";
+    }
+    await restoreIncumbentRows(managers, {
+      alert: portfolioAlert,
+      // Binance arms its native stop at open only; a handed-back row needs one. Stocks: the 15s loop
+      // and the native-stop pass of AccountManager pick the re-tagged row up by themselves.
+      armStop: async (sleeve, row) => {
+        const exec = sleeve === "momentum_crypto_usdc" ? usdcExecutor : sleeve === "momentum_crypto" ? accountManager.executor.binance : null;
+        if (!exec) return true;
+        const stopPct = (RISK_PROFILES as Record<string, { stopLossPct: number }>)[sleeve]?.stopLossPct ?? 4;
+        return exec.placeStopMarketClose(row.symbol, "buy", stopPriceFromEntry("buy", row.entryPrice, stopPct), row.quantity, fapiClientOrderId(`handback:${row.id}`));
+      },
+    });
+  }
+
   // 9. Momentum engines — ALWAYS ON (the only signal engine in v8).
   const momentumLog = createLogger("Momentum");
   // Per-sleeve logger contexts: four MomentumEngines + two MeanRevEngines
@@ -1560,7 +1630,7 @@ async function main() {
     // logged + surfaced on the activity timeline above.
     log.warn("momentum_crypto: binance venue UNLINKED (ACCOUNTS_SOURCE=registry) — engine NOT built");
   } else if (!portfolioEnabled("momentum_crypto")) {
-    log.warn("momentum_crypto: platform_portfolios row disabled — engine NOT built (stop-loss loop and broker syncs keep running)");
+    log.warn("momentum_crypto: platform_portfolios row disabled or cut over to the portfolio engine — engine NOT built (stop-loss loop and broker syncs keep running)");
   } else {
     governor.migrateOnce(
       "2026-07-16_momentum_crypto_shadow_default",
@@ -1694,7 +1764,7 @@ async function main() {
     // F3b: db mode, row disabled (owner action) — engine not built; the
     // 15s stop-loss loop, broker-native stops and syncs keep managing any
     // open rows for the shared Alpaca account.
-    log.warn("momentum_stocks: platform_portfolios row disabled — engine NOT built (stop-loss loop, native stops and broker syncs keep running)");
+    log.warn("momentum_stocks: platform_portfolios row disabled or cut over to the portfolio engine — engine NOT built (stop-loss loop, native stops and broker syncs keep running)");
   } else {
     const dailyHorizon = MOMENTUM_STOCKS_DAILY_HORIZON;
     const stocksPlan = momentumPlanFor("momentum_stocks");
@@ -1865,7 +1935,26 @@ async function main() {
     handles.meanrevInterval = meanrevInterval;
     log.info("🚀 meanrev_stocks engine wired (daily pass ≥ 09:35 ET)");
   } else {
-    log.info("meanrev_stocks disabled (MEANREV_ENABLED=false or platform_portfolios row disabled)");
+    log.info("meanrev_stocks disabled (MEANREV_ENABLED=false, platform_portfolios row disabled or cut over to the portfolio engine)");
+  }
+
+  // 9c-pe. Portfolio engines start LAST among the sleeve engines. Last line of defence first: a sleeve
+  // whose portfolio engine is live must not have an incumbent (impossible by construction — the
+  // cutover set gates every incumbent above); if it ever happens the portfolio engine yields.
+  {
+    const incumbentBuilt = (sleeve: string): boolean => ({
+      momentum_crypto: cryptoEngine !== null, momentum_crypto_usdc: usdcEngine !== null,
+      momentum_stocks: stocksEngine !== null, meanrev_stocks: meanrevInterval !== null,
+    } as Record<string, boolean>)[sleeve] ?? false;
+    for (const sleeve of sleevesWithTwoManagers(peBuilt.live.keys(), incumbentBuilt)) {
+      portfolioAlert("PortfolioCutover", `${sleeve}: TWO managers (incumbent built AND portfolio engine live) — the portfolio engine is NOT started; the incumbent manages the sleeve`);
+      peBuilt.live.delete(sleeve);
+    }
+    const peEngines = [...peBuilt.live.values(), ...peBuilt.observers];
+    if (peEngines.length > 0) {
+      handles.stopPortfolioEngines = startPortfolioEngines(peEngines);
+      log.info(`🧮 portfolio engines started: ${[...peBuilt.live.keys()].map(s => `${s} LIVE`).concat(peBuilt.observers.map(e => `${e.accountId} observer`)).join(", ")}`);
+    }
   }
 
   // 9d. Treasury sweep — OPT-IN (ALPACA_TREASURY_SWEEP above, default null =

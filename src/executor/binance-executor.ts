@@ -214,6 +214,9 @@ export class BinanceExecutor {
   /** REST transport (usdmTransport.ts). Field declared after `limiter` —
    *  the constructor hands it live accessors into this instance. */
   private readonly transport: BinanceUsdmTransport;
+  /** The executor's own transport (signing, timeouts, the shared venue limiter), for the portfolio
+   *  engine's Binance venue: one connection and one rate-limit bucket per account, never a second client. */
+  get venueTransport(): BinanceUsdmTransport { return this.transport; }
   /** Symbol-lock acquisition bound; overridable only by tests (a shorter
    *  bound makes the timeout path testable without a 10s wait). */
   private lockTimeoutMs = DEFAULT_SYMBOL_LOCK_TIMEOUT_MS;

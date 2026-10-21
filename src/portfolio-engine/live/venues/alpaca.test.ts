@@ -139,3 +139,36 @@ describe("positions / prices / rules", () => {
     expect(AlpacaVenue.fromExecutor(exec).venue).toBe("alpaca");
   });
 });
+
+describe("releaseLegacyStops / Reg-T guard (executor surface)", () => {
+  test("cancels only resting SELL stops on the requested symbols, by exact id; a failed cancel throws", async () => {
+    const cancelled: string[] = [];
+    const stops = [
+      { id: "s1", clientOrderId: "uc8-a", symbol: "SPY", side: "sell" },
+      { id: "s2", clientOrderId: "uc8-b", symbol: "TLT", side: "sell" },
+      { id: "s3", clientOrderId: "uc8-c", symbol: "SPY", side: "buy" },
+    ];
+    const venue = new AlpacaVenue(fakeExecutor({ getOpenStopOrders: async () => stops, cancelOrderById: async (id) => { cancelled.push(id); return true; } }), fakeClient());
+    expect(await venue.releaseLegacyStops(["SPY"])).toEqual(["s1"]);
+    expect(cancelled).toEqual(["s1"]);
+    expect(await venue.releaseLegacyStops([])).toEqual([]);
+    const failing = new AlpacaVenue(fakeExecutor({ getOpenStopOrders: async () => stops, cancelOrderById: async () => false }), fakeClient());
+    await expect(failing.releaseLegacyStops(["SPY"])).rejects.toThrow(/could not cancel/);
+    // an executor without the stop surface releases nothing (no guess)
+    expect(await new AlpacaVenue(fakeExecutor(), fakeClient()).releaseLegacyStops(["SPY"])).toEqual([]);
+  });
+
+  test("buy over Reg-T buying power: blocked before createOrder; equal/under passes; sell never guarded; unreadable fails open", async () => {
+    const client = fakeClient();
+    const mk = (bp: number | null | "throw") => new AlpacaVenue(fakeExecutor({ getRegTBuyingPower: async () => { if (bp === "throw") throw new Error("x"); return bp; } }), client, { sleep: async () => {} });
+    const blocked = await mk(2999).submit(intent({ notional: 3000 }), "id1");
+    expect(blocked).toMatchObject({ ok: false, filledQty: 0, status: "insufficient_buying_power" });
+    expect(blocked.error).toContain("Reg-T buying power $2999");
+    expect(client.calls).toHaveLength(0);
+    expect((await mk(3000).submit(intent({ notional: 3000 }), "id2")).ok).toBe(true);
+    expect((await mk(1).submit(intent({ side: "sell", reduceOnly: true, notional: 3000 }), "id3")).ok).toBe(true);
+    expect((await mk(null).submit(intent(), "id4")).ok).toBe(true);
+    expect((await mk("throw").submit(intent(), "id5")).ok).toBe(true);
+    expect((await mk(-5).submit(intent(), "id6")).status).toBe("insufficient_buying_power"); // margin call: blocks
+  });
+});

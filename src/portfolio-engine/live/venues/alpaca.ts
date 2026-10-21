@@ -15,6 +15,12 @@
 //   - positions and latest prices read through the executor (its limiter,
 //     its cache, its symbol normalization);
 //   - rules: fractional, min notional 5 USD (RW manifest), band from the design.
+//   - buys mirror the shared account's Reg-T buying power pre-submit, exactly as the
+//     incumbent engines do (AlpacaMomentumAdapter, 2026-08-20): the sleeve ledger sizes the
+//     order, the account's margin buying power is the cross-sleeve truth, an unreadable
+//     value fails OPEN. Sells are never guarded. The treasury sweep (BOXX) needs nothing
+//     else: cash simply goes negative on margin until its 15:50 cover sells the ETF;
+//   - releaseLegacyStops: cancel the incumbent's resting GTC stops on adopted symbols;
 //   - syncStops: not provided — D1/D2 declare no stops; the engine alerts if a
 //     design ever declares one on this venue.
 
@@ -38,6 +44,11 @@ export interface AlpacaVenueExecutor {
   getPositions(): Promise<Array<{ symbol: string; market: string; side: string; quantity: number; avgEntryPrice: number; currentPrice: number }>>;
   getLatestPrice(symbol: string): Promise<number>;
   getCachedPrice?(symbol: string): number;
+  /** Account Reg-T buying power (null = unreadable). Absent = no guard (fails open). */
+  getRegTBuyingPower?(): Promise<number | null>;
+  /** Cutover: this bot's resting stop orders (uc8- stamped only), and a targeted cancel by id. */
+  getOpenStopOrders?(symbol?: string): Promise<Array<{ id: string; clientOrderId: string; symbol: string; side: string }>>;
+  cancelOrderById?(orderId: string): Promise<boolean>;
 }
 
 export interface AlpacaVenueOptions {
@@ -129,9 +140,38 @@ export class AlpacaVenue implements VenueAdapter {
     return out;
   }
 
+  /** Cancel the incumbent's resting protective stops on `symbols` (targeted, by exact order id,
+   *  only orders stamped uc8- by getOpenStopOrders). Throws when the stop book cannot be read:
+   *  unknown is never "no stops". */
+  async releaseLegacyStops(symbols: readonly string[]): Promise<string[]> {
+    if (!this.executor.getOpenStopOrders || !this.executor.cancelOrderById) return [];
+    const want = new Set(symbols);
+    if (want.size === 0) return [];
+    const released: string[] = [];
+    for (const stop of await this.executor.getOpenStopOrders()) {
+      if (!want.has(stop.symbol) || stop.side !== "sell") continue;
+      if (await this.executor.cancelOrderById(stop.id)) {
+        released.push(stop.id);
+        log.warn(`${stop.symbol}: incumbent stop ${stop.id} (${stop.clientOrderId}) cancelled — the row left the stop machinery`);
+      } else {
+        throw new Error(`could not cancel incumbent stop ${stop.id} on ${stop.symbol}`);
+      }
+    }
+    return released;
+  }
+
   async submit(order: OrderIntent, clientOrderId: string): Promise<OrderResult> {
     if (!this.executor.isConnected()) return { ok: false, filledQty: 0, avgPrice: null, status: "disconnected", error: "alpaca not connected" };
     if (!(order.qty > 0)) return { ok: false, filledQty: 0, avgPrice: null, status: "invalid", error: `non-positive qty ${order.qty}` };
+    if (order.side === "buy" && this.executor.getRegTBuyingPower) {
+      let bp: number | null = null;
+      try { bp = await this.executor.getRegTBuyingPower(); } catch (e: any) { log.warn(`Reg-T buying power unreadable (${e?.message ?? e}) — failing open`); }
+      if (bp !== null && order.notional > bp) {
+        const error = `insufficient_buying_power (shared Alpaca account): need $${order.notional.toFixed(0)}, Reg-T buying power $${bp.toFixed(0)} — blocked pre-submit`;
+        log.warn(`BUY ${order.symbol} blocked: ${error}`);
+        return { ok: false, filledQty: 0, avgPrice: null, status: "insufficient_buying_power", error };
+      }
+    }
     let broker: any;
     try {
       broker = await this.client.createOrder({

@@ -126,3 +126,40 @@ export function fixedDecide(weights: Record<string, number>, opts: { stops?: boo
   };
   return Object.assign(fn, { calls });
 }
+
+// ── registry definitions of the portfolio engine (cutover / wiring tests) ────
+import type { PortfolioDefinition, PortfolioEngineParams } from "../../portfolios/types";
+import type { ModelVersion } from "../../portfolio/modelVersions";
+import { designHash } from "./cutover";
+
+export const PE_VERSION = "pe-d1-test";
+export function peVersions(sleeve: string, name = PE_VERSION): Record<string, readonly ModelVersion[]> {
+  return { [sleeve]: [
+    { id: `${sleeve}@old`, since: "1970-01-01T00:00:00Z", modelStart: null, note: "incumbent" },
+    { id: `${sleeve}@${name}`, since: "2026-10-21T00:00:00Z", modelStart: null, note: "portfolio engine" },
+  ] };
+}
+
+/** A well-formed 'portfolio' definition on `sleeve` (stocks by default), provenance included. */
+export function peDefinition(sleeve = "momentum_stocks", over: { id?: string; runMode?: "observer" | "live"; mode?: "live" | "shadow"; enabled?: boolean; params?: Partial<PortfolioEngineParams> } = {}): PortfolioDefinition {
+  const crypto = sleeve.startsWith("momentum_crypto");
+  const usdc = sleeve === "momentum_crypto_usdc";
+  const dataSymbols = usdc ? { "BTC/USDC": "BTC/USD", "ETH/USDC": "ETH/USD" } : undefined;
+  const strategy = crypto
+    ? { ...CRYPTO_STOP, universe: usdc ? ["BTC/USDC", "ETH/USDC"] : ["BTC/USD", "ETH/USD"] }
+    : XASSET;
+  const base: PortfolioEngineParams = {
+    engine: "portfolio", sleeve, strategy, venue: usdc ? "binance_usdc" : crypto ? "binance_usdm" : "alpaca",
+    runMode: over.runMode ?? "observer", strategyVersion: `${sleeve}@${PE_VERSION}`,
+    heartbeatName: `portfolio:${sleeve}`, loggerContext: `Portfolio:${sleeve}`,
+    minOrderNotional: 5, rebalanceBand: crypto ? 0.02 : 0, ...(dataSymbols ? { dataSymbols } : {}),
+    ...over.params,
+  };
+  base.provenance = over.params?.provenance ?? { manifest: "experiments/test.json", candidate: "c1", designSha256: designHash(base) };
+  return {
+    id: over.id ?? `pe_${sleeve}`, name: `PE ${sleeve}`, template: "portfolio",
+    account: usdc ? "binance_usdc" : crypto ? "binance_usdt" : "alpaca_main",
+    capital: 10_000, mode: over.mode ?? ((over.runMode ?? "observer") === "live" ? "live" : "shadow"),
+    enabled: over.enabled ?? true, params: base,
+  };
+}

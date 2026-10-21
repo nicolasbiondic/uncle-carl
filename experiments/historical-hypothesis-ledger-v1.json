@@ -1036,6 +1036,63 @@
       "resultsComplete": false,
       "executionReported": true,
       "evidence": "RW D3, rediseno de momentum_crypto y momentum_crypto_usdc: un kernel diario en BTC/ETH/SOL/XRP/DOGE (perpetuos, funding real), senal de D1 sin banda, pesos senal/sigma30, vol objetivo (cov 30d), tope 0.6, bruto <=2, banda de rebalanceo 2%; eje de stop CERRADO: fijo 4%, por volatilidad (3 sigma de 20, 2-12%) o ninguno; candidatos vt30-stop4, vt35-stop4, vt35-volstop, vt35-nostop; costes 5+4 / 10+8 bps. +4: 392->396. RESULTADO REFUTADO: cadena mixta vt35-nostop/vt35-volstop/vt35-nostop, retorno OOS +54.97%, Sharpe 0.452, DD 35.49%, PSR 0.837 frente a BTC +94.9%/0.534; falla C1-C6 (C4 senal 0.452 vs pasivo 0.54; un ano = 92.8% del P&L); pasa C6b y C7. La replica independiente en Python reproduce los 3 folds (|dSharpe| 0.012/0.015/0.026 <= 0.10): motor validado. C8 no se calcula. 0.57 ordenes/sesion. NO SE CABLEA. authoritativeArtifactRwD3 y RW SS7."
+    },
+    {
+      "id": "rw2-e1-stocks-volmanaged-2026-10-21",
+      "sourceCommit": "6ee72fd (manifest ANTES de todo ensayo; pre-registro vinculante docs/reports/RW-reescritura-rentable.md SS8 @ e80e72b)",
+      "sourcePaths": [
+        "experiments/rw2-e1-stocks-volmanaged-v1.json",
+        "scripts/portfolio-replay.ts",
+        "scripts/portfolio-wf.ts",
+        "scripts/portfolio-criteria.ts",
+        "src/portfolio-engine/decide.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 2,
+      "priorUniqueTrials": 396,
+      "resultingUniqueTrials": 398,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW2 E1, rediseno de momentum_stocks (pre-registro docs/reports/RW-reescritura-rentable.md SS8 @ e80e72b, manifest 6ee72fd ANTES de todo ensayo): siempre invertido en su propio universo, pesos 1/sigma, escala unica a la vol objetivo (covarianza 21d), tope por nombre, bruto <= 1 (sin margen), sin senal ni stops; ventana y costes del manifest del sleeve actual. +2: 396->398. RESULTADO VALIDADO: cadena vt15/vt15/vt15, retorno OOS +262.41%, Sharpe 1.291, DD 21.9%, PSR 0.999; R3 Sharpe 1.279 vs 1.138 del sleeve actual re-corrido (4084d122) en 1752 sesiones comunes; criterios fallados: ninguno. Replica independiente en Python por fold: |dSharpe| 0.0004/0.0005/0.0007 (tolerancia 0.10). PASA A MODO OBSERVADOR junto al sleeve actual (>= 5 sesiones), luego corte con adopcion de posiciones y congelacion de 90 dias (RW SS8.5). authoritativeArtifactRw2E1 y RW SS9."
+    },
+    {
+      "id": "rw2-e2-meanrev-volmanaged-2026-10-21",
+      "sourceCommit": "6ee72fd (manifest ANTES de todo ensayo; pre-registro vinculante docs/reports/RW-reescritura-rentable.md SS8 @ e80e72b)",
+      "sourcePaths": [
+        "experiments/rw2-e2-meanrev-volmanaged-v1.json",
+        "scripts/portfolio-replay.ts",
+        "scripts/portfolio-wf.ts",
+        "scripts/portfolio-criteria.ts",
+        "src/portfolio-engine/decide.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 2,
+      "priorUniqueTrials": 398,
+      "resultingUniqueTrials": 400,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW2 E2, rediseno de meanrev_stocks (pre-registro docs/reports/RW-reescritura-rentable.md SS8 @ e80e72b, manifest 6ee72fd ANTES de todo ensayo): siempre invertido en su propio universo, pesos 1/sigma, escala unica a la vol objetivo (covarianza 21d), tope por nombre, bruto <= 1 (sin margen), sin senal ni stops; ventana y costes del manifest del sleeve actual. +2: 398->400. RESULTADO VALIDADO: cadena vt15/vt12/vt12/vt12/vt12/vt15, retorno OOS +149.7%, Sharpe 1.109, DD 21.0%, PSR 0.997; R3 Sharpe 1.095 vs 0.715 del sleeve actual re-corrido (b367dfd1) en 1846 sesiones comunes; criterios fallados: ninguno. Replica independiente en Python por fold: |dSharpe| 0.001/0.002/0.001/0.002/0.062/0.078 (tolerancia 0.10). PASA A MODO OBSERVADOR junto al sleeve actual (>= 5 sesiones), luego corte con adopcion de posiciones y congelacion de 90 dias (RW SS8.5). authoritativeArtifactRw2E2 y RW SS9."
+    },
+    {
+      "id": "rw2-e3-usdc-volmanaged-2026-10-21",
+      "sourceCommit": "6ee72fd (manifest ANTES de todo ensayo; pre-registro vinculante docs/reports/RW-reescritura-rentable.md SS8 @ e80e72b)",
+      "sourcePaths": [
+        "experiments/rw2-e3-usdc-volmanaged-v1.json",
+        "scripts/portfolio-replay.ts",
+        "scripts/portfolio-wf.ts",
+        "scripts/portfolio-criteria.ts",
+        "src/portfolio-engine/decide.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 2,
+      "priorUniqueTrials": 400,
+      "resultingUniqueTrials": 402,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW2 E3, rediseno de momentum_crypto_usdc (pre-registro docs/reports/RW-reescritura-rentable.md SS8 @ e80e72b, manifest 6ee72fd ANTES de todo ensayo): siempre invertido en su propio universo, pesos 1/sigma, escala unica a la vol objetivo (covarianza 21d), tope por nombre, bruto <= 1 (sin margen), sin senal ni stops; ventana y costes del manifest del sleeve actual. +2: 400->402. RESULTADO REFUTADO: cadena vt30/vt30/vt20, retorno OOS +117.44%, Sharpe 0.788, DD 37.1%, PSR 0.938; R3 Sharpe 0.809 vs 1.028 del sleeve actual re-corrido (d0f7fd6f) en 1410 sesiones comunes; criterios fallados: R1_psr, R2_maxDrawdown, R3_vsControl, R5_yearShare. NO SE CABLEA: momentum_crypto_usdc sigue con su configuracion. authoritativeArtifactRw2E3 y RW SS9."
     }
   ],
   "trialSensitivityFinding": {
@@ -2812,6 +2869,155 @@
       "ordersPerSessionOos": 0.57,
       "symbolPnlUsd": 3049.22,
       "marginInterestUsd": 0
+    }
+  },
+  "authoritativeArtifactRw2E1": {
+    "path": "data/backtests/b2324d4f74f15042af8bfba4170df8b41f05e8ec033e324bebe8e284e24e5236/",
+    "manifest": "experiments/rw2-e1-stocks-volmanaged-v1.json @ 6ee72fd (pre-registro antes de correr)",
+    "date": "2026-10-21",
+    "verdict": "VALIDADO por los criterios pre-registrados RW2 SS8.5: cumple R1-R7 (Sharpe 1.279 vs 1.138 del sleeve actual re-corrido en 1752 sesiones comunes, DD 21.9% vs 31.2%) y la replica independiente en Python reproduce los 3 folds (|dSharpe| 0.0004/0.0005/0.0007). PASA A MODO OBSERVADOR junto a momentum_stocks (>= 5 sesiones), luego corte con adopcion de posiciones y congelacion de 90 dias (RW SS8.5). Candidato en vivo: vt15 (cadena uniforme).",
+    "rw2E1": {
+      "outerFoldReturnsPct": [
+        63.96,
+        50.07,
+        47.28
+      ],
+      "stitchedReturnPct": 262.41,
+      "sharpe": 1.291,
+      "maxDrawdownPct": 21.9,
+      "outerPsr": 0.999,
+      "trades": 33,
+      "criteriaFailed": [],
+      "criteriaVerdict": "CUMPLE R1–R7 (réplica independiente pendiente)",
+      "selectedPerFold": [
+        "vt15",
+        "vt15",
+        "vt15"
+      ],
+      "r3StrategySharpe": 1.279,
+      "r3ControlSharpe": 1.138,
+      "r3CommonDays": 1752,
+      "controlArtifact": "4084d122",
+      "authoritativeArtifact": "cb516547",
+      "stressSharpe": 1.281,
+      "maxYearPnlShare": 0.246,
+      "exTopDecileSharpe": 1.16,
+      "meanGross": 0.825,
+      "ordersPerSessionOos": 0.74,
+      "turnoverAnnual": 3.38,
+      "strategyOnCommonDays": {
+        "sharpe": 1.2792,
+        "totalReturn": 2.5727,
+        "maxDrawdown": 0.219
+      },
+      "controlOnCommonDays": {
+        "sharpe": 1.1378,
+        "totalReturn": 5.7928,
+        "maxDrawdown": 0.3117
+      }
+    }
+  },
+  "authoritativeArtifactRw2E2": {
+    "path": "data/backtests/0b088ca320e3521d8bff05b10c1ad7eed2816bc2a1b0b927eb3134e2a3dca4c2/",
+    "manifest": "experiments/rw2-e2-meanrev-volmanaged-v1.json @ 6ee72fd (pre-registro antes de correr)",
+    "date": "2026-10-21",
+    "verdict": "VALIDADO por los criterios pre-registrados RW2 SS8.5: cumple R1-R7 (Sharpe 1.095 vs 0.715 del sleeve actual re-corrido en 1846 sesiones comunes; el re-corrido difiere 0.009 del autoritativo 624d50e9) y la replica independiente reproduce los 6 folds alineados a las sesiones exactas del motor (|dSharpe| <= 0.078; la primera comparacion tenia un desfase de una sesion por fold). PASA A MODO OBSERVADOR junto a meanrev_stocks (>= 5 sesiones), luego corte y congelacion de 90 dias. Candidato en vivo: vt15, el elegido en el ultimo fold (cadena mixta vt15/vt12).",
+    "rw2E2": {
+      "outerFoldReturnsPct": [
+        3.97,
+        33.85,
+        6.46,
+        19.45,
+        9.69,
+        28.64
+      ],
+      "stitchedReturnPct": 149.7,
+      "sharpe": 1.109,
+      "maxDrawdownPct": 21.0,
+      "outerPsr": 0.997,
+      "trades": 192,
+      "criteriaFailed": [],
+      "criteriaVerdict": "CUMPLE R1–R7 (réplica independiente pendiente)",
+      "selectedPerFold": [
+        "vt15",
+        "vt12",
+        "vt12",
+        "vt12",
+        "vt12",
+        "vt15"
+      ],
+      "r3StrategySharpe": 1.095,
+      "r3ControlSharpe": 0.715,
+      "r3CommonDays": 1846,
+      "controlArtifact": "b367dfd1",
+      "authoritativeArtifact": "624d50e9",
+      "stressSharpe": 1.099,
+      "maxYearPnlShare": 0.216,
+      "exTopDecileSharpe": 0.975,
+      "meanGross": 0.888,
+      "ordersPerSessionOos": 0.46,
+      "turnoverAnnual": 2.35,
+      "strategyOnCommonDays": {
+        "sharpe": 1.0947,
+        "totalReturn": 1.4615,
+        "maxDrawdown": 0.21
+      },
+      "controlOnCommonDays": {
+        "sharpe": 0.715,
+        "totalReturn": 0.6539,
+        "maxDrawdown": 0.1767
+      }
+    }
+  },
+  "authoritativeArtifactRw2E3": {
+    "path": "data/backtests/5db1c1526fe82ac3eb75e10a6a214b5da889b2e34d990d835e2d2165585b1b9e/",
+    "manifest": "experiments/rw2-e3-usdc-volmanaged-v1.json @ 6ee72fd (pre-registro antes de correr)",
+    "date": "2026-10-21",
+    "verdict": "REFUTADO por los criterios pre-registrados RW2 SS8.5: falla R1 (PSR 0.938 < 0.95), R2 (DD 37.1% > 25%), R3 (Sharpe 0.809 vs 1.028 del sleeve actual re-corrido en 1410 sesiones comunes) y R5 (un ano = 66.3% del P&L); pasa R4, R6 y R7. NO SE CABLEA: momentum_crypto_usdc sigue con su configuracion.",
+    "rw2E3": {
+      "outerFoldReturnsPct": [
+        74.79,
+        25.31,
+        -0.73
+      ],
+      "stitchedReturnPct": 117.44,
+      "sharpe": 0.788,
+      "maxDrawdownPct": 37.1,
+      "outerPsr": 0.938,
+      "trades": 39,
+      "criteriaFailed": [
+        "R1_psr",
+        "R2_maxDrawdown",
+        "R3_vsControl",
+        "R5_yearShare"
+      ],
+      "criteriaVerdict": "FALLA: R1, R2, R3, R5",
+      "selectedPerFold": [
+        "vt30",
+        "vt30",
+        "vt20"
+      ],
+      "r3StrategySharpe": 0.809,
+      "r3ControlSharpe": 1.028,
+      "r3CommonDays": 1410,
+      "controlArtifact": "d0f7fd6f",
+      "authoritativeArtifact": "752767ae",
+      "stressSharpe": 0.708,
+      "maxYearPnlShare": 0.663,
+      "exTopDecileSharpe": 0.742,
+      "meanGross": 0.528,
+      "ordersPerSessionOos": 0.41,
+      "turnoverAnnual": 4.35,
+      "strategyOnCommonDays": {
+        "sharpe": 0.8089,
+        "totalReturn": 1.2298,
+        "maxDrawdown": 0.3676
+      },
+      "controlOnCommonDays": {
+        "sharpe": 1.0282,
+        "totalReturn": 3.2434,
+        "maxDrawdown": 0.5258
+      }
     }
   }
 }

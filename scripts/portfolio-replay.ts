@@ -125,7 +125,7 @@ export const runPortfolioReplay: ReplayRunner = makePortfolioRunner();
 // ── helpers ───────────────────────────────────────────────────────────────
 
 /** cfg.universe is the protocol's DOMAIN (data identity, LOO, ex-top-decile
- *  reruns): a trend strategy trades strategy.universe ∩ domain; factorCore's
+ *  reruns): trend/volManaged trade strategy.universe ∩ domain; factorCore's
  *  domain is the point-in-time membership, its exclusions travel in
  *  strategy.exclude (the rerun helpers extend that list). */
 export function effectiveStrategy(strategy: PortfolioStrategyConfig, domain: ReadonlySet<string>): PortfolioStrategyConfig {
@@ -171,7 +171,7 @@ export function simulatePortfolioWindow(
   const toMs = Date.parse(win.to);
   if (!(toMs > fromMs)) throw new Error(`portfolio runner: invalid window ${win.from} → ${win.to}`);
   const calendar = calendarForSource(cfg.source);
-  const ppy = calendar === "utc" ? 365 : 252;
+  const ppy = cfg.portfolio.strategy.kind === "volManaged" ? cfg.portfolio.strategy.annualization : calendar === "utc" ? 365 : 252;
   const costModel = costModelOf(cfg);
   const venue = cfg.portfolio.venue;
   const domain = new Set(cfg.universe);

@@ -66,6 +66,25 @@ export function decide(input: CoreDecideInput): TargetBook {
       diagnostics: { reconstituted, coreMembers: memory.coreMembers, scores, vols, overlay, scale: 1 } };
   }
 
+  if (config.kind === "volManaged") {
+    // RW2: every eligible symbol is held — same construction as the trend
+    // designs with the signal always on; no memory, no stops.
+    const vols: Record<string, number> = {};
+    const needed = Math.max(config.volLookback, config.covLookback) + 1;
+    for (const s of [...new Set(config.universe)].sort(compareSymbols)) {
+      if (view.barCount(s) < config.inceptionGuardBars) continue;
+      const closes = priceHistory(view, s, needed).map(b => b.close);
+      const vol = trailingVol(closes, config.volLookback);
+      if (vol !== null && vol > 0 && closes.length >= config.covLookback + 1) vols[s] = vol;
+    }
+    const covariance = covarianceFromPrices(view, Object.keys(vols), config.covLookback);
+    const construction = scaleToVolTarget(vols, covariance, config.annualization,
+      config.portfolioVolTarget, config.perAssetCap, config.maxGross);
+    return { asOf: view.asOf, weights: construction.weights, stops: [],
+      memory: { ...book.memory, portfolioCore: { ...memory, signals: {}, stops: {} } },
+      diagnostics: { vols, covariance, scale: construction.scale, uncappedVol: construction.uncappedVol, finalVol: construction.finalVol } };
+  }
+
   const signals: Record<string, ReturnType<typeof trendSignal>> = {};
   const vols: Record<string, number> = {};
   const needed = Math.max(config.maLong, ...config.blendHorizons.map(h => h + 1), config.volLookback + 1, config.covLookback + 1);

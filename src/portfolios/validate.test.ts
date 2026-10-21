@@ -258,3 +258,28 @@ describe("PATCH — pending_restart lifecycle, unvalidated mark, owner-only arch
     if (!missing.ok) expect(missing.errors[0]).toContain("not found");
   });
 });
+
+describe("RW2: a portfolio-engine definition and its incumbent are ONE sleeve", () => {
+  const pe = (rows: PlatformPortfolioRow[], sleeve = "momentum_stocks"): PlatformPortfolioRow => {
+    const inc = rows.find((r) => r.id === sleeve)!;
+    return {
+      ...inc, id: `pe_${sleeve}`, template: "portfolio", status: "active", source: "owner", validation: "unvalidated",
+      params: { engine: "portfolio", sleeve, strategy: { kind: "xassetTrend", universe: (inc.params as MomentumTsmParams).universe } } as any,
+    };
+  };
+  test("editing the incumbent is not blocked by its own observer/live twin (same universe, same capital counted once)", () => {
+    const rows = seededRows();
+    rows.push(pe(rows));
+    const out = validatePatchPortfolio("momentum_stocks", { capital: rows.find((r) => r.id === "momentum_stocks")!.capital }, ctx(rows), NOW); // $110k equity: the two sleeves hold $100k; the twin must not add its $50k
+    expect(out.ok).toBe(true);
+  });
+  test("but a THIRD sleeve still collides with the twin's universe (the rule is not switched off)", () => {
+    const rows = seededRows();
+    rows.push(pe(rows));
+    const out = validateCreatePortfolio(
+      { id: "stocks_clone", name: "clone", account: "alpaca_main", capital: 100, preset: "momentum_stocks" },
+      ctx(rows), NOW,
+    );
+    expect(out.ok).toBe(false);
+  });
+});

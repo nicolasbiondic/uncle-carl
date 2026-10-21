@@ -27,6 +27,10 @@
  * Report-only (§2.5): orders/session with adjustments apart, turnover, mean
  * gross, P&L by asset class, correlation with other chains (live sleeve or
  * other designs) when their artifact directories are supplied.
+ *
+ * RW2 volManaged manifests use §8.5 R1–R7 instead, with the re-run current
+ * sleeve supplied via --control. Standalone (full tapes from runs.jsonl):
+ *   bun scripts/portfolio-criteria.ts <artifactDir> --control <dir> [--authoritative <dir>]
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -34,6 +38,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import {
   candidateToReplayConfig,
+  loadManifest,
   periodsPerYear,
   stitchEquityHistory,
   stitchedMetrics,
@@ -46,6 +51,7 @@ import { coreKernel, makePortfolioRunner, type PortfolioChainState, type Portfol
 import { covarianceFromPrices, priceHistory, scaleToVolTarget, selectCoreMembers, trailingVol } from "../src/portfolio-engine";
 import type { PortfolioStrategyConfig, SessionDate } from "../src/portfolio-engine/types";
 import { calendarForSource, loadSessionSeries } from "./lib/portfolioData";
+import { loadArtifactOuterDailyReturns } from "./lib/combinedPortfolioReturns";
 
 // ── thresholds (§2.5, verbatim) ──────────────────────────────────────────
 
@@ -71,7 +77,21 @@ export const CRITERIA: Record<DesignId, DesignThresholds> = {
 };
 
 export function designOf(strategy: PortfolioStrategyConfig): DesignId {
+  if (strategy.kind === "volManaged") throw new Error("volManaged uses RW2 criteria and its manifest name, not RW1 designOf");
   return strategy.kind === "xassetTrend" ? "D1" : strategy.kind === "factorCore" ? "D2" : "D3";
+}
+
+export type RW2DesignId = "E1" | "E2" | "E3";
+export const RW2_CRITERIA = {
+  E1: { annualization: 252, minPsr: 0.95, maxDrawdown: 0.25, minExcessVsControl: 0, stressMinSharpe: 0.5, maxYearShare: 0.5, exTopDecileMinSharpe: 0.3, minExtraBpsPerSide: 4 },
+  E2: { annualization: 252, minPsr: 0.95, maxDrawdown: 0.25, minExcessVsControl: 0, stressMinSharpe: 0.5, maxYearShare: 0.5, exTopDecileMinSharpe: 0.3, minExtraBpsPerSide: 4 },
+  E3: { annualization: 365, minPsr: 0.95, maxDrawdown: 0.25, minExcessVsControl: 0, stressMinSharpe: 0.5, maxYearShare: 0.5, exTopDecileMinSharpe: 0.3, minExtraBpsPerSide: 10 },
+} as const;
+
+export function rw2DesignOf(name: string): RW2DesignId {
+  const match = /^rw2-(e[123])-/.exec(name);
+  if (!match) throw new Error("volManaged manifest name must start with rw2-e1-, rw2-e2- or rw2-e3-");
+  return match[1].toUpperCase() as RW2DesignId;
 }
 
 /** Symbols of each fixed benchmark (must be in the manifest's data block). */
@@ -179,7 +199,7 @@ export const passiveTrendDecide: PortfolioKernel["decide"] = ({ view, config, bo
     if (vol !== null && vol > 0) vols[s] = vol;
   }
   const covariance = covarianceFromPrices(view, Object.keys(vols), config.covLookback);
-  const c = scaleToVolTarget(vols, covariance, config.kind === "xassetTrend" ? 252 : 365, config.portfolioVolTarget, config.perAssetCap, config.maxGross);
+  const c = scaleToVolTarget(vols, covariance, config.kind === "volManaged" ? config.annualization : config.kind === "xassetTrend" ? 252 : 365, config.portfolioVolTarget, config.perAssetCap, config.maxGross);
   return { asOf: view.asOf, weights: c.weights, stops: [], memory: book.memory, diagnostics: { passive: "trend-always-on", vols, scale: c.scale } };
 };
 
@@ -456,6 +476,74 @@ export function computeCriteria(inp: CriteriaInputs): CriteriaReport {
   };
 }
 
+// ── RW2 §8.5: risk efficiency vs the re-run current sleeve ────────────────
+
+export interface RW2CriteriaInputs extends Omit<CriteriaInputs, "design" | "passive" | "market" | "ppy"> {
+  design: RW2DesignId;
+  control: DailySeries | null;
+  authoritative?: DailySeries;
+}
+
+export interface RW2CriteriaReport extends Omit<CriteriaReport, "design" | "thresholds"> {
+  design: RW2DesignId;
+  thresholds: (typeof RW2_CRITERIA)[RW2DesignId];
+}
+
+/** Compound ONLY the supplied common sessions, starting from unit equity. */
+function commonPerformance(rets: number[]): { totalReturn: number; maxDrawdown: number } {
+  let equity = 1, peak = 1, maxDrawdown = 0;
+  for (const ret of rets) {
+    equity *= 1 + ret;
+    peak = Math.max(peak, equity);
+    maxDrawdown = Math.max(maxDrawdown, (peak - equity) / peak);
+  }
+  return { totalReturn: equity - 1, maxDrawdown };
+}
+
+export function computeRW2Criteria(inp: RW2CriteriaInputs): RW2CriteriaReport {
+  const th = RW2_CRITERIA[inp.design];
+  // Same PSR, stitched risk/stress, concentration, robustness and reporting
+  // instruments as RW1. RW2 has NO signal/passive/market/timing gates.
+  const shared = computeCriteria({ ...inp, design: "D2", ppy: th.annualization, passive: null, market: null });
+  const renamed = (key: string, from: string): Criterion => ({ ...shared.criteria[from], id: `${key}_${shared.criteria[from].id.split("_").slice(1).join("_")}` });
+  const criteria: Record<string, Criterion> = { R1: renamed("R1", "C1"), R2: renamed("R2", "C2") };
+  const mine = chainDailyReturns(inp.summary);
+  const control = inp.control ?? new Map();
+  const aligned = alignedSharpe(mine, control, th.annualization);
+  const excess = aligned.sharpeA - aligned.sharpeB;
+  criteria.R3 = fmtC("R3_vsControl", aligned.observations >= 2 && excess >= th.minExcessVsControl,
+    aligned.observations >= 2 ? excess : null, th.minExcessVsControl, {
+      detail: { strategySharpe: aligned.sharpeA, controlSharpe: aligned.sharpeB, commonDays: aligned.observations, annualization: th.annualization },
+      ...(aligned.observations < 2 ? { reason: "fewer than two common sessions with the control" } : {}),
+    });
+  criteria.R4 = renamed("R4", "C3");
+  criteria.R5 = renamed("R5", "C6");
+  criteria.R6 = renamed("R6", "C6b");
+  criteria.R7 = { ...renamed("R7", "C7"), threshold: th.minExtraBpsPerSide,
+    pass: inp.summary.breakEvenSlippageBps !== undefined && inp.summary.breakEvenSlippageBps - inp.baseSlippageBps >= th.minExtraBpsPerSide };
+
+  let authoritative: Record<string, unknown> | null = null;
+  if (inp.authoritative) {
+    // Never change R3's sample or comparator for the optional diagnostic.
+    const dates = aligned.dates.filter(d => inp.authoritative!.has(d));
+    const complete = dates.length === aligned.observations && dates.length >= 2;
+    const sharpe = complete ? annualizedSharpe(dates.map(d => inp.authoritative!.get(d)!), th.annualization) : null;
+    const delta = complete && sharpe !== null ? sharpe - aligned.sharpeB : null;
+    authoritative = { sharpe, commonDays: dates.length, completeCommonDays: complete,
+      differenceVsControl: delta, differsByMoreThan005: delta === null ? null : Math.abs(delta) > 0.05,
+      ...(!complete ? { reason: "authoritative artifact does not cover every strategy/control common day; difference not comparable" } : {}) };
+  }
+  const allPass = Object.values(criteria).every(c => c.pass === true);
+  return { design: inp.design, thresholds: th, criteria, allPass,
+    verdict: allPass ? "CUMPLE R1–R7 (réplica independiente pendiente)" : `FALLA: ${Object.keys(criteria).filter(k => !criteria[k].pass).join(", ")}`,
+    reported: { ...shared.reported, commonDays: aligned.observations,
+      strategyOnCommonDays: { sharpe: aligned.sharpeA, ...commonPerformance(aligned.dates.map(d => mine.get(d)!)) },
+      controlOnCommonDays: { sharpe: aligned.sharpeB, ...commonPerformance(aligned.dates.map(d => control.get(d)!)) },
+      correlationWithControl: correlationOnCommonDates(mine, control), authoritative,
+      independentReplication: "external: |ΔSharpe| ≤ 0.10 per fold, required before a wiring decision" },
+  };
+}
+
 // ── orchestration: benchmarks + criteria for a finished protocol run ─────
 
 export interface EvaluateOptions {
@@ -464,6 +552,8 @@ export interface EvaluateOptions {
   dbPath?: string;
   /** label → artifact directory (data/backtests/<hash>) for report-only correlations. */
   compareArtifacts?: Record<string, string>;
+  controlArtifact?: string;
+  authoritativeArtifact?: string;
   criteriaFile?: string;
   quiet?: boolean;
 }
@@ -474,11 +564,14 @@ export async function evaluatePortfolioCriteria(
   outputDir: string,
   manifestPath: string,
   opts: EvaluateOptions = {},
-): Promise<CriteriaReport & { generatedAt: string; manifest: string; manifestHash: string }> {
+): Promise<(CriteriaReport | RW2CriteriaReport) & { generatedAt: string; manifest: string; manifestHash: string }> {
   const strategy = m.candidates[0]?.portfolio?.strategy;
   if (!strategy) throw new Error("evaluatePortfolioCriteria: not a portfolio manifest");
-  const design = designOf(strategy);
-  const ppy = periodsPerYear(m.sleeve, m.data.source);
+  const rw2Design = strategy.kind === "volManaged" ? rw2DesignOf(m.name) : null;
+  if (rw2Design && !opts.controlArtifact) throw new Error("RW2 criteria require --control <artifactDir> (the re-run current sleeve)");
+  if (strategy.kind === "volManaged" && strategy.annualization !== RW2_CRITERIA[rw2Design!].annualization) throw new Error("RW2 design/annualization mismatch");
+  const design = rw2Design ? null : designOf(strategy);
+  const ppy = strategy.kind === "volManaged" ? strategy.annualization : periodsPerYear(m.sleeve, m.data.source);
   const kernel = opts.kernel ?? coreKernel;
   const dbPath = opts.dbPath ?? m.data.dbPath;
   const windows = executedOuterWindows(m, summary);
@@ -486,7 +579,7 @@ export async function evaluatePortfolioCriteria(
 
   // Passive (C4): same simulator, costs, venue; the decision swapped.
   let passive: DailySeries | null = null;
-  if (windows.length > 0) {
+  if (!rw2Design && windows.length > 0) {
     const results = await rerunChain(m, windows, makePortfolioRunner(kernel, { decide: passiveDecideFor(strategy), assetClasses }), "passive", () => {}, dbPath);
     passive = seriesOf(results.flatMap(r => r.dailyReturns));
   }
@@ -494,7 +587,7 @@ export async function evaluatePortfolioCriteria(
   // Market (C5): frictionless close-to-close on the executed windows.
   let market: DailySeries | null = null;
   let marketError: string | undefined;
-  if (windows.length > 0) {
+  if (design && windows.length > 0) {
     try {
       market = new Map();
       for (const w of windows) for (const [d, r] of marketDailyReturns(dbPath, m, CRITERIA[design].c5Market, w.fromMs, w.toMs)) market.set(d, r);
@@ -504,9 +597,9 @@ export async function evaluatePortfolioCriteria(
     }
   }
 
-  // C6b (D1/D2): chain re-run without the top P&L decile.
+  // C6b (D1/D2) / R6 (every RW2 design): re-run without the top P&L decile.
   let exTopDecile: CriteriaInputs["exTopDecile"] = null;
-  if (CRITERIA[design].c6b.kind === "exTopDecile" && windows.length > 0) {
+  if ((rw2Design || (design && CRITERIA[design].c6b.kind === "exTopDecile")) && windows.length > 0) {
     const excluded = topDecileSymbols(summary);
     if (excluded.length > 0) {
       const results = await rerunChain(m, windows, makePortfolioRunner(kernel, { assetClasses }), "ex-top-decile", cfg => {
@@ -530,18 +623,70 @@ export async function evaluatePortfolioCriteria(
     try { compare[label] = artifactOosDailyReturns(dir); } catch (e) { compare[label] = new Map(); if (!opts.quiet) console.warn(`compare ${label}: ${(e as Error).message}`); }
   }
 
-  const report = computeCriteria({ design, summary, ppy, initialEquity: m.ledger.initialEquity, baseSlippageBps: m.costs.base.slippageBps, passive, market, marketError, exTopDecile, compare });
+  const common = { summary, initialEquity: m.ledger.initialEquity, baseSlippageBps: m.costs.base.slippageBps, exTopDecile, compare };
+  const report = rw2Design
+    ? computeRW2Criteria({ ...common, design: rw2Design, control: seriesOf(loadArtifactOuterDailyReturns(opts.controlArtifact!)),
+      authoritative: opts.authoritativeArtifact ? seriesOf(loadArtifactOuterDailyReturns(opts.authoritativeArtifact)) : undefined })
+    : computeCriteria({ ...common, design: design!, ppy, passive, market, marketError });
+  if (rw2Design) {
+    report.reported.controlArtifact = opts.controlArtifact;
+    report.reported.authoritativeArtifact = opts.authoritativeArtifact ?? null;
+  }
   const out = { generatedAt: new Date().toISOString(), manifest: manifestPath, manifestHash: summary.manifestHash, ...report };
-  if (existsSync(outputDir)) writeFileSync(join(outputDir, opts.criteriaFile ?? "rw-criteria.json"), JSON.stringify(out, null, 2));
+  const criteriaFile = opts.criteriaFile ?? (rw2Design ? "rw2-criteria.json" : "rw-criteria.json");
+  if (existsSync(outputDir)) writeFileSync(join(outputDir, criteriaFile), JSON.stringify(out, null, 2));
   if (!opts.quiet) {
-    console.log(`\n▌ RW §2.5 criteria (${design})`);
+    console.log(`\n▌ ${rw2Design ? "RW2 §8.5" : "RW §2.5"} criteria (${report.design})`);
     for (const c of Object.values(report.criteria)) {
       const v = c.value === null ? "n/a" : c.value.toFixed(3);
       console.log(`   ${c.id}: ${c.pass === null ? "external" : c.pass ? "PASS" : "FAIL"} value=${v} threshold=${c.threshold ?? "—"}${c.reason ? ` (${c.reason})` : ""}`);
     }
     console.log(`   orders/session: ${report.reported.ordersPerSession !== null ? (report.reported.ordersPerSession as number).toFixed(2) : "n/a"} (adjustments ${(report.reported.adjustmentOrdersPerSession as number | null)?.toFixed(2) ?? "n/a"}) | turnover ${((report.reported.turnoverAnnual as number | null) ?? NaN).toFixed(2)}×/yr | mean gross ${((report.reported.avgGross as number | null) ?? NaN).toFixed(2)}`);
+    if (rw2Design) {
+      const r3 = report.criteria.R3.detail!;
+      console.log(`   common sessions: ${r3.commonDays} | strategy Sharpe: ${(r3.strategySharpe as number).toFixed(3)} | control: ${(r3.controlSharpe as number).toFixed(3)}`);
+      const authoritative = report.reported.authoritative as { sharpe: number | null; differsByMoreThan005: boolean | null } | null;
+      if (authoritative) console.log(`   authoritative Sharpe: ${authoritative.sharpe?.toFixed(3) ?? "n/a (incomplete common days)"}${authoritative.differsByMoreThan005 ? " — WARNING: differs by > 0.05; R3 uses the re-run control" : ""}`);
+    }
     console.log(`   VERDICT: ${report.verdict}`);
-    if (existsSync(outputDir)) console.log(`   written: ${join(outputDir, opts.criteriaFile ?? "rw-criteria.json")}`);
+    if (existsSync(outputDir)) console.log(`   written: ${join(outputDir, criteriaFile)}`);
   }
   return out;
+}
+
+/** Compact summaries omit the tapes. Recover ONLY the exact executed trials,
+ * including stress, from the ledger; do not accidentally use a LOO/cost run. */
+export function loadCriteriaSummary(artifactDir: string): WalkForwardSummary {
+  const summary: WalkForwardSummary = JSON.parse(readFileSync(join(artifactDir, "summary.json"), "utf8"));
+  const runs = readFileSync(join(artifactDir, "runs.jsonl"), "utf8").trim().split("\n").filter(Boolean).map(l => JSON.parse(l));
+  for (const [tests, tier] of [[summary.outerTests, "base"], [summary.stressTests, "stress"]] as const) {
+    for (const t of tests) {
+      const run = runs.find(r => r.foldPath === t.foldPath && r.costTier === tier && r.status === "complete" && r.result?.hash === t.result.hash);
+      if (!run?.result?.dailyReturns || !run.result.equityHistory) throw new Error(`artifact ${artifactDir}: missing full ${tier} trial at ${t.foldPath}`);
+      t.result = run.result;
+    }
+  }
+  // JSON encodes Infinity as null. Restore the protocol's never-crosses
+  // convention only when its persisted curve demonstrates positive Sharpe.
+  if (summary.breakEvenSlippageBps === null && summary.breakEvenCurve?.length && summary.breakEvenCurve.every(p => p.sharpe > 0)) summary.breakEvenSlippageBps = Infinity;
+  return summary;
+}
+
+export function parseCriteriaArtifacts(args: string[]): Pick<EvaluateOptions, "controlArtifact" | "authoritativeArtifact"> {
+  const out: Pick<EvaluateOptions, "controlArtifact" | "authoritativeArtifact"> = {};
+  for (const [flag, key] of [["--control", "controlArtifact"], ["--authoritative", "authoritativeArtifact"]] as const) {
+    const i = args.indexOf(flag);
+    if (i < 0) continue;
+    if (!args[i + 1] || args[i + 1].startsWith("--")) throw new Error(`${flag} expects <artifactDir>`);
+    out[key] = args[i + 1];
+  }
+  return out;
+}
+
+if (import.meta.main) {
+  const args = process.argv.slice(2);
+  if (!args[0] || args[0].startsWith("--")) throw new Error("Usage: bun scripts/portfolio-criteria.ts <artifactDir> --control <dir> [--authoritative <dir>]");
+  const artifactDir = args[0];
+  const manifestPath = join(artifactDir, "manifest-resolved.json");
+  await evaluatePortfolioCriteria(loadManifest(manifestPath), loadCriteriaSummary(artifactDir), artifactDir, manifestPath, parseCriteriaArtifacts(args));
 }

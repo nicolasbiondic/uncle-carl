@@ -46,11 +46,13 @@ describe("loadArtifactOuterDailyReturns", () => {
         { foldPath: "0/test", dailyReturns: [{ date: "2024-01-03", ret: 0.01 }], config: { timeframe: "1d" } },
         { foldPath: "1/test", dailyReturns: [{ date: "2024-01-03", ret: 0.02 }], config: { timeframe: "1d", meanrev: {} } },
         { foldPath: "2/test", dailyReturns: [{ date: "2024-01-03", ret: 0.03 }], config: { timeframe: "1h" } },
+        { foldPath: "3/test", dailyReturns: [{ date: "2024-01-03", ret: 0.04 }], config: { timeframe: "1d", portfolio: { strategy: { kind: "volManaged" } } } },
       ]);
       expect(loadArtifactOuterDailyReturns(dir)).toEqual([
         { date: "2024-01-02", ret: 0.01 },
         { date: "2024-01-03", ret: 0.02 },
         { date: "2024-01-03", ret: 0.03 },
+        { date: "2024-01-03", ret: 0.04 },
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -63,6 +65,19 @@ describe("loadArtifactOuterDailyReturns", () => {
       writeFileSync(join(dir, "summary.json"), JSON.stringify({ outerTests: [{ foldPath: "0/test" }] }));
       writeFileSync(join(dir, "runs.jsonl"), "");
       expect(() => loadArtifactOuterDailyReturns(dir)).toThrow(/missing complete base-cost outer-test run/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("legacy artifacts without outerSelection use the compact result hash, not a last-record cost-curve decoy", () => {
+    const dir = mkdtempSync(join(tmpdir(), "artifact-"));
+    try {
+      writeFileSync(join(dir, "summary.json"), JSON.stringify({ outerTests: [{ foldPath: "0/test", result: { hash: "chosen" } }] }));
+      const runs = ["chosen", "curve"].map(hash => ({ foldPath: "0/test", costTier: "base", status: "complete", candidateHash: hash,
+        result: { hash, config: { timeframe: "1d" }, dailyReturns: [{ date: "2024-01-03", ret: hash === "chosen" ? 0.01 : 99 }] } }));
+      writeFileSync(join(dir, "runs.jsonl"), runs.map(r => JSON.stringify(r)).join("\n"));
+      expect(loadArtifactOuterDailyReturns(dir)).toEqual([{ date: "2024-01-02", ret: 0.01 }]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

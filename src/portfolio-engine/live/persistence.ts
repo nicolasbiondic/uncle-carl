@@ -128,3 +128,12 @@ export function listPortfolioDecisions(accountId: string, limit = 30): Portfolio
     `SELECT * FROM portfolio_decisions WHERE account_id = ? ORDER BY session DESC, id DESC LIMIT ?`,
   ).all(accountId, limit) as any[]).map(toRecord);
 }
+
+/** BinanceVenueOptions.claimOrderId: record the id in portfolio_order_claims BEFORE returning true.
+ *  One INSERT OR IGNORE statement = atomic (the PRIMARY KEY decides the race, even across
+ *  processes); the row is durable in the same SQLite file as the book, never expires and is never
+ *  deleted: a retry after a crash or restart finds it claimed and the venue only queries. */
+export function claimPortfolioOrderId(id: string, nowMs = Date.now()): Promise<boolean> {
+  const r = getDB().prepare(`INSERT OR IGNORE INTO portfolio_order_claims (id, claimed_at) VALUES (?, ?)`).run(id, nowMs);
+  return Promise.resolve(Number(r.changes) === 1);
+}

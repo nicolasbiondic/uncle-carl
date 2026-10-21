@@ -214,6 +214,15 @@ function checkIdentityParams(p: any, errors: string[]): void {
 
 /** Cross-portfolio invariants: unique id/state path/heartbeat, disjoint
  *  universes per account (ENABLED portfolios only), capital sum ≤ equity. */
+/** RW2: a "portfolio" definition and the incumbent row it runs on (params.sleeve = that row's id), or
+ *  two definitions of the same sleeve, are ONE sleeve in two engines: same universe and the same
+ *  capital by construction, so neither the disjoint-universe nor the capital-sum rule applies between them. */
+function sameSleeve(a: { id: string; params: unknown }, b: { id: string; params: unknown }): boolean {
+  const sa = (a.params as { engine?: string; sleeve?: string })?.engine === "portfolio" ? (a.params as { sleeve?: string }).sleeve : undefined;
+  const sb = (b.params as { engine?: string; sleeve?: string })?.engine === "portfolio" ? (b.params as { sleeve?: string }).sleeve : undefined;
+  return (sa !== undefined && sa === b.id) || (sb !== undefined && sb === a.id) || (sa !== undefined && sa === sb);
+}
+
 function checkCrossPortfolio(
   row: PlatformPortfolioRow,
   ctx: PortfolioWriteContext,
@@ -235,7 +244,7 @@ function checkCrossPortfolio(
   if (row.enabled && row.status !== "archived") {
     const mine = new Set(portfolioUniverse(row.template, row.params));
     for (const o of others) {
-      if (o.account !== row.account || !o.enabled || o.status === "archived") continue;
+      if (o.account !== row.account || !o.enabled || o.status === "archived" || sameSleeve(row, o)) continue;
       const overlap = portfolioUniverse(o.template, o.params).filter((s) => mine.has(s));
       if (overlap.length) errors.push(`universe overlaps enabled portfolio '${o.id}' on account '${row.account}': ${overlap.join(", ")}`);
     }
@@ -249,7 +258,7 @@ function checkCrossPortfolio(
       errors.push(`account '${row.account}' equity is unreadable — refusing the write (fail closed; retry when the broker answers)`);
     } else {
       const sum = others
-        .filter((o) => o.account === row.account && o.enabled && o.status !== "archived")
+        .filter((o) => o.account === row.account && o.enabled && o.status !== "archived" && !sameSleeve(row, o))
         .reduce((acc, o) => acc + o.capital, row.capital);
       if (sum > equity + 1e-6) {
         errors.push(`capital: enabled portfolios on '${row.account}' would hold $${sum.toFixed(2)} > account equity $${equity.toFixed(2)}`);

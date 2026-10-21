@@ -28,8 +28,8 @@ export interface DailyReturnPoint {
 }
 
 /** Daily-bar momentum replays label a session by its end, one day late. */
-export function dailyReturnShiftDays(config: { timeframe?: unknown; meanrev?: unknown } | undefined): number {
-  return config?.timeframe === "1d" && config.meanrev === undefined ? -1 : 0;
+export function dailyReturnShiftDays(config: { timeframe?: unknown; meanrev?: unknown; portfolio?: unknown } | undefined): number {
+  return config?.timeframe === "1d" && config.meanrev === undefined && config.portfolio === undefined ? -1 : 0;
 }
 
 export function shiftDailyReturnDate(date: string, days: number): string {
@@ -41,6 +41,8 @@ export function shiftDailyReturnDate(date: string, days: number): string {
 export function loadArtifactOuterDailyReturns(dir: string): DailyReturnPoint[] {
   const summary = JSON.parse(readFileSync(join(dir, "summary.json"), "utf8"));
   const foldPaths: string[] = summary.outerTests.map((t: { foldPath: string }) => t.foldPath);
+  const selected = new Map<string, string | undefined>(summary.outerTests.map((t: { foldPath: string; result?: { hash?: string } }) => [t.foldPath, t.result?.hash]));
+  for (const s of summary.outerSelection ?? []) selected.set(s.foldPath, s.candidateHash);
   const runLines = readFileSync(join(dir, "runs.jsonl"), "utf8")
     .trim()
     .split("\n")
@@ -48,7 +50,8 @@ export function loadArtifactOuterDailyReturns(dir: string): DailyReturnPoint[] {
     .map(l => JSON.parse(l));
   const byFold = new Map<string, any>();
   for (const r of runLines) {
-    if (r.costTier === "base" && r.status === "complete" && foldPaths.includes(r.foldPath)) {
+    if (r.costTier === "base" && r.status === "complete" && foldPaths.includes(r.foldPath)
+      && (!selected.get(r.foldPath) || selected.get(r.foldPath) === (r.candidateHash ?? r.result?.hash))) {
       byFold.set(r.foldPath, r);
     }
   }

@@ -229,7 +229,7 @@ export class BinanceVenueAdapter implements VenueAdapter {
     }
   }
 
-  private async openStops(native: string): Promise<NativeStop[]> {
+  private async openStops(native: string, prefix: string = this.stopPrefix): Promise<NativeStop[]> {
     const transport = this.options.transport;
     const regular = await transport.signedRequest("GET", "/fapi/v1/openOrders", { symbol: native }, "protect");
     const algoRaw = await transport.signedRequest("GET", "/fapi/v1/openAlgoOrders", { symbol: native }, "protect");
@@ -237,7 +237,7 @@ export class BinanceVenueAdapter implements VenueAdapter {
     if (!Array.isArray(regular) || !Array.isArray(algo)) throw new Error("Invalid Binance open stop response");
     return [
       ...regular.map((o: any) => ({ o, algo: false })), ...algo.map((o: any) => ({ o, algo: true })),
-    ].filter(({ o, algo }) => o.symbol === native && String(algo ? o.clientAlgoId : o.clientOrderId).startsWith(this.stopPrefix))
+    ].filter(({ o, algo }) => o.symbol === native && String(algo ? o.clientAlgoId : o.clientOrderId).startsWith(prefix))
       .map(({ o, algo }) => ({ algo, id: String(algo ? o.algoId : o.orderId),
         clientId: String(algo ? o.clientAlgoId : o.clientOrderId),
         qty: Number(o.totalQty ?? o.origQty ?? o.quantity ?? o.qty),
@@ -267,6 +267,26 @@ export class BinanceVenueAdapter implements VenueAdapter {
     } catch (e) {
       if (!(await this.openStops(native)).some(s => s.clientId === id)) throw e;
     }
+  }
+
+  /** Cutover: cancel the incumbent engines' resting protective stops (the old executors stamp
+   * `uc-`; this adapter's own stops are `pe-s-` and are managed by syncStops) on `symbols`.
+   * Targeted by exact id, reduce-only SELL stops only, both order stores must be readable
+   * before ANY cancel. */
+  async releaseLegacyStops(symbols: readonly string[]): Promise<string[]> {
+    const released: string[] = [];
+    for (const symbol of new Set(symbols)) {
+      if (!this.native.has(symbol)) continue;
+      await symbolLocks.withLock("binance_fapi", this.lockSymbol(symbol), { label: "portfolio.releaseLegacyStops" }, async () => {
+        const open = (await this.openStops(this.toNative(symbol), "uc-")).filter(s => s.reduceOnly && s.side === "SELL");
+        for (const old of open) {
+          await this.options.transport.signedRequest("DELETE", old.algo ? "/fapi/v1/algoOrder" : "/fapi/v1/order",
+            { symbol: this.toNative(symbol), [old.algo ? "algoId" : "orderId"]: old.id }, "protect");
+          released.push(old.id);
+        }
+      }, () => { throw new Error(`Release legacy stops symbol lock timeout: ${symbol}`); });
+    }
+    return released;
   }
 
   async syncStops(stops: readonly StopLevel[], positions: readonly Position[]): Promise<void> {

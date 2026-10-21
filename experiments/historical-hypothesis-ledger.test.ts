@@ -1314,4 +1314,78 @@ describe("historical hypothesis ledger", () => {
       expect(normalized).toContainEqual(expected);
     }
   });
+
+  // RW2 "exposición eficiente" (docs/reports/RW-reescritura-rentable.md §8–9): the three
+  // always-invested redesigns, chained 396 → 398 → 400 → 402, each judged against its current
+  // sleeve rerun on the same data (R3). Binding verdict: rw2-criteria.json next to summary.json.
+  const rw2Designs = [
+    ["authoritativeArtifactRw2E1", "rw2E1", "rw2-e1-stocks-volmanaged-v1.json", 396, "rw2-e1-stocks-volmanaged-2026-10-21", true],
+    ["authoritativeArtifactRw2E2", "rw2E2", "rw2-e2-meanrev-volmanaged-v1.json", 398, "rw2-e2-meanrev-volmanaged-2026-10-21", true],
+    ["authoritativeArtifactRw2E3", "rw2E3", "rw2-e3-usdc-volmanaged-v1.json", 400, "rw2-e3-usdc-volmanaged-2026-10-21", false],
+  ] as const;
+
+  test("RW2 designs E1/E2/E3 align with their manifests and batches; E1 and E2 pass, E3 is refuted (2026-10-21)", () => {
+    for (const [key, claimsKey, manifestFile, prior, batchId, passes] of rw2Designs) {
+      const m = JSON.parse(readFileSync(join(root, "experiments", manifestFile), "utf8"));
+      expect(m.trialAccounting).toEqual({ priorUniqueTrials: prior, complete: false });
+      expect(m.candidates).toHaveLength(2);
+      expect(m.candidates.every((c: any) => c.portfolio?.strategy?.kind === "volManaged" && c.portfolio.strategy.maxGross === 1)).toBe(true);
+      const batch = ledger.batches.find((b: any) => b.id === batchId);
+      expect(batch.hypothesisCount).toBe(m.candidates.length);
+      expect(batch.priorUniqueTrials).toBe(prior);
+      expect(batch.resultingUniqueTrials).toBe(prior + m.candidates.length);
+      expect(batch.inventoryComplete).toBe(false);
+      expect(batch.resultsComplete).toBe(false);
+      expect(batch.executionReported).toBe(true);
+      const art = ledger[key];
+      const claims = art[claimsKey];
+      expect(art.verdict).toContain(passes ? "VALIDADO" : "REFUTADO");
+      expect(claims.criteriaFailed.length === 0).toBe(passes);
+      // R3: not below the current sleeve on the same days, exactly as pre-registered.
+      expect(claims.r3StrategySharpe >= claims.r3ControlSharpe).toBe(passes);
+      if (passes) expect(claims.maxDrawdownPct).toBeLessThanOrEqual(25);
+    }
+  });
+
+  testWithDb("RW2 designs E1/E2/E3 artifacts exist on disk and reproduce the ledger claims", () => {
+    const normalize = (dir: string) => {
+      const s = JSON.parse(readFileSync(join(dir, "summary.json"), "utf8"));
+      const c = JSON.parse(readFileSync(join(dir, "rw2-criteria.json"), "utf8"));
+      const criteria: any[] = Array.isArray(c.criteria) ? c.criteria : Object.values(c.criteria);
+      const r3 = criteria.find(x => x.id === "R3_vsControl");
+      return {
+        outerFoldReturnsPct: s.outerTests.map((t: { result: { totalReturn: number } }) => round2(t.result.totalReturn * 100)),
+        stitchedReturnPct: round2(s.stitchedOos.totalReturn * 100),
+        sharpe: round3(s.stitchedOos.sharpe),
+        maxDrawdownPct: round2(s.stitchedOos.maxDrawdown * 100),
+        outerPsr: round3(s.outerPsr),
+        criteriaFailed: criteria.filter(x => x.pass === false).map(x => x.id).sort(),
+        r3StrategySharpe: round3(r3.detail.strategySharpe),
+        r3ControlSharpe: round3(r3.detail.controlSharpe),
+        r3CommonDays: r3.detail.commonDays,
+      };
+    };
+    for (const [key, claimsKey] of rw2Designs) {
+      const art = ledger[key];
+      const claims = art[claimsKey];
+      const expected = {
+        outerFoldReturnsPct: claims.outerFoldReturnsPct,
+        stitchedReturnPct: claims.stitchedReturnPct,
+        sharpe: claims.sharpe,
+        maxDrawdownPct: claims.maxDrawdownPct,
+        outerPsr: claims.outerPsr,
+        criteriaFailed: [...claims.criteriaFailed].sort(),
+        r3StrategySharpe: claims.r3StrategySharpe,
+        r3ControlSharpe: claims.r3ControlSharpe,
+        r3CommonDays: claims.r3CommonDays,
+      };
+      const normalized = artifactCandidates(art.path)
+        .map(p => join(p, ".."))
+        .filter(dir => existsSync(join(dir, "rw2-criteria.json")))
+        .flatMap(dir => {
+          try { return [normalize(dir)]; } catch { return []; }
+        });
+      expect(normalized).toContainEqual(expected);
+    }
+  });
 });

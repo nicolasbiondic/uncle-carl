@@ -9,6 +9,7 @@
  *
  *   bun scripts/portfolio-wf.ts experiments/rw-d1-….json [--dry-run] [--no-breakeven]
  *        [--compare <label>=<data/backtests/hash> …]   # report-only correlations
+ *   bun scripts/portfolio-wf.ts experiments/rw2-e1-….json --control <dir> [--authoritative <dir>]
  *
  * Owner rule (§6): nothing here runs on real data before the director
  * publishes the manifests — the tests use synthetic tapes only.
@@ -18,7 +19,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_CODE_FILES, loadManifest, runWalkForward, type ExperimentManifest } from "./walk-forward";
 import { coreKernel, makePortfolioRunner, type PortfolioReplayResult } from "./portfolio-replay";
-import { evaluatePortfolioCriteria } from "./portfolio-criteria";
+import { evaluatePortfolioCriteria, parseCriteriaArtifacts } from "./portfolio-criteria";
 
 /** Code identity of a portfolio artifact: the protocol's default list PLUS
  *  the simulator, the driver, the evaluator, the data views and every pure
@@ -29,6 +30,7 @@ export const PORTFOLIO_CODE_FILES = [
   "scripts/portfolio-wf.ts",
   "scripts/portfolio-criteria.ts",
   "scripts/lib/portfolioData.ts",
+  "scripts/lib/combinedPortfolioReturns.ts",
   "src/portfolio-engine/types.ts",
   "src/portfolio-engine/index.ts",
   "src/portfolio-engine/signals.ts",
@@ -61,7 +63,7 @@ async function main() {
   const args = process.argv.slice(2);
   const manifestPath = args.find(a => a.endsWith(".json"));
   if (!manifestPath) {
-    console.error("Usage: bun scripts/portfolio-wf.ts <manifest.json> [--dry-run] [--no-breakeven] [--compare label=dir]");
+    console.error("Usage: bun scripts/portfolio-wf.ts <manifest.json> [--dry-run] [--no-breakeven] [--compare label=dir] [--control dir] [--authoritative dir]");
     process.exit(1);
   }
   const dryRun = args.includes("--dry-run");
@@ -69,6 +71,8 @@ async function main() {
   const m = loadManifest(manifestPath);
   assertPortfolioManifest(m);
   const kind = m.candidates[0].portfolio!.strategy.kind;
+  const criteriaArtifacts = parseCriteriaArtifacts(args);
+  if (kind === "volManaged" && !dryRun && !criteriaArtifacts.controlArtifact) throw new Error("RW2 requires --control <artifactDir>");
   console.log(`▌ RW portfolio walk-forward: ${m.name} (${kind}, ${m.candidates.length} candidates)`);
   console.log(`   folds: ${m.window.outerFoldCount} outer × ${m.window.innerFoldCount} inner | asOf ${m.asOf}`);
   if (dryRun) console.log("   DRY RUN — no trials executed");
@@ -91,7 +95,7 @@ async function main() {
 
   const diagnostics = summary.outerTests.map(t => ({ foldPath: t.foldPath, ...(t.result as PortfolioReplayResult).portfolioDiagnostics }));
   writeFileSync(join(outputDir, "rw-diagnostics.json"), JSON.stringify({ manifestHash: summary.manifestHash, outerFolds: diagnostics }, null, 2));
-  await evaluatePortfolioCriteria(m, summary, outputDir, manifestPath, { compareArtifacts: parseCompare(args) });
+  await evaluatePortfolioCriteria(m, summary, outputDir, manifestPath, { compareArtifacts: parseCompare(args), ...criteriaArtifacts });
   console.log(`   artifacts: ${outputDir}/`);
 }
 

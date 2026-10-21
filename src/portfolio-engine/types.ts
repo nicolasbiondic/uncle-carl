@@ -87,7 +87,29 @@ export type Decide = (input: DecideInput) => TargetBook;
 
 // ── Strategy configs: the manifest candidate's `portfolio` block ─────────────
 
-export type PortfolioStrategyConfig = XassetTrendConfig | FactorCoreConfig | CryptoTrendConfig;
+export type PortfolioStrategyConfig = XassetTrendConfig | FactorCoreConfig | CryptoTrendConfig | VolManagedConfig;
+
+/** RW2 (E1–E3): always invested — inverse-vol weights, one scale to the portfolio vol
+ *  target, per-name cap, max gross. No timing signal, no stops: every eligible symbol
+ *  is held; only the vol target (and the caps) lower the exposure. */
+export interface VolManagedConfig {
+  kind: "volManaged";
+  universe: string[];
+  /** A symbol enters after this many bars of history. */
+  inceptionGuardBars: number;
+  /** Daily-return stdev lookback for the inverse-vol weights. */
+  volLookback: number;
+  /** Covariance lookback for the portfolio vol estimate (the de-risking speed). */
+  covLookback: number;
+  /** Annualized portfolio vol target (e.g. 0.15). */
+  portfolioVolTarget: number;
+  /** 252 for stocks/ETFs, 365 for crypto. */
+  annualization: 252 | 365;
+  /** Max weight of one symbol (fraction of equity). */
+  perAssetCap: number;
+  /** Max sum of weights (1 = no margin). */
+  maxGross: number;
+}
 
 /** Signal shared by D1 and D3: mean of the blend horizons' returns > band AND close > SMA(maLong). */
 export interface TrendSignalConfig {
@@ -228,4 +250,9 @@ export interface VenueAdapter {
   submit(order: OrderIntent, clientOrderId: string): Promise<OrderResult>;
   /** Make the venue's stop orders for these symbols match `stops` exactly (D3 with stops); optional. */
   syncStops?(stops: readonly StopLevel[], positions: readonly Position[]): Promise<void>;
+  /** Cutover: cancel the resting protective stops the INCUMBENT engine armed on these symbols
+   *  (targeted, by exact id, only orders stamped by this bot). Rows adopted by the portfolio engine
+   *  leave the incumbent's stop machinery; a stale resting stop would otherwise keep firing on them
+   *  and block the engine's own sells. Returns the cancelled order ids. Optional. */
+  releaseLegacyStops?(symbols: readonly string[]): Promise<string[]>;
 }

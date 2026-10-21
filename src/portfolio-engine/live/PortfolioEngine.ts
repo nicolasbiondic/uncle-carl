@@ -35,6 +35,7 @@ import type {
 } from "../types";
 import { computeSleeveLedger } from "../../account/EquityTracker";
 import { isTradingEnabled } from "../../config";
+import { insertActivity } from "../../db/database";
 import { createLogger } from "../../utils/logger";
 import { eventBus, EVENTS } from "../../utils/events";
 import { heartbeats as defaultHeartbeats } from "../../ops/heartbeat";
@@ -278,6 +279,7 @@ export class PortfolioEngine {
         const id = adoptBrokerPosition(this.rows, p, this.now());
         if (id) this.log.warn(`adopted broker position ${p.symbol} ${p.qty} @ ${p.avgEntryPrice} as row ${id}`);
       }
+      await this.releaseIncumbentStops();
       for (const pos of positionsFromRows(loadSleeveRows(this.opts.accountId))) {
         const bq = brokerQty.get(pos.symbol) ?? 0;
         if (bq < pos.qty * (1 - tol)) {
@@ -332,6 +334,25 @@ export class PortfolioEngine {
         `${this.opts.accountId} ${session}: ${rejected} order(s) rejected — ${orders.filter(o => o.result && !o.result.ok).map(o => `${o.intent.side} ${o.intent.symbol}: ${o.result?.error ?? o.result?.status}`).join("; ")}`);
     }
     return { status: "submitted", session, asOf, orders, rejected };
+  }
+
+  /** The rows of this sleeve are ours now (adoption) and out of the stop machinery: the stops the
+   *  incumbent armed at the venue go too (a resting full-size stop keeps firing on an adopted row and
+   *  makes the venue reject this engine's own sells). Idempotent; the design's own stops are synced
+   *  after the fills. A failure alerts and the pass goes on. */
+  private async releaseIncumbentStops(): Promise<void> {
+    if (!this.opts.venue.releaseLegacyStops) return;
+    const symbols = [...new Set(loadSleeveRows(this.opts.accountId).map(r => r.symbol))];
+    if (symbols.length === 0) return;
+    try {
+      const released = await this.opts.venue.releaseLegacyStops(symbols);
+      if (released.length > 0) {
+        insertActivity(this.opts.accountId, "system", `portfolio engine released ${released.length} incumbent stop order(s) on adopted rows: ${released.join(", ")}`);
+      }
+    } catch (e: any) {
+      this.alertFn(`Portfolio:${this.opts.accountId}`,
+        `${this.opts.accountId}: could not release the incumbent's stop orders on adopted rows (${e?.message ?? e}) — a stale stop may still fire or block sells`);
+    }
   }
 
   private async resume(existing: PortfolioDecisionRecord): Promise<PortfolioRunReport> {

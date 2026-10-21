@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { decide, type CoreMemory, type DailyBar, type PriceView, type XassetTrendConfig, type FactorCoreConfig, type BookState } from "./index";
+import type { VolManagedConfig } from "./types";
 
 /** No real prices: deterministic alternating growth on a synthetic calendar. */
 function synthetic(symbols: readonly string[], asOf = "2020-01-30", lengths: Record<string, number> = {}): PriceView & { calls: { n: number; s: string }[] } {
@@ -165,4 +166,78 @@ test("deterministic, JSON-roundtrippable, no mutation, no look-ahead", () => {
   // A violating provider is rejected rather than silently introducing look-ahead.
   const badView: PriceView = { ...input.view, history: (s, n) => input.view.history(s, n).map(b => ({ ...b, date: "2099-01-01" })) };
   expect(() => decide({ ...input, view: badView })).toThrow("point-in-time");
+});
+
+const managed: VolManagedConfig = { kind: "volManaged", universe: ["B", "A", "NEW"], inceptionGuardBars: 5,
+  volLookback: 4, covLookback: 4, portfolioVolTarget: 0.1, annualization: 252, perAssetCap: 1, maxGross: 2 };
+
+/** Four aligned, zero-mean returns: B = 2A, with sample Var(A) = 4×.01²/3. */
+function managedView(): PriceView {
+  const asOf = "2024-01-05";
+  const bars = (scale: number) => {
+    let close = 100;
+    return [0, 0.01, -0.01, 0.01, -0.01].map((ret, i): DailyBar => {
+      close *= 1 + scale * ret;
+      const date = `2024-01-0${i + 1}`;
+      if (date > asOf) throw new Error("read after asOf");
+      return { date, open: close, high: close, low: close, close, volume: 1 };
+    });
+  };
+  return { asOf, barCount: s => s === "NEW" ? 4 : 5, history: (s, n) => {
+    if (s === "NEW") throw new Error("inception guard must skip history");
+    return bars(s === "A" ? 1 : 2).slice(-n);
+  } };
+}
+
+test("RW2 inception, inverse-vol normalization and known covariance target at 252/365", () => {
+  for (const annualization of [252, 365] as const) {
+    const target = decide({ view: managedView(), book, config: { ...managed, annualization } });
+    expect(Object.keys(target.weights)).toEqual(["A", "B"]);
+    const gross = target.weights.A + target.weights.B;
+    expect(target.weights.A / gross).toBeCloseTo(2 / 3, 12);
+    expect(target.weights.B / gross).toBeCloseTo(1 / 3, 12);
+    // Independent w'Σw with Σ = Var(A) × [[1,2],[2,4]].
+    const vol = Math.sqrt(annualization * (4 * 0.01 ** 2 / 3)) * (target.weights.A + 2 * target.weights.B);
+    expect(vol).toBeCloseTo(managed.portfolioVolTarget, 12);
+    expect(target.diagnostics.finalVol).toBeCloseTo(vol, 12);
+    expect(target.stops).toEqual([]);
+  }
+  const a = decide({ view: managedView(), book, config: managed });
+  const b = decide({ view: managedView(), book, config: { ...managed, annualization: 365 } });
+  expect(b.weights.A / a.weights.A).toBeCloseTo(Math.sqrt(252 / 365), 12);
+});
+
+test("RW2 caps clip then reduce gross proportionally; no stops or decision memory", () => {
+  const view = managedView();
+  const cap = decide({ view, book, config: { ...managed, portfolioVolTarget: 2, perAssetCap: 0.25, maxGross: 2 } });
+  expect(cap.weights).toEqual({ A: 0.25, B: 0.25 });
+  const cfg = { ...managed, portfolioVolTarget: 2, perAssetCap: 0.25, maxGross: 0.3 };
+  const a = decide({ view, book, config: cfg });
+  expect(Object.values(a.weights).reduce((x, y) => x + y, 0)).toBeLessThanOrEqual(0.3);
+  expect(a.weights.A).toBeCloseTo(0.15, 12);
+  const prior = { unrelated: 7, portfolioCore: { version: 1, signals: { A: false, B: false }, stops: { A: { distance: 0.04 } } } };
+  const frozenBook = Object.freeze({ ...book, memory: Object.freeze(prior), positions: [{ symbol: "A", qty: 10, avgEntryPrice: 100 }] });
+  const before = JSON.stringify(frozenBook);
+  const b = decide({ view, book: frozenBook, config: cfg });
+  expect(b.weights).toEqual(a.weights);
+  expect(b.stops).toEqual([]);
+  expect(b.memory.unrelated).toBe(7);
+  expect((b.memory.portfolioCore as CoreMemory).signals).toEqual({});
+  expect((b.memory.portfolioCore as CoreMemory).stops).toEqual({});
+  expect(JSON.stringify(frozenBook)).toBe(before);
+  expect(decide({ view, book: frozenBook, config: cfg })).toEqual(b);
+  expect(decide({ view, book: { ...book, memory: b.memory }, config: cfg }).weights).toEqual(a.weights);
+});
+
+test("RW2 deterministic point-in-time view never reads after asOf; future bars are rejected", () => {
+  const view = managedView();
+  let futureReads = 0;
+  const future: DailyBar = { date: "2024-01-06", open: 1, high: 1, low: 1, volume: 1,
+    get close(): number { futureReads++; throw new Error("read after asOf"); } };
+  const guarded: PriceView = { ...view, history: (s, n) => [...view.history(s, 5), future].filter(b => b.date <= view.asOf).slice(-n) };
+  const input = { view: guarded, book, config: managed, executionSession: "2024-01-06" };
+  expect(decide(input)).toEqual(decide(input));
+  expect(futureReads).toBe(0);
+  expect(() => decide({ ...input, view: { ...view, history: (s, n) => [...view.history(s, n - 1), future] } })).toThrow(/point-in-time/);
+  expect(futureReads).toBe(0);
 });

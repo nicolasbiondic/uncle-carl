@@ -5,15 +5,16 @@
  * real data here — every tape is seeded GBM from scripts/lib/portfolioSynthetic.
  */
 import { describe, expect, test, afterAll } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runWalkForward, type ExperimentManifest, type ReplayRunner } from "./walk-forward";
 import { coreKernel, makePortfolioRunner, type PortfolioChainState, type PortfolioReplayResult } from "./portfolio-replay";
-import { CRITERIA, evaluatePortfolioCriteria } from "./portfolio-criteria";
+import { CRITERIA, evaluatePortfolioCriteria, chainDailyReturns, loadCriteriaSummary } from "./portfolio-criteria";
 import { PORTFOLIO_CODE_FILES, assertPortfolioManifest, parseCompare } from "./portfolio-wf";
 import type { PortfolioStrategyConfig, VenueRules } from "../src/portfolio-engine/types";
 import { writeDailyFixture } from "./lib/portfolioSynthetic";
+import { loadArtifactOuterDailyReturns, shiftDailyReturnDate } from "./lib/combinedPortfolioReturns";
 
 const tmp = mkdtempSync(join(tmpdir(), "rw-wf-"));
 const outputDirs: string[] = [];
@@ -129,6 +130,76 @@ function spyRunner(inner: ReplayRunner, calls: Array<{ label: string; carried: b
 // ── tests ──────────────────────────────────────────────────────────────────
 
 describe("RW portfolio protocol — end to end on synthetic tapes", () => {
+  test("RW2 E1/E2/E3: volManaged windows, ex-top-decile, break-even and standalone CLI vs shifted legacy control", async () => {
+    for (const design of ["E1", "E2", "E3"] as const) {
+      const m = design === "E3" ? d3Manifest() : d1Manifest();
+      m.name = `rw2-${design.toLowerCase()}-synthetic`;
+      m.candidates = m.candidates.map((c, i) => ({ ...c, name: `vol-${i}`, portfolio: { venue: c.portfolio!.venue,
+        strategy: { kind: "volManaged", universe: m.data.universe, inceptionGuardBars: 252, volLookback: design === "E3" ? 30 : 63,
+          covLookback: 21, portfolioVolTarget: 0.12 + i * 0.03, annualization: design === "E3" ? 365 : 252, perAssetCap: 0.5, maxGross: 1 } } }));
+      const { summary, outputDir } = await runWalkForward(m, { runner: makePortfolioRunner(coreKernel), codeFiles: PORTFOLIO_CODE_FILES, breakEven: true });
+      outputDirs.push(outputDir);
+      expect(summary.complete).toBe(true);
+      expect(summary.skippedFolds).toEqual([]);
+      expect(summary.breakEvenCurve).toHaveLength(6);
+      for (const t of summary.outerTests) {
+        expect((t.result as PortfolioReplayResult).portfolioDiagnostics.stopOrders).toBe(0);
+        expect((t.result as PortfolioReplayResult).portfolioDiagnostics.orders).toBeGreaterThan(0);
+        if (design === "E3") expect(t.result.funding).not.toBe(0);
+      }
+      const mine = chainDailyReturns(summary);
+      // A synthetic legacy-style control uses one-day-late momentum labels,
+      // except meanrev (E2), which already labels the execution session.
+      const controlDir = join(tmp, `${design}-control`);
+      mkdirSync(controlDir);
+      const config = { timeframe: "1d", ...(design === "E2" ? { meanrev: {} } : {}) };
+      const points = [...mine].map(([date, ret]) => ({ date: shiftDailyReturnDate(date, design === "E2" ? 0 : 1), ret }));
+      writeFileSync(join(controlDir, "summary.json"), JSON.stringify({ outerTests: [{ foldPath: "0/test" }], outerSelection: [{ foldPath: "0/test", candidateHash: "control" }] }));
+      writeFileSync(join(controlDir, "runs.jsonl"), [
+        { foldPath: "0/test", costTier: "base", status: "complete", candidateHash: "control", result: { config, dailyReturns: points } },
+        // Last-record LOO/cost decoy must NOT replace the selected control.
+        { foldPath: "0/test", costTier: "base", status: "complete", candidateHash: "decoy", result: { config, dailyReturns: [{ date: "1999-01-01", ret: 100 }] } },
+      ].map(r => JSON.stringify(r)).join("\n"));
+      expect(loadArtifactOuterDailyReturns(controlDir)).toEqual([...mine].map(([date, ret]) => ({ date, ret })));
+      await expect(evaluatePortfolioCriteria(m, summary, outputDir, "synthetic", { quiet: true })).rejects.toThrow(/--control/);
+      const report = await evaluatePortfolioCriteria(m, summary, outputDir, "synthetic", { quiet: true, controlArtifact: controlDir, authoritativeArtifact: controlDir });
+      expect(report.design).toBe(design);
+      expect(report.criteria.R3).toMatchObject({ value: 0, pass: true, threshold: 0 });
+      expect(report.reported.commonDays).toBe(mine.size);
+      expect(report.reported.authoritative).toMatchObject({ differsByMoreThan005: false });
+      expect(report.criteria.R6.detail?.excluded).toHaveLength(1);
+      expect(typeof report.criteria.R6.value).toBe("number");
+      expect(report.criteria.R7.detail?.curve).toHaveLength(6);
+      expect(report.criteria.R7.threshold).toBe(design === "E3" ? 10 : 4);
+      expect(existsSync(join(outputDir, "rw2-criteria.json"))).toBe(true);
+      expect(existsSync(join(outputDir, "rw-criteria.json"))).toBe(false);
+      const restored = loadCriteriaSummary(outputDir);
+      expect(chainDailyReturns(restored)).toEqual(mine);
+      const rerun = await evaluatePortfolioCriteria(m, restored, outputDir, "synthetic", { quiet: true, controlArtifact: controlDir, authoritativeArtifact: controlDir });
+      expect(rerun.criteria).toEqual(report.criteria);
+      const cli = Bun.spawnSync([process.execPath, "scripts/portfolio-criteria.ts", outputDir, "--control", controlDir, "--authoritative", controlDir], { cwd: join(import.meta.dir, "..") });
+      expect(cli.exitCode).toBe(0);
+      const written = JSON.parse(readFileSync(join(outputDir, "rw2-criteria.json"), "utf8"));
+      expect(written.criteria).toEqual(JSON.parse(JSON.stringify(report.criteria)));
+      expect(written.reported.commonDays).toBe(mine.size);
+      if (design === "E1") {
+        const manifestPath = join(tmp, "rw2-e1-synthetic.json");
+        writeFileSync(manifestPath, JSON.stringify(m));
+        const driver = Bun.spawnSync([process.execPath, "scripts/portfolio-wf.ts", manifestPath, "--control", controlDir, "--authoritative", controlDir], { cwd: join(import.meta.dir, "..") });
+        expect(driver.exitCode).toBe(0);
+        expect(driver.stdout.toString()).toContain("RW2 §8.5 criteria (E1)");
+        const driven = JSON.parse(readFileSync(join(outputDir, "rw2-criteria.json"), "utf8"));
+        expect(driven.criteria).toEqual(written.criteria);
+        // A compact summary alone is not sufficient evidence for standalone.
+        const brokenDir = join(tmp, "broken-artifact");
+        mkdirSync(brokenDir);
+        writeFileSync(join(brokenDir, "summary.json"), readFileSync(join(outputDir, "summary.json")));
+        writeFileSync(join(brokenDir, "runs.jsonl"), "");
+        expect(() => loadCriteriaSummary(brokenDir)).toThrow(/missing full base trial/);
+      }
+    }
+  }, 120_000);
+
   test("D1: nested walk-forward + criteria; session labels, chained memory, break-even curve, rw-criteria.json", async () => {
     const m = d1Manifest();
     assertPortfolioManifest(m);

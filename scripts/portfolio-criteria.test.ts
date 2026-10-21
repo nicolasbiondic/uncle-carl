@@ -7,6 +7,10 @@ import {
   annualizedSharpe,
   chainDailyReturns,
   computeCriteria,
+  computeRW2Criteria,
+  RW2_CRITERIA,
+  rw2DesignOf,
+  parseCriteriaArtifacts,
   correlationOnCommonDates,
   designOf,
   passiveDecideFor,
@@ -225,6 +229,72 @@ describe("computeCriteria — §2.5 thresholds and fail-closed semantics", () =>
     expect((r.reported.pnlByAssetClass as Record<string, number>).equity).toBeCloseTo(100 + 1.5 * 100, 12); // fold 1 dollars × (1 + fold 0 return)
     expect((r.reported.correlations as Record<string, { corr: number }>).live.corr).toBeCloseTo(1, 12);
     expect(Math.abs((r.reported.correlations as Record<string, { corr: number }>).noise.corr)).toBeLessThan(0.3);
+  });
+});
+
+describe("RW2 §8.5 R1–R7", () => {
+  const rw2 = (over: Partial<Parameters<typeof computeRW2Criteria>[0]> = {}) => computeRW2Criteria({
+    design: "E1", summary: summaryOf(outer, stress), initialEquity: 50_000, baseSlippageBps: 2,
+    control: passiveWeak, exTopDecile: { excluded: ["AAA"], sharpe: 0.8, totalReturn: 0.2, maxDrawdown: 0.1 }, ...over,
+  });
+
+  test("designs come from manifest names; exact thresholds and no RW1 gates", () => {
+    for (const design of ["E1", "E2", "E3"] as const) {
+      expect(rw2DesignOf(`rw2-${design.toLowerCase()}-synthetic`)).toBe(design);
+      const report = rw2({ design, summary: summaryOf(outer, stress, { breakEvenSlippageBps: 12 }) });
+      expect(report.thresholds).toEqual(RW2_CRITERIA[design]);
+      expect(Object.keys(report.criteria)).toEqual(["R1", "R2", "R3", "R4", "R5", "R6", "R7"]);
+      expect(Object.values(report.criteria).map(c => c.threshold)).toEqual([0.95, 0.25, 0, 0.5, 0.5, 0.3, design === "E3" ? 10 : 4]);
+      expect(report.allPass).toBe(true);
+      expect(report.verdict).toMatch(/CUMPLE R1–R7/);
+    }
+    expect(() => rw2DesignOf("rw2-e4-no")).toThrow(/manifest name/);
+    expect(() => designOf({ kind: "volManaged" } as PortfolioStrategyConfig)).toThrow(/RW2/);
+    expect(parseCriteriaArtifacts(["x", "--control", "c", "--authoritative", "a"])).toEqual({ controlArtifact: "c", authoritativeArtifact: "a" });
+    expect(() => parseCriteriaArtifacts(["--control", "--authoritative", "a"])).toThrow(/expects/);
+  });
+
+  test("R1/2/4/5/6/7 fail independently and boundary comparisons are inclusive", () => {
+    expect(rw2({ summary: summaryOf(outer, stress, { outerPsr: 0.949 }) }).criteria.R1.pass).toBe(false);
+    expect(rw2({ summary: summaryOf(outer, stress, { outerPsr: 0.95 }) }).criteria.R1.pass).toBe(true);
+    expect(rw2({ summary: summaryOf(outer, stress, { stitchedOos: { ...summaryOf(outer, stress).stitchedOos, maxDrawdown: 0.25001 } }) }).criteria.R2.pass).toBe(false);
+    expect(rw2({ summary: summaryOf(outer, stress, { stitchedOos: { ...summaryOf(outer, stress).stitchedOos, maxDrawdown: 0.25 } }) }).criteria.R2.pass).toBe(true);
+    expect(rw2({ summary: summaryOf(outer, []) }).criteria.R4.pass).toBe(false);
+    const losingStress = outer.map((r, i) => foldResult(`${i}/test`, r.dailyReturns.map(d => d.date), r.dailyReturns.map(d => -Math.abs(d.ret))));
+    expect(rw2({ summary: summaryOf(outer, losingStress) }).criteria.R4.pass).toBe(false);
+    expect(rw2({ summary: summaryOf([outer[0]], stress) }).criteria.R5.pass).toBe(false);
+    expect(rw2({ exTopDecile: { excluded: ["AAA"], sharpe: 0.299, totalReturn: 0.1, maxDrawdown: 0.1 } }).criteria.R6.pass).toBe(false);
+    expect(rw2({ exTopDecile: { excluded: ["AAA"], sharpe: 0.3, totalReturn: 0.1, maxDrawdown: 0.1 } }).criteria.R6.pass).toBe(true);
+    expect(rw2({ summary: summaryOf(outer, stress, { breakEvenSlippageBps: 5.99 }) }).criteria.R7.pass).toBe(false);
+    expect(rw2({ summary: summaryOf(outer, stress, { breakEvenSlippageBps: 6 }) }).criteria.R7.pass).toBe(true);
+    expect(rw2({ design: "E3" }).criteria.R7.pass).toBe(false);
+    expect(rw2({ summary: summaryOf(outer, stress, { breakEvenSlippageBps: Infinity }) }).criteria.R7.pass).toBe(true);
+    const empty = rw2({ control: null, exTopDecile: null, summary: summaryOf([], [], { outerPsr: undefined, breakEvenSlippageBps: undefined }) });
+    expect(Object.values(empty.criteria).every(c => c.pass === false)).toBe(true);
+    expect(empty.verdict).toMatch(/R1, R2, R3, R4, R5, R6, R7/);
+  });
+
+  test("R3 uses common days only, no margin; design annualization, diagnostics and optional authoritative flag", () => {
+    const half = new Map([...mine].filter((_, i) => i % 2 === 0));
+    half.set("1999-01-01", 100); // must not affect either Sharpe
+    const equal = rw2({ control: half });
+    expect(equal.criteria.R3).toMatchObject({ pass: true, value: 0, threshold: 0 });
+    expect(equal.reported.commonDays).toBe(390);
+    const sharper = new Map([...half].map(([d, ret]) => [d, ret + 0.000001]));
+    expect(rw2({ control: sharper }).criteria.R3.pass).toBe(false);
+    const crypto = rw2({ design: "E3", control: half });
+    const expectedSharpe = annualizedSharpe([...mine].filter((_, i) => i % 2 === 0).map(([, ret]) => ret), 365);
+    expect(crypto.criteria.R3.detail?.strategySharpe).toBeCloseTo(expectedSharpe, 12);
+    expect(crypto.criteria.R3.detail?.controlSharpe).toBeCloseTo(expectedSharpe, 12);
+    expect((equal.reported.correlationWithControl as { corr: number }).corr).toBeCloseTo(1, 12);
+    expect(equal.reported.strategyOnCommonDays).toEqual(equal.reported.controlOnCommonDays);
+    expect(rw2({ control: new Map([...mine].slice(0, 1)) }).criteria.R3.pass).toBe(false);
+    const different = new Map([...mine].map(([d, ret]) => [d, ret - 0.001]));
+    const authoritative = rw2({ control: mine, authoritative: different });
+    expect(authoritative.criteria.R3.pass).toBe(true); // warning does not gate
+    expect(authoritative.reported.authoritative).toMatchObject({ differsByMoreThan005: true, commonDays: 780 });
+    expect(rw2({ control: mine, authoritative: mine }).reported.authoritative).toMatchObject({ differsByMoreThan005: false });
+    expect(rw2({ control: mine, authoritative: half }).reported.authoritative).toMatchObject({ completeCommonDays: false, differsByMoreThan005: null });
   });
 });
 

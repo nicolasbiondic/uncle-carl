@@ -1,0 +1,191 @@
+{
+  "name": "rw2-e2-meanrev-volmanaged-v1",
+  "sleeve": "stocks",
+  "description": "PRE-REGISTERED (2026-10-21) BEFORE any run, docs/reports/RW-reescritura-rentable.md §8 (published in e80e72b), owner's choice 'exposición eficiente'. E2 redesign of meanrev_stocks on its own 32 names. Always invested, no signal, no stops: every symbol with >= 252 bars, weights proportional to 1/sigma, one scale so the annualized portfolio vol from the 21-day covariance equals the target, per-name cap, gross <= 1.0 (no margin), daily rebalance with a band. Binding criteria: §8.5 R1-R7 (R3: Sharpe not below the current sleeve's on the same days, the control being its own manifest rerun on the same data snapshot). Window and costs are those of the current sleeve's manifest. sigma 63 days, cap 0.10, band 1%, min order 5 USD fractional; costs 2 bps (stress 5 + 2) as in the control; window = meanrev-slot12-pure-v1. Candidates: vol target 12% and 15%. Trials 398 -> 400. data.universe also carries SPY as the session calendar (refSymbol); the strategy universe is the 32 names only, so E2 never trades SPY.",
+  "trialAccounting": {
+    "priorUniqueTrials": 398,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "ABBV",
+      "AVGO",
+      "BAC",
+      "CAT",
+      "COST",
+      "CVX",
+      "DIS",
+      "GE",
+      "HD",
+      "HON",
+      "JNJ",
+      "JPM",
+      "KO",
+      "LLY",
+      "MA",
+      "MCD",
+      "MRK",
+      "NFLX",
+      "NKE",
+      "ORCL",
+      "PG",
+      "QCOM",
+      "UNH",
+      "V",
+      "WMT",
+      "XLE",
+      "XLF",
+      "XLI",
+      "XLP",
+      "XLV",
+      "XOM",
+      "SLV"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-10-19T00:00:00Z",
+  "window": {
+    "from": "2018-01-01",
+    "to": "2026-08-06",
+    "outerFoldCount": 6,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 365
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000
+  },
+  "candidates": [
+    {
+      "name": "vt12",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": {
+          "kind": "volManaged",
+          "universe": [
+            "ABBV",
+            "AVGO",
+            "BAC",
+            "CAT",
+            "COST",
+            "CVX",
+            "DIS",
+            "GE",
+            "HD",
+            "HON",
+            "JNJ",
+            "JPM",
+            "KO",
+            "LLY",
+            "MA",
+            "MCD",
+            "MRK",
+            "NFLX",
+            "NKE",
+            "ORCL",
+            "PG",
+            "QCOM",
+            "UNH",
+            "V",
+            "WMT",
+            "XLE",
+            "XLF",
+            "XLI",
+            "XLP",
+            "XLV",
+            "XOM",
+            "SLV"
+          ],
+          "inceptionGuardBars": 252,
+          "volLookback": 63,
+          "covLookback": 21,
+          "portfolioVolTarget": 0.12,
+          "annualization": 252,
+          "perAssetCap": 0.1,
+          "maxGross": 1
+        },
+        "venue": {
+          "venue": "alpaca",
+          "fractional": true,
+          "minOrderNotional": 5,
+          "rebalanceBand": 0.01
+        }
+      }
+    },
+    {
+      "name": "vt15",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": {
+          "kind": "volManaged",
+          "universe": [
+            "ABBV",
+            "AVGO",
+            "BAC",
+            "CAT",
+            "COST",
+            "CVX",
+            "DIS",
+            "GE",
+            "HD",
+            "HON",
+            "JNJ",
+            "JPM",
+            "KO",
+            "LLY",
+            "MA",
+            "MCD",
+            "MRK",
+            "NFLX",
+            "NKE",
+            "ORCL",
+            "PG",
+            "QCOM",
+            "UNH",
+            "V",
+            "WMT",
+            "XLE",
+            "XLF",
+            "XLI",
+            "XLP",
+            "XLV",
+            "XOM",
+            "SLV"
+          ],
+          "inceptionGuardBars": 252,
+          "volLookback": 63,
+          "covLookback": 21,
+          "portfolioVolTarget": 0.15,
+          "annualization": 252,
+          "perAssetCap": 0.1,
+          "maxGross": 1
+        },
+        "venue": {
+          "venue": "alpaca",
+          "fractional": true,
+          "minOrderNotional": 5,
+          "rebalanceBand": 0.01
+        }
+      }
+    }
+  ],
+  "acceptance": {}
+}

@@ -110,6 +110,13 @@ export interface MeanRevConnorsParams {
  *  nothing. NOT wired to any sleeve yet — the director does that at cutover. */
 export interface PortfolioEngineParams {
   engine: "portfolio";
+  /** The incumbent sleeve this definition runs on: the `trades.account_id`
+   *  whose rows the engine reads (observer) or manages (live). The definition
+   *  id is its OWN registry id (never the sleeve's, whose row belongs to the
+   *  incumbent); that is how an observer coexists with the incumbent and how
+   *  rollback leaves the incumbent definition untouched. Absent: the engine
+   *  runs on the definition id (research/tests only; index.ts requires it). */
+  sleeve?: string;
   strategy: PortfolioStrategyConfig;
   venue: VenueId;
   runMode: "observer" | "live";
@@ -123,6 +130,17 @@ export interface PortfolioEngineParams {
   maxStaleSymbols?: number;
   /** Strategy symbol → historical_bars symbol (e.g. {"BTC": "BTC/USD"}). */
   dataSymbols?: Record<string, string>;
+  /** Written by scripts/portfolio-engine-cutover.ts: where the design came from
+   *  and the hash of what was tested (designHash). A LIVE definition whose
+   *  design no longer matches its hash is refused at boot: live = tested. */
+  provenance?: PortfolioEngineProvenance;
+}
+
+export interface PortfolioEngineProvenance {
+  manifest: string;
+  candidate: string;
+  /** sha256 of designHash input (see src/portfolio-engine/live/cutover.ts). */
+  designSha256: string;
 }
 
 export type PortfolioParams = MomentumTsmParams | MeanRevConnorsParams | PortfolioEngineParams;

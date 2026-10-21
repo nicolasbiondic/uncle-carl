@@ -5,10 +5,9 @@
 // PortfolioEnginePlan (pure data). This module turns that plan plus the venue
 // into a running PortfolioEngine and registers its heartbeat.
 //
-// NOT wired in src/index.ts: no sleeve runs on it until the director's
-// cutover (RW-reescritura-rentable §4). The wiring the cutover needs is the
-// two calls at the bottom (buildAlpacaPortfolioEngine for stocks; the Binance
-// venue comes from live/venues/binance.ts).
+// src/index.ts consumes these through live/wiring.ts (observer alongside the
+// incumbent, live instead of it); no sleeve is configured by the code: the
+// registry definition comes from scripts/portfolio-engine-cutover.ts.
 
 import { Database } from "bun:sqlite";
 import type { AlpacaExecutor } from "../../executor/alpaca-executor";
@@ -61,7 +60,7 @@ export function buildPortfolioEngine(plan: PortfolioEnginePlan, deps: BuildDeps)
   const dataSymbols = p.dataSymbols ?? {};
   const dataSymbol = (s: string) => dataSymbols[s] ?? s;
   const engine = new PortfolioEngine({
-    accountId: plan.portfolioId,
+    accountId: p.sleeve ?? plan.portfolioId,
     strategyVersion: p.strategyVersion,
     config: p.strategy,
     capital: plan.capital,
