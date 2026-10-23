@@ -18,6 +18,11 @@
 //   6. submit     — live mode only: deterministic client order ids, sells
 //                   first, each fill applied to the rows and marked `applied`
 //                   so a restart resumes exactly the orders not yet applied.
+//                   A sell refused only because its shares are still held
+//                   (an incumbent stop's async cancel) is NOT applied: the pass
+//                   stays `decided` and the next tick resumes it with the same
+//                   client order id, ≤ maxSellAttempts (5) per order per session,
+//                   then terminal + page. Buys wait behind a retrying sell.
 //   7. stops      — designs with stops: re-decide on the ACTUAL positions and
 //                   sync the venue's stop orders (VenueAdapter.syncStops).
 //   Observer mode runs 1–5 and submits nothing, mutates no row.
@@ -30,7 +35,7 @@
 import { decide as coreDecide, type CoreDecideInput } from "../decide";
 import { planOrders as corePlanOrders } from "../orders";
 import type {
-  BookState, MembershipView, OrderIntent, PlanOrders, PortfolioStrategyConfig, Position, PriceView, SessionDate,
+  BookState, MembershipView, OrderIntent, OrderResult, PlanOrders, PortfolioStrategyConfig, Position, PriceView, SessionDate,
   StopLevel, TargetBook, VenueAdapter, VenueRules,
 } from "../types";
 import { computeSleeveLedger } from "../../account/EquityTracker";
@@ -89,13 +94,17 @@ export interface PortfolioEngineOptions {
   heartbeatName?: string;
   heartbeats?: { register(name: string, intervalMs: number, opts?: { graceMultiplier?: number }): void; beat(name: string): void };
   alert?: (context: string, message: string) => void;
+  /** Submissions per retryable sell (held-quantity rejection) per session before it is terminal (default 5). */
+  maxSellAttempts?: number;
   /** Tick cadence of start() (ms). */
   tickMs?: number;
   /** Consecutive failed passes before one page per session. */
   failPageAfter?: number;
 }
 
-export type RunStatus = "not_due" | "already_done" | "skipped_stale" | "observed" | "submitted" | "resumed" | "failed";
+/** "retrying": the pass is live and `decided` with orders still to retry next tick (a sell the venue refused
+ *  because the shares are still held, plus the buys deferred behind it). */
+export type RunStatus = "not_due" | "already_done" | "skipped_stale" | "observed" | "submitted" | "resumed" | "retrying" | "failed";
 
 export interface PortfolioRunReport {
   status: RunStatus;
@@ -107,6 +116,25 @@ export interface PortfolioRunReport {
 }
 
 const DEFAULT_QTY_TOLERANCE = 1e-6;
+/** Submissions of one retryable sell per session before it is terminal (and pages). */
+const DEFAULT_MAX_SELL_ATTEMPTS = 5;
+/** Alpaca: `http_403 insufficient qty available for order (requested: X, available: 0)` while a resting order
+ *  (e.g. a stop whose cancel has not settled) still holds the shares; also its `held_for_orders` field. */
+const HELD_QTY_REJECTION_RE = /insufficient\s+(qty|quantity)|held[_ ]for[_ ]orders|available:\s*[\d.]+\s*\)/i;
+
+/** A SELL the venue refused only because the shares are held/unavailable right now. The venue never created the
+ *  order (a 403's client id stays free), so the same id can be sent again. Every other rejection is terminal. */
+export function isRetryableSellRejection(intent: OrderIntent, result: OrderResult): boolean {
+  return intent.side === "sell" && !result.ok && !(result.filledQty > 0) && result.status === "rejected"
+    && HELD_QTY_REJECTION_RE.test(result.error ?? "");
+}
+
+interface SubmitOutcome {
+  /** Orders whose rejection is terminal (applied) in THIS call. */
+  rejected: PersistedOrder[];
+  /** Orders left unapplied for the next tick: retryable sells and the buys deferred behind them. */
+  retrying: number;
+}
 
 export class PortfolioEngine {
   private readonly log;
@@ -227,6 +255,7 @@ export class PortfolioEngine {
       for (const s of core ?? []) required.add(s);
       return { all: [...required], required: [...required] };
     }
+    if (cfg.kind === "copySignal") throw new Error("copySignal is research-only: no live signal source is wired");
     return { all: [...cfg.universe], required: [...cfg.universe] };
   }
 
@@ -324,16 +353,34 @@ export class PortfolioEngine {
     this.log.info(`${session} (asOf ${asOf}) ${this.opts.mode}: equity $${ledger.equity.toFixed(2)}, ${Object.keys(target.weights).length} target(s), ${intents.length} order(s)`);
     if (!live) return { status: "observed", session, asOf, orders, rejected: 0 };
 
-    // 6. submit
-    const rejected = await this.submitAll(key, orders, view);
-    // 7. stops on the actual book
-    await this.refreshStops(key, view, target, ledger.equity);
-    updatePortfolioDecisionProgress(key, { status: "submitted", orders }, this.now());
+    // 6. submit, 7. stops on the actual book, close-out
+    return await this.submitAndSettle(key, asOf, orders, view, target, ledger.equity, "submitted", null);
+  }
+
+  /** Steps 6–7 shared by the first pass and the resume. Orders that must be retried (a held-quantity sell
+   *  rejection and the buys deferred behind it) keep the decision `decided`: the next tick resumes them with
+   *  the same client order ids. Stops are refreshed and progress recorded either way; the post-fill memory is
+   *  persisted only by the closing call (the README contract: ONE refresh from the first call's memory). */
+  private async submitAndSettle(
+    key: { accountId: string; strategyVersion: string; session: SessionDate }, asOf: SessionDate,
+    orders: PersistedOrder[], view: EnginePriceView, target: TargetBook, equity: number,
+    doneStatus: "submitted" | "resumed", doneNote: string | null,
+  ): Promise<PortfolioRunReport> {
+    const outcome = await this.submitAll(key, orders, view);
+    const retrying = outcome.retrying > 0;
+    await this.refreshStops(key, view, target, equity, !retrying);
+    if (retrying) {
+      const pending = orders.filter(o => !o.applied && !o.skipped).map(o => `${o.intent.side} ${o.intent.symbol}${o.attempts ? ` (${o.attempts}/${this.opts.maxSellAttempts ?? DEFAULT_MAX_SELL_ATTEMPTS})` : ""}`);
+      updatePortfolioDecisionProgress(key, { orders, note: `retrying next tick: ${pending.join(", ")}` }, this.now());
+    } else {
+      updatePortfolioDecisionProgress(key, { status: "submitted", orders, ...(doneNote ? { note: doneNote } : {}) }, this.now());
+    }
+    const rejected = outcome.rejected.length;
     if (rejected > 0) {
       this.alertFn(`Portfolio:${this.opts.accountId}`,
-        `${this.opts.accountId} ${session}: ${rejected} order(s) rejected — ${orders.filter(o => o.result && !o.result.ok).map(o => `${o.intent.side} ${o.intent.symbol}: ${o.result?.error ?? o.result?.status}`).join("; ")}`);
+        `${this.opts.accountId} ${key.session}: ${rejected} order(s) rejected — ${outcome.rejected.map(o => `${o.intent.side} ${o.intent.symbol}: ${o.result?.error ?? o.result?.status}`).join("; ")}`);
     }
-    return { status: "submitted", session, asOf, orders, rejected };
+    return { status: retrying ? "retrying" : doneStatus, session: key.session, asOf, orders, rejected };
   }
 
   /** The rows of this sleeve are ours now (adoption) and out of the stop machinery: the stops the
@@ -345,9 +392,16 @@ export class PortfolioEngine {
     const symbols = [...new Set(loadSleeveRows(this.opts.accountId).map(r => r.symbol))];
     if (symbols.length === 0) return;
     try {
-      const released = await this.opts.venue.releaseLegacyStops(symbols);
+      const res = await this.opts.venue.releaseLegacyStops(symbols);
+      const { released, unconfirmed } = Array.isArray(res) ? { released: res, unconfirmed: [] as string[] } : res;
       if (released.length > 0) {
         insertActivity(this.opts.accountId, "system", `portfolio engine released ${released.length} incumbent stop order(s) on adopted rows: ${released.join(", ")}`);
+      }
+      if (unconfirmed.length > 0) {
+        // Not a page: a sell refused for held shares is retried every tick (submitAll).
+        const msg = `${unconfirmed.length} incumbent stop cancel(s) not confirmed by the venue in time (${unconfirmed.join(", ")}) — their shares may still be held; sells refused for it are retried`;
+        this.log.warn(msg);
+        insertActivity(this.opts.accountId, "system", `portfolio engine: ${msg}`);
       }
     } catch (e: any) {
       this.alertFn(`Portfolio:${this.opts.accountId}`,
@@ -360,23 +414,33 @@ export class PortfolioEngine {
     this.log.warn(`resuming ${existing.session}: ${existing.orders.filter(o => !o.applied && !o.skipped).length} order(s) not yet applied`);
     const symbols = [...new Set([...existing.orders.map(o => o.intent.symbol), ...loadSleeveRows(this.opts.accountId).map(r => r.symbol)])];
     const view = this.opts.openPriceView(existing.asOf, symbols);
-    const rejected = await this.submitAll(key, existing.orders, view);
+    // A sell already refused for held shares: look for the incumbent's stops again (idempotent; a cancel that
+    // failed or never confirmed last tick is the usual cause).
+    if (existing.orders.some(o => !o.applied && !o.skipped && (o.attempts ?? 0) > 0)) await this.releaseIncumbentStops();
     const target: TargetBook = { asOf: existing.asOf, weights: existing.weights, stops: existing.stops, memory: existing.memory, diagnostics: existing.diagnostics };
-    await this.refreshStops(key, view, target, existing.equity);
-    updatePortfolioDecisionProgress(key, { status: "submitted", orders: existing.orders, note: "resumed after restart" }, this.now());
-    return { status: "resumed", session: existing.session, asOf: existing.asOf, orders: existing.orders, rejected };
+    return await this.submitAndSettle(key, existing.asOf, existing.orders, view, target, existing.equity, "resumed", "resumed after restart");
   }
 
   /** Submit every pending order (sells first — planOrders' order), apply each
-   *  fill to the rows, persist progress after each. Returns the rejection count. */
-  private async submitAll(key: { accountId: string; strategyVersion: string; session: SessionDate }, orders: PersistedOrder[], view: EnginePriceView): Promise<number> {
-    let rejected = 0;
+   *  fill to the rows, persist progress after each. A sell refused only because its shares are still
+   *  held (isRetryableSellRejection) stays UNAPPLIED with the same client order id, up to
+   *  `maxSellAttempts` per session, and the buys behind it wait (sells fund and precede buys); at the cap
+   *  it becomes a terminal rejection like any other. */
+  private async submitAll(key: { accountId: string; strategyVersion: string; session: SessionDate }, orders: PersistedOrder[], view: EnginePriceView): Promise<SubmitOutcome> {
+    const rejected: PersistedOrder[] = [];
+    const maxAttempts = this.opts.maxSellAttempts ?? DEFAULT_MAX_SELL_ATTEMPTS;
+    let retrying = 0;
+    let sellRetrying = false;
     for (const o of orders) {
       if (o.applied || o.skipped) continue;
       if (o.intent.side === "buy" && !this.tradingEnabled()) {
         o.skipped = "trading_disabled";
         this.log.warn(`TRADING_ENABLED=false — buy ${o.intent.symbol} not submitted (sells unaffected)`);
         updatePortfolioDecisionProgress(key, { orders }, this.now());
+        continue;
+      }
+      if (o.intent.side === "buy" && sellRetrying) {
+        retrying++; // not submitted, not counted as an attempt: it goes once the sells settle
         continue;
       }
       const clientOrderId = o.clientOrderId ?? portfolioClientOrderId(key.accountId, key.session, o.intent.symbol);
@@ -390,6 +454,18 @@ export class PortfolioEngine {
         o.result = { ok: false, filledQty: 0, avgPrice: null, status: "unknown", error: String(e?.message ?? e) };
         updatePortfolioDecisionProgress(key, { orders, note: `order ${o.intent.symbol} outcome unknown: ${o.result.error}` }, this.now());
         throw e;
+      }
+      if (isRetryableSellRejection(o.intent, result)) {
+        o.attempts = (o.attempts ?? 0) + 1;
+        if (o.attempts < maxAttempts) {
+          o.result = result;
+          retrying++;
+          sellRetrying = true;
+          this.log.warn(`sell ${o.intent.symbol} ${o.intent.qty}: shares still held (${result.error}) — attempt ${o.attempts}/${maxAttempts}, retried next tick with the same client order id`);
+          updatePortfolioDecisionProgress(key, { orders }, this.now());
+          continue; // stays unapplied
+        }
+        result = { ...result, error: `${result.error} — gave up after ${o.attempts} attempts this session` };
       }
       o.result = result;
       if (result.filledQty > 0 && result.avgPrice !== null && result.avgPrice > 0) {
@@ -411,27 +487,29 @@ export class PortfolioEngine {
         }
       }
       if (!result.ok) {
-        rejected++;
+        rejected.push(o);
         this.log.warn(`${o.intent.side} ${o.intent.symbol} ${o.intent.qty}: NOT filled (${result.status}${result.error ? `: ${result.error}` : ""})`);
       }
       o.applied = true;
       updatePortfolioDecisionProgress(key, { orders }, this.now());
     }
-    return rejected;
+    return { rejected, retrying };
   }
 
   /** After the fills (README "Calling the core"): re-decide on the ACTUAL
    *  positions with the same view/session and the first call's memory,
    *  persist THAT memory (stop levels from the real average entry) and make
    *  the venue's stops match. Never a second rebalance. */
-  private async refreshStops(key: { accountId: string; strategyVersion: string; session: SessionDate }, view: EnginePriceView, target: TargetBook, equity: number): Promise<void> {
+  private async refreshStops(key: { accountId: string; strategyVersion: string; session: SessionDate }, view: EnginePriceView, target: TargetBook, equity: number, persistMemory = true): Promise<void> {
     const positions = positionsFromRows(loadSleeveRows(this.opts.accountId));
     const refreshed = this.decideFn({
       view, membership: this.opts.membership, config: this.opts.config, executionSession: key.session,
       book: { equity, positions, memory: target.memory },
     });
     const stops: readonly StopLevel[] = refreshed.stops;
-    updatePortfolioDecisionProgress(key, { memory: refreshed.memory, stops }, this.now());
+    // While orders are still being retried the stored memory stays the FIRST call's: the next tick refreshes
+    // again from it, so the core is only ever advanced once per session (README "Calling the core").
+    updatePortfolioDecisionProgress(key, persistMemory ? { memory: refreshed.memory, stops } : { stops }, this.now());
     if (!this.opts.venue.syncStops) {
       if (stops.length > 0) this.alertFn(`Portfolio:${this.opts.accountId}`, `${this.opts.accountId}: design declares ${stops.length} stop(s) but venue ${this.opts.venue.venue} has no syncStops — positions unprotected`);
       return;

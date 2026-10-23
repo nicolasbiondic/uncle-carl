@@ -18,7 +18,7 @@ import type { CurrentPosition } from "./Rebalancer";
 import type { OHLCV } from "../../utils/types";
 import type { AlpacaExecutor } from "../../executor/alpaca-executor";
 import type { BinanceExecutor } from "../../executor/binance-executor";
-import { SYMBOL_MAP } from "../../executor/binance-executor";
+import { SYMBOL_MAP, fapiClientOrderId } from "../../executor/binance-executor";
 import { isUnknownOrder } from "../../executor/executionPolicy";
 import { beginEngineClose, endEngineClose } from "../../sync/inflightCloses";
 import type { QuoteAsset } from "../../executor/binance/quoteAsset";
@@ -26,7 +26,8 @@ import { USDC_SYMBOL_MAP } from "../../executor/binance/quoteAsset";
 import { binanceKlinesEnabled, fetchBinanceKlines } from "../../market/binanceKlines";
 import {
   getDB, insertTrade, closeTrade, updateTradeCloseReason, getOpenTrades,
-  insertSignal, insertOrder, recordFill, RECONCILE_CLOSE_SQL,
+  insertSignal, insertOrder, recordFill, insertActivity, RECONCILE_CLOSE_SQL,
+  accumulatePartialCloseLedger, getPartialCloseLedger, increaseOpenTradeQuantity,
 } from "../../db/database";
 import { eventBus, EVENTS } from "../../utils/events";
 import { createLogger } from "../../utils/logger";
@@ -594,11 +595,18 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
       // only, never anonymous ones.
       await this.binance.cancelAllOrders(action.symbol);
 
-      // Close the DB row with the broker's realised PnL.
+      // Close the DB row with the broker's realised PnL. A row the exposure
+      // control partially reduced (scalePosition, factor < 1) carries those
+      // legs' broker-settled pnl/fees on the partial ledger: net them into
+      // the ONE final pnl (the sim's partialRealized → ClosedTrade.pnl), with
+      // pnl_pct over the quantity ever held, not the remnant.
       try {
-        const netPnl = result.realizedPnl - result.commission - (row.open_commission || 0);
+        const ledger = getPartialCloseLedger(row.id);
+        const netPnl = result.realizedPnl - result.commission - (row.open_commission || 0)
+          + ledger.realizedNative - ledger.commissionNative;
         const closeTime = Date.now();
-        const closed = closeTrade(row.id, result.filledPrice, closeTime, result.commission, netPnl);
+        const closed = closeTrade(row.id, result.filledPrice, closeTime, result.commission, netPnl,
+          ledger.closedContracts > 0 ? { basisQuantity: row.quantity + ledger.closedContracts } : {});
         if (!closed) throw new Error("DB close returned no row");
         if (closed?.closeReason !== "MANUAL_CLOSE_UNRECONCILED") {
           updateTradeCloseReason(row.id, closeReason);
@@ -627,6 +635,265 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
     } finally {
       endEngineClose(this.cfg.accountId, action.symbol);
     }
+  }
+
+  /**
+   * MomentumBrokerAdapter.scalePosition — the portfolio exposure control's
+   * partial resize (RW4a, 2026-10-23; MomentumEngineConfig.exposureControl,
+   * wired on momentum_crypto_usdc; shared verbatim by the USDT sleeve).
+   * Mirrors SimBroker.scalePosition (scripts/backtest-momentum-wf.ts) so live
+   * and replay derive the SAME order from their own recorded quantity:
+   *
+   *  factor < 1 — reduceOnly MARKET close of (1 − factor) × the ROW's quantity
+   *    (bounded by the broker's; the executor floors to LOT_SIZE, no
+   *    minNotional gate on a reduce). Accounting = the COIN-M partial-close
+   *    ledger (accumulatePartialCloseLedger): the leg's broker-settled
+   *    realizedPnl/commission accrue on the row, quantity shrinks to the
+   *    remnant, the row stays OPEN — ONE trades row per position, pnl written
+   *    once at the final close (closePosition / the reconciler sum the legs),
+   *    so trades, win rate, expectancy and RiskGuard's getRealisedPnlSince
+   *    behave exactly like the sim's single ClosedTrade. No new close reason.
+   *  factor > 1 — MARKET add of (factor − 1) × quantity through placeOrder
+   *    (every entry filter applies: step, minNotional, margin); entry_price
+   *    becomes the weighted average, open_commission accumulates, stop_loss
+   *    (the stop PRICE) is untouched — the stop stays at the original entry.
+   *
+   * In both cases the DB write is ONE transaction on the confirmed fill, so
+   * BrokerSync's SUM(open quantity) never sees a phantom mismatch beyond the
+   * fill→write instant it already tolerates; the 15s loop and the display
+   * re-read rows, so they see the new quantity; the inflight-close guard is
+   * held across the reduce like a close. Then the broker-native STOP_MARKET
+   * is re-sized to the new quantity at the row's stop price (place the new
+   * one FIRST, then sweep ours around it; a double placement failure cancels
+   * nothing, pages STOP_RESIZE_FAILED and leaves the row correct — the
+   * resize DID happen, so the engine must record it).
+   * Never flattens (a reduction that would leave ~nothing is refused — exits
+   * are the closes' job) and never creates a position. Any failure BEFORE a
+   * confirmed fill leaves position and row untouched and returns ok:false.
+   */
+  async scalePosition(action: { symbol: string; side: "buy" | "sell"; factor: number; reason?: string }): Promise<{ ok: boolean; reason?: string }> {
+    if (!this.binance.isConnected()) return { ok: false, reason: "binance not connected" };
+    const { factor } = action;
+    if (!(factor > 0) || !Number.isFinite(factor) || factor === 1) return { ok: false, reason: `invalid factor ${factor}` };
+    const binanceSym = this.toNative(action.symbol);
+    if (!binanceSym) return { ok: false, reason: `no binance mapping for ${action.symbol}` };
+
+    // Ownership: only OUR open row authorizes touching the symbol, and only
+    // relative to the RECORDED quantity (same boundary as closePosition).
+    let row: any;
+    try {
+      row = getDB().prepare(
+        `SELECT id, entry_price, quantity, side, stop_loss, open_commission FROM trades
+         WHERE account_id = ? AND symbol = ? AND status = 'open' AND strategy IN ('MOMENTUM', 'SYNC_RECOVERY')
+         ORDER BY entry_time DESC LIMIT 1`
+      ).get(this.cfg.accountId, action.symbol) as any;
+    } catch (e: any) {
+      return { ok: false, reason: `DB ownership lookup failed: ${e.message}` };
+    }
+    if (!row) return { ok: false, reason: "no open DB trade for this sleeve — refusing to resize the aggregate broker position" };
+    if (row.side !== action.side) return { ok: false, reason: `row side ${row.side} ≠ requested ${action.side}` };
+    if (!(row.quantity > 0)) return { ok: false, reason: `non-positive row quantity ${row.quantity}` };
+
+    let live: { positionAmt: number } | undefined;
+    try {
+      live = (await this.binance.getPositions()).find((p: any) => p.symbol === binanceSym);
+    } catch (e: any) {
+      return { ok: false, reason: `broker positions unavailable: ${e.message}` };
+    }
+    const brokerQty = Math.abs(live?.positionAmt ?? 0);
+    if (!(brokerQty > 0)) return { ok: false, reason: "broker position flat; awaiting reconciliation" };
+
+    // The stop PRICE the re-sized native stop keeps: the row's persisted one
+    // (vol-scaled at entry), else the profile distance from the ORIGINAL
+    // entry — never re-derived from the new average.
+    const stopPrice = row.stop_loss > 0
+      ? row.stop_loss
+      : (action.side === "buy" ? row.entry_price * (1 - this.cfg.stopLossPct / 100) : row.entry_price * (1 + this.cfg.stopLossPct / 100));
+    const why = action.reason ?? "exposure control";
+
+    if (factor < 1) {
+      const closeQty = Math.min(row.quantity * (1 - factor), brokerQty);
+      // Never flatten: the remnant must be a real position on BOTH books.
+      if (!(closeQty > 0) || row.quantity - closeQty <= row.quantity * 1e-9 || brokerQty - closeQty <= brokerQty * 1e-6) {
+        return { ok: false, reason: `reduction too small or would flatten (row ${row.quantity}, broker ${brokerQty}, factor ${factor})` };
+      }
+      const closeSide: "buy" | "sell" = action.side === "buy" ? "sell" : "buy";
+      let preExpectedPx: number | undefined;
+      if (typeof (this.binance as any).getExecutableQuote === "function") {
+        try {
+          const quote = await this.binance.getExecutableQuote(binanceSym, closeSide);
+          if (quote && quote.price > 0) preExpectedPx = quote.price;
+        } catch (e: any) { log.debug(`pre-resize quote fetch failed for ${binanceSym}: ${e.message}`); }
+      }
+      // Same guard as closePosition: while the fill→DB-write is in flight the
+      // reconciler must not attribute our own partial fill.
+      beginEngineClose(this.cfg.accountId, action.symbol);
+      try {
+        const result = await this.binance.closePosition(action.symbol, closeQty, action.side);
+        if (!result.success || !(result.filledPrice > 0)) return { ok: false, reason: `broker did not confirm partial close${result.reason ? `: ${result.reason}` : ""}` };
+        const filledQty = result.filledQty && result.filledQty > 0 ? Math.min(result.filledQty, row.quantity) : closeQty;
+        const remaining = row.quantity - filledQty;
+        if (!(remaining > row.quantity * 1e-9)) {
+          // The broker took the whole row — not a resize any more. Leave the
+          // row to the reconciler (broker flat → attributed close) and say so.
+          log.error(`🚨 scalePosition ${action.symbol}: partial reduce filled ${filledQty} ≥ row ${row.quantity} — position flattened; row left to reconciliation`);
+          return { ok: false, reason: "partial close consumed the whole row; reconciliation pending" };
+        }
+        let ledger;
+        try {
+          ledger = accumulatePartialCloseLedger(row.id, {
+            realizedNative: result.realizedPnl, commissionNative: result.commission,
+            commissionAsset: this.cfg.quoteAsset, closedContracts: filledQty, remainingContracts: remaining,
+          });
+        } catch (e: any) {
+          ledger = null;
+          log.error(`scalePosition ${action.symbol}: partial ledger write threw: ${e.message}`);
+        }
+        if (!ledger) {
+          log.error(`🚨 Broker reduced ${action.symbol} by ${filledQty}, but the DB row ${row.id} could not be updated — reconciliation pending`);
+          eventBus.emit(EVENTS.ERROR_BURST, {
+            context: "BinanceMomentumAdapter",
+            message: `Partial reduce persisted on broker, DB update failed: ${action.symbol} −${filledQty}`,
+            count: 1, windowMs: 0, firstAt: Date.now(), lastAt: Date.now(),
+          });
+          return { ok: false, reason: "broker reduced; DB reconciliation pending" };
+        }
+        try {
+          if ((result.submittedPx ?? 0) > 0) recordFill({
+            tradeId: row.id, orderId: result.orderId ?? `${row.id}:resize:${Date.now()}`, accountId: this.cfg.accountId,
+            symbol: action.symbol, side: closeSide, market: "crypto",
+            expectedPx: preExpectedPx ?? result.submittedPx!, submittedPx: result.submittedPx!,
+            filledPx: result.filledPrice, filledQty, fillTime: result.exitTime ?? Date.now(),
+            latencyMs: Math.max(0, (result.exitTime ?? Date.now()) - (result.submittedAt ?? Date.now())),
+            broker: "binance", estPx: result.estPx,
+          });
+        } catch (e: any) { log.warn(`resize fill telemetry failed for ${action.symbol}: ${e.message}`); }
+        log.info(`📉 ${action.symbol} reduced ×${factor.toFixed(3)}: −${filledQty} @ $${result.filledPrice} (leg pnl ${result.realizedPnl.toFixed(2)}, fee ${result.commission.toFixed(4)}; remaining ${remaining}) — ${why}`);
+        try { insertActivity(this.cfg.accountId, "trade", `Resized ${action.symbol} ×${factor.toFixed(3)}: −${filledQty} @ $${result.filledPrice} (remaining ${remaining}) — ${why}`); } catch {}
+        await this.resizeNativeStop(action.symbol, action.side, stopPrice, remaining, row.quantity);
+        return { ok: true };
+      } finally {
+        endEngineClose(this.cfg.accountId, action.symbol);
+      }
+    }
+
+    // factor > 1 — an add-back is an ENTRY: the engine already applied every
+    // entry gate and the gross cap; the venue's entry filters apply here.
+    const price = await this.binance.getPrice(binanceSym);
+    if (!(price > 0)) return { ok: false, reason: `no price for ${binanceSym}` };
+    const addQty = row.quantity * (factor - 1);
+    if (!(addQty > 0)) return { ok: false, reason: "computed add qty <= 0" };
+    // Shared-pool margin mirror (see openPosition): names the failure instead
+    // of an anonymous HTTP 400; fails OPEN when unreadable.
+    try {
+      const bal = await this.binance.getBalance();
+      const available = Number.isFinite(bal?.marginCash) ? bal.marginCash : null;
+      const required = (addQty * price) / Math.max(1, this.cfg.leverage);
+      if (available !== null && required > available) {
+        return { ok: false, reason: `insufficient_margin (${this.cfg.quoteAsset} pool): add-back needs ~$${required.toFixed(0)}, available $${available.toFixed(0)}` };
+      }
+    } catch { /* unreadable → fail open, broker enforces */ }
+    const signal = {
+      id: crypto.randomUUID(), symbol: action.symbol, market: "crypto" as const, side: action.side,
+      strategy: "MOMENTUM" as any, strength: "strong" as any, price, timestamp: Date.now(),
+      indicators: { _score: 100 } as Record<string, number>, reason: `exposure control add-back: ${why}`,
+    };
+    const submittedAt = Date.now();
+    const order = await this.binance.placeOrder(signal, addQty, this.cfg.accountId as any);
+    if (isUnknownOrder(order)) {
+      // In flight: the fill (if any) shows up as broker > row quantity, which
+      // BrokerSync's drift page reports; NOT retried (the next tick re-reads
+      // the row and re-derives the factor).
+      log.error(`scalePosition ${action.symbol}: add-back outcome UNKNOWN (${order.reason}) — in flight, NOT retried`);
+      return { ok: false, reason: `order outcome unknown (in flight): ${order.reason}` };
+    }
+    if (!order) return { ok: false, reason: "binance.placeOrder returned null (add-back rejected)" };
+    const filledQty = order.quantity;
+    if (!(filledQty > 0)) return { ok: false, reason: "broker returned zero add quantity" };
+    const filledPrice = order.filledPrice ?? price;
+    const filledAt = order.filledAt ?? Date.now();
+    let updated: ReturnType<typeof increaseOpenTradeQuantity> = null;
+    try {
+      updated = increaseOpenTradeQuantity(row.id, { addQty: filledQty, fillPrice: filledPrice, commission: order.openCommission ?? 0 });
+    } catch (e: any) {
+      log.error(`scalePosition ${action.symbol}: row increase threw: ${e.message}`);
+    }
+    if (!updated) {
+      // The add filled but the row is gone (closed meanwhile) or the write
+      // failed: that quantity is untracked exposure. Undo it (reduceOnly) and
+      // page; whatever remains is the reconciler's orphan path.
+      log.error(`🚨 scalePosition ${action.symbol}: add-back filled ${filledQty} but the row could not be increased — closing the added quantity`);
+      eventBus.emit(EVENTS.ERROR_BURST, {
+        context: "BinanceMomentumAdapter",
+        message: `Add-back persisted on broker, DB update failed: ${action.symbol} +${filledQty} — undoing`,
+        count: 1, windowMs: 0, firstAt: Date.now(), lastAt: Date.now(),
+      });
+      try { await this.binance.closePosition(action.symbol, filledQty, action.side); } catch (e: any) { log.error(`undo of ${action.symbol} add-back failed: ${e.message}`); }
+      return { ok: false, reason: "add-back filled; DB update failed; undo attempted" };
+    }
+    try {
+      insertOrder({
+        ...order, symbol: action.symbol, market: "crypto", side: action.side, type: order.type ?? "market",
+        quantity: filledQty, price: order.price ?? price, signal, status: "filled", filledPrice, filledAt,
+        createdAt: order.createdAt ?? submittedAt, updatedAt: Date.now(),
+      }, this.cfg.accountId);
+      if (order.submittedPx && order.submittedPx > 0) recordFill({
+        tradeId: row.id, orderId: order.externalId ?? order.id, accountId: this.cfg.accountId,
+        symbol: action.symbol, side: action.side, market: "crypto",
+        expectedPx: price, submittedPx: order.submittedPx, filledPx: filledPrice,
+        filledQty, fillTime: filledAt, latencyMs: Math.max(0, filledAt - (order.submittedAt ?? submittedAt)),
+        broker: "binance", estPx: order.estPx,
+      });
+    } catch (e: any) { log.warn(`add-back telemetry failed for ${action.symbol}: ${e.message}`); }
+    log.info(`📈 ${action.symbol} added ×${factor.toFixed(3)}: +${filledQty} @ $${filledPrice} (qty ${updated.quantity}, avg entry $${updated.entryPrice.toFixed(6)}, stop stays $${stopPrice}) — ${why}`);
+    try { insertActivity(this.cfg.accountId, "trade", `Resized ${action.symbol} ×${factor.toFixed(3)}: +${filledQty} @ $${filledPrice} (qty ${updated.quantity}) — ${why}`); } catch {}
+    await this.resizeNativeStop(action.symbol, action.side, stopPrice, updated.quantity, row.quantity);
+    return { ok: true };
+  }
+
+  /**
+   * Re-size the broker-native STOP_MARKET after a confirmed resize, never
+   * leaving the position without one: PLACE the new reduceOnly stop first
+   * (stamped as ours, same stop price, new quantity; two attempts), and only
+   * then cancel OUR other stops for the symbol around it
+   * (cancelAllOrders exceptClientOrderIds — never anonymous ones, the
+   * aggregate is not flat). If both placements fail, NOTHING is canceled:
+   * the old stop stays. After a trim it still protects the whole remainder
+   * (reduceOnly clamps to the position); after an add-back it covers only
+   * the OLD quantity — the STOP_RESIZE_FAILED page says which case this is.
+   * Never undoes the resize: it already happened and the engine records it.
+   */
+  private async resizeNativeStop(symbol: string, side: "buy" | "sell", stopPrice: number, newQty: number, previousQty: number): Promise<boolean> {
+    const native = this.toNative(symbol) ?? symbol;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const clientOrderId = fapiClientOrderId(`stop:${native}:${side}:resize:${Date.now()}:${attempt}:${crypto.randomUUID()}`);
+      let placed = false;
+      try {
+        placed = await this.binance.placeStopMarketClose(symbol, side, stopPrice, newQty, clientOrderId);
+      } catch (e: any) {
+        log.warn(`resizeNativeStop ${symbol}: attempt ${attempt} threw: ${e.message}`);
+      }
+      if (!placed) continue;
+      try {
+        await this.binance.cancelAllOrders(symbol, { exceptClientOrderIds: [clientOrderId] });
+      } catch (e: any) {
+        // Two of our stops at the same price: harmless (the second is a
+        // reduceOnly no-op once the first fills); the next pass's sweep clears it.
+        log.warn(`resizeNativeStop ${symbol}: new stop placed but the sweep of the previous ones failed (${e.message}) — a stale duplicate stop may remain`);
+      }
+      return true;
+    }
+    const trimmed = newQty < previousQty;
+    const coverage = trimmed
+      ? `TRIM: the previous stop (qty ${previousQty}) still protects the whole remainder ${newQty} (reduceOnly)`
+      : `ADD-BACK: the previous stop (qty ${previousQty}) covers only the old quantity; ${newQty - previousQty} of ${newQty} is unprotected`;
+    log.error(`🚨 STOP_RESIZE_FAILED ${symbol} @ $${stopPrice} [${this.cfg.accountId}] — re-sized native stop NOT placed after two attempts, nothing canceled; ${coverage}; ${this.cfg.quoteAsset === "USDT" ? "15s loop still covers the row" : "USDC has no client stop loop"} — MANUAL CHECK`);
+    eventBus.emit(EVENTS.ERROR_BURST, {
+      context: "BinanceMomentumAdapter",
+      message: `STOP_RESIZE_FAILED ${symbol}: ${trimmed ? "trim — old stop still covers the remainder" : "add-back — old stop covers only the old quantity"}`,
+      count: 1, windowMs: 0, firstAt: Date.now(), lastAt: Date.now(),
+    });
+    return false;
   }
 
   async fetchCandles(symbol: string, bars: number): Promise<OHLCV[]> {

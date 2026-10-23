@@ -41,7 +41,7 @@
 
 import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
-import { MomentumEngine, shortStopDistancePct, trailPctFromVol, type MarketTrendGateConfig, type MomentumBrokerAdapter, type MomentumStatePersistence, type ShortStopSpec, type TimeStopConfig, type TrailMark, type TrailStopConfig, type VolSizingConfig, type VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
+import { MomentumEngine, shortStopDistancePct, trailPctFromVol, type ExposureControlConfig, type MarketTrendGateConfig, type MomentumBrokerAdapter, type MomentumStatePersistence, type ShortStopSpec, type TimeStopConfig, type TrailMark, type TrailStopConfig, type VolSizingConfig, type VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
 import type { CurrentPosition } from "../src/strategies/momentum/Rebalancer";
 import { DEFAULT_TSM_CONFIG, type TSMConfig } from "../src/strategies/momentum/TimeSeriesMomentum";
 import type { OHLCV } from "../src/utils/types";
@@ -658,6 +658,25 @@ export interface SimPosition {
    *  profitLock isn't configured. Monotonic once armed: never retreats
    *  (max for longs, min for shorts — see checkStops). */
   lockLevel?: number | null;
+  /** Net cash already realized by exposure-control PARTIAL reductions
+   *  (gross − exit fee, already applied to cash). Netted into
+   *  ClosedTrade.pnl at the final close so the trade's economic result is
+   *  whole. Absent on every run without the control (legacy shape). */
+  partialRealized?: number;
+  /** Hard-stop price anchor after an exposure-control ADD-BACK: the live
+   *  adapters keep trades.stop_loss at the ORIGINAL entry's distance when
+   *  they add to a position, so the sim anchors the stop there too instead
+   *  of at the new weighted-average entryPrice. Absent = entryPrice (legacy). */
+  stopAnchorPrice?: number;
+}
+
+/** One exposure-control resize executed by the SimBroker (RW4a telemetry). */
+export interface SimResize {
+  t: number; symbol: string; side: "buy" | "sell"; factor: number;
+  /** Signed quantity change (negative = reduction). */
+  qtyDelta: number;
+  /** |Δqty| × execution price (slippage included). */
+  notionalUsd: number;
 }
 export interface ClosedTrade {
   symbol: string; side: "buy" | "sell"; pnl: number; exitAt: number; reason: string;
@@ -852,6 +871,10 @@ export class SimBroker implements MomentumBrokerAdapter {
    *  included). Feeds ReplayResult.turnoverAnnual via computeTurnoverAnnual;
    *  0 unless positions actually trade — no behavior change on its own. */
   turnoverNotional = 0;
+  /** Exposure-control resizes executed (MomentumBrokerAdapter.scalePosition).
+   *  Empty on every run without cfg.exposureControl — the engine never calls
+   *  scalePosition then. Output only (ReplayResult.exposureResizes). */
+  resizes: SimResize[] = [];
   /** symbol → decisionTicks value at which entries unblock (B2 axis). Empty
    *  unless cooldownBarsAfterStop > 0 AND a hard stop actually fired. */
   private cooldownUntilTick = new Map<string, number>();
@@ -1021,6 +1044,76 @@ export class SimBroker implements MomentumBrokerAdapter {
     }
   }
 
+  /**
+   * MomentumBrokerAdapter.scalePosition (exposure control, RW4a): multiply a
+   * held position's quantity by `factor`, at the SAME next-bar-open execution
+   * price, slippage and commission every open/close here pays.
+   *  - factor < 1: partial close of (1 − factor) × qty. Gross P&L on the
+   *    closed part (vs the position's entry price) minus its exit fee goes
+   *    to cash NOW and accumulates on `partialRealized`, which closeAt nets
+   *    into the final ClosedTrade.pnl — one trade row per position, so
+   *    trades/win rate/expectancy stay comparable with the control and
+   *    getRealisedPnlSince (loss streak) sees the realization at the final
+   *    close exactly like live (trades.pnl is written once, at close).
+   *  - factor > 1: add (factor − 1) × qty at market, under the same margin
+   *    check as openPosition; entryPrice becomes the weighted average, the
+   *    hard-stop anchor stays at the ORIGINAL entry (stopAnchorPrice) like
+   *    the live row's stop_loss price does.
+   * Every resize counts in turnoverNotional (the extra cost the protocol
+   * measures) and in `resizes` (the extra orders). Never creates or
+   * removes a position: a reduction that would leave ~nothing (≤ 1e-9 of
+   * the quantity) is refused — flattening is the exits' job.
+   */
+  async scalePosition(a: { symbol: string; side: "buy" | "sell"; factor: number; reason?: string }) {
+    const idx = this.positions.findIndex(p => p.symbol === a.symbol && p.side === a.side);
+    if (idx < 0) return { ok: false, reason: "no position" };
+    if (!(a.factor > 0) || !Number.isFinite(a.factor) || a.factor === 1) return { ok: false, reason: "invalid factor" };
+    const px = this.executionPrice(a.symbol);
+    if (!px) return { ok: false, reason: "no price" };
+    const p = this.positions[idx];
+    const long = p.side === "buy";
+    if (a.factor < 1) {
+      const rawClose = p.qty * (1 - a.factor);
+      const closeQty = this.isStock ? Math.floor(rawClose) : rawClose;
+      if (!(closeQty > 0) || p.qty - closeQty <= p.qty * 1e-9) return { ok: false, reason: "reduction too small or would flatten" };
+      // Closing a long sells (adverse = lower), closing a short buys (adverse = higher).
+      const slip = long ? px * (1 - this.slippageBps / 10_000) : px * (1 + this.slippageBps / 10_000);
+      const notional = closeQty * slip;
+      this.turnoverNotional += notional;
+      const gross = (slip - p.entryPrice) * closeQty * (long ? 1 : -1);
+      const fee = notional * (this.commissionBps / 10_000);
+      this.cash += gross - fee;
+      this.feesPaid += fee;
+      this.feesBySymbol.set(a.symbol, (this.feesBySymbol.get(a.symbol) ?? 0) + fee);
+      p.partialRealized = (p.partialRealized ?? 0) + gross - fee;
+      p.entryMargin *= (p.qty - closeQty) / p.qty;
+      p.qty -= closeQty;
+      this.resizes.push({ t: this.now, symbol: a.symbol, side: a.side, factor: a.factor, qtyDelta: -closeQty, notionalUsd: notional });
+      return { ok: true };
+    }
+    const rawAdd = p.qty * (a.factor - 1);
+    const addQty = this.isStock ? Math.floor(rawAdd) : rawAdd;
+    if (!(addQty > 0)) return { ok: false, reason: "zero_qty" };
+    // Adding to a long buys (adverse = higher), adding to a short sells (adverse = lower).
+    const slip = long ? px * (1 + this.slippageBps / 10_000) : px * (1 - this.slippageBps / 10_000);
+    const notional = addQty * slip;
+    const need = notional / this.margin.leverage;
+    const used = this.positions.reduce((s, q) => s + q.entryMargin, 0);
+    if (used + need > this.equityNow()) { this.marginRejects++; return { ok: false, reason: "margin_insufficient" }; }
+    this.turnoverNotional += notional;
+    const fee = notional * (this.commissionBps / 10_000);
+    this.cash -= fee;
+    this.feesPaid += fee;
+    this.feesBySymbol.set(a.symbol, (this.feesBySymbol.get(a.symbol) ?? 0) + fee);
+    p.stopAnchorPrice ??= p.entryPrice;
+    p.entryPrice = (p.entryPrice * p.qty + slip * addQty) / (p.qty + addQty);
+    p.qty += addQty;
+    p.entryMargin += need;
+    p.entryCommission = (p.entryCommission ?? 0) + fee;
+    this.resizes.push({ t: this.now, symbol: a.symbol, side: a.side, factor: a.factor, qtyDelta: addQty, notionalUsd: notional });
+    return { ok: true };
+  }
+
   async closePosition(a: { symbol: string; side: "buy" | "sell"; closeReason?: string }) {
     // `reason` stays the legacy SimBroker classification ("rebalance") byte
     // for byte — scripts/regression-fingerprint.test.ts hashes it. The
@@ -1083,7 +1176,10 @@ export class SimBroker implements MomentumBrokerAdapter {
     // pnl values byte-identical; with a shortBorrow rate it nets the short's
     // accrued borrow into the trade's economic result, same convention as
     // funding.)
-    const netPnl = gross - (p.entryCommission ?? 0) - fee + (p.fundingCashDelta ?? 0) + (p.borrowCashDelta ?? 0);
+    // (partialRealized is absent on every run without the exposure control —
+    // `?? 0` keeps legacy pnl byte-identical; with it, the trade's economic
+    // result includes what its partial reductions already realized.)
+    const netPnl = gross - (p.entryCommission ?? 0) - fee + (p.fundingCashDelta ?? 0) + (p.borrowCashDelta ?? 0) + (p.partialRealized ?? 0);
     this.closed.push({ symbol, side, pnl: netPnl, exitAt, reason, entryAt: p.entryAt, entryPrice: p.entryPrice, exitPrice: slip, qty: p.qty, ...(engineCloseReason !== undefined ? { engineCloseReason } : {}) });
     this.positions.splice(idx, 1);
     // Arm the post-stop cooldown ONLY on the sim's hard-stop close
@@ -1124,7 +1220,11 @@ export class SimBroker implements MomentumBrokerAdapter {
         : Math.min(p.peakPrice ?? p.entryPrice, bar.close);
 
       const frac = p.stopFrac === undefined ? this.hardStopPct : p.stopFrac;
-      const hardLevel = frac === null ? null : (p.side === "buy" ? p.entryPrice * (1 - frac) : p.entryPrice * (1 + frac));
+      // stopAnchorPrice is set only by an exposure-control add-back (the stop
+      // stays anchored at the original entry, like the live row); absent on
+      // every legacy position → entryPrice, byte-identical.
+      const anchor = p.stopAnchorPrice ?? p.entryPrice;
+      const hardLevel = frac === null ? null : (p.side === "buy" ? anchor * (1 - frac) : anchor * (1 + frac));
 
       if (this.profitLock) {
         const peak = p.peakPrice;
@@ -1481,6 +1581,12 @@ export interface ReplayConfig {
    *  (no lookahead — see runWithConfig). Absent = OFF, legacy hash. */
   marketTrend?: MarketTrendGateConfig;
   risk?: Partial<RiskGuardConfig>;
+  /** Portfolio exposure control passthrough (MomentumEngineConfig.
+   *  exposureControl — RW4a, 2026-10-23): the sim instantiates the REAL
+   *  engine, so the exact production λ/hysteresis logic runs, and SimBroker
+   *  implements scalePosition for the partial resizes. Absent = OFF AND the
+   *  legacy hash (canonicalJson drops undefined). */
+  exposureControl?: ExposureControlConfig;
   /** Present iff sleeve === "meanrev": routes the trial to runMeanRevReplay. */
   meanrev?: MeanRevSimParams;
   /**
@@ -1540,6 +1646,10 @@ export interface ReplayConfig {
    *  slice rows enter the run's DATA identity via hashCloseSlices in the
    *  walk-forward driver, not the candidate hash). Absent = legacy. */
   sliceDbPath?: string;
+  /** Signals database (copySignal portfolio candidates only): runtime-only path
+   *  like dbPath/sliceDbPath, EXCLUDED from hashReplayConfig; its rows enter the
+   *  run's DATA identity via hashSignalEvents. Absent = legacy. */
+  signalsDbPath?: string;
 }
 
 export interface ReplayResult {
@@ -1606,6 +1716,15 @@ export interface ReplayResult {
    *  keep the exact pre-existing result shape. Not part of candidate
    *  identity (that's config-hash territory: risk.ddScale itself). */
   ddScaleStats?: { ticks: number; ticksBelowOne: number; meanScale: number; minScale: number };
+  /** Exposure-control telemetry (cfg.exposureControl only; legacy runs keep
+   *  the exact result shape): resize ORDERS executed (the extra orders the
+   *  protocol counts), their Σ|Δnotional| in USD (already inside
+   *  turnoverAnnual/fees), λ statistics over the decision ticks, and how
+   *  often an add-back was deferred by a gate or the gross cap. */
+  exposureStats?: {
+    resizes: number; reductions: number; addBacks: number; resizeNotionalUsd: number;
+    ticks: number; ticksBelowOne: number; meanScale: number; minScale: number; deferredUp: number;
+  };
   hash: string;
   /** RiskGuard state at replay end. Runtime-only — carries fold-to-fold continuity in walk-forward.ts. */
   finalRiskState: RiskState;
@@ -1628,7 +1747,7 @@ export function canonicalJson(obj: unknown): string {
  *  any legacy canonical JSON — JSON.stringify drops undefined — so every
  *  pre-existing hash is byte-identical). */
 export function hashReplayConfig(cfg: ReplayConfig): string {
-  const { dbPath, sliceDbPath, ...semanticCfg } = cfg;
+  const { dbPath, sliceDbPath, signalsDbPath, ...semanticCfg } = cfg;
   return createHash("sha256").update(canonicalJson(semanticCfg)).digest("hex");
 }
 
@@ -2159,6 +2278,9 @@ export async function runWithConfig(
         regime: { barMinutes: cfg.barMinutesEq, ...(cfg.regime ?? {}) },
         scorer: { barMinutes: cfg.barMinutesEq },
         risk: cfg.risk,
+        // exposureControl (RW4a): engine-level knob; SimBroker.scalePosition
+        // executes the resizes. undefined = OFF, byte-identical engine config.
+        exposureControl: cfg.exposureControl,
         // maxGrossExposureMult: already a MomentumEngineConfig field (prod
         // parity — the sim instantiates the real engine). undefined = OFF,
         // matching the engine's own default.
@@ -2200,6 +2322,9 @@ export async function runWithConfig(
     // One entry per decision tick that reported a ddScale entry factor
     // (risk.ddScale candidates only — legacy reports never carry the field).
     const entryScalesSeen: number[] = [];
+    // One entry per decision tick that reported an exposure-control verdict
+    // (cfg.exposureControl candidates only — legacy reports never carry it).
+    const exposureSeen: Array<{ scale: number; deferredUp: number }> = [];
     try {
       for (let i = 0; i < ref.length; i++) {
         const bar = ref[i];
@@ -2274,6 +2399,7 @@ export async function runWithConfig(
             if (report.blockedReason) blockedTicks.push({ t, reason: normalizeGateReason(report.blockedReason) });
           }
           if (report.entryScale !== undefined) entryScalesSeen.push(report.entryScale);
+          if (report.exposureControl !== undefined) exposureSeen.push({ scale: report.exposureControl.scale, deferredUp: report.exposureControl.deferredUp });
           lastTick = t;
         }
       }
@@ -2319,6 +2445,19 @@ export async function runWithConfig(
           ticksBelowOne: entryScalesSeen.filter(s => s < 1).length,
           meanScale: entryScalesSeen.reduce((s, x) => s + x, 0) / entryScalesSeen.length,
           minScale: Math.min(...entryScalesSeen),
+        }
+      : undefined;
+    const exposureStats = exposureSeen.length > 0
+      ? {
+          resizes: broker.resizes.length,
+          reductions: broker.resizes.filter(r => r.qtyDelta < 0).length,
+          addBacks: broker.resizes.filter(r => r.qtyDelta > 0).length,
+          resizeNotionalUsd: broker.resizes.reduce((s, r) => s + r.notionalUsd, 0),
+          ticks: exposureSeen.length,
+          ticksBelowOne: exposureSeen.filter(x => x.scale < 1).length,
+          meanScale: exposureSeen.reduce((s, x) => s + x.scale, 0) / exposureSeen.length,
+          minScale: Math.min(...exposureSeen.map(x => x.scale)),
+          deferredUp: exposureSeen.reduce((s, x) => s + x.deferredUp, 0),
         }
       : undefined;
     const wins = trades.filter(t => t.pnl > 0).length;
@@ -2406,6 +2545,8 @@ export async function runWithConfig(
       // Key absent on legacy candidates — pre-existing artifacts/runs.jsonl
       // rows keep their exact shape.
       ...(ddScaleStats ? { ddScaleStats } : {}),
+      // Key absent on legacy candidates (RW4a exposure control only).
+      ...(exposureStats ? { exposureStats } : {}),
       // Line-S output-only telemetry: absent unless the run actually charged
       // borrow / vetoed a short on the gross cap (legacy shape preserved).
       ...(broker.shortBorrowPaid > 0 ? { shortBorrow: broker.shortBorrowPaid } : {}),

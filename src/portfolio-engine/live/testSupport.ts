@@ -40,7 +40,9 @@ export function weekdaySessions(last: string, n: number): string[] {
 export type FillBehavior =
   | { kind: "fill"; price?: number }
   | { kind: "partial"; fraction: number; price?: number }
-  | { kind: "reject"; error?: string }
+  /** `times`: reject that many submissions, then fill (a rejected order never exists at the venue, so its
+   *  client id stays free and a repeat is a fresh attempt). Default: reject forever. */
+  | { kind: "reject"; error?: string; times?: number }
   | { kind: "throw"; error?: string };
 
 export interface SubmitCall { order: OrderIntent; clientOrderId: string }
@@ -57,6 +59,9 @@ export class FakeVenue implements VenueAdapter {
   stopSyncs: Array<{ stops: readonly StopLevel[]; positions: readonly Position[] }> = [];
   behavior: Record<string, FillBehavior> = {};
   private seen = new Map<string, OrderResult>();
+  private rejects = new Map<string, number>();
+  /** Scripted releaseLegacyStops answer (stop release is only offered when set). */
+  releaseLegacyStops?: (symbols: readonly string[]) => Promise<string[] | import("../types").LegacyStopRelease>;
   mirrorFills = true;
   syncStops?: (stops: readonly StopLevel[], positions: readonly Position[]) => Promise<void>;
 
@@ -78,11 +83,18 @@ export class FakeVenue implements VenueAdapter {
     this.submits.push({ order, clientOrderId });
     const prior = this.seen.get(clientOrderId);
     if (prior) return { ...prior, status: `${prior.status}` };
-    const b = this.behavior[order.symbol] ?? { kind: "fill" };
+    let b = this.behavior[order.symbol] ?? { kind: "fill" };
     if (b.kind === "throw") throw new Error(b.error ?? "transport down");
+    if (b.kind === "reject" && b.times !== undefined) {
+      const n = (this.rejects.get(clientOrderId) ?? 0) + 1;
+      this.rejects.set(clientOrderId, n);
+      if (n > b.times) b = { kind: "fill" };
+    }
     let result: OrderResult;
-    if (b.kind === "reject") result = { ok: false, filledQty: 0, avgPrice: null, status: "rejected", error: b.error ?? "insufficient buying power" };
-    else {
+    if (b.kind === "reject") {
+      // Like a 4xx at the venue: no order was created, nothing is remembered under the client id.
+      return { ok: false, filledQty: 0, avgPrice: null, status: "rejected", error: b.error ?? "insufficient buying power" };
+    } else {
       const qty = b.kind === "partial" ? order.qty * b.fraction : order.qty;
       const price = b.price ?? this.prices_[order.symbol];
       result = { ok: b.kind === "fill", filledQty: qty, avgPrice: price, status: b.kind === "fill" ? "filled" : "canceled", brokerOrderId: `b-${this.submits.length}` };

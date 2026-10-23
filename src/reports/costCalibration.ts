@@ -36,6 +36,16 @@
 // Non-sim closes (MANUAL_CLOSE*, SYNC_*, *_RECONCILED, BROKER_GONE_404, …)
 // are excluded entirely — the simulator never takes those decisions.
 //
+// RW2 (2026-10-23): momentum_stocks and meanrev_stocks run on the portfolio
+// engine, which writes NO fills rows (OPEN.md) — from the cutover neither
+// sleeve accumulates observations here (honest: no number, not a wrong one).
+// momentum_stocks' window starts at MODEL_START (the engine's), so it shows
+// "insufficient"; meanrev_stocks (sinceEtDateKey null) keeps showing the
+// Connors era's execution cost — same reference (the decision session's
+// open, which the engine also fills after), a valid prior but the retired
+// model's evidence. The artifact (break-even curve, base costs) now comes
+// from the version table and IS the engine's.
+//
 // Caveat (stocks): historical daily bars are adjustment=all — a dividend/
 // split ex-date AFTER a fill shifts that day's adjusted open vs the raw
 // fill by the adjustment factor, biasing buys UP and sells DOWN by the

@@ -44,13 +44,37 @@ describe("the version table", () => {
     }
   });
 
+  test("momentum_crypto@vt35-corroff: modelStart is the first FULL UTC day after `since`", () => {
+    const v = MODEL_VERSIONS.momentum_crypto.at(-1)!;
+    expect(v.id).toBe("momentum_crypto@vt35-corroff");
+    const sinceMs = Date.parse(v.since);
+    const nextMidnight = Math.floor(sinceMs / 86_400_000) * 86_400_000 + (sinceMs % 86_400_000 === 0 ? 0 : 86_400_000);
+    expect(v.modelStart).toBe(new Date(nextMidnight).toISOString().slice(0, 10));
+  });
+
+  test("momentum_crypto_usdc@daily-d13s5-xc-dd (RW4a): since = a DAILY pass instant (00:00:00Z), modelStart = that UTC day; the control is the ONE change vs the control version", () => {
+    const list = MODEL_VERSIONS.momentum_crypto_usdc;
+    const v = list.at(-1)!;
+    expect(v.id).toBe("momentum_crypto_usdc@daily-d13s5-xc-dd");
+    expect(v.since).toBe("2026-10-24T00:00:00Z");
+    expect(Date.parse(v.since) % 86_400_000).toBe(0); // the sleeve decides once a day at 00:00 UTC (+15s)
+    expect(v.modelStart).toBe(v.since.slice(0, 10));
+    expect(v.engine).toBeUndefined();
+    expect(v.manifest).toBe("experiments/momentum-crypto-usdc-daily-s5-rw4a-xc-dd-pure-v1.json");
+    expect(v.artifact).toEqual({ dir: "data/backtests/8892c1e950818ee724cbd5473ffdb6d207aefc98ae1f054d3bdf08e4eebad607", shiftDays: -1 });
+    // Rollback target = the control version (the artifact was measured against it).
+    expect(list.at(-2)!.id).toBe("momentum_crypto_usdc@daily-d13s5");
+    expect(list.at(-2)!.manifest).toBe("experiments/momentum-crypto-usdc-daily-s5-pure-v1.json");
+    expect(list.at(-2)!.artifact?.shiftDays).toBe(-1);
+  });
+
   test("the scorecard's MODEL_START IS the current version's modelStart (one source), for every scorecard sleeve", () => {
     expect(MODEL_START).toEqual(currentModelStarts());
     expect(MODEL_START).toEqual({
-      momentum_stocks: "2026-10-13",
-      meanrev_stocks: "2026-09-28",
-      momentum_crypto: "2026-09-27",
-      momentum_crypto_usdc: "2026-09-29",
+      momentum_stocks: "2026-10-26",
+      meanrev_stocks: "2026-10-26",
+      momentum_crypto: "2026-10-24",
+      momentum_crypto_usdc: "2026-10-24",
     });
     for (const e of SCORECARD_ENTITIES.filter(e => e.kind === "sleeve")) {
       expect(MODEL_START[e.id]).toBeTruthy();
@@ -70,8 +94,12 @@ describe("rowModelVersion — a row belongs to the version that OPENED it", () =
     expect(at("meanrev_stocks", "2026-09-28T13:36:00Z")).toBe("meanrev_stocks@slot12");
     expect(at("momentum_crypto", "2026-09-22T00:00:20Z")).toBe("momentum_crypto@pre-vt35");
     expect(at("momentum_crypto", "2026-09-26T19:48:19Z")).toBe("momentum_crypto@vt35");
+    expect(at("momentum_crypto", "2026-10-23T08:59:59Z")).toBe("momentum_crypto@vt35");
+    expect(at("momentum_crypto", "2026-10-23T09:00:00Z")).toBe("momentum_crypto@vt35-corroff");
     expect(at("momentum_crypto_usdc", "2026-08-29T01:16:52Z")).toBe("momentum_crypto_usdc@hourly-13b");
     expect(at("momentum_crypto_usdc", "2026-09-27T00:00:21Z")).toBe("momentum_crypto_usdc@daily-d13s5");
+    expect(at("momentum_crypto_usdc", "2026-10-23T23:59:59Z")).toBe("momentum_crypto_usdc@daily-d13s5");
+    expect(at("momentum_crypto_usdc", "2026-10-24T00:00:15Z")).toBe("momentum_crypto_usdc@daily-d13s5-xc-dd");
     expect(modelVersionAt("momentum_btc", T("2026-07-22T01:38:47Z"))?.id).toBe("momentum_btc@hourly-coinm");
   });
 
@@ -122,12 +150,14 @@ describe("insertTrade stamps every new row with the sleeve's version", () => {
     updateTradeCloseReason("old-meta", "MODEL_CUTOVER");
     seedOpenTrade("new-meta", "momentum_stocks", { symbol: "META" });
 
+    const current = currentModelVersionId("momentum_stocks")!;
+    expect(current).not.toBe("momentum_stocks@blend-k100");
     expect(versionOf("old-meta")).toBe("momentum_stocks@blend-k100");
-    expect(versionOf("new-meta")).toBe("momentum_stocks@blend-k150");
+    expect(versionOf("new-meta")).toBe(current);
     const rows = getDB().prepare(`SELECT id, strategy_version, status, pnl, close_reason, entry_time, exit_time FROM trades ORDER BY id`).all() as any[];
     const rec = computeVersionRecords("momentum_stocks", rows);
     expect(rec.find(r => r.versionId === "momentum_stocks@blend-k100")).toMatchObject({ nOpened: 1, nClosed: 1, realizedPnl: 500 });
-    expect(rec.find(r => r.versionId === "momentum_stocks@blend-k150")).toMatchObject({ nOpened: 1, nOpen: 1, realizedPnl: 0 });
+    expect(rec.find(r => r.versionId === current)).toMatchObject({ nOpened: 1, nOpen: 1, realizedPnl: 0 });
   });
 });
 
@@ -147,8 +177,8 @@ describe("scorecard: the model window judges one version", () => {
 
   test("another version's closes (a cutover windfall) stay out of realized P&L; 30d keeps every row", () => {
     const trades = [
-      row("momentum_crypto@pre-vt35", 1000),      // opened by the previous model, closed inside the window
-      row("momentum_crypto@vt35", 7, T("2026-09-28T00:00:00Z")),
+      row("momentum_crypto@vt35", 1000),          // opened by the previous model, closed inside the window
+      row("momentum_crypto@vt35-corroff", 7, T("2026-10-24T00:00:00Z")),
     ];
     const model = computeWindowMetrics(CRYPTO, "model", marks, trades, null, now);
     expect(model.realizedPnl).toBe(7);
@@ -160,8 +190,8 @@ describe("scorecard: the model window judges one version", () => {
 
   test("legacy rows are attributed by entry time inside the model window as well", () => {
     const trades = [
-      row("legacy", 1000, T("2026-09-01T00:00:00Z")),  // opened under pre-vt35
-      row("legacy", 5, T("2026-09-28T00:00:00Z")),     // opened under vt35 before the stamp existed
+      row("legacy", 1000, T("2026-10-01T00:00:00Z")),  // opened under vt35 (brake on)
+      row("legacy", 5, T("2026-10-23T12:00:00Z")),     // opened under vt35-corroff before the stamp existed
     ];
     const model = computeWindowMetrics(CRYPTO, "model", marks, trades, null, now);
     expect(model.realizedPnl).toBe(5);

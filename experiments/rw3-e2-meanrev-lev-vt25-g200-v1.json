@@ -1,0 +1,141 @@
+{
+  "name": "rw3-e2-meanrev-lev-vt25-g200-v1",
+  "sleeve": "stocks",
+  "description": "PRE-REGISTERED (2026-10-22) BEFORE any run, docs/reports/RW-reescritura-rentable.md §10 (RW3 'más agresivo'). Family (a) E2-lev: meanrev_stocks' own 32 names, the RW2 E2 volManaged construction byte for byte (1/sigma 63d, 21d covariance, cap 0.10, band 1%, 5 USD fractional) with ONE axis changed: portfolio vol target 25% and maxGross 2 (Reg-T margin at 6.5%/yr on the borrowed cash, base and stress — rw2-e2 carried none because its gross never exceeded 1). Pure chain of 1 candidate so the OOS frontier point (CAGR, maxDD) is read directly. Window, asOf, costs and capital = rw2-e2-meanrev-volmanaged-v1 so the OOS sessions are the same as the control; data.universe carries SPY only as the session calendar (refSymbol), the strategy never trades it. CONTROL (R3, same days): the wired sleeve from 2026-10-23, meanrev_stocks@pe-vt15 = rw2-e2 artifact 0b088ca3 (its data hash 898c5720 reproduces on the current historical.db, verified 2026-10-22, so 0b088ca3 is used directly as --control). Binding criteria §8.5 R1-R7 unchanged (R2 maxDD <= 25%). Pre-registered pick among the family's passing chains: highest CAGR, ties to lower maxDD. CONFLICTS: meanrev_stocks is frozen 90 days from 2026-10-23 (§2.6). Trials 408 -> 409.",
+  "trialAccounting": {
+    "priorUniqueTrials": 408,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "ABBV",
+      "AVGO",
+      "BAC",
+      "CAT",
+      "COST",
+      "CVX",
+      "DIS",
+      "GE",
+      "HD",
+      "HON",
+      "JNJ",
+      "JPM",
+      "KO",
+      "LLY",
+      "MA",
+      "MCD",
+      "MRK",
+      "NFLX",
+      "NKE",
+      "ORCL",
+      "PG",
+      "QCOM",
+      "UNH",
+      "V",
+      "WMT",
+      "XLE",
+      "XLF",
+      "XLI",
+      "XLP",
+      "XLV",
+      "XOM",
+      "SLV"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-10-19T00:00:00Z",
+  "window": {
+    "from": "2018-01-01",
+    "to": "2026-08-06",
+    "outerFoldCount": 6,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 365
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000
+  },
+  "candidates": [
+    {
+      "name": "vt25-g200",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": {
+          "kind": "volManaged",
+          "universe": [
+            "ABBV",
+            "AVGO",
+            "BAC",
+            "CAT",
+            "COST",
+            "CVX",
+            "DIS",
+            "GE",
+            "HD",
+            "HON",
+            "JNJ",
+            "JPM",
+            "KO",
+            "LLY",
+            "MA",
+            "MCD",
+            "MRK",
+            "NFLX",
+            "NKE",
+            "ORCL",
+            "PG",
+            "QCOM",
+            "UNH",
+            "V",
+            "WMT",
+            "XLE",
+            "XLF",
+            "XLI",
+            "XLP",
+            "XLV",
+            "XOM",
+            "SLV"
+          ],
+          "inceptionGuardBars": 252,
+          "volLookback": 63,
+          "covLookback": 21,
+          "portfolioVolTarget": 0.25,
+          "annualization": 252,
+          "perAssetCap": 0.1,
+          "maxGross": 2
+        },
+        "venue": {
+          "venue": "alpaca",
+          "fractional": true,
+          "minOrderNotional": 5,
+          "rebalanceBand": 0.01
+        }
+      }
+    }
+  ],
+  "acceptance": {}
+}

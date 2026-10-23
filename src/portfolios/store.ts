@@ -163,6 +163,23 @@ export function updatePlatformPortfolio(db: Database, row: PlatformPortfolioRow)
   );
 }
 
+/** Boot (PORTFOLIOS_SOURCE=db only): every `pending_restart` row has just been
+ *  applied — the definitions the engines are built from are read in the same
+ *  boot — so its lifecycle label becomes `active`. Generic: owner edits
+ *  (validate.ts), scripts/portfolio-engine-cutover.ts and un-archives all
+ *  write `pending_restart`; before this the label stayed there forever and
+ *  the dashboard kept saying "applies on the next restart" after the restart.
+ *  Whether the applied definition then RUNS (a refused live portfolio
+ *  definition, a disabled row) is a different fact, reported by its own
+ *  consumer (cutover problems page; `enabled` is shown as is). Returns the
+ *  ids it flipped. */
+export function markPendingPortfoliosActive(db: Database, nowMs: number = Date.now()): string[] {
+  const ids = (db.prepare(`SELECT id FROM platform_portfolios WHERE status = 'pending_restart' ORDER BY id`).all() as Array<{ id: string }>).map(r => r.id);
+  if (ids.length === 0) return ids;
+  db.prepare(`UPDATE platform_portfolios SET status = 'active', updated_at = ? WHERE status = 'pending_restart'`).run(nowMs);
+  return ids;
+}
+
 /** The definitions index.ts builds engines from under PORTFOLIOS_SOURCE=db:
  *  every NON-archived row, with `enabled` carrying the row flag (main()'s
  *  per-sleeve gates — env flags included — stay in charge of what builds). */

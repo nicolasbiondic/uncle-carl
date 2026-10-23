@@ -49,7 +49,7 @@ export function buildPortfolioEngines(wiring: PortfolioWiring, src: EngineSource
     }
     const transport = src.binanceTransports[p.venue];
     if (!transport) throw new Error(`no ${p.venue} transport`);
-    if (p.strategy.kind === "factorCore") throw new Error("factorCore has no Binance venue");
+    if (p.strategy.kind === "factorCore" || p.strategy.kind === "copySignal") throw new Error(`${p.strategy.kind} has no Binance venue`);
     const venue = new BinanceVenueAdapter({
       venue: p.venue, sleeveId: p.sleeve ?? plan.portfolioId, symbols: p.strategy.universe,
       transport, claimOrderId: src.claimOrderId ?? claimPortfolioOrderId,

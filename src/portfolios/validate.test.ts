@@ -76,6 +76,22 @@ describe("create from a validated preset", () => {
     // Strategy params stay byte-identical to the validated sleeve.
     expect(p.volTarget).toEqual({ annualizedPct: 35, lookbackBars: 720, minScale: 0.33, maxScale: 1.5 });
     expect(p.notionalPctPerSlot).toBe(0.375);
+    // RW3 (2026-10-23): the validated sleeve runs the correlation brake OFF.
+    expect(p.regime).toEqual({ correlationCeiling: 1.01 });
+  });
+
+  test("params.regime.correlationCeiling is range-checked (0.1..1.01: correlation lives in [-1, 1], 1.01 = brake OFF)", () => {
+    const create = (regime: unknown) => validateCreatePortfolio(
+      { id: "momentum_crypto_v2", name: "Crypto v2", account: "binance_usdt", capital: 5_000, preset: "momentum_crypto", params: { regime } },
+      ctx(archivedCrypto()), NOW,
+    );
+    expect(create({ correlationCeiling: 1.01 }).ok).toBe(true);
+    expect(create({ correlationCeiling: 0.85 }).ok).toBe(true);
+    for (const bad of [1.5, 0, -1, "0.85", Number.NaN]) {
+      const out = create({ correlationCeiling: bad });
+      expect(out.ok).toBe(false);
+      if (!out.ok) expect(JSON.stringify(out)).toContain("params.regime.correlationCeiling");
+    }
   });
 
   test("ANY param override on a preset leaves the artifact behind → unvalidated", () => {
@@ -85,6 +101,26 @@ describe("create from a validated preset", () => {
     );
     expect(out.ok).toBe(true);
     if (out.ok) expect(out.row.validation).toBe("unvalidated");
+  });
+
+  test("RW2: a preset whose validated model runs on the portfolio engine cannot create a portfolio — the retired incumbent params are not 'validated' (2026-10-23)", () => {
+    for (const preset of ["momentum_stocks", "meanrev_stocks"]) {
+      expect(VALIDATED_PRESETS[preset].template).toBe("portfolio");
+      expect(VALIDATED_PRESETS[preset].portfolioEngine).toEqual({ version: `${preset}@pe-vt15`, candidate: "vt15" });
+      const rows = seededRows((r) => { const x = r.find((y) => y.id === preset)!; x.status = "archived"; x.enabled = false; });
+      const out = validateCreatePortfolio(
+        { id: `${preset}_v2`, name: "v2", account: "alpaca_main", capital: 1_000, preset },
+        ctx(rows), NOW,
+      );
+      expect(out.ok).toBe(false);
+      if (!out.ok) {
+        expect(out.errors.join(" ")).toContain("runs on the portfolio engine");
+        expect(out.errors.join(" ")).toContain("scripts/portfolio-engine-cutover.ts");
+        expect(out.errors.join(" ")).toContain(VALIDATED_PRESETS[preset].manifestPath);
+      }
+    }
+    // The crypto presets still create validated incumbent portfolios.
+    expect(VALIDATED_PRESETS.momentum_crypto.portfolioEngine).toBeUndefined();
   });
 
   test("unknown preset is rejected with the valid list", () => {

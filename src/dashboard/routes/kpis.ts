@@ -6,6 +6,12 @@
 //                              signals, entries, exits, blocks by reason
 //                              (decision_passes telemetry), plus live
 //                              executed orders/day vs the validated design.
+//                              Since 2026-10-23 each account also carries
+//                              signalsRawLong / signalsAfterGates / gateBinding
+//                              (gates that removed a candidate, not merely
+//                              active) and `exposure` {latest, mean5, low}:
+//                              real vs intended gross / sleeve equity, `low`
+//                              when the 5-pass ratio < 0.8.
 
 import express from "express";
 import { computeKpiSnapshot } from "../../portfolio/kpis";
@@ -14,13 +20,20 @@ import { toBoundedInt } from "../dashboard-utils";
 
 /**
  * Validated design volume in COMPLETE operations (round trips) per day —
- * §2 of docs/reports/V-plan-volumen-rentabilidad.md (the four authoritative
- * OOS chains: 5f03d68d stocks, 624d50e9 meanrev, 06e1a160 crypto, 413ffb90
- * USDC). One executed ORDER = half an operation, so orders/day ≈ ×2.
+ * §2 of docs/reports/V-plan-volumen-rentabilidad.md for the crypto chains
+ * (06e1a160 crypto, 413ffb90 USDC). One executed ORDER = half an operation,
+ * so orders/day ≈ ×2.
+ *
+ * RW2 (2026-10-23): the two stock sleeves run on the portfolio engine
+ * (`@pe-vt15`, docs/reports/RW-reescritura-rentable.md §9): orders per
+ * session 0.74 (E1) and 0.46 (E2) → 0.37 / 0.23 ops per day. Until then:
+ * 0.05 (5f03d68d) and 1.20 (624d50e9). Caveat (OPEN.md): the engine
+ * rebalances quantities on existing rows, which countExecutedOrders does not
+ * count, and writes no decision_passes — their funnel rows show 0 passes.
  */
 export const DESIGN_OPS_PER_DAY: Record<string, number> = {
-  momentum_stocks: 0.05,
-  meanrev_stocks: 1.20,
+  momentum_stocks: 0.37,
+  meanrev_stocks: 0.23,
   momentum_crypto: 0.78,
   momentum_crypto_usdc: 0.08,
 };
@@ -64,6 +77,13 @@ export function registerKpiRoutes(app: express.Application): void {
         lastBlockNote: s?.lastBlockNote ?? null,
         slotsUsed: s?.slotsUsed ?? null,
         slotsTotal: s?.slotsTotal ?? null,
+        // 2026-10-23: gate-binding (null / {} on passes recorded before it or
+        // by an engine that cannot measure it) and sleeve exposure.
+        signalsRawLong: s?.signalsRawLong ?? null,
+        signalsAfterGates: s?.signalsAfterGates ?? null,
+        gateBinding: s?.gateBinding ?? {},
+        gateBindingPasses: s?.gateBindingPasses ?? 0,
+        exposure: s?.exposure ?? null,
         liveOrders,
         liveOrdersPerDay: liveOrders / days,
         designOpsPerDay: designOps,

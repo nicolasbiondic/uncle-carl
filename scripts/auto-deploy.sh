@@ -8,15 +8,32 @@
 # polls, so nothing inbound is opened.
 #
 # Semantics: when commits land on origin/master from ANYWHERE (your laptop, CI,
-# another machine), this host fast-forwards, runs the gate, and only restarts
-# the live bot if the gate passes. Safe guards:
-#   • skips if the working tree is dirty (never clobbers local/in-progress edits)
-#   • fast-forward only (won't auto-resolve a diverged history)
-#   • typecheck AND the test suite must pass BEFORE the bot is restarted; a bad
-#     push is pulled but NOT deployed (the running bot keeps serving old code)
+# another machine), this host runs the gate on a SEPARATE checkout at the new
+# SHA, and only if the gate passes fast-forwards the live checkout and restarts
+# the bot, in that order and back to back. Safe guards:
+#   • the LIVE checkout never holds an unapproved commit (2026-10-21: the old
+#     flow fast-forwarded live FIRST and gated after; the watchdog restarted the
+#     bot at 07:27 while the gate was still running and it booted ba5acb2, a
+#     commit that had not passed anything). The gate now runs in a git worktree
+#     next to the repo ($REPO-gate, detached at the candidate SHA, its own
+#     `bun install --frozen-lockfile`, the live .env symlinked in). A failed,
+#     timed-out or killed gate leaves the live checkout, node_modules and
+#     data/ byte-for-byte untouched: any restart at ANY moment boots the last
+#     approved SHA. The live checkout moves only after the gate passed, and the
+#     restart follows immediately (the only work in between is `bun install`,
+#     a no-op unless the lockfile changed).
+#   • a live HEAD that is AHEAD of data/.deployed-sha (parked by the pre-2026-10-22
+#     script, or left by a crash between the fast-forward and the restart) is
+#     reset back to .deployed-sha before anything else, so it cannot boot
+#     unapproved code either
+#   • skips if the live working tree is dirty (never clobbers local/in-progress
+#     edits); re-checked after the gate, which can last minutes
+#   • fast-forward only (won't auto-resolve a diverged history; checked BEFORE
+#     spending a gate run on it)
+#   • typecheck AND the test suite must pass BEFORE the live tree is touched; a
+#     bad push is never deployed (the running bot keeps serving old code)
 #   • a gate failure PAGES Telegram (once per SHA) and is RETRIED every poll —
-#     data/.deployed-sha tracks what is actually running, so "pulled but never
-#     deployed" can no longer sit silently for days (2026-07-30: prod ran
+#     data/.deployed-sha tracks what is actually running (2026-07-30: prod ran
 #     Jul-22 code for 8 days because bun moved to mise, the gate died with
 #     "bun: command not found", and nothing paged or retried)
 #   • the bot reloads state from the DB + reconciles with the broker on restart
@@ -24,19 +41,32 @@
 #   • after restart, polls local /healthz (bounded ~30-60s, HEALTH_CHECK_*
 #     env-overridable) before logging DEPLOYED; if it never confirms ok, the
 #     script ROLLS BACK (git reset --hard + deps reinstall + re-restart to
-#     the pre-pull SHA) and marks the bad SHA in data/.deploy-rejected-sha
+#     the pre-deploy SHA) and marks the bad SHA in data/.deploy-rejected-sha
 #     so the next ~2min poll SKIPS re-deploying the same unhealthy commit —
 #     it only retries once a NEW commit lands on origin/master
 #   • a commit range that only touches documentation (*.md, docs/ — rule in
 #     scripts/lib/docs-only.sh) still runs the gate but does NOT restart the
 #     bot: the running code is byte-identical (2026-10-11 — docs pushes were
-#     restarting the bot up to 14 times a day)
+#     restarting the bot up to 14 times a day); the live tree is still only
+#     fast-forwarded after the gate
 #   • a successful deploy is log-only; only failures page Telegram (owner,
 #     2026-10-11: TELEGRAM_OPS_CHAT_ID is the owner's own chat, so every
 #     "DEPLOYED" reached them)
+#   • the unit's low CPU/IO priority, TMPDIR=/dev/shm and 30-minute ceiling
+#     (uncle-carl-deploy.service) cover the gate checkout and its install too:
+#     they are inherited by every child of this script
+# Migration (pre-2026-10-22 script → this one): the unit and timer are unchanged,
+# nothing to reinstall. The FIRST deploy of the commit that carries this file is
+# still run by the OLD script (live-first, gate after); the first run of this
+# one is the next poll, which finds live == origin/master == .deployed-sha and
+# exits. See docs/reports/ops-hardening-2026-10-22.md.
 # ──────────────────────────────────────────────────────────────────────────
 set -uo pipefail
 REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# Where the gate runs: a detached git worktree NEXT TO the live checkout, never
+# inside it (a path under $REPO would show up in the live `git status` and
+# block every later deploy as a dirty tree).
+GATE_DIR="${GATE_DIR:-${REPO}-gate}"
 REJECTED_SHA_FILE="$REPO/data/.deploy-rejected-sha"
 DEPLOYED_SHA_FILE="$REPO/data/.deployed-sha"
 GATEFAIL_PAGED_FILE="$REPO/data/.deploy-gatefail-paged"
@@ -67,6 +97,13 @@ GATE_TYPECHECK_CMD="${GATE_TYPECHECK_CMD:-bun run typecheck}"
 GATE_TEST_CMD="${GATE_TEST_CMD:-bun test}"
 START_CMD="${START_CMD:-./start.sh}"
 log() { echo "[$(date -u +%FT%TZ)] auto-deploy: $*"; }
+# The gate's own output lives in /tmp (gone at reboot, overwritten by the next
+# run). On failure its last lines are copied into this script's output, i.e.
+# logs/deploy.log, which logrotate keeps >= 90 days: the failing test names of
+# a GATE FAIL used to be unrecoverable afterwards (ops review 2026-10-22).
+log_gate_tail() { # $1 = gate log file
+  tail -n 30 "$1" 2>/dev/null | sed 's/^/auto-deploy:   | /'
+}
 # docs_only_range (missing file → the function is undefined, the check below
 # fails and every deploy restarts: the pre-2026-10-11 behavior).
 # shellcheck source=lib/docs-only.sh
@@ -96,7 +133,7 @@ page_gate_fail() { # $1 = gate name, $2 = sha/key
   prev=$(cat "$GATEFAIL_PAGED_FILE" 2>/dev/null || true)
   if [ "$prev" != "$2" ]; then
     echo "$2" > "$GATEFAIL_PAGED_FILE" 2>/dev/null || true
-    notify "🚨 GATE FAIL ($1) on ${2:0:12} — bot keeps running OLD code until this is fixed (retrying every poll). See /tmp/uc-deploy-${1}.log"
+    notify "🚨 GATE FAIL ($1) on ${2:0:12} — the bot keeps running the last approved code, the live checkout is untouched, until this is fixed (retrying every poll). See /tmp/uc-deploy-${1}.log"
   fi
 }
 
@@ -170,6 +207,51 @@ if [ "${1:-}" = "--health-check-only" ]; then
   exit $?
 fi
 
+# ── Gate checkout ─────────────────────────────────────────────────────────
+# $GATE_DIR is a detached worktree of $REPO. True when it already is one (a
+# plain directory, a worktree of ANOTHER repo or a half-deleted leftover from a
+# killed run is wiped and rebuilt instead of trusted).
+gate_checkout_ok() {
+  [ -d "$GATE_DIR" ] || return 1
+  local top common
+  top=$(git -C "$GATE_DIR" rev-parse --show-toplevel 2>/dev/null) || return 1
+  common=$(git -C "$GATE_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+  [ "$(readlink -f "$top")" = "$(readlink -f "$GATE_DIR")" ] \
+    && [ "$(readlink -f "$common")" = "$(readlink -f "$REPO/.git")" ]
+}
+
+# Puts $GATE_DIR at exactly $1, with nothing but node_modules (warm install
+# cache) surviving from a previous run: tracked files reset, untracked AND
+# ignored files removed. Returns 1 when it cannot be built.
+prepare_gate_checkout() { # $1 = sha
+  case "$GATE_DIR" in
+    ""|"/"|"$REPO"|"$REPO"/*) log "refusing unsafe GATE_DIR='$GATE_DIR'"; return 1 ;;
+  esac
+  git -C "$REPO" worktree prune >/dev/null 2>&1 || true
+  if gate_checkout_ok \
+     && git -C "$GATE_DIR" checkout -q -f --detach "$1" >/dev/null 2>&1 \
+     && git -C "$GATE_DIR" clean -ffdxq -e node_modules >/dev/null 2>&1; then
+    :
+  else
+    rm -rf "$GATE_DIR"
+    git -C "$REPO" worktree prune >/dev/null 2>&1 || true
+    git -C "$REPO" worktree add -q -f --detach "$GATE_DIR" "$1" >/tmp/uc-deploy-checkout.log 2>&1 || return 1
+  fi
+  # The gate has always run with the live .env (prod-only variables the suite
+  # strips in src/test-setup.ts); a symlink keeps that identical without
+  # copying the secrets. data/ is NOT linked: a gate must not touch the live DBs.
+  if [ -f "$REPO/.env" ]; then ln -sfn "$REPO/.env" "$GATE_DIR/.env"; fi
+  return 0
+}
+
+# Fast-forwards the LIVE checkout to $1. Only ever called after the gate passed.
+ff_live() { # $1 = sha
+  if ! git merge --ff-only "$1" >/dev/null 2>&1; then
+    log "ff-only merge failed (history diverged) — manual intervention needed; NOT deploying"
+    return 1
+  fi
+}
+
 cd "$REPO" || exit 1
 
 # 0. The whole gate depends on bun; a missing bun must be LOUD, not a silent
@@ -233,20 +315,44 @@ fi
 rm -f "$FETCH_FAIL_SINCE_FILE" "$FETCH_FAIL_COUNT_FILE" 2>/dev/null || true
 LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse origin/master)
+DEPLOYED=$(cat "$DEPLOYED_SHA_FILE" 2>/dev/null || true)
+if [ "$LOCAL" = "$REMOTE" ] && [ "$DEPLOYED" = "$LOCAL" ]; then exit 0; fi   # up to date AND deployed
+
+# 2b. The live checkout must only ever sit on an approved commit. A HEAD AHEAD
+# of what is running (.deployed-sha) was parked there by the pre-2026-10-22
+# script (it fast-forwarded first and gated after) or left by a crash between
+# the fast-forward and the restart: any restart now would boot code that never
+# passed the gate (2026-10-21). Walk it back — never sideways: only when
+# .deployed-sha is an ancestor of HEAD. The tree is clean (checked above).
+if [ -n "$DEPLOYED" ] && [ "$DEPLOYED" != "$LOCAL" ] \
+   && git cat-file -e "${DEPLOYED}^{commit}" 2>/dev/null \
+   && git merge-base --is-ancestor "$DEPLOYED" "$LOCAL" 2>/dev/null; then
+  log "live HEAD ${LOCAL:0:7} is ahead of the last deployed ${DEPLOYED:0:7} (parked or interrupted) — resetting the live checkout to ${DEPLOYED:0:7} so a restart boots approved code"
+  if git reset --hard "$DEPLOYED" >/dev/null 2>&1; then
+    bun install --frozen-lockfile >/dev/null 2>&1 || log "bun install after reset reported issues"
+    LOCAL="$DEPLOYED"
+    if [ "$LOCAL" = "$REMOTE" ]; then exit 0; fi
+  else
+    log "CRITICAL: could not reset live checkout to ${DEPLOYED:0:7} — manual intervention required"
+    exit 1
+  fi
+fi
+LIVE_HEAD="$LOCAL"   # where the live checkout really is until the gate passed
+
 if [ "$LOCAL" = "$REMOTE" ]; then
   # HEAD matches origin — but is HEAD what's actually RUNNING? A gate failure
-  # pulls then parks, and before .deployed-sha existed a parked SHA sat here
-  # ("nothing to do") until the next commit. Now: retry the gate every poll.
-  DEPLOYED=$(cat "$DEPLOYED_SHA_FILE" 2>/dev/null || true)
-  if [ "$DEPLOYED" = "$LOCAL" ]; then exit 0; fi   # up to date AND deployed
+  # used to pull then park, and before .deployed-sha existed a parked SHA sat
+  # here ("nothing to do") until the next commit. Now: retry the gate every
+  # poll (here only with an unknown .deployed-sha, or one that is not an
+  # ancestor of HEAD; the common parked case was walked back above).
   log "HEAD ${LOCAL:0:7} was pulled but never deployed (last deployed: ${DEPLOYED:-unknown}) — retrying gate"
   # If a health-fail forces a rollback below, the last deployed SHA is the
   # only meaningful target (LOCAL==REMOTE here, resetting to self is a no-op).
   [ -n "$DEPLOYED" ] && LOCAL="$DEPLOYED"
 else
   # A prior run already rolled this exact SHA back as unhealthy — skip it
-  # every cycle (else the 2min timer churns pull→gate→restart→rollback
-  # forever on the same bad commit). Cleared once origin/master moves on.
+  # every cycle (else the 2min timer churns gate→restart→rollback forever on
+  # the same bad commit). Cleared once origin/master moves on.
   if [ -f "$REJECTED_SHA_FILE" ]; then
     rejected=$(cat "$REJECTED_SHA_FILE" 2>/dev/null || true)
     if [ "$rejected" = "$REMOTE" ]; then
@@ -256,19 +362,27 @@ else
     rm -f "$REJECTED_SHA_FILE"
   fi
 
-  log "new commits ${LOCAL:0:7}..${REMOTE:0:7} — pulling"
-  if ! git merge --ff-only origin/master >/dev/null 2>&1; then
+  # Fail fast, before spending a gate run on it: the live tree can only
+  # fast-forward to origin/master if its HEAD is an ancestor of it.
+  if ! git merge-base --is-ancestor "$LIVE_HEAD" "$REMOTE" 2>/dev/null; then
     log "ff-only merge failed (history diverged) — manual intervention needed; NOT deploying"
     exit 1
   fi
+  log "new commits ${LOCAL:0:7}..${REMOTE:0:7} — gating in ${GATE_DIR} (live checkout untouched)"
 fi
 
-# 3. Refresh deps (lockfile-pinned; no-op when unchanged).
-bun install --frozen-lockfile >/dev/null 2>&1 || log "bun install reported issues (continuing to gate)"
+# 3. Gate checkout at the candidate SHA, with its own lockfile-pinned deps.
+if ! prepare_gate_checkout "$REMOTE"; then
+  log "GATE FAIL: could not build the gate checkout ${GATE_DIR} at ${REMOTE:0:7} — NOT deploying (live checkout untouched)"
+  page_gate_fail "checkout" "$REMOTE"
+  exit 1
+fi
+(cd "$GATE_DIR" && bun install --frozen-lockfile >/dev/null 2>&1) || log "bun install in the gate checkout reported issues (continuing to gate)"
 
-# 4. GATE — typecheck + tests must pass before touching the live bot.
-if ! bash -c "$GATE_TYPECHECK_CMD" >/tmp/uc-deploy-typecheck.log 2>&1; then
-  log "GATE FAIL: typecheck — NOT restarting (pulled code is parked; see /tmp/uc-deploy-typecheck.log)"
+# 4. GATE — typecheck + tests must pass before the live checkout is touched.
+if ! (cd "$GATE_DIR" && bash -c "$GATE_TYPECHECK_CMD") >/tmp/uc-deploy-typecheck.log 2>&1; then
+  log "GATE FAIL: typecheck — NOT deploying (live checkout untouched; see /tmp/uc-deploy-typecheck.log)"
+  log_gate_tail /tmp/uc-deploy-typecheck.log
   page_gate_fail "typecheck" "$REMOTE"
   exit 1
 fi
@@ -276,28 +390,43 @@ fi
 # remove: run it under a private TMPDIR deleted afterwards, or every deploy
 # leaves dozens of them in /tmp (121 dirs, 37 MB by 2026-10-07).
 GATE_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/uc-gate.XXXXXX")"
-if ! TMPDIR="$GATE_TMPDIR" bash -c "$GATE_TEST_CMD" >/tmp/uc-deploy-test.log 2>&1; then
+if ! (cd "$GATE_DIR" && TMPDIR="$GATE_TMPDIR" bash -c "$GATE_TEST_CMD") >/tmp/uc-deploy-test.log 2>&1; then
   rm -rf "$GATE_TMPDIR"
-  log "GATE FAIL: tests — NOT restarting (see /tmp/uc-deploy-test.log)"
+  log "GATE FAIL: tests — NOT deploying (live checkout untouched; see /tmp/uc-deploy-test.log)"
+  log_gate_tail /tmp/uc-deploy-test.log
   page_gate_fail "test" "$REMOTE"
   exit 1
 fi
 rm -rf "$GATE_TMPDIR"
 rm -f "$GATEFAIL_PAGED_FILE" 2>/dev/null || true
 
+# 4a. The gate can last minutes: make sure the live checkout is still what it
+# was and still clean before touching it. Otherwise defer to the next poll
+# (which gates again) — never fast-forward over somebody's edit.
+if [ -n "$(git status --porcelain)" ] || [ "$(git rev-parse HEAD)" != "$LIVE_HEAD" ]; then
+  log "live checkout changed while the gate ran (dirty tree or moved HEAD) — NOT fast-forwarding; the next poll re-evaluates"
+  exit 0
+fi
+
 # 4b. Documentation-only range since what is RUNNING (.deployed-sha, never
 # HEAD — a parked SHA may hold code that never ran): the code is unchanged, so
-# the bot keeps running; record the new SHA as deployed. Unknown deployed SHA →
-# restart as always.
+# the bot keeps running; fast-forward the live tree (gate passed) and record the
+# new SHA as deployed. Unknown deployed SHA → restart as always.
 DEPLOYED_NOW=$(cat "$DEPLOYED_SHA_FILE" 2>/dev/null || true)
 if [ -n "$DEPLOYED_NOW" ] && [ "$DEPLOYED_NOW" != "$REMOTE" ] && docs_only_range "$DEPLOYED_NOW" "$REMOTE" 2>/dev/null; then
+  if [ "$LIVE_HEAD" != "$REMOTE" ]; then ff_live "$REMOTE" || exit 1; fi
   log "docs-only change ${DEPLOYED_NOW:0:7}..${REMOTE:0:7} — gate passed, running code unchanged, NOT restarting"
   echo "$REMOTE" > "$DEPLOYED_SHA_FILE" 2>/dev/null || true
   exit 0
 fi
 
-# 5. Deploy: restart via the canonical entrypoint (systemd-managed).
-log "gate passed (typecheck+tests) — restarting uncle-carl"
+# 5. Deploy: the gate passed, so NOW (and only now) the live checkout moves,
+# immediately followed by the restart via the canonical entrypoint
+# (systemd-managed). `bun install` in between is a no-op unless the lockfile
+# changed; node_modules must match the code the bot boots.
+log "gate passed (typecheck+tests) — fast-forwarding live to ${REMOTE:0:7} and restarting uncle-carl"
+if [ "$LIVE_HEAD" != "$REMOTE" ]; then ff_live "$REMOTE" || exit 1; fi
+bun install --frozen-lockfile >/dev/null 2>&1 || log "bun install reported issues (continuing to restart)"
 # Mark this restart as planned so the bot suppresses its Telegram startup banner
 # (only unexpected restarts — crash / host reboot — should ping the chat).
 touch "$REPO/data/.deploy-restart" 2>/dev/null || true

@@ -224,3 +224,69 @@ describe("ShadowAdapter — stopLossPct persists trades.stop_loss (P3-2)", () =>
     expect(row.stop_loss).toBeNull();
   });
 });
+
+// ══════════════════════════════════════════════
+// scalePosition (RW4a exposure control, 2026-10-23): the shadow book keeps
+// the SAME single-row accounting as BinanceMomentumAdapter — a reduction
+// books the leg on the partial ledger and shrinks the row (pnl written once
+// at the final close), an add averages the entry and leaves stop_loss alone.
+// ══════════════════════════════════════════════
+describe("ShadowAdapter — scalePosition (exposure control resize)", () => {
+  test("factor < 1: adverse partial fill, leg on the ledger, row shrinks, stays open; final close nets ONE pnl over the full basis", async () => {
+    const a = makeAdapter(priceSource({ AAPL: 100 }));
+    expect((await a.openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 10_000, stopLossPct: 5 })).ok).toBe(true);
+    const before = getDB().prepare(`SELECT id, quantity, entry_price, stop_loss FROM trades WHERE account_id = ?`).get(a.accountId) as any;
+    const src = priceSource({ AAPL: 110 });
+    const b = new ShadowAdapter(src, { accountId: a.accountId, strategy: "TEST", closeReason: "TEST_EXIT", timeframe: "1Day", baseUsd: 50_000, market: "stock" }, (async () => []) as any);
+    const res = await b.scalePosition({ symbol: "AAPL", side: "buy", factor: 0.6 });
+    expect(res.ok).toBe(true);
+    const mid = getDB().prepare(`SELECT status, quantity, entry_price, stop_loss, pnl, partial_realized_native, partial_closed_contracts FROM trades WHERE id = ?`).get(before.id) as any;
+    const closeQty = Math.floor(before.quantity * 0.4); // whole shares
+    expect(mid.status).toBe("open");
+    expect(mid.quantity).toBe(before.quantity - closeQty);
+    expect(mid.entry_price).toBe(before.entry_price);
+    expect(mid.stop_loss).toBe(before.stop_loss);
+    expect(mid.pnl).toBeNull();
+    expect(mid.partial_closed_contracts).toBe(closeQty);
+    const legFill = 110 * (1 - SHADOW_SLIPPAGE);
+    expect(mid.partial_realized_native).toBeCloseTo((legFill - before.entry_price) * closeQty, 6);
+    // Final close: one pnl = leg + remnant, pct over the quantity ever held.
+    expect((await b.closePosition({ symbol: "AAPL", side: "buy" })).ok).toBe(true);
+    const done = getDB().prepare(`SELECT status, pnl, pnl_pct, close_reason FROM trades WHERE id = ?`).get(before.id) as any;
+    expect(done.status).toBe("closed");
+    const expectedPnl = (legFill - before.entry_price) * closeQty + (legFill - before.entry_price) * mid.quantity;
+    expect(done.pnl).toBeCloseTo(expectedPnl, 6);
+    expect(done.pnl_pct).toBeCloseTo((expectedPnl / (before.entry_price * before.quantity)) * 100, 6);
+    expect(done.close_reason).toBe("TEST_EXIT");
+  });
+
+  test("factor > 1: adds whole shares at the adverse price, entry = weighted average, stop_loss untouched", async () => {
+    const a = makeAdapter(priceSource({ AAPL: 100 }));
+    expect((await a.openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 10_000, stopLossPct: 5 })).ok).toBe(true);
+    const before = getDB().prepare(`SELECT id, quantity, entry_price, stop_loss FROM trades WHERE account_id = ?`).get(a.accountId) as any;
+    const b = new ShadowAdapter(priceSource({ AAPL: 120 }), { accountId: a.accountId, strategy: "TEST", closeReason: "TEST_EXIT", timeframe: "1Day", baseUsd: 50_000, market: "stock" }, (async () => []) as any);
+    expect((await b.scalePosition({ symbol: "AAPL", side: "buy", factor: 1.5 })).ok).toBe(true);
+    const after = getDB().prepare(`SELECT quantity, entry_price, stop_loss FROM trades WHERE id = ?`).get(before.id) as any;
+    const addQty = Math.floor(before.quantity * 0.5);
+    const fill = 120 * (1 + SHADOW_SLIPPAGE);
+    expect(after.quantity).toBe(before.quantity + addQty);
+    expect(after.entry_price).toBeCloseTo((before.entry_price * before.quantity + fill * addQty) / after.quantity, 9);
+    expect(after.stop_loss).toBe(before.stop_loss);
+  });
+
+  test("refusals: no row, factor 1, flattening reduction, no price — row untouched", async () => {
+    const a = makeAdapter(priceSource({ AAPL: 100 }));
+    expect((await a.scalePosition({ symbol: "AAPL", side: "buy", factor: 0.5 })).ok).toBe(false);
+    expect((await a.openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 300 })).ok).toBe(true); // 2 shares
+    expect((await a.scalePosition({ symbol: "AAPL", side: "buy", factor: 1 })).ok).toBe(false);
+    expect((await a.scalePosition({ symbol: "AAPL", side: "buy", factor: 0.9 })).ok).toBe(false); // 0.2 share → floors to 0
+    const crypto = makeAdapter(priceSource({ "BTC/USD": 100 }), { market: "crypto" });
+    expect((await crypto.openPosition({ symbol: "BTC/USD", side: "buy", notionalUsd: 300 })).ok).toBe(true);
+    expect((await crypto.scalePosition({ symbol: "BTC/USD", side: "buy", factor: 1e-12 })).ok).toBe(false); // would flatten
+    expect((getDB().prepare(`SELECT quantity FROM trades WHERE account_id = ?`).get(crypto.accountId) as any).quantity).toBeCloseTo(300 / (100 * (1 + SHADOW_SLIPPAGE)), 9);
+    const noPrice = new ShadowAdapter(priceSource({}), { accountId: a.accountId, strategy: "TEST", closeReason: "TEST_EXIT", timeframe: "1Day", baseUsd: 50_000, market: "stock" }, (async () => []) as any);
+    expect((await noPrice.scalePosition({ symbol: "AAPL", side: "buy", factor: 0.5 })).ok).toBe(false);
+    const row = getDB().prepare(`SELECT quantity FROM trades WHERE account_id = ?`).get(a.accountId) as any;
+    expect(row.quantity).toBe(2);
+  });
+});

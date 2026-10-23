@@ -342,7 +342,7 @@ describe("calibrateSleeveCosts / computeCostCalibration", () => {
       const c = calibrateSleeveCosts(db, null, cfgOf("momentum_stocks"), null);
       expect(c.measured).toBeNull();
       expect(c.verdict).toContain("sin fills comparables");
-      expect(c.verdict).toContain("2026-10-13"); // MODEL_START.momentum_stocks (line E k = 1.5)
+      expect(c.verdict).toContain("2026-10-26"); // MODEL_START.momentum_stocks (RW2 E1 on the portfolio engine)
     } finally { db.close(); }
   });
 });

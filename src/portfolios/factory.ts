@@ -88,12 +88,13 @@ function buildMomentumPlan(def: PortfolioDefinition, nowMs: number): MomentumPor
           : { lookbackDays: horizon.lookbackDays, maLengthDays: horizon.maLengthDays })
         : {}),
     },
-    regime: { barMinutes: p.barMinutes },
+    regime: { barMinutes: p.barMinutes, ...(p.regime ? { ...p.regime } : {}) },
     scorer: { barMinutes: p.barMinutes },
     ...(p.tsmTrail ? { tsmTrail: { ...p.tsmTrail } } : {}),
     ...(p.volStop ? { volStop: { ...p.volStop } } : {}),
     ...(p.sharpeGate ? { sharpeGate: { ...p.sharpeGate } } : {}),
     ...(p.volTarget ? { volTarget: { ...p.volTarget } } : {}),
+    ...(p.exposureControl ? { exposureControl: structuredClone(p.exposureControl) } : {}),
     risk: { equitySemantics: p.equitySemantics },
     ...(p.modelVersion ? { modelVersion: p.modelVersion } : {}),
     // The runtime gross backstop is the slot×count product × measured

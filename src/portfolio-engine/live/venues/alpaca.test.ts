@@ -149,13 +149,65 @@ describe("releaseLegacyStops / Reg-T guard (executor surface)", () => {
       { id: "s3", clientOrderId: "uc8-c", symbol: "SPY", side: "buy" },
     ];
     const venue = new AlpacaVenue(fakeExecutor({ getOpenStopOrders: async () => stops, cancelOrderById: async (id) => { cancelled.push(id); return true; } }), fakeClient());
-    expect(await venue.releaseLegacyStops(["SPY"])).toEqual(["s1"]);
+    expect(await venue.releaseLegacyStops(["SPY"])).toEqual({ released: ["s1"], unconfirmed: [] });
     expect(cancelled).toEqual(["s1"]);
-    expect(await venue.releaseLegacyStops([])).toEqual([]);
+    expect(await venue.releaseLegacyStops([])).toEqual({ released: [], unconfirmed: [] });
     const failing = new AlpacaVenue(fakeExecutor({ getOpenStopOrders: async () => stops, cancelOrderById: async () => false }), fakeClient());
     await expect(failing.releaseLegacyStops(["SPY"])).rejects.toThrow(/could not cancel/);
     // an executor without the stop surface releases nothing (no guess)
-    expect(await new AlpacaVenue(fakeExecutor(), fakeClient()).releaseLegacyStops(["SPY"])).toEqual([]);
+    expect(await new AlpacaVenue(fakeExecutor(), fakeClient()).releaseLegacyStops(["SPY"])).toEqual({ released: [], unconfirmed: [] });
+  });
+
+  // 2026-10-23: DELETE answered 204 but the stop stayed pending_cancel (shares held) while the engine sold.
+  test("waits until each accepted cancel is terminal at the venue (pending_cancel is not enough)", async () => {
+    let t = 0;
+    const polls: Record<string, number> = { s1: 0, s2: 0 };
+    const stops = [
+      { id: "s1", clientOrderId: "uc8-a", symbol: "SPY", side: "sell" },
+      { id: "s2", clientOrderId: "uc8-b", symbol: "AAPL", side: "sell" },
+    ];
+    // s1 settles on its 3rd read, s2 on its 1st.
+    const client = fakeClient({ getOrder: (id: string) => ({ id, status: ++polls[id] >= (id === "s1" ? 3 : 1) ? "canceled" : "pending_cancel" }) });
+    const venue = new AlpacaVenue(fakeExecutor({ getOpenStopOrders: async () => stops, cancelOrderById: async () => true }), client,
+      { sleep: async (ms) => { t += ms; }, now: () => t, releasePollMs: 1_000 });
+    expect(await venue.releaseLegacyStops(["SPY", "AAPL"])).toEqual({ released: ["s2", "s1"], unconfirmed: [] });
+    expect(polls).toEqual({ s1: 3, s2: 1 }); // a settled order is not polled again
+    expect(t).toBe(2_000);
+  });
+
+  test("a cancel never confirmed is reported unconfirmed after the bounded wait (default 20 s); 404 counts as gone; a failed read is 'not yet'", async () => {
+    let t = 0;
+    const stops = [
+      { id: "stuck", clientOrderId: "uc8-a", symbol: "SPY", side: "sell" },
+      { id: "gone", clientOrderId: "uc8-b", symbol: "AAPL", side: "sell" },
+      { id: "flaky", clientOrderId: "uc8-c", symbol: "TLT", side: "sell" },
+    ];
+    let flakyReads = 0;
+    const client = fakeClient({
+      getOrder: (id: string) => {
+        if (id === "gone") throw http(404, "order not found");
+        if (id === "flaky") { if (++flakyReads === 1) throw new Error("socket hang up"); return { id, status: "canceled" }; }
+        return { id, status: "pending_cancel" };
+      },
+    });
+    const venue = new AlpacaVenue(fakeExecutor({ getOpenStopOrders: async () => stops, cancelOrderById: async () => true }), client,
+      { sleep: async (ms) => { t += ms; }, now: () => t });
+    const res = await venue.releaseLegacyStops(["SPY", "AAPL", "TLT"]);
+    expect(res.released.sort()).toEqual(["flaky", "gone"]);
+    expect(res.unconfirmed).toEqual(["stuck"]);
+    expect(t).toBeGreaterThanOrEqual(20_000);
+    expect(t).toBeLessThanOrEqual(21_000); // bounded, never an open-ended wait
+  });
+
+  test("a failed cancel on one stop does not skip the others, and still throws at the end", async () => {
+    const cancelled: string[] = [];
+    const stops = [
+      { id: "bad", clientOrderId: "uc8-a", symbol: "SPY", side: "sell" },
+      { id: "ok", clientOrderId: "uc8-b", symbol: "AAPL", side: "sell" },
+    ];
+    const venue = new AlpacaVenue(fakeExecutor({ getOpenStopOrders: async () => stops, cancelOrderById: async (id) => { cancelled.push(id); return id !== "bad"; } }), fakeClient());
+    await expect(venue.releaseLegacyStops(["SPY", "AAPL"])).rejects.toThrow(/could not cancel incumbent stop bad on SPY/);
+    expect(cancelled).toEqual(["bad", "ok"]);
   });
 
   test("buy over Reg-T buying power: blocked before createOrder; equal/under passes; sell never guarded; unreadable fails open", async () => {

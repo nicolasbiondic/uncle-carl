@@ -50,7 +50,7 @@ import {
   getRecentSignals, getRecentTrades, getV8StartedAt,
   insertActivity, updateTradeCloseReason, updateTradeStopLoss,
   getETDateKey, getETDayBounds, pruneOldData, recordFill, isSyncOwned, isPortfolioEngineRow, pnlOf,
-  getAlpacaV8StartEquity,
+  getAlpacaV8StartEquity, getPartialCloseLedger,
   recordCorporateAction, markCorporateActionApplied, applySplitToOpenStockTrades,
 } from "../db/database";
 import type { CorporateActionEvent } from "../market/corporateActions";
@@ -231,7 +231,11 @@ export function rowStopPct(
 }
 
 /** Build a bounded, deterministic Alpaca stock WS symbol list.
- *  1) Every currently held stock is included first.
+ *  1) Every currently held stock is included first; symbols with a
+ *     stop-protected row (`stopProtected`) take the slots before the rest —
+ *     the live bars are the 15s stop loop's price source for them, while
+ *     rows without stop machinery (PORTFOLIO, treasury) price via REST/the
+ *     broker mark. Each group is sorted deterministically.
  *  2) Remaining slots (up to `max`) are filled from the configured universe,
  *     sorted deterministically.
  *  3) If held positions alone exceed the cap, `droppedHeld` reports the ones
@@ -241,8 +245,11 @@ export function boundedAlpacaStockSymbols(
   held: string[],
   universe: string[],
   max = ALPACA_STOCK_WS_MAX,
+  stopProtected: Iterable<string> = [],
 ): { symbols: string[]; droppedHeld: string[] } {
-  const uniqueHeld = [...new Set(held)].sort();
+  const prio = new Set(stopProtected);
+  const sortedHeld = [...new Set(held)].sort();
+  const uniqueHeld = [...sortedHeld.filter(s => prio.has(s)), ...sortedHeld.filter(s => !prio.has(s))];
   const heldTake = uniqueHeld.slice(0, max);
   const droppedHeld = uniqueHeld.slice(max);
   const heldSet = new Set(heldTake);
@@ -1004,7 +1011,12 @@ export class AccountManager {
         if (closeResult.success && closeResult.filledPrice > 0) {
           realExitPrice = closeResult.filledPrice;
           closeCommission = closeResult.commission;
-          brokerPnl = closeResult.realizedPnl - closeResult.commission - getOpenCommission(trade.id);
+          // Net the exposure control's partial-reduce legs (RW4a — the
+          // row's partial ledger, see BinanceMomentumAdapter.scalePosition):
+          // one pnl per row, written once, like the engine close does.
+          const ledger = getPartialCloseLedger(trade.id);
+          brokerPnl = closeResult.realizedPnl - closeResult.commission - getOpenCommission(trade.id)
+            + ledger.realizedNative - ledger.commissionNative;
           brokerConfirmed = true;
           if (closeResult.exitTime) (trade as any).__exitTime = closeResult.exitTime;
         }
@@ -1341,20 +1353,37 @@ export class AccountManager {
       }
     }
 
-    const universe = [...new Set([...getEnabledStocks(), ...MEANREV_UNIVERSE])];
-    const { symbols, droppedHeld } = boundedAlpacaStockSymbols(held, universe);
-
-    if (droppedHeld.length > 0) {
-      log.error(
-        `Alpaca IEX stock WS limit (${ALPACA_STOCK_WS_MAX}) exceeded by ` +
-        `held positions; ${droppedHeld.length} held stocks will not receive live bars: ` +
-        droppedHeld.join(", ")
-      );
+    // Symbols with at least one row the stop machinery manages (the 15s loop's price source is the
+    // WS cache). Portfolio-engine rows and treasury ETFs have no stop of ours (same predicates as
+    // checkAllStopLoss / runAlpacaNativeStopsPass), so they only lose a convenience price tick.
+    const stopProtected = new Set<string>();
+    for (const id of this.accounts.keys()) {
+      for (const trade of getOpenTrades(id)) {
+        if (trade.market !== "stock" || isTreasurySymbol(trade.symbol) || isPortfolioEngineRow(trade)) continue;
+        stopProtected.add(trade.symbol);
+      }
     }
 
+    const universe = [...new Set([...getEnabledStocks(), ...MEANREV_UNIVERSE])];
+    const { symbols, droppedHeld } = boundedAlpacaStockSymbols(held, universe, ALPACA_STOCK_WS_MAX, stopProtected);
+
+    // Everything below (log included) runs only when the subscribed set CHANGES: this refresh runs every
+    // ~5 min and the unchanged over-cap condition used to log ERROR each time.
     const key = symbols.join(",");
     if (key === this.lastStockWsSymbolsKey) return;
     this.lastStockWsSymbolsKey = key;
+
+    if (droppedHeld.length > 0) {
+      const droppedProtected = droppedHeld.filter(s => stopProtected.has(s));
+      const msg =
+        `Alpaca IEX stock WS limit (${ALPACA_STOCK_WS_MAX}) exceeded by held positions; ` +
+        `${droppedHeld.length} held stocks will not receive live bars: ${droppedHeld.join(", ")}`;
+      if (droppedProtected.length > 0) {
+        log.error(`${msg} — ${droppedProtected.length} of them have a stop-protected row (stop loop falls back to REST prices): ${droppedProtected.join(", ")}`);
+      } else {
+        log.warn(`${msg} — none has a stop-protected row (portfolio-engine/treasury rows are priced via REST/broker mark)`);
+      }
+    }
 
     // Alpaca paper allows ONE market-data WS connection per account. The stock
     // (/v2/iex) and crypto (/v1beta3/crypto/us) endpoints each count against

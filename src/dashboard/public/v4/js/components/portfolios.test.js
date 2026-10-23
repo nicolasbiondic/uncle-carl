@@ -15,6 +15,7 @@ import {
   buildPatchBody,
   formatErrors,
   exampleParamsFor,
+  renderCreateFormHtml,
   renderEditFormHtml,
 } from "./portfolios.js";
 
@@ -93,6 +94,14 @@ describe("portfolioRowHtml", () => {
     expect(html).toContain("desactivado");
     expect(html).toContain("pendiente de reinicio");
     expect(html).toContain("no validado");
+  });
+  test("RW2: an incumbent row managed by the live portfolio engine says so and is NOT 'disabled'; the definition row names its template", () => {
+    store.state.lang = "es";
+    const html = portfolioRowHtml({ ...P, managedBy: "pe_momentum_stocks" });
+    expect(html).toContain("gestionado por el motor de cartera (pe_momentum_stocks)");
+    expect(html).not.toContain("desactivado");
+    expect(portfolioRowHtml({ ...P, id: "pe_momentum_stocks", template: "portfolio", managedBy: null })).toContain("Motor de cartera (RW2)");
+    expect(portfolioRowHtml({ ...P, managedBy: null })).not.toContain("gestionado por");
   });
 });
 
@@ -232,5 +241,24 @@ describe("exampleParamsFor", () => {
   test("no match -> {} (never undefined, so JSON.stringify never breaks)", () => {
     expect(exampleParamsFor(presets, "unknown")).toEqual({});
     expect(exampleParamsFor([], "momentum_tsm")).toEqual({});
+  });
+  test("RW2: a preset whose validated model is a portfolio-engine design still lends its incumbent's params as the free-template example", () => {
+    const pe = [{ id: "meanrev_stocks", template: "portfolio", incumbentTemplate: "meanrev_connors", creatable: false, exampleParams: { slotPct: 0.12 } }];
+    expect(exampleParamsFor(pe, "meanrev_connors")).toEqual({ slotPct: 0.12 });
+    expect(exampleParamsFor(pe, "portfolio")).toEqual({ slotPct: 0.12 });
+  });
+});
+
+describe("renderCreateFormHtml — portfolio-engine presets are listed but disabled", () => {
+  test("creatable:false renders a disabled option with the script note; creatable presets stay selectable", () => {
+    store.state.lang = "en";
+    const meta = { writable: true, accounts: ["alpaca_main"], presets: [
+      { id: "momentum_stocks", name: "Momentum Stocks", template: "portfolio", incumbentTemplate: "momentum_tsm", creatable: false, account: "alpaca_main", exampleParams: {} },
+      { id: "momentum_crypto", name: "Momentum Crypto", template: "momentum_tsm", incumbentTemplate: "momentum_tsm", creatable: true, account: "binance_usdt", exampleParams: {} },
+    ] };
+    const html = renderCreateFormHtml(meta, { source: "preset", preset: "momentum_crypto" });
+    expect(html).toMatch(/<option value="momentum_stocks"[^>]*disabled[^>]*>Momentum Stocks[^<]*portfolio engine, via script/);
+    expect(html).toMatch(/<option value="momentum_crypto"[^>]*selected[^>]*>/);
+    expect(html).not.toMatch(/<option value="momentum_crypto"[^>]*disabled/);
   });
 });

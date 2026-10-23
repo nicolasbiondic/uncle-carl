@@ -39,6 +39,14 @@
  * to the exact instant of its 2026-09-26 risk-state re-anchor: the sim's
  * empty book at the epoch mirrors the live book emptied by that re-anchor.
  *
+ * Portfolio-engine sleeves (RW2, 2026-10-23): a sleeve whose live manager is
+ * the portfolio engine (platform_portfolios: template "portfolio", enabled,
+ * mode live, params.runMode live → params.sleeve; portfolioEngineLiveSleeves)
+ * is SKIPPED with an explicit summary line — the incumbent replay this
+ * monitor runs is no longer what trades, so comparing against it would page
+ * a false divergence every day. Exit code unaffected (0 when nothing else
+ * diverges).
+ *
  * Epochs (PARITY_EPOCHS — the monitor's sleeve list IS this map's keys):
  *   momentum_stocks 2026-09-28 — first daily pass after MODEL_CUTOVER
  *     re-underwrites the legacy 2×-regime positions (META/AAPL).
@@ -47,12 +55,18 @@
  *     price"). Same reasoning as the earlier 09-25 → 09-28 move (the QCOM
  *     same-day-retry fix): an epoch before a fix re-pages the fixed
  *     divergence every day.
- *   momentum_crypto 2026-09-26T19:00:00Z — the instant the vt-35 re-anchor
- *     landed (MOMENTUM_CRYPTO_MODEL_VERSION) and reopened AVAX/LINK/ADA/SOL;
- *     first pass whose live risk state starts as clean as the replay's.
- *   momentum_crypto_usdc 2026-09-27T00:00:00Z — first DAILY decision of the
- *     d13-s5 kernel after its MODEL_CUTOVER; live BASE/USDC symbols map to
- *     the replay's BASE/USD proxies (normalizeLiveDecisions).
+ *   momentum_crypto 2026-10-23T09:00:00Z — RW3's cutover (correlation brake
+ *     OFF, MOMENTUM_CRYPTO_MODEL_VERSION vt35-corroff-2026-10-23): the first
+ *     pass of the new model, on a flat book with the RiskState re-anchored
+ *     (peak = equity, streak 0) — as clean as the replay's, which starts
+ *     empty and fresh at the epoch. This value is a PROJECTION of the deploy
+ *     hour; the director sets the exact one after deploying (see below).
+ *     (Before: 2026-09-26T19:00:00Z, the vt-35 re-anchor.)
+ *   momentum_crypto_usdc 2026-10-24T00:00:00Z — first DAILY pass of the RW4a
+ *     model (drawdown exposure control, PROJECTED deploy; the director sets
+ *     the exact pass, see PARITY_EPOCHS); live BASE/USDC symbols map to the
+ *     replay's BASE/USD proxies (normalizeLiveDecisions). (Before:
+ *     2026-10-08 the UNI realign; 2026-09-27 the d13-s5 cutover.)
  *
  * Date tolerance: sim decision stamps can sit off the live pass (the daily
  * sim labels a decision by the bar's END — a weekend gap lands the stamp
@@ -108,18 +122,81 @@ export const PARITY_EPOCHS: Partial<Record<LiveSleeveId, string>> = {
   // (09-28..10-06 compared clean apart from GOOGL, AUDITS 2026-10-06).
   momentum_stocks: "2026-10-12",
   meanrev_stocks: "2026-09-29",
-  // First pass after the 2026-09-26 vt-35 risk-state re-anchor
-  // (MOMENTUM_CRYPTO_MODEL_VERSION) — live's book was emptied by that
-  // re-anchor, so the sim's empty-at-epoch book is a true mirror.
-  momentum_crypto: "2026-09-26T19:00:00Z",
-  // Re-anchored to the owner's realign decision (00:00:15 UTC 10-08): its
-  // MODEL_CUTOVER closes UNI/USDC, which the 09-29 cutover's simultaneous
-  // re-rank had bought and the model does not hold. From the 09-29 epoch the
-  // only divergence left was that UNI (AUDITS 2026-10-06).
+  // First pass after the RW3 deploy (correlation brake OFF, 2026-10-23): the
+  // sleeve is flat there and the RiskState re-anchors on that pass, so the
+  // sim's empty, fresh-risk book at the epoch is a true mirror. PROJECTED
+  // value (09:00 UTC = the hourly pass after the projected deploy, same hour
+  // as `since` of momentum_crypto@vt35-corroff in modelVersions.ts). A pass
+  // BEFORE the real deploy inside this window would run the brake live while
+  // the sim (ceiling 1.01) enters: a false divergence — so after deploying
+  // the director sets the exact instant, in BOTH places, from prod, read-only:
+  //   SELECT datetime(min(ts)/1000,'unixepoch') FROM decision_passes
+  //    WHERE account_id='momentum_crypto' AND ts >= <the restart's epoch ms>;
+  // → write it here as an ISO instant (e.g. "2026-10-23T10:00:15Z") and as
+  // `since` (and, if it crosses 00:00 UTC, modelStart = the next UTC day).
+  // (Replaces the 2026-09-26T19:00:00Z vt-35 re-anchor epoch.)
+  momentum_crypto: "2026-10-23T09:00:00Z",
+  // Re-anchored to the first DAILY pass of the RW4a model (drawdown exposure
+  // control, momentum_crypto_usdc@daily-d13s5-xc-dd): 00:00:15 UTC 10-24 is
+  // the first pass whose replay candidate (exposureControl ON) is what runs
+  // live; a pass BEFORE the deploy inside the window would have the sim
+  // sizing entries at λ and resizing while live did not. PROJECTED value
+  // (same instant as `since` in modelVersions.ts): after deploying, the
+  // director sets the exact first pass, in BOTH places, from prod, read-only:
+  //   SELECT datetime(min(ts)/1000,'unixepoch') FROM decision_passes
+  //    WHERE account_id='momentum_crypto_usdc' AND ts >= <the restart's epoch ms>;
+  // → if the deploy lands AFTER 10-24 00:00:15Z, move this epoch, `since`
+  // and modelStart to that next daily pass (its 00:00:00Z / its date).
+  // The seeded book is the live book at the epoch (SOL/NEAR/UNI/AVAX held at
+  // full size, fraction 1); the sim's RiskState starts fresh (dd 0) while
+  // live carries its 13.8% dd — a KNOWN state difference (OPEN.md): the live
+  // control cuts ~13% on the first pass and the soft-DD pause stays bound,
+  // the sim does neither until its own dd builds. Resizes are not decisions
+  // (no row opens or closes), so they never page here; entries blocked by
+  // the pause can.
+  // (Before: 2026-10-08T00:00:00Z, the owner's UNI realign, AUDITS 2026-10-06.)
   // Live trades are BASE/USDC; the replay runs the BASE/USD USDT-perp proxies
   // (declared in its manifest) — normalizeLiveDecisions.
-  momentum_crypto_usdc: "2026-10-08T00:00:00Z",
+  momentum_crypto_usdc: "2026-10-24T00:00:00Z",
 };
+
+// ── sleeves managed by the portfolio engine (RW2) ─────────────────────────
+/**
+ * Sleeves whose LIVE manager is the portfolio engine, read from the trading
+ * DB's registry: enabled `platform_portfolios` rows with template
+ * "portfolio", params.runMode "live" and mode "live" (the same predicate
+ * src/portfolio-engine/live/cutover.ts resolves at boot) → params.sleeve.
+ * The monitor SKIPS those sleeves: it replays the INCUMBENT's config
+ * (liveSleeveConfigs), and after a cutover that is not what runs, so every
+ * entry/exit it would report is a false divergence (2026-10-23:
+ * momentum_stocks and meanrev_stocks on @pe-vt15). A DB without the table
+ * (pre-F3b, fixtures) means no cutover anywhere → empty map.
+ *
+ * Honest parity for these sleeves is a DIFFERENT check (not built here):
+ * `portfolio_decisions.weights_json` (one row per session and version) vs the
+ * target weights of the manifest candidate's design replayed on
+ * data/historical.db up to the same session (pure
+ * src/portfolio-engine/construction.ts + decide.ts, no fills to model), plus
+ * the open PORTFOLIO rows vs the decision's book. Cheap (one covariance per
+ * session), deterministic, and it compares what the engine actually
+ * decided instead of what the incumbent would have.
+ */
+export function portfolioEngineLiveSleeves(db: Database): Map<string, { definitionId: string; strategyVersion: string | null }> {
+  const out = new Map<string, { definitionId: string; strategyVersion: string | null }>();
+  const has = db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'platform_portfolios'`).get();
+  if (!has) return out;
+  const rows = db.prepare(
+    `SELECT id, params_json FROM platform_portfolios
+     WHERE template = 'portfolio' AND enabled = 1 AND mode = 'live' AND status != 'archived'`,
+  ).all() as Array<{ id: string; params_json: string }>;
+  for (const r of rows) {
+    let p: any;
+    try { p = JSON.parse(r.params_json); } catch { continue; }
+    if (p?.runMode !== "live" || typeof p?.sleeve !== "string") continue;
+    out.set(p.sleeve, { definitionId: r.id, strategyVersion: typeof p.strategyVersion === "string" ? p.strategyVersion : null });
+  }
+  return out;
+}
 
 /** Live symbols → the replay's universe symbols. momentum_crypto_usdc
  *  trades BASE/USDC perps while its validated replay runs the BASE/USD
@@ -419,12 +496,16 @@ export function compareDailyHoldings(
 }
 
 // ── replay drivers ────────────────────────────────────────────────────────
-interface SleeveParityResult {
+export interface SleeveParityResult {
   sleeve: LiveSleeveId;
-  status: "compared" | "nothing_yet" | "error";
+  /** "skipped_portfolio_engine": the sleeve's live manager is the portfolio
+   *  engine (portfolioEngineLiveSleeves) — nothing replayed, nothing paged. */
+  status: "compared" | "nothing_yet" | "error" | "skipped_portfolio_engine";
   epoch: string;
   /** status "error": why this sleeve's check threw (the others still run). */
   error?: string;
+  /** status "skipped_portfolio_engine": the registry definition that manages the sleeve. */
+  skipped?: { definitionId: string; strategyVersion: string | null };
   /** Divergences matched by PARITY_ACKNOWLEDGED — shown, never counted. */
   acknowledged?: Divergence[];
   lastSession?: string;
@@ -714,6 +795,10 @@ export function renderSummary(results: SleeveParityResult[]): string {
       lines.push(`  ❌ check FAILED (other sleeves unaffected): ${r.error ?? "unknown error"}`);
       continue;
     }
+    if (r.status === "skipped_portfolio_engine") {
+      lines.push(`  ⏭️  SKIPPED — live manager is the portfolio engine (${r.skipped?.definitionId ?? "?"}, ${r.skipped?.strategyVersion ?? "version ?"}); this monitor replays the incumbent's config, which no longer runs. Not a divergence. Decision parity for this sleeve: portfolio_decisions.weights_json vs the manifest design replayed (see portfolioEngineLiveSleeves).`);
+      continue;
+    }
     if (r.staleSymbols.length > 0) {
       lines.push(`  ⚠️  STALE universe symbols (freeze the comparison window — fix the backfill): ${r.staleSymbols.map(s => `${s.symbol}@${s.lastBar}`).join(", ")}`);
     }
@@ -786,8 +871,25 @@ async function main() {
   // entry there.
   const sleeves = (Object.keys(PARITY_EPOCHS) as LiveSleeveId[])
     .filter(s => !only || s === only);
+  // RW2: a sleeve whose live manager is the portfolio engine is skipped
+  // (the incumbent's replay is not what runs) — read once, from the same
+  // readonly trading.db the live decisions come from. An unreadable DB
+  // degrades to "no cutover" (empty map, logged), exactly like a DB that
+  // predates the table — the per-sleeve checks below then fail on their own.
+  let peLive: ReturnType<typeof portfolioEngineLiveSleeves> = new Map();
+  try {
+    const regDb = new Database(tradingDbPath, { readonly: true });
+    try { peLive = portfolioEngineLiveSleeves(regDb); } finally { regDb.close(); }
+  } catch (e: any) {
+    console.error(`parity-check: could not read platform_portfolios (${e?.message ?? e}) — assuming no portfolio-engine cutover`);
+  }
   const results: SleeveParityResult[] = [];
   for (const sleeve of sleeves) {
+    const pe = peLive.get(sleeve);
+    if (pe) {
+      results.push({ sleeve, status: "skipped_portfolio_engine", epoch: epochOverride ?? PARITY_EPOCHS[sleeve] ?? "?", skipped: pe, staleSymbols: [], divergences: [] });
+      continue;
+    }
     // One sleeve's failure must not blind the monitor to the others
     // (2026-09-29: a momentum_crypto funding-tail throw aborted all four).
     try {

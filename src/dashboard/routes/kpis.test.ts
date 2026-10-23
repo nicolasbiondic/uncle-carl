@@ -133,6 +133,47 @@ describe("GET /api/funnel", () => {
     });
   });
 
+  test("exposes gate binding and sleeve exposure (latest, 5-pass mean, low flag); old rows stay null", async () => {
+    setSystemTime(new Date("2026-10-12T16:00:00Z"));
+    const now = Date.now();
+    const base = { universe: 4, evaluated: 4, signalsLong: 0, signalsShort: 0, entries: 0, exits: 0, blocks: {} };
+    // Legacy row (no new fields) for a sleeve that never measured anything.
+    insertDecisionPass({ accountId: "momentum_crypto_usdc", ts: now - 600_000, ...base });
+    // 7 measured passes: the first two are healthy, the last five deploy 40% of intent.
+    for (let i = 0; i < 7; i++) {
+      const healthy = i < 2;
+      insertDecisionPass({
+        accountId: "momentum_crypto", ts: now - (7 - i) * 60_000, ...base,
+        signalsRawLong: 1, signalsAfterGates: healthy ? 1 : 0,
+        gateBinding: healthy ? [] : ["regime"],
+        exposureReal: healthy ? 0.5 : 0.2, exposureIntended: 0.5,
+      });
+    }
+    await withServer(async (port) => {
+      const f = await (await fetch(`http://127.0.0.1:${port}/api/funnel?days=1`)).json() as any;
+      const c = f.accounts.find((a: any) => a.accountId === "momentum_crypto");
+      expect(c.signalsRawLong).toBe(7);
+      expect(c.signalsAfterGates).toBe(2);
+      expect(c.gateBinding).toEqual({ regime: 5 });
+      expect(c.gateBindingPasses).toBe(7);
+      expect(c.exposure.latest.real).toBeCloseTo(0.2, 9);
+      expect(c.exposure.latest.ratio).toBeCloseTo(0.4, 9);
+      expect(c.exposure.mean5.passes).toBe(5); // the 2 healthy passes fall out of the window
+      expect(c.exposure.mean5.ratio).toBeCloseTo(0.4, 9);
+      expect(c.exposure.threshold).toBe(0.8);
+      expect(c.exposure.low).toBe(true);
+      const legacy = f.accounts.find((a: any) => a.accountId === "momentum_crypto_usdc");
+      expect(legacy.passes).toBe(1);
+      expect(legacy.signalsRawLong).toBeNull();
+      expect(legacy.signalsAfterGates).toBeNull();
+      expect(legacy.gateBinding).toEqual({});
+      expect(legacy.gateBindingPasses).toBe(0);
+      expect(legacy.exposure).toBeNull();
+      // Existing fields keep their meaning for both.
+      expect(c.signalsLong).toBe(0);
+    });
+  });
+
   test("days is clamped to 1..30 and defaults to 7", async () => {
     await withServer(async (port) => {
       const def = await (await fetch(`http://127.0.0.1:${port}/api/funnel`)).json() as any;

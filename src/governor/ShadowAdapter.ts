@@ -26,7 +26,7 @@ import type { MomentumBrokerAdapter } from "../strategies/momentum/MomentumEngin
 import { MODEL_CUTOVER_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, TIME_STOP_CLOSE_REASON, TRAIL_STOP_CLOSE_REASON } from "../strategies/momentum/MomentumEngine";
 import type { CurrentPosition } from "../strategies/momentum/Rebalancer";
 import type { OHLCV } from "../utils/types";
-import { getDB, insertTrade, closeTrade, updateTradeCloseReason, getOpenTrades, RECONCILE_CLOSE_SQL } from "../db/database";
+import { getDB, insertTrade, closeTrade, updateTradeCloseReason, getOpenTrades, RECONCILE_CLOSE_SQL, accumulatePartialCloseLedger, getPartialCloseLedger, increaseOpenTradeQuantity, pnlOf } from "../db/database";
 import { createLogger } from "../utils/logger";
 import { binanceKlinesEnabled, fetchBinanceKlines } from "../market/binanceKlines";
 
@@ -169,7 +169,7 @@ export class ShadowAdapter implements MomentumBrokerAdapter {
       ? action.closeReason
       : this.cfg.closeReason;
     const row = getDB().prepare(
-      `SELECT id, side FROM trades
+      `SELECT id, side, quantity, entry_price FROM trades
        WHERE account_id = ? AND symbol = ? AND status = 'open'
        ORDER BY entry_time DESC LIMIT 1`
     ).get(this.cfg.accountId, action.symbol) as any;
@@ -180,11 +180,64 @@ export class ShadowAdapter implements MomentumBrokerAdapter {
 
     // Adverse fill: closing a long sells down, closing a short buys up.
     const fill = row.side === "buy" ? price * (1 - SHADOW_SLIPPAGE) : price * (1 + SHADOW_SLIPPAGE);
-    const closed = closeTrade(row.id, fill, Date.now(), 0);
+    // Partial-reduce legs (scalePosition) net into the ONE final pnl — the
+    // same single-row accounting as BinanceMomentumAdapter / the sim.
+    const ledger = getPartialCloseLedger(row.id);
+    const closed = ledger.closedContracts > 0
+      ? closeTrade(row.id, fill, Date.now(), 0,
+        pnlOf(row.side, row.entry_price, fill, row.quantity).pnl + ledger.realizedNative,
+        { basisQuantity: row.quantity + ledger.closedContracts })
+      : closeTrade(row.id, fill, Date.now(), 0);
     if (closed?.closeReason !== "MANUAL_CLOSE_UNRECONCILED") {
       updateTradeCloseReason(row.id, closeReason);
     }
     log.debug(`shadow close ${action.symbol} @ $${fill.toFixed(2)} [${this.cfg.accountId}]`);
+    return { ok: true };
+  }
+
+  /**
+   * Exposure-control resize on the shadow book (RW4a, 2026-10-23) — the
+   * same single-row accounting as BinanceMomentumAdapter.scalePosition, with
+   * simulated fills at the kline price ± SHADOW_SLIPPAGE: factor < 1 realizes
+   * the leg's price-diff pnl on the row's partial ledger and shrinks the
+   * quantity (row stays open, pnl written once at the final close); factor > 1
+   * adds at market, entry becomes the weighted average, stop_loss untouched.
+   * Stocks round the leg to whole shares. Never flattens, never creates.
+   */
+  async scalePosition(action: { symbol: string; side: "buy" | "sell"; factor: number; reason?: string }): Promise<{ ok: boolean; reason?: string }> {
+    const { factor } = action;
+    if (!(factor > 0) || !Number.isFinite(factor) || factor === 1) return { ok: false, reason: `invalid factor ${factor}` };
+    const row = getDB().prepare(
+      `SELECT id, side, quantity, entry_price FROM trades
+       WHERE account_id = ? AND symbol = ? AND status = 'open'
+       ORDER BY entry_time DESC LIMIT 1`
+    ).get(this.cfg.accountId, action.symbol) as any;
+    if (!row) return { ok: false, reason: `no open shadow position for ${action.symbol}` };
+    if (row.side !== action.side) return { ok: false, reason: `row side ${row.side} ≠ requested ${action.side}` };
+    const price = await this.currentPrice(action.symbol);
+    if (price <= 0) return { ok: false, reason: `no price for ${action.symbol}` };
+    const long = row.side === "buy";
+    if (factor < 1) {
+      const raw = row.quantity * (1 - factor);
+      const closeQty = this.cfg.market === "stock" ? Math.floor(raw) : raw;
+      if (!(closeQty > 0) || row.quantity - closeQty <= row.quantity * 1e-9) return { ok: false, reason: "reduction too small or would flatten" };
+      const fill = long ? price * (1 - SHADOW_SLIPPAGE) : price * (1 + SHADOW_SLIPPAGE);
+      const leg = pnlOf(row.side, row.entry_price, fill, closeQty).pnl;
+      const ledger = accumulatePartialCloseLedger(row.id, {
+        realizedNative: leg, commissionNative: 0, commissionAsset: "USD",
+        closedContracts: closeQty, remainingContracts: row.quantity - closeQty,
+      });
+      if (!ledger) return { ok: false, reason: "row no longer open" };
+      log.debug(`shadow reduce ${action.symbol} ×${factor.toFixed(3)} −${closeQty} @ $${fill.toFixed(2)} [${this.cfg.accountId}]`);
+      return { ok: true };
+    }
+    const raw = row.quantity * (factor - 1);
+    const addQty = this.cfg.market === "stock" ? Math.floor(raw) : raw;
+    if (!(addQty > 0)) return { ok: false, reason: "zero_qty" };
+    const fill = long ? price * (1 + SHADOW_SLIPPAGE) : price * (1 - SHADOW_SLIPPAGE);
+    const updated = increaseOpenTradeQuantity(row.id, { addQty, fillPrice: fill, commission: 0 });
+    if (!updated) return { ok: false, reason: "row no longer open" };
+    log.debug(`shadow add ${action.symbol} ×${factor.toFixed(3)} +${addQty} @ $${fill.toFixed(2)} [${this.cfg.accountId}]`);
     return { ok: true };
   }
 

@@ -1,0 +1,103 @@
+{
+  "name": "rw4b-e1-lev-vt20-g150-brakeonly-v1",
+  "sleeve": "stocks",
+  "description": "DRAFT PRE-REGISTRATION (2026-10-23), docs/reports/RW-reescritura-rentable.md \u00a714 (RW4b, the condition of the Q3 quorum, docs/reports/Q3-quorum-decision.md): leveraged E1 with a drawdown brake and a faster vol estimator. Evaluated by backtest now; its WIRING is decided only when the 90-day freeze ends (2027-01-21), against E1's live record and only if E1's live Sharpe and beta stay inside the backtest band. momentum_stocks' own 11 names, the RW2 E1 volManaged construction byte for byte (1/sigma 63d, 21d covariance, cap 0.25, band 1%, 5 USD fractional) with the RW3 axes vol target 20% and maxGross 1.5 (Reg-T margin at 6.5%/yr on the borrowed cash, base and stress) plus a drawdown brake on the target vol (linear from 1 at a 5% sleeve drawdown to 0.25 at 20%, restored as it recovers; peak of the sleeve's book equity tracked in memory at past decisions, no look-ahead) (NO fast vol: ablation of the fast estimate). Pure chain of 1 candidate so the OOS frontier point is read directly. Window, asOf, costs and capital = rw2-e1-stocks-volmanaged-v1, so the OOS sessions are those of the control (E1 re-run 33b0ac05, passed as --control) and E2 (artifact 0b088ca3, passed as --partner, the account's other $50k). Binding criteria \u00a714: R1-R7 (R2 = the 25% sleeve drawdown limit, R3 = Sharpe not below E1's on the same days) plus A1 account drawdown <= 20%, H1/H2 with a -0.18 Sharpe haircut, M1 margin cost >= 6.5%, S1/S2 the February-March 2020 and 2022 windows judged separately. Pre-registered pick among the family's passing chains: highest CAGR, ties to lower maxDD. The brake and fast-vol parameters are fixed here, a priori, not tuned. Trials 427 -> 428.",
+  "trialAccounting": {
+    "priorUniqueTrials": 427,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-24",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000
+  },
+  "candidates": [
+    {
+      "name": "vt20-g150-brake",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": {
+          "kind": "volManaged",
+          "universe": [
+            "SPY",
+            "QQQ",
+            "IWM",
+            "GLD",
+            "AAPL",
+            "MSFT",
+            "NVDA",
+            "META",
+            "GOOGL",
+            "AMZN",
+            "SMH"
+          ],
+          "inceptionGuardBars": 252,
+          "volLookback": 63,
+          "covLookback": 21,
+          "portfolioVolTarget": 0.2,
+          "annualization": 252,
+          "perAssetCap": 0.25,
+          "maxGross": 1.5,
+          "drawdownBrake": {
+            "startDrawdown": 0.05,
+            "maxDrawdown": 0.2,
+            "floorScale": 0.25
+          }
+        },
+        "venue": {
+          "venue": "alpaca",
+          "fractional": true,
+          "minOrderNotional": 5,
+          "rebalanceBand": 0.01
+        }
+      }
+    }
+  ],
+  "acceptance": {}
+}

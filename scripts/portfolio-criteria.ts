@@ -12,7 +12,8 @@
  *   C4  the signal adds: Sharpe ≥ passive + 0.10, SAME sessions. Passive =
  *       D1/D3 the same construction with the signal forced on (vol target of
  *       the fold's selected candidate); D2 equal-weight of every eligible
- *       name, monthly reconstitution, no overlay. Passive runs through the
+ *       name, monthly reconstitution, no overlay; D4 (copySignal) equal-weight
+ *       of every point-in-time member (the S&P 500 itself). Passive runs through the
  *       same simulator, same costs, same venue rules, chained like the OOS.
  *   C5  better than the market, SAME sessions: D1 ≥ 60/40 SPY/IEF rebalanced
  *       daily; D2 ≥ SPY + 0.05; D3 ≥ BTC + 0.20 (frictionless close-to-close).
@@ -39,6 +40,7 @@ import { Database } from "bun:sqlite";
 import {
   candidateToReplayConfig,
   loadManifest,
+  penalizedPsr,
   periodsPerYear,
   stitchEquityHistory,
   stitchedMetrics,
@@ -48,14 +50,14 @@ import {
 } from "./walk-forward";
 import type { ReplayResult } from "./backtest-momentum-wf";
 import { coreKernel, makePortfolioRunner, type PortfolioChainState, type PortfolioKernel, type PortfolioReplayResult } from "./portfolio-replay";
-import { covarianceFromPrices, priceHistory, scaleToVolTarget, selectCoreMembers, trailingVol } from "../src/portfolio-engine";
+import { MAX_BAR_STALENESS_DAYS, covarianceFromPrices, priceHistory, scaleToVolTarget, selectCoreMembers, trailingVol } from "../src/portfolio-engine";
 import type { PortfolioStrategyConfig, SessionDate } from "../src/portfolio-engine/types";
 import { calendarForSource, loadSessionSeries } from "./lib/portfolioData";
 import { loadArtifactOuterDailyReturns } from "./lib/combinedPortfolioReturns";
 
 // ── thresholds (§2.5, verbatim) ──────────────────────────────────────────
 
-export type DesignId = "D1" | "D2" | "D3";
+export type DesignId = "D1" | "D2" | "D3" | "D4";
 export type MarketBenchmark = "sixtyForty" | "spy" | "btc";
 
 export interface DesignThresholds {
@@ -74,11 +76,15 @@ export const CRITERIA: Record<DesignId, DesignThresholds> = {
   D1: { c1MinPsr: 0.95, c2MaxDrawdown: 0.20, c3StressMinSharpe: 0.5, c4MinExcessVsPassive: 0.10, c5Market: "sixtyForty", c5MinExcess: 0, c6MaxYearShare: 0.5, c6b: { kind: "exTopDecile", minSharpe: 0.3 }, c7MinExtraBpsPerSide: 4 },
   D2: { c1MinPsr: 0.95, c2MaxDrawdown: 0.25, c3StressMinSharpe: 0.5, c4MinExcessVsPassive: 0.10, c5Market: "spy", c5MinExcess: 0.05, c6MaxYearShare: 0.5, c6b: { kind: "exTopDecile", minSharpe: 0.3 }, c7MinExtraBpsPerSide: 4 },
   D3: { c1MinPsr: 0.95, c2MaxDrawdown: 0.35, c3StressMinSharpe: 0.6, c4MinExcessVsPassive: 0.10, c5Market: "btc", c5MinExcess: 0.20, c6MaxYearShare: 0.5, c6b: { kind: "worstLoo", minRatio: 0.6 }, c7MinExtraBpsPerSide: 10 },
+  // D4 = copySignal (copy-trading on public event streams). Pre-registered 2026-10-23
+  // (docs/reports/RW-reescritura-rentable.md §11.1): D2's thresholds, same stocks universe and
+  // benchmarks (C4 vs the equal-weight point-in-time members, C5 vs SPY).
+  D4: { c1MinPsr: 0.95, c2MaxDrawdown: 0.25, c3StressMinSharpe: 0.5, c4MinExcessVsPassive: 0.10, c5Market: "spy", c5MinExcess: 0.05, c6MaxYearShare: 0.5, c6b: { kind: "exTopDecile", minSharpe: 0.3 }, c7MinExtraBpsPerSide: 4 },
 };
 
 export function designOf(strategy: PortfolioStrategyConfig): DesignId {
   if (strategy.kind === "volManaged") throw new Error("volManaged uses RW2 criteria and its manifest name, not RW1 designOf");
-  return strategy.kind === "xassetTrend" ? "D1" : strategy.kind === "factorCore" ? "D2" : "D3";
+  return strategy.kind === "xassetTrend" ? "D1" : strategy.kind === "factorCore" ? "D2" : strategy.kind === "copySignal" ? "D4" : "D3";
 }
 
 export type RW2DesignId = "E1" | "E2" | "E3";
@@ -88,9 +94,12 @@ export const RW2_CRITERIA = {
   E3: { annualization: 365, minPsr: 0.95, maxDrawdown: 0.25, minExcessVsControl: 0, stressMinSharpe: 0.5, maxYearShare: 0.5, exTopDecileMinSharpe: 0.3, minExtraBpsPerSide: 10 },
 } as const;
 
+/** RW3 (§10, 2026-10-22) reuses the E1/E2/E3 thresholds and controls for its
+ *  leveraged volManaged families, so the `rw3-e?-` prefix maps the same way;
+ *  RW4b (§14) maps `rw4b-e1-` to E1 and adds its own criteria on top. */
 export function rw2DesignOf(name: string): RW2DesignId {
-  const match = /^rw2-(e[123])-/.exec(name);
-  if (!match) throw new Error("volManaged manifest name must start with rw2-e1-, rw2-e2- or rw2-e3-");
+  const match = /^(?:rw[23]|rw4b)-(e[123])-/.exec(name);
+  if (!match) throw new Error("volManaged manifest name must start with rw2-e1-, rw2-e2-, rw2-e3- (or the rw3- / rw4b- equivalents)");
   return match[1].toUpperCase() as RW2DesignId;
 }
 
@@ -188,7 +197,7 @@ const PASSIVE_KEY = "portfolioPassive";
  *  to the candidate's vol target with the core's own construction (caps and
  *  gross included); no signal, no stops. */
 export const passiveTrendDecide: PortfolioKernel["decide"] = ({ view, config, book }) => {
-  if (config.kind === "factorCore") throw new Error("passiveTrendDecide: factorCore uses passiveEqualWeightDecide");
+  if (config.kind === "factorCore" || config.kind === "copySignal") throw new Error(`passiveTrendDecide: ${config.kind} uses its equal-weight benchmark`);
   const vols: Record<string, number> = {};
   const needed = Math.max(config.volLookback, config.covLookback) + 1;
   for (const s of [...new Set(config.universe)].sort()) {
@@ -208,7 +217,7 @@ export const passiveTrendDecide: PortfolioKernel["decide"] = ({ view, config, bo
  *  price floor, rankable), reconstituted monthly, exposure 1, no overlay. */
 export const passiveEqualWeightDecide: PortfolioKernel["decide"] = (input) => {
   const { view, config, book, membership } = input;
-  if (config.kind !== "factorCore") throw new Error("passiveEqualWeightDecide: trend designs use passiveTrendDecide");
+  if (config.kind !== "factorCore") throw new Error("passiveEqualWeightDecide: trend designs use passiveTrendDecide, copySignal uses passiveCopyBenchmarkDecide");
   if (!membership) throw new Error("passiveEqualWeightDecide requires membership");
   const prev = (book.memory[PASSIVE_KEY] as { month: string; members: string[] } | undefined);
   const month = (input.executionSession ?? view.asOf).slice(0, 7);
@@ -221,8 +230,50 @@ export const passiveEqualWeightDecide: PortfolioKernel["decide"] = (input) => {
   return { asOf: view.asOf, weights, stops: [], memory: { ...book.memory, [PASSIVE_KEY]: { month, members } }, diagnostics: { passive: "equal-weight-eligible", count: members.length } };
 };
 
+/** D4 (copySignal): equal weight of every point-in-time member the strategy itself could trade
+ *  (member at the execution session, not excluded, a fresh bar), exposure 1, reconstituted monthly.
+ *  It buys the whole index; the copy line has to beat it on risk-adjusted terms (C4) and SPY (C5). */
+export const passiveCopyBenchmarkDecide: PortfolioKernel["decide"] = (input) => {
+  const { view, config, book, membership } = input;
+  if (config.kind !== "copySignal") throw new Error("passiveCopyBenchmarkDecide: copySignal designs only");
+  if (!membership) throw new Error("passiveCopyBenchmarkDecide requires membership");
+  const prev = (book.memory[PASSIVE_KEY] as { month: string; members: string[] } | undefined);
+  const session = input.executionSession ?? view.asOf;
+  const month = session.slice(0, 7);
+  let members = prev?.members ?? [];
+  if (!prev || prev.month !== month) {
+    const excluded = new Set(config.exclude);
+    members = [...new Set(membership.members(session))].sort().filter(s => {
+      if (excluded.has(s)) return false;
+      const last = priceHistory(view, s, 1)[0];
+      return last !== undefined && (Date.parse(view.asOf) - Date.parse(last.date)) / 86_400_000 <= MAX_BAR_STALENESS_DAYS;
+    });
+  }
+  const weights: Record<string, number> = {};
+  if (prev?.month === month && book.positions.length > 0) {
+    // Between monthly reconstitutions hold quantities, allowing weights to
+    // drift. A fold starts flat even when memory is chained: reinvest then.
+    for (const p of book.positions) weights[p.symbol] = p.qty * (view.lastClose(p.symbol) ?? p.avgEntryPrice) / book.equity;
+  } else {
+    for (const s of members) weights[s] = members.length > 0 ? 1 / members.length : 0;
+  }
+  return { asOf: view.asOf, weights, stops: [], memory: { ...book.memory, [PASSIVE_KEY]: { month, members } }, diagnostics: { passive: "equal-weight-members", count: members.length } };
+};
+
 export function passiveDecideFor(strategy: PortfolioStrategyConfig): PortfolioKernel["decide"] {
-  return strategy.kind === "factorCore" ? passiveEqualWeightDecide : passiveTrendDecide;
+  return strategy.kind === "factorCore" ? passiveEqualWeightDecide : strategy.kind === "copySignal" ? passiveCopyBenchmarkDecide : passiveTrendDecide;
+}
+
+export function makePassiveRunner(strategy: PortfolioStrategyConfig, kernel = coreKernel, assetClasses?: Record<string, string>): ReplayRunner {
+  // D4's index weights (~1/450) are all INSIDE the strategy's absolute 1%
+  // rebalance band. Applying that band leaves the benchmark entirely in cash.
+  // Keep execution constraints/costs, but execute the passive's monthly targets
+  // without the signal strategy's no-trade band. Never mutate the candidate.
+  const passiveKernel = strategy.kind === "copySignal" ? {
+    ...kernel,
+    planOrders: ((target, book, prices, rules) => kernel.planOrders(target, book, prices, { ...rules, rebalanceBand: 0 })) as PortfolioKernel["planOrders"],
+  } : kernel;
+  return makePortfolioRunner(passiveKernel, { decide: passiveDecideFor(strategy), assetClasses });
 }
 
 // ── chain re-runs on the executed outer windows ──────────────────────────
@@ -544,6 +595,148 @@ export function computeRW2Criteria(inp: RW2CriteriaInputs): RW2CriteriaReport {
   };
 }
 
+// ── RW4b §14: leveraged E1 with a drawdown brake and a fast vol estimate ──
+//
+// DRAFT pre-registration (2026-10-23). The R1–R7 of §8.5 (E1 thresholds, the sleeve drawdown limit
+// is R2) plus GPT's Q3 conditions as explicit, binding criteria. Wiring is decided only at the end
+// of the 90-day freeze (2027-01-21), against E1's live record.
+
+export const RW4B_LIMITS = {
+  /** R2 (E1): max drawdown of the stitched OOS chain of the sleeve. */
+  sleeveMaxDrawdown: RW2_CRITERIA.E1.maxDrawdown,
+  /** A1: max drawdown of the account = E1 variant + E2, $50k each, on the common sessions (line E's budget, LE §10.1). */
+  accountMaxDrawdown: 0.20,
+  /** The estimated live cost of the hindsight-chosen universe (Q3 dossier). */
+  sharpeHaircut: 0.18,
+  haircutMinPsr: 0.95,
+  haircutStressMinSharpe: 0.5,
+  minMarginRate: 0.065,
+  /** A crash window needs this many sessions of the OOS chain, or it fails closed. */
+  minWindowSessions: 20,
+  minAccountSessions: 30,
+  capitalPerSleeve: 50_000,
+  crashWindows: [
+    { id: "S1_crash2020", label: "febrero–marzo 2020", from: "2020-02-01", to: "2020-03-31" },
+    { id: "S2_bear2022", label: "2022", from: "2022-01-01", to: "2022-12-31" },
+  ],
+} as const;
+
+export const isRw4bName = (name: string): boolean => /^rw4b-/.test(name);
+
+export interface RW4bCriteriaInputs extends RW2CriteriaInputs {
+  design: "E1";
+  /** E2's chain by session: the account's other $50k. */
+  partner: DailySeries | null;
+  marginRates: { base: number; stress: number };
+}
+
+/** Account = two independent books (no reallocation between sleeves), each starting at `capital`, summed. */
+export function accountPerformance(a: readonly number[], b: readonly number[]): { totalReturn: number; maxDrawdown: number; rebalancedMaxDrawdown: number } {
+  let ea = 1, eb = 1, peak = 1, maxDrawdown = 0;
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    ea *= 1 + a[i]; eb *= 1 + b[i];
+    const equity = (ea + eb) / 2;
+    peak = Math.max(peak, equity);
+    maxDrawdown = Math.max(maxDrawdown, (peak - equity) / peak);
+  }
+  // Report-only: the same two sleeves with the weights reset to 50/50 every session.
+  const rebalanced = commonPerformance(a.map((x, i) => (x + b[i]) / 2));
+  return { totalReturn: (ea + eb) / 2 - 1, maxDrawdown, rebalancedMaxDrawdown: rebalanced.maxDrawdown };
+}
+
+const datesWithin = (dates: readonly string[], from: string, to: string) => dates.filter(d => d >= from && d <= to);
+const sampleSd = (xs: readonly number[]) => {
+  if (xs.length < 2) return 0;
+  const m = xs.reduce((s, x) => s + x, 0) / xs.length;
+  return Math.sqrt(xs.reduce((s, x) => s + (x - m) ** 2, 0) / (xs.length - 1));
+};
+
+export function computeRW4bCriteria(inp: RW4bCriteriaInputs): RW2CriteriaReport {
+  const lim = RW4B_LIMITS;
+  const rw2 = computeRW2Criteria(inp);
+  const ppy = RW2_CRITERIA.E1.annualization;
+  const mine = chainDailyReturns(inp.summary);
+  const control = inp.control ?? new Map<SessionDate, number>();
+  const partner = inp.partner ?? new Map<SessionDate, number>();
+  const myDates = [...mine.keys()].sort();
+  const outer = [...inp.summary.outerTests].sort((a, b) => a.result.fromMs - b.result.fromMs).map(t => t.result);
+  const criteria: Record<string, Criterion> = { ...rw2.criteria };
+  const vals = (s: DailySeries, dates: readonly string[]) => dates.map(d => s.get(d)!);
+
+  // A1 — account drawdown (E1 variant + E2, $50k each, common sessions); the E1 control's account is the baseline.
+  const common = myDates.filter(d => partner.has(d) && control.has(d));
+  if (partner.size === 0 || common.length < lim.minAccountSessions) {
+    criteria.A1 = fmtC("A1_accountDrawdown", false, null, lim.accountMaxDrawdown, { reason: partner.size === 0 ? "partner (E2) chain not supplied" : `only ${common.length} common sessions with E2 and the control` });
+  } else {
+    const mineAccount = accountPerformance(vals(mine, common), vals(partner, common));
+    const controlAccount = accountPerformance(vals(control, common), vals(partner, common));
+    criteria.A1 = fmtC("A1_accountDrawdown", mineAccount.maxDrawdown <= lim.accountMaxDrawdown, mineAccount.maxDrawdown, lim.accountMaxDrawdown, {
+      detail: { commonDays: common.length, from: common[0], to: common[common.length - 1], capitalPerSleeve: lim.capitalPerSleeve,
+        sleeveMaxDrawdownLimit: lim.sleeveMaxDrawdown, candidateAccount: mineAccount, controlAccount },
+    });
+  }
+
+  // H1/H2 — selection-bias sensitivity: the chain with a −0.18 Sharpe haircut (a constant daily shave that lowers the
+  // annualized Sharpe by exactly 0.18). E1 shares the universe and the bias, so R3 is unchanged by it.
+  const rets = myDates.map(d => mine.get(d)!);
+  const shave = lim.sharpeHaircut * sampleSd(rets) / Math.sqrt(ppy);
+  const haircut = rets.map(r => r - shave);
+  const psrRaw = penalizedPsr(rets);
+  const psrHaircut = penalizedPsr(haircut);
+  const aligned = alignedSharpe(mine, control, ppy);
+  criteria.H1 = fmtC("H1_haircutPsr", psrHaircut !== null && psrHaircut >= lim.haircutMinPsr, psrHaircut, lim.haircutMinPsr, {
+    detail: { haircutSharpe: lim.sharpeHaircut, sharpe: annualizedSharpe(rets, ppy), sharpeAfterHaircut: annualizedSharpe(haircut, ppy), psrBeforeHaircut: psrRaw,
+      afterHaircut: commonPerformance(haircut), controlSharpeSameDays: aligned.sharpeB, controlSharpeSameDaysAfterHaircut: aligned.sharpeB - lim.sharpeHaircut },
+    ...(psrHaircut === null ? { reason: "PSR not computable" } : {}),
+  });
+  const stressSharpe = rw2.criteria.R4.value;
+  criteria.H2 = fmtC("H2_haircutStressSharpe", stressSharpe !== null && stressSharpe - lim.sharpeHaircut >= lim.haircutStressMinSharpe,
+    stressSharpe === null ? null : stressSharpe - lim.sharpeHaircut, lim.haircutStressMinSharpe, {
+      detail: { stressSharpe, haircutSharpe: lim.sharpeHaircut },
+      ...(stressSharpe === null ? { reason: "stress Sharpe not available" } : {}),
+    });
+
+  // M1 — margin interest is in the simulated P&L at ≥ 6.5 % in base AND stress; its cost is reported.
+  const marginPaid = outer.reduce((s, r) => s + (r.marginInterest ?? 0), 0);
+  const totalPnl = outer.length > 0 ? yearPnlShares(stitchEquityHistory(outer, inp.initialEquity)).totalPnl : 0;
+  criteria.M1 = fmtC("M1_marginCost", inp.marginRates.base >= lim.minMarginRate && inp.marginRates.stress >= lim.minMarginRate, inp.marginRates.base, lim.minMarginRate, {
+    detail: { baseRate: inp.marginRates.base, stressRate: inp.marginRates.stress, marginInterestPaidUsd: marginPaid, stitchedPnlUsd: totalPnl,
+      marginInterestShareOfNetPnl: totalPnl > 0 ? marginPaid / totalPnl : null },
+  });
+
+  // S1/S2 — fast-crash stress: each window judged separately, drawdown measured inside the window (peak = its start).
+  const crashWindows: Record<string, unknown> = {};
+  for (const w of lim.crashWindows) {
+    const inWindow = datesWithin(myDates, w.from, w.to);
+    const both = inWindow.filter(d => partner.has(d));
+    if (inWindow.length < lim.minWindowSessions || both.length < lim.minWindowSessions) {
+      criteria[w.id.slice(0, 2)] = fmtC(w.id, false, null, lim.sleeveMaxDrawdown, {
+        reason: `${w.label}: only ${inWindow.length} OOS sessions of the chain (${both.length} with E2) — fails closed (needs ${lim.minWindowSessions})` });
+      crashWindows[w.id] = { label: w.label, sessions: inWindow.length, covered: false };
+      continue;
+    }
+    const sleeve = commonPerformance(vals(mine, inWindow));
+    const account = accountPerformance(vals(mine, both), vals(partner, both));
+    const controlDates = inWindow.filter(d => control.has(d));
+    const controlBoth = controlDates.filter(d => partner.has(d));
+    const controlSleeve = controlDates.length > 0 ? commonPerformance(vals(control, controlDates)) : null;
+    const controlAccount = controlBoth.length > 0 ? accountPerformance(vals(control, controlBoth), vals(partner, controlBoth)) : null;
+    criteria[w.id.slice(0, 2)] = fmtC(w.id, sleeve.maxDrawdown <= lim.sleeveMaxDrawdown && account.maxDrawdown <= lim.accountMaxDrawdown, sleeve.maxDrawdown, lim.sleeveMaxDrawdown, {
+      detail: { label: w.label, from: inWindow[0], to: inWindow[inWindow.length - 1], sessions: inWindow.length, accountMaxDrawdownLimit: lim.accountMaxDrawdown,
+        candidate: { sleeve, account }, control: { sleeve: controlSleeve, account: controlAccount } },
+    });
+    crashWindows[w.id] = { label: w.label, sessions: inWindow.length, covered: true, candidate: { sleeve, account }, control: { sleeve: controlSleeve, account: controlAccount } };
+  }
+
+  const judged = Object.keys(criteria);
+  const allPass = judged.every(k => criteria[k].pass === true);
+  return { ...rw2, criteria, allPass,
+    verdict: allPass ? "CUMPLE R1–R7, A1, H1–H2, M1, S1–S2 (réplica independiente pendiente; cableado solo al final de la congelación)"
+      : `FALLA: ${judged.filter(k => criteria[k].pass !== true).join(", ")}`,
+    reported: { ...rw2.reported, rw4b: { limits: lim, crashWindows, marginInterestPaidUsd: marginPaid, sharpeHaircut: lim.sharpeHaircut,
+      wiring: "decided only on 2027-01-21, and only if E1's live Sharpe and beta stay inside the backtest band" } } };
+}
+
 // ── orchestration: benchmarks + criteria for a finished protocol run ─────
 
 export interface EvaluateOptions {
@@ -554,6 +747,8 @@ export interface EvaluateOptions {
   compareArtifacts?: Record<string, string>;
   controlArtifact?: string;
   authoritativeArtifact?: string;
+  /** RW4b: E2's artifact, the account's other $50k. */
+  partnerArtifact?: string;
   criteriaFile?: string;
   quiet?: boolean;
 }
@@ -569,6 +764,9 @@ export async function evaluatePortfolioCriteria(
   if (!strategy) throw new Error("evaluatePortfolioCriteria: not a portfolio manifest");
   const rw2Design = strategy.kind === "volManaged" ? rw2DesignOf(m.name) : null;
   if (rw2Design && !opts.controlArtifact) throw new Error("RW2 criteria require --control <artifactDir> (the re-run current sleeve)");
+  const rw4b = isRw4bName(m.name);
+  if (rw4b && (rw2Design !== "E1" || strategy.kind !== "volManaged")) throw new Error("RW4b manifests are E1 volManaged designs (name rw4b-e1-…)");
+  if (rw4b && !opts.partnerArtifact) throw new Error("RW4b criteria require --partner <artifactDir> (E2, the account's other $50k)");
   if (strategy.kind === "volManaged" && strategy.annualization !== RW2_CRITERIA[rw2Design!].annualization) throw new Error("RW2 design/annualization mismatch");
   const design = rw2Design ? null : designOf(strategy);
   const ppy = strategy.kind === "volManaged" ? strategy.annualization : periodsPerYear(m.sleeve, m.data.source);
@@ -580,7 +778,7 @@ export async function evaluatePortfolioCriteria(
   // Passive (C4): same simulator, costs, venue; the decision swapped.
   let passive: DailySeries | null = null;
   if (!rw2Design && windows.length > 0) {
-    const results = await rerunChain(m, windows, makePortfolioRunner(kernel, { decide: passiveDecideFor(strategy), assetClasses }), "passive", () => {}, dbPath);
+    const results = await rerunChain(m, windows, makePassiveRunner(strategy, kernel, assetClasses), "passive", () => {}, dbPath);
     passive = seriesOf(results.flatMap(r => r.dailyReturns));
   }
 
@@ -603,7 +801,7 @@ export async function evaluatePortfolioCriteria(
     const excluded = topDecileSymbols(summary);
     if (excluded.length > 0) {
       const results = await rerunChain(m, windows, makePortfolioRunner(kernel, { assetClasses }), "ex-top-decile", cfg => {
-        if (strategy.kind === "factorCore") {
+        if (strategy.kind === "factorCore" || strategy.kind === "copySignal") {
           const p = (cfg as typeof cfg & { portfolio: NonNullable<ExperimentManifest["candidates"][0]["portfolio"]> }).portfolio;
           p.strategy = { ...p.strategy, exclude: [...new Set([...(p.strategy as { exclude: string[] }).exclude, ...excluded])] } as PortfolioStrategyConfig;
         } else {
@@ -624,19 +822,26 @@ export async function evaluatePortfolioCriteria(
   }
 
   const common = { summary, initialEquity: m.ledger.initialEquity, baseSlippageBps: m.costs.base.slippageBps, exTopDecile, compare };
-  const report = rw2Design
-    ? computeRW2Criteria({ ...common, design: rw2Design, control: seriesOf(loadArtifactOuterDailyReturns(opts.controlArtifact!)),
-      authoritative: opts.authoritativeArtifact ? seriesOf(loadArtifactOuterDailyReturns(opts.authoritativeArtifact)) : undefined })
+  const rw2Inputs = rw2Design
+    ? { ...common, design: rw2Design, control: seriesOf(loadArtifactOuterDailyReturns(opts.controlArtifact!)),
+      authoritative: opts.authoritativeArtifact ? seriesOf(loadArtifactOuterDailyReturns(opts.authoritativeArtifact)) : undefined }
+    : null;
+  const report = rw4b
+    ? computeRW4bCriteria({ ...rw2Inputs!, design: "E1", partner: seriesOf(loadArtifactOuterDailyReturns(opts.partnerArtifact!)),
+      marginRates: { base: m.costs.base.marginInterest?.annualRate ?? 0, stress: m.costs.stress.marginInterest?.annualRate ?? 0 } })
+    : rw2Inputs
+    ? computeRW2Criteria(rw2Inputs)
     : computeCriteria({ ...common, design: design!, ppy, passive, market, marketError });
   if (rw2Design) {
     report.reported.controlArtifact = opts.controlArtifact;
     report.reported.authoritativeArtifact = opts.authoritativeArtifact ?? null;
+    if (rw4b) report.reported.partnerArtifact = opts.partnerArtifact;
   }
   const out = { generatedAt: new Date().toISOString(), manifest: manifestPath, manifestHash: summary.manifestHash, ...report };
-  const criteriaFile = opts.criteriaFile ?? (rw2Design ? "rw2-criteria.json" : "rw-criteria.json");
+  const criteriaFile = opts.criteriaFile ?? (rw4b ? "rw4b-criteria.json" : rw2Design ? "rw2-criteria.json" : "rw-criteria.json");
   if (existsSync(outputDir)) writeFileSync(join(outputDir, criteriaFile), JSON.stringify(out, null, 2));
   if (!opts.quiet) {
-    console.log(`\n▌ ${rw2Design ? "RW2 §8.5" : "RW §2.5"} criteria (${report.design})`);
+    console.log(`\n▌ ${rw4b ? "RW4b §14" : rw2Design ? "RW2 §8.5" : "RW §2.5"} criteria (${report.design})`);
     for (const c of Object.values(report.criteria)) {
       const v = c.value === null ? "n/a" : c.value.toFixed(3);
       console.log(`   ${c.id}: ${c.pass === null ? "external" : c.pass ? "PASS" : "FAIL"} value=${v} threshold=${c.threshold ?? "—"}${c.reason ? ` (${c.reason})` : ""}`);
@@ -672,9 +877,9 @@ export function loadCriteriaSummary(artifactDir: string): WalkForwardSummary {
   return summary;
 }
 
-export function parseCriteriaArtifacts(args: string[]): Pick<EvaluateOptions, "controlArtifact" | "authoritativeArtifact"> {
-  const out: Pick<EvaluateOptions, "controlArtifact" | "authoritativeArtifact"> = {};
-  for (const [flag, key] of [["--control", "controlArtifact"], ["--authoritative", "authoritativeArtifact"]] as const) {
+export function parseCriteriaArtifacts(args: string[]): Pick<EvaluateOptions, "controlArtifact" | "authoritativeArtifact" | "partnerArtifact"> {
+  const out: Pick<EvaluateOptions, "controlArtifact" | "authoritativeArtifact" | "partnerArtifact"> = {};
+  for (const [flag, key] of [["--control", "controlArtifact"], ["--authoritative", "authoritativeArtifact"], ["--partner", "partnerArtifact"]] as const) {
     const i = args.indexOf(flag);
     if (i < 0) continue;
     if (!args[i + 1] || args[i + 1].startsWith("--")) throw new Error(`${flag} expects <artifactDir>`);
@@ -685,7 +890,7 @@ export function parseCriteriaArtifacts(args: string[]): Pick<EvaluateOptions, "c
 
 if (import.meta.main) {
   const args = process.argv.slice(2);
-  if (!args[0] || args[0].startsWith("--")) throw new Error("Usage: bun scripts/portfolio-criteria.ts <artifactDir> --control <dir> [--authoritative <dir>]");
+  if (!args[0] || args[0].startsWith("--")) throw new Error("Usage: bun scripts/portfolio-criteria.ts <artifactDir> --control <dir> [--authoritative <dir>] [--partner <dir>  (RW4b)]");
   const artifactDir = args[0];
   const manifestPath = join(artifactDir, "manifest-resolved.json");
   await evaluatePortfolioCriteria(loadManifest(manifestPath), loadCriteriaSummary(artifactDir), artifactDir, manifestPath, parseCriteriaArtifacts(args));

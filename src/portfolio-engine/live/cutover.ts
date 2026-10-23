@@ -64,7 +64,7 @@ export function stableStringify(v: unknown): string {
  *  bars XXX/USD), so it is undone before hashing: the hash is the manifest's, whatever the sleeve. */
 export function designHash(p: Pick<PortfolioEngineParams, "strategy" | "venue" | "minOrderNotional" | "rebalanceBand" | "dataSymbols">): string {
   const map = p.dataSymbols ?? {};
-  const strategy: any = p.strategy.kind === "factorCore" ? p.strategy : { ...p.strategy, universe: p.strategy.universe.map(s => map[s] ?? s) };
+  const strategy: any = p.strategy.kind === "factorCore" || p.strategy.kind === "copySignal" ? p.strategy : { ...p.strategy, universe: p.strategy.universe.map(s => map[s] ?? s) };
   return createHash("sha256").update(stableStringify({
     strategy, venue: p.venue, minOrderNotional: p.minOrderNotional, rebalanceBand: p.rebalanceBand,
   })).digest("hex");
@@ -127,6 +127,7 @@ export function resolvePortfolioWiring(input: ResolveInput): PortfolioWiring {
     if (!p?.strategyVersion || !p?.heartbeatName) errors.push("strategyVersion and heartbeatName are required");
     if (!(def.capital > 0)) errors.push("capital must be > 0");
     if (p?.strategy?.kind === "factorCore") errors.push("factorCore needs a point-in-time membership source that no live wiring provides yet");
+    else if (p?.strategy?.kind === "copySignal") errors.push("copySignal needs a live signal source (and membership) that no wiring provides yet: research only");
     else if (p?.strategy) {
       if (isCryptoDesign(p.strategy) !== (p.venue !== "alpaca")) errors.push(`design ${p.strategy.kind} does not belong on venue ${p.venue}`);
       if (target) {
@@ -203,7 +204,7 @@ function liveRefusals(
   if (last !== p.strategyVersion) {
     errors.push(`strategyVersion '${p.strategyVersion}' is not the LAST entry of MODEL_VERSIONS['${e.sleeve}'] (${last ?? "none"}): append the version in src/portfolio/modelVersions.ts and deploy before going live`);
   }
-  if (p.venue === "alpaca" && p.strategy.kind !== "factorCore") {
+  if (p.venue === "alpaca" && p.strategy.kind !== "factorCore" && p.strategy.kind !== "copySignal") {
     const mine = p.strategy.universe;
     const treasury = mine.filter(isTreasurySymbol);
     if (treasury.length > 0) errors.push(`universe holds the treasury sweep's ETF (${treasury.join(", ")})`);

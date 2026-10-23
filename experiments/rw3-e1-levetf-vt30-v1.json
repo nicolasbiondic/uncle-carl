@@ -1,0 +1,91 @@
+{
+  "name": "rw3-e1-levetf-vt30-v1",
+  "sleeve": "stocks",
+  "description": "PRE-REGISTERED (2026-10-22) BEFORE any run, docs/reports/RW-reescritura-rentable.md §10 (RW3 'más agresivo'). Family (b) leveraged-ETF volManaged book, maxGross 1 (no account margin: the leverage is inside the funds). Universe 7, disjoint from every Alpaca sleeve (riskProfiles.disjoint.test.ts): TQQQ UPRO TECL TNA (3x equity), USD (ProShares Ultra Semiconductors, 2x; SOXL fails the repo's bar validator: genuine +54.8% on 2025-04-09 > the 50% discontinuity cap), TMF (3x 20y Treasuries) and UGL (2x gold) as the defensive leg. Same construction as RW2 E1 (1/sigma 63d, 21d covariance, cap 0.25, band 1%, 5 USD fractional), portfolio vol target 30%. Daily SIP bars adjustment=all downloaded 2026-10-22 into historical.db (source alpaca_wide, 2016-01-04 onwards). Pure chain of 1 candidate. Window, asOf, costs and capital = rw2-e1-stocks-volmanaged-v1 so the OOS sessions are the same as the control. Redesigns momentum_stocks (same account, same capital): CONTROL (R3, same days) = momentum_stocks@pe-vt15, rw2-e1 artifact b2324d4f (de245446 no longer reproduces on the refreshed DB — the E1 universe hashed ee75275b on 2026-10-22 — so re-run rw2-e1-stocks-volmanaged-v1 as-is, +0, and pass that artifact as --control). Binding criteria §8.5 R1-R7 unchanged (R2 maxDD <= 25%). Pre-registered pick among the family's passing chains: highest CAGR, ties to lower maxDD. CASE AGAINST (declared): daily-reset 3x funds decay in chop (volatility drag) and the 21-day covariance reacts late to crashes (2020-03, 2022); TMF lost with equities in 2022. CONFLICTS: momentum_stocks frozen 90 days from 2026-10-23; the universe would need adding to riskProfiles and the disjoint test. Trials 411 -> 412.",
+  "trialAccounting": {
+    "priorUniqueTrials": 411,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "TQQQ",
+      "UPRO",
+      "TECL",
+      "TNA",
+      "USD",
+      "TMF",
+      "UGL"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-24",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000
+  },
+  "candidates": [
+    {
+      "name": "vt30",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": {
+          "kind": "volManaged",
+          "universe": [
+            "TQQQ",
+            "UPRO",
+            "TECL",
+            "TNA",
+            "USD",
+            "TMF",
+            "UGL"
+          ],
+          "inceptionGuardBars": 252,
+          "volLookback": 63,
+          "covLookback": 21,
+          "portfolioVolTarget": 0.3,
+          "annualization": 252,
+          "perAssetCap": 0.25,
+          "maxGross": 1
+        },
+        "venue": {
+          "venue": "alpaca",
+          "fractional": true,
+          "minOrderNotional": 5,
+          "rebalanceBand": 0.01
+        }
+      }
+    }
+  ],
+  "acceptance": {}
+}

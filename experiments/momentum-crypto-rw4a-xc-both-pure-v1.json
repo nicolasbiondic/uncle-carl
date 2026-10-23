@@ -1,0 +1,116 @@
+{
+  "name": "momentum-crypto-rw4a-xc-both-pure-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTERED (2026-10-23) BEFORE any run — docs/reports/RW-reescritura-rentable.md §13 (RW4a, quorum Q3 research priority (i): a portfolio-level exposure control that REDUCES OPEN POSITIONS, not only blocks entries, on the crypto sleeves). Mechanism (MomentumEngineConfig.exposureControl, default OFF; SimBroker.scalePosition executes the partial resizes): one sleeve-level scale λ ∈ [minScale, 1] per tick from realized BOOK vol (volCap: σ = max(σ_fast, σ_slow) of the exposure-weighted book return; λ_vol = min(1, target/σ)) and/or the RiskGuard drawdown (drawdown: linear ramp 1 → minScale between startPct and endPct of the decayed-peak dd); λ = max(minScale, min(λ_vol, λ_dd)). Each held position keeps a persisted fraction f of full size and is resized ×(λ/f) only when |λ − f| > band and the order ≥ minOrderUsd (hysteresis); reductions run even while entries are blocked, add-backs obey every entry gate and the gross cap, and never exceed full size. New entries are sized at λ. Family RW4a-c1, momentum_crypto (hourly, vt-35, correlation brake OFF — the live config since 2026-10-23, artifact efc086b4). Byte-for-byte copy of momentum-crypto-rw3-vt-35-corroff-pure-v1 (asOf pinned 2026-10-02T08:00:00Z so folds and OOS days match the control) plus the knob. TWO axes vs the live config: volCap {50, 120, 504} AND drawdown {5% → 25%}, floor 0.25, band 10 pp, min order 100 USD; λ = min of the two axes. Trial 430 -> 431.CASE AGAINST (declared): (1) the live sizing already vol-targets each position (vt-35, 720 bars) and the 4% stop cuts losers — a second layer may only add turnover (every resize pays 5+4 bps per side) and sell into bottoms; (2) drawdown scaling of ENTRIES was refuted on this sleeve (ddscale 2026-09-25: 2022 lost what the pause avoided) — this candidate differs in scaling the OPEN book, but the prior is against; (3) the hourly book is 1–4 names at ≤ 0.70× gross, so there is little exposure to cut — the expected effect is small either way. CRITERIA (fixed here): the control's acceptance gates (unchanged) PLUS, against the LIVE config on the same OOS days (control artifact efc086b4 = momentum-crypto-rw3-vt-35-corroff-pure-v1, data hash 77c87d51; re-run it +0 if the hash drifts): Sharpe ≥ control (R3), maxDD ≤ control's maxDD on common days (the control is cut in drawdown, so it must not deepen it; sleeve gate 45% stays), PSR ≥ 0.95, ≥ 2/3 folds PSR > 0.5, worst LOO ≥ 0.6 × Sharpe, combined-book OOS maxDD ≤ 20% (50k/50k/5k/5k), and the extra orders (exposureStats.resizes) and extra turnover are REPORTED. Pick among passing chains: highest CAGR, ties to lower maxDD. If none passes, the sleeve stays as it is. Pure chain of 1 candidate. Trial accounting continues from the ledger's 424 (RW3 + copy D4): priorUniqueTrials=426, +1.",
+  "trialAccounting": {
+    "priorUniqueTrials": 430,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-10-02T08:00:00Z",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt35-corroff-xc-both",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "regime": {
+        "correlationCeiling": 1.01
+      },
+      "exposureControl": {
+        "volCap": {
+          "annualizedPct": 50,
+          "fastBars": 120,
+          "slowBars": 504
+        },
+        "drawdown": {
+          "startPct": 0.05,
+          "endPct": 0.25
+        },
+        "minScale": 0.25,
+        "band": 0.1,
+        "minOrderUsd": 100
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

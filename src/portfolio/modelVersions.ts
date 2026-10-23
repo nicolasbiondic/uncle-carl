@@ -21,6 +21,20 @@
 // the version the deployed code writes; versionTable tests lock the shape.
 // ══════════════════════════════════════════════
 
+/** Authoritative pure-chain artifact of a version (data/backtests/<sha256>/,
+ *  gitignored): runs.jsonl + manifest-resolved.json + summary.json. Its OOS
+ *  daily returns ARE the version's expectation (scorecard band, Telegram
+ *  "POR DEBAJO" page, cost calibration's break-even curve, tearsheet). */
+export interface ModelVersionArtifact {
+  /** Repo-root relative directory. */
+  dir: string;
+  /** Daily-bar MOMENTUM replays (backtest-momentum-wf) label a session by its
+   *  END (next midnight), one calendar day late — −1 realigns to trading-date
+   *  labels. Meanrev and portfolio-engine replays label by session date: 0.
+   *  Only affects date labels, never the return values. */
+  shiftDays: number;
+}
+
 export interface ModelVersion {
   /** What lands in trades.strategy_version. Format `<sleeve>@<name>`. */
   id: string;
@@ -32,6 +46,19 @@ export interface ModelVersion {
   modelStart: string | null;
   /** One line: what this model is. */
   note: string;
+  /** Which engine runs it. Absent = the sleeve's incumbent engine (TSM /
+   *  Connors, wired in src/index.ts); "portfolio" = the portfolio engine on a
+   *  registry definition (RW2, src/portfolio-engine/live/cutover.ts) — the
+   *  incumbent is NOT built, its config describes nothing that runs. */
+  engine?: "portfolio";
+  /** Experiment manifest (repo-root relative) whose candidate this version
+   *  runs — what "vivo = validado" compares against (liveSleeveConfigs,
+   *  VALIDATED_PRESETS) and what the cutover script hashes. */
+  manifest?: string;
+  /** Candidate name inside `manifest` when it holds more than one. */
+  candidate?: string;
+  /** See ModelVersionArtifact. Absent = no band for this version. */
+  artifact?: ModelVersionArtifact;
 }
 
 const EPOCH = "1970-01-01T00:00:00Z";
@@ -44,7 +71,17 @@ export const MODEL_VERSIONS: Readonly<Record<string, readonly ModelVersion[]>> =
     { id: "momentum_stocks@blend-k100", since: "2026-09-25T20:00:00Z", modelStart: "2026-09-28",
       note: "daily TSM blend 63/126/252 / MA200, 8 slots x 0.125; first pass 2026-09-28 (its MODEL_CUTOVER closed META/AAPL of the previous model)" },
     { id: "momentum_stocks@blend-k150", since: "2026-10-12T00:00:00Z", modelStart: "2026-10-13",
-      note: "same kernel, 8 slots x 0.1875 (line E, k150 artifact cb516547…); MODEL_CUTOVER pass 2026-10-12" },
+      note: "same kernel, 8 slots x 0.1875 (line E, k150 artifact cb516547…); MODEL_CUTOVER pass 2026-10-12",
+      // cb516547… = the k = 1 chain 5f03d68d… with slot × 1.5, gross cap × 1.5 and 6.5% Reg-T interest
+      // (+563.2% / 1.12 / DD 31.2%), re-run 2026-10-03 on prod's base with the corrected replay (AUDITS 2026-10-03).
+      manifest: "experiments/momentum-stocks-daily-blend3-k150-exposure-v1.json",
+      artifact: { dir: "data/backtests/cb516547be365b7080cb56357a391ae73535aa3db3f83295fe9c935b7a7ed031", shiftDays: -1 } },
+    { id: "momentum_stocks@pe-vt15", since: "2026-10-23T05:00:00Z", modelStart: "2026-10-26",
+      note: "RW2 E1: always-invested vol-managed portfolio engine (volManaged vt15, artifact b2324d4f…); owner cutover 2026-10-22 ('empieza ahora') after 2 observed sessions; first live pass 2026-10-23 adopts the book",
+      engine: "portfolio",
+      // RW2 §9: Sharpe OOS 1.29, +262%, DD 21.9%, PSR 0.999; R1–R7 met. Portfolio replays label by session date.
+      manifest: "experiments/rw2-e1-stocks-volmanaged-v1.json", candidate: "vt15",
+      artifact: { dir: "data/backtests/b2324d4f74f15042af8bfba4170df8b41f05e8ec033e324bebe8e284e24e5236", shiftDays: 0 } },
   ],
   meanrev_stocks: [
     { id: "meanrev_stocks@pre-slot10", since: EPOCH, modelStart: null,
@@ -52,19 +89,57 @@ export const MODEL_VERSIONS: Readonly<Record<string, readonly ModelVersion[]>> =
     { id: "meanrev_stocks@slot10", since: "2026-09-25T00:00:00Z", modelStart: null,
       note: "7 slots x 0.10 (ran 2026-09-25 only)" },
     { id: "meanrev_stocks@slot12", since: "2026-09-28T00:00:00Z", modelStart: "2026-09-28",
-      note: "7 slots x 0.12 (artifact 624d50e9…), wired 2026-09-28 before the open" },
+      note: "7 slots x 0.12 (artifact 624d50e9…), wired 2026-09-28 before the open",
+      // 624d50e9… = 7 × 0.12 pure chain on the adjustment=all research DB (supersedes 03382972…, 7 × 0.10 split-only).
+      manifest: "experiments/meanrev-slot12-pure-v1.json",
+      artifact: { dir: "data/backtests/624d50e930d47ef55e42f16e6537e0e895dec847fb0b709c26b2ecd94ea37db7", shiftDays: 0 } },
+    { id: "meanrev_stocks@pe-vt15", since: "2026-10-23T05:00:00Z", modelStart: "2026-10-26",
+      note: "RW2 E2: always-invested vol-managed portfolio engine (volManaged vt15, artifact 0b088ca3…); owner cutover 2026-10-22 ('empieza ahora') after 2 observed sessions; first live pass 2026-10-23",
+      engine: "portfolio",
+      // RW2 §9: Sharpe OOS 1.11, +150%, DD 21.0%, PSR 0.997; R1–R7 met.
+      manifest: "experiments/rw2-e2-meanrev-volmanaged-v1.json", candidate: "vt15",
+      artifact: { dir: "data/backtests/0b088ca320e3521d8bff05b10c1ad7eed2816bc2a1b0b927eb3134e2a3dca4c2", shiftDays: 0 } },
   ],
   momentum_crypto: [
     { id: "momentum_crypto@pre-vt35", since: EPOCH, modelStart: null,
       note: "hourly TSM 4 slots before the vol-target (until 2026-09-23)" },
     { id: "momentum_crypto@vt35", since: "2026-09-23T00:00:00Z", modelStart: "2026-09-27",
-      note: "hourly TSM + volTarget vt-35 (artifact 06e1a160…), wired 2026-09-23; first full own-book day 2026-09-27" },
+      note: "hourly TSM + volTarget vt-35 (artifact 06e1a160…), wired 2026-09-23; first full own-book day 2026-09-27",
+      // 06e1a160… supersedes a5101316… (vt-35 control pure chain), re-run 2026-10-03 with the corrected replay
+      // (+509.8% / 1.31 / DD 32.6%, same failed gate maxDisplacementShare). Same candidate as
+      // momentum-crypto-vt35-pure-v1, on a window that includes the live months.
+      manifest: "experiments/momentum-crypto-2026w-control-pure-v1.json",
+      artifact: { dir: "data/backtests/06e1a160c3556102aa2fff769f9e4c2a3d27d09a6f3874841286426425faf6e4", shiftDays: 0 } },
+    { id: "momentum_crypto@vt35-corroff", since: "2026-10-23T09:00:00Z", modelStart: "2026-10-24",
+      note: "RW3 c1: same vt-35 kernel with the correlation-collapse entry brake OFF (regime.correlationCeiling 0.85 → 1.01; the vol-spike check stays ON); artifact efc086b4…; since = the PROJECTED deploy hour (the director sets the real one, see scripts/parity-check.ts); sleeve flat at the cutover, RiskState re-anchored",
+      // efc086b4… = momentum-crypto-rw3-vt-35-corroff-pure-v1 (asOf pinned to the control's, so folds and OOS days are
+      // identical to the control 39f732bc…): Sharpe 1.331 vs 1.313, DD 34.3%, PSR 0.998, fold PSRs 0.963/0.988/0.687,
+      // worst LOO 0.70 × Sharpe, combined-book DD 14.0% — every RW §10.4 (c1) criterion. Hourly crypto replay
+      // (timeframe 1h) labels sessions by date ⇒ shiftDays 0 (dailyReturnShiftDays only shifts "1d" momentum replays).
+      // The live candidate must equal this manifest's single candidate (liveSleeveConfigs.test.ts).
+      manifest: "experiments/momentum-crypto-rw3-vt-35-corroff-pure-v1.json",
+      artifact: { dir: "data/backtests/efc086b47776235749e7013458360f8131cb3d3629b0a143f6c994d2bb16f240", shiftDays: 0 } },
   ],
   momentum_crypto_usdc: [
     { id: "momentum_crypto_usdc@hourly-13b", since: "2026-07-20T00:00:00Z", modelStart: null,
       note: "hourly TSM, 13 bases, launched 2026-07-20 (refuted control, replaced by the daily kernel)" },
     { id: "momentum_crypto_usdc@daily-d13s5", since: "2026-09-27T00:00:00Z", modelStart: "2026-09-29",
-      note: "daily d13-s5 blend 63/126/252 x 0.2 (artifact 752767ae…/413ffb90…); first daily decision 2026-09-27, MODEL_CUTOVER 2026-09-29 00:00 UTC" },
+      note: "daily d13-s5 blend 63/126/252 x 0.2 (artifact 752767ae…/413ffb90…); first daily decision 2026-09-27, MODEL_CUTOVER 2026-09-29 00:00 UTC",
+      // AUTHORITATIVE but NOT gate-certified (U1 rounds 3-5: 15/17 gates, fails maxDrawdown 52.4%>45 and excess vs
+      // BTC −24.4pp); replaced the refuted hourly control per the pre-registered criterion. 413ffb90… supersedes
+      // 752767ae… (corrected replay). Daily-bar MOMENTUM replay ⇒ session labelled by its END ⇒ shiftDays −1.
+      manifest: "experiments/momentum-crypto-usdc-daily-s5-pure-v1.json",
+      artifact: { dir: "data/backtests/413ffb90cd968bfdfe51f1b1eebc87612f262ce9ecb7d2ca82fd59383a704625", shiftDays: -1 } },
+    { id: "momentum_crypto_usdc@daily-d13s5-xc-dd", since: "2026-10-24T00:00:00Z", modelStart: "2026-10-24",
+      note: "RW4a c2: the same d13-s5 kernel plus the drawdown exposure control on the OPEN book (λ 1 down to 10% dd, then the line to 0 at 40% floored at 0.25 — 0.67 at 20%, floor from 32.5%, RW §13.6 erratum; band 10 pp, min order 100 USD; soft-DD pause stays ON); artifact 8892c1e9…; since = the first DAILY pass after the PROJECTED deploy (00:00:15 UTC 10-24 — the director sets the real one, see scripts/parity-check.ts); RiskState NOT re-anchored (same kernel built the live drawdown the control reads)",
+      // 8892c1e9… = momentum-crypto-usdc-daily-s5-rw4a-xc-dd-pure-v1 (byte copy of the control's manifest 413ffb90… /
+      // asOf 2026-09-26 plus the knob; identical data hash 55da03c9…): Sharpe 1.038 vs 1.028 on 1,410 common days,
+      // CAGR 45.1% vs 45.4%, DD 51.9% vs 52.6%, PSR 0.978, fold PSRs 0.93/0.72/0.91, worst LOO 0.74 × Sharpe,
+      // combined-book DD 13.8%, 104 resizes (69 cuts, 35 add-backs) — every RW §13.4 (c2) criterion. Daily-bar
+      // MOMENTUM replay (timeframe "1d", no meanrev/portfolio key) ⇒ dailyReturnShiftDays infers −1, same as the
+      // control. The live candidate must equal this manifest's single candidate (liveSleeveConfigs.test.ts).
+      manifest: "experiments/momentum-crypto-usdc-daily-s5-rw4a-xc-dd-pure-v1.json",
+      artifact: { dir: "data/backtests/8892c1e950818ee724cbd5473ffdb6d207aefc98ae1f054d3bdf08e4eebad607", shiftDays: -1 } },
   ],
   momentum_btc: [
     { id: "momentum_btc@hourly-coinm", since: EPOCH, modelStart: null,
@@ -127,4 +202,25 @@ export function currentModelStarts(): Record<string, string> {
     if (ms) out[sleeve] = ms;
   }
   return out;
+}
+
+/** The current version's manifest per sleeve (sleeves whose current version
+ *  names none are omitted). liveSleeveConfigs' LIVE_SLEEVE_MANIFESTS and
+ *  validate.ts's VALIDATED_PRESETS read it: one source for "what justified
+ *  what runs". */
+export function currentModelManifests(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [sleeve, list] of Object.entries(MODEL_VERSIONS)) {
+    const m = list[list.length - 1]?.manifest;
+    if (m) out[sleeve] = m;
+  }
+  return out;
+}
+
+/** true when the sleeve's CURRENT version runs on the portfolio engine: its
+ *  incumbent engine is not built, so derivations of the incumbent's wiring
+ *  (liveSleeveConfigs, parity replays, decision_passes funnels) describe
+ *  nothing that trades. */
+export function isPortfolioEngineSleeve(sleeveId: string): boolean {
+  return currentModelVersion(sleeveId)?.engine === "portfolio";
 }

@@ -54,6 +54,7 @@ function windowRow(w: ScorecardWindowMetrics): string {
     f(w.trackingErrorAnnPct, 1, "%").padStart(7),
     f(w.psr == null ? null : w.psr * 100, 0, "%").padStart(5),
     f(w.capitalUtilizationPct, 0, "%").padStart(5),
+    money(w.markedToMarketPnl).padStart(9),
     money(w.realizedPnl).padStart(9),
     money(w.unrealizedPnl).padStart(9),
   ].join(" ");
@@ -64,13 +65,17 @@ const HEADER = [
   "CAGR".padStart(8), "vol".padStart(7), "Sharpe".padStart(7), "Sortino".padStart(7),
   "maxDD".padStart(8), "bench".padStart(9), "αOLS/a".padStart(8), "β".padStart(6),
   "IR".padStart(6), "TE".padStart(7), "PSR".padStart(5), "util".padStart(5),
-  "realiz".padStart(9), "noReal".padStart(9),
+  "MtM".padStart(9), "realiz".padStart(9), "ΔnoReal".padStart(9),
 ].join(" ");
 
 function printEntity(e: EntityScorecard): void {
   console.log(`\n═══ ${e.label} (${e.id}) · grid ${e.grid} · benchmark ${e.benchmarkSymbol}${e.kind === "sleeve" ? ` · modelo desde ${e.modelStart}` : ""} ═══`);
   console.log(HEADER);
   for (const w of e.windows) console.log(windowRow(w));
+  for (const v of e.versionRecords) {
+    const m = v.markedToMarket;
+    console.log(`versión ${v.versionId}: MtM ${money(m?.pnl ?? null)} (${m ? `${m.fromDate}→${m.toDate}` : "sin marcas"}) · realizado de sus filas ${money(v.realizedPnl)}`);
+  }
   if (e.band) {
     const b = e.band;
     if (b.cumReturnPct) {

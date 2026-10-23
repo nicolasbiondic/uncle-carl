@@ -62,7 +62,7 @@ import { getDB, insertActivity, RECONCILE_CLOSE_SQL } from "../db/database";
 import { createLogger } from "../utils/logger";
 import { eventBus, EVENTS } from "../utils/events";
 import { checkReviewPoints } from "../portfolio/reviewPoint";
-import type { BandReading } from "../portfolio/scorecard";
+import { readDailyMarks, gridDateKey, SCORECARD_ENTITIES, type BandReading } from "../portfolio/scorecard";
 
 const log = createLogger("SleeveGovernor");
 
@@ -324,11 +324,22 @@ export class SleeveGovernor implements ModeSource {
       // still requires 90d since the epoch, but the stats query itself only
       // looks at trades closed within the last 90d.
       const windowStart = Math.max(epoch, now - EVIDENCE_DAYS * DAY_MS);
-      const { pnl, n } = this.windowStats(account, windowStart);
+      const { pnl: realizedPnl, n } = this.windowStats(account, windowStart);
 
       if (n < this.opts.minTrades) continue;
 
-      const detail = `${EVIDENCE_DAYS}d PnL $${pnl.toFixed(2)} over ${n} trades (evidence ${meta.evidence_version ?? "default"})`;
+      // A cutover can realize gains earned BEFORE this window. The live
+      // fallback judges the equity move, not the date those gains were booked.
+      // Retain an explicitly labelled proxy only when no marks are available.
+      const entity = SCORECARD_ENTITIES.find(e => e.id === sleeve);
+      const marks = mode === "live" && entity ? readDailyMarks(getDB(), account, entity.grid, now) : [];
+      const startKey = entity ? gridDateKey(windowStart, entity.grid) : "";
+      const base = marks.filter(m => m.dateKey < startKey).at(-1);
+      const last = marks.at(-1);
+      const mtm = base && last && last.dateKey >= startKey ? last.equity - base.equity : null;
+      const pnl = mtm ?? realizedPnl;
+      const basis = mtm == null ? "realized proxy (no equity window)" : `MtM ${base!.dateKey}→${last!.dateKey}; realized $${realizedPnl.toFixed(2)}`;
+      const detail = `${EVIDENCE_DAYS}d PnL $${pnl.toFixed(2)} (${basis}) over ${n} trades (evidence ${meta.evidence_version ?? "default"})`;
 
       if (mode === "live") {
         const band = bandFor(sleeve);

@@ -20,10 +20,11 @@ import {
   readDailyMarks, readTrades, marksToDailyReturns, maxDrawdown, olsAlphaBeta,
   percentile, mulberry32, blockBootstrapBand, classifyBand,
   loadOosDailyReturns, clearArtifactCache, computeExpectationBand,
-  computeWindowMetrics, computeScorecard, bandEpisodeTransitions,
+  computeWindowMetrics, computeVersionRecords, computeScorecard, bandEpisodeTransitions,
   formatScorecardDigestLines, type DailyMark, type ScorecardWindowMetrics,
-  SELECTION_BIAS_HAIRCUT, selectionBiasDrift, expectationBandReadings,
+  SELECTION_BIAS_HAIRCUT, selectionBiasDrift, expectationBandReadings, sleeveExpectationArtifacts,
 } from "./scorecard";
+import { MODEL_VERSIONS, currentModelVersion } from "./modelVersions";
 
 // ── Fixture DB (standalone minimal schema — never the app's global handle) ──
 
@@ -62,6 +63,30 @@ const NOW = Date.parse("2026-09-20T12:00:00Z");
 // ── Daily marks reader ──────────────────────────────────────────────────
 
 describe("readDailyMarks", () => {
+  test("Alpaca snapshot at Saturday UTC is still Friday ET, not a next-day broker history label", () => {
+    const db = makeDb();
+    snap(db, "alpaca_main", 100, Date.parse("2026-10-16T03:30:00Z")); // Thu ET
+    snap(db, "alpaca_main", 102, Date.parse("2026-10-17T03:30:00Z")); // Fri ET
+    snap(db, "alpaca_main", 102, Date.parse("2026-10-17T04:30:00Z")); // Sat ET: drop
+    const marks = readDailyMarks(db, "alpaca_main", "trading_days", Date.parse("2026-10-19T12:00:00Z"));
+    expect(marks.map(m => m.dateKey)).toEqual(["2026-10-15", "2026-10-16"]);
+    expect(marksToDailyReturns(marks, "trading_days")[0].ret).toBeCloseTo(0.02, 12);
+    db.close();
+  });
+  test("NYSE holidays are not zero-return observations; Friday to Tuesday is adjacent", () => {
+    const db = makeDb();
+    for (const [key, eq] of [["2026-09-04", 100], ["2026-09-05", 100], ["2026-09-07", 100], ["2026-09-08", 102]] as const) {
+      snap(db, "momentum_stocks", eq, dayMs(key));
+      snap(db, "momentum_crypto", eq, dayMs(key));
+    }
+    const marks = readDailyMarks(db, "momentum_stocks", "trading_days", NOW);
+    expect(marks.map(m => m.dateKey)).toEqual(["2026-09-04", "2026-09-08"]);
+    const rets = marksToDailyReturns(marks, "trading_days");
+    expect(rets).toHaveLength(1);
+    expect(rets[0].ret).toBeCloseTo(0.02, 12);
+    expect(readDailyMarks(db, "momentum_crypto", "calendar_days", NOW)).toHaveLength(4);
+    db.close();
+  });
   test("last snapshot per day wins; semantics≠5, synthetic and current day excluded; weekends dropped on the trading grid", () => {
     const db = makeDb();
     // Fri 2026-09-11: two snapshots — last one (105) must win.
@@ -87,6 +112,21 @@ describe("readDailyMarks", () => {
     const marks = readDailyMarks(db, "momentum_crypto", "calendar_days", NOW);
     expect(marks.map(m => m.dateKey)).toEqual(["2026-09-12", "2026-09-13"]);
   });
+});
+
+test("cutover realizes an old gain, but window/version MtM measures only the equity move", () => {
+  const marks: DailyMark[] = [["2026-09-24", 1000], ["2026-09-25", 1100], ["2026-09-28", 1080], ["2026-09-29", 1070]].map(([dateKey, equity]) => ({ dateKey: String(dateKey), equity: Number(equity), snapshotTime: dayMs(String(dateKey)) }));
+  const trades = [{ entry_price: 10, quantity: 10, entry_time: dayMs("2026-09-01"), exit_time: dayMs("2026-09-28") - 1000, status: "closed", pnl: 80, strategy_version: "legacy" }];
+  const w = computeWindowMetrics(STOCKS, "30d", marks, trades, null, Date.parse("2026-10-27T12:00:00Z"));
+  expect(w.realizedPnl).toBe(80);
+  expect(w.markedToMarketPnl).toBe(-30);
+  expect(w.unrealizedPnl).toBe(-110);
+  const records = computeVersionRecords("momentum_stocks", trades, marks);
+  expect(records.find(v => v.versionId === "momentum_stocks@pre-blend")!.realizedPnl).toBe(80);
+  const next = records.find(v => v.versionId === "momentum_stocks@blend-k100")!;
+  expect(next.realizedPnl).toBe(0);
+  expect(next.markedToMarket).toEqual({ pnl: -30, fromDate: "2026-09-25", toDate: "2026-09-29" });
+  expect(computeVersionRecords("momentum_stocks", trades).every(v => v.markedToMarket === null)).toBe(true);
 });
 
 describe("marksToDailyReturns", () => {
@@ -289,6 +329,45 @@ function writeArtifactFixture(returns: { date: string; ret: number }[], opts: { 
   return dir;
 }
 
+describe("sleeveExpectationArtifacts — the CURRENT model version's artifact, one source (RW2 cutover 2026-10-23)", () => {
+  const envKeys = ["SCORECARD_ARTIFACT_MOMENTUM_STOCKS", "SCORECARD_ARTIFACT_MEANREV_STOCKS"] as const;
+  const saved = Object.fromEntries(envKeys.map(k => [k, process.env[k]]));
+  const restore = () => { for (const k of envKeys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } };
+
+  test("every live sleeve's band points at its current version's artifact + manifest — the stock sleeves at the RW2 E1/E2 chains, never the incumbents' (cb516547 / 624d50e9)", () => {
+    for (const k of envKeys) delete process.env[k];
+    try {
+      const arts = sleeveExpectationArtifacts();
+      for (const sleeve of ["momentum_stocks", "meanrev_stocks", "momentum_crypto", "momentum_crypto_usdc"]) {
+        const v = currentModelVersion(sleeve)!;
+        expect(arts[sleeve]).toEqual({ dir: v.artifact!.dir, shiftDays: v.artifact!.shiftDays, manifest: v.manifest! });
+      }
+      expect(arts.momentum_stocks.dir).toBe("data/backtests/b2324d4f74f15042af8bfba4170df8b41f05e8ec033e324bebe8e284e24e5236");
+      expect(arts.momentum_stocks.manifest).toBe("experiments/rw2-e1-stocks-volmanaged-v1.json");
+      expect(arts.meanrev_stocks.dir).toBe("data/backtests/0b088ca320e3521d8bff05b10c1ad7eed2816bc2a1b0b927eb3134e2a3dca4c2");
+      expect(arts.meanrev_stocks.manifest).toBe("experiments/rw2-e2-meanrev-volmanaged-v1.json");
+      // Portfolio replays label a session by its date (weekday labels, verified on both artifacts): no −1 shift.
+      expect(arts.momentum_stocks.shiftDays).toBe(0);
+      expect(arts.meanrev_stocks.shiftDays).toBe(0);
+      expect(arts.momentum_crypto_usdc.shiftDays).toBe(-1); // daily MOMENTUM replay: session labelled by its END
+      expect(JSON.stringify(arts)).not.toContain("cb516547");
+      expect(JSON.stringify(arts)).not.toContain("624d50e9");
+    } finally { restore(); }
+  });
+
+  test("env override re-points the dir only; a version without an artifact has no band entry", () => {
+    process.env.SCORECARD_ARTIFACT_MOMENTUM_STOCKS = "/tmp/elsewhere";
+    try {
+      const arts = sleeveExpectationArtifacts();
+      expect(arts.momentum_stocks.dir).toBe("/tmp/elsewhere");
+      expect(arts.momentum_stocks.manifest).toBe(currentModelVersion("momentum_stocks")!.manifest!);
+    } finally { restore(); }
+    const noArt = sleeveExpectationArtifacts({ x: [{ id: "x@v1", since: "2026-01-01T00:00:00Z", modelStart: null, note: "" }] });
+    expect(noArt).toEqual({});
+    expect(sleeveExpectationArtifacts(MODEL_VERSIONS).momentum_btc).toBeUndefined();
+  });
+});
+
 describe("loadOosDailyReturns", () => {
   test("keeps only outer test folds at the manifest's base costs", () => {
     const dir = writeArtifactFixture([
@@ -315,7 +394,7 @@ describe("computeExpectationBand", () => {
     maxDrawdownPct: 2, benchmark: { symbol: "SPY", totalReturnPct: null, nPaired: 0 },
     alphaAnnPct: null, beta: null, informationRatio: null, trackingErrorAnnPct: null,
     psr: null, trackRecordStatus: "insufficient_observations",
-    capitalUtilizationPct: null, realizedPnl: null, unrealizedPnl: null,
+    capitalUtilizationPct: null, realizedPnl: null, markedToMarketPnl: null, unrealizedPnl: null,
   });
 
   test("h<5 → insufficient_data without touching disk", () => {
@@ -392,7 +471,7 @@ describe("selection-bias haircut", () => {
       maxDrawdownPct: 2, benchmark: { symbol: "SPY", totalReturnPct: null, nPaired: 0 },
       alphaAnnPct: null, beta: null, informationRatio: null, trackingErrorAnnPct: null,
       psr: null, trackRecordStatus: "insufficient_observations",
-      capitalUtilizationPct: null, realizedPnl: null, unrealizedPnl: null,
+      capitalUtilizationPct: null, realizedPnl: null, markedToMarketPnl: null, unrealizedPnl: null,
     });
     try {
       clearArtifactCache();
@@ -495,8 +574,8 @@ describe("computeScorecard readonly", () => {
       const ms = sc.entities.find(e => e.id === "momentum_stocks")!;
       expect(ms.windows.map(w => w.window)).toEqual(["model", "30d", "90d", "v8"]);
       const w30 = ms.windows.find(w => w.window === "30d")!;
-      expect(w30.nObs).toBe(4);
-      expect(w30.totalReturnPct!).toBeCloseTo(4, 8);
+      expect(w30.nObs).toBe(3); // Labor Day (09-07) is not a session/base mark
+      expect(w30.totalReturnPct!).toBeCloseTo((104 / 101 - 1) * 100, 8);
       expect(w30.capitalUtilizationPct).not.toBeNull();
       expect(ms.band).not.toBeNull();
       expect(ms.band!.status).toBe("unavailable"); // artifacts: {} — no mapping, no disk
@@ -520,16 +599,16 @@ describe("formatScorecardDigestLines", () => {
 
   test("formats return vs benchmark with the excess in parentheses", () => {
     const db = makeDb();
-    // momentum_crypto marks straddling MODEL_START (2026-09-27: first full
-    // UTC day after the vt-35 re-anchor of 09-26 19:00), +2% then −1%.
-    snap(db, "momentum_crypto", 100, dayMs("2026-09-26"));
-    snap(db, "momentum_crypto", 102, dayMs("2026-09-27"));
-    snap(db, "momentum_crypto", 100.5, dayMs("2026-09-28"));
-    const sc = computeScorecard({ db, hist: null, now: Date.parse("2026-09-29T12:00:00Z"), artifacts: {} });
+    // momentum_crypto marks straddling MODEL_START (2026-10-24: first full
+    // UTC day after the RW3 brake-off cutover of 10-23 09:00), +2% then −1%.
+    snap(db, "momentum_crypto", 100, dayMs("2026-10-23"));
+    snap(db, "momentum_crypto", 102, dayMs("2026-10-24"));
+    snap(db, "momentum_crypto", 100.5, dayMs("2026-10-25"));
+    const sc = computeScorecard({ db, hist: null, now: Date.parse("2026-10-26T12:00:00Z"), artifacts: {} });
     const line = formatScorecardDigestLines(sc).find(l => l.startsWith("MOM-CRY"))!;
-    expect(line).toContain("MOM-CRY +0,5%"); // 100.5 / 100 (cierre 09-26) − 1
+    expect(line).toContain("MOM-CRY +0,5%"); // 100.5 / 100 (cierre 10-23) − 1
     expect(line).toContain("banda:");
-    expect(MODEL_START.momentum_crypto).toBe("2026-09-27");
+    expect(MODEL_START.momentum_crypto).toBe("2026-10-24");
   });
 });
 

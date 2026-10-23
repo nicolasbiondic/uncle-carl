@@ -53,7 +53,9 @@ import { minTrlObservations, probabilisticSharpe as psrFromMoments } from "../sr
 import { computeSequenceRisk, type SequenceRiskSummary } from "./lib/sequenceRisk";
 import { expandDataPath } from "./lib/researchData";
 import { hashCloseSlices } from "./lib/closeSlices";
-import type { MarketTrendGateConfig, ShortStopSpec, TimeStopConfig, TrailStopConfig, VolSizingConfig, VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
+import { hashSignalEvents } from "./lib/signalData";
+import { missingLiveExcludes } from "./lib/liveStockExcludes";
+import type { ExposureControlConfig, MarketTrendGateConfig, ShortStopSpec, TimeStopConfig, TrailStopConfig, VolSizingConfig, VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
 import type { RiskGuardConfig, RiskState } from "../src/strategies/momentum/RiskGuard";
 import { getETDateKey } from "../src/db/database";
 import type { PortfolioStrategyConfig, VenueRules } from "../src/portfolio-engine/types";
@@ -149,6 +151,13 @@ export interface CandidateConfig {
    *  OFF (production incumbent AND the legacy hash). */
   marketTrend?: MarketTrendGateConfig;
   risk?: Partial<RiskGuardConfig>;
+  /** Portfolio exposure control (RW4a, 2026-10-23 — ReplayConfig.
+   *  exposureControl → MomentumEngineConfig.exposureControl): resizes the
+   *  OPEN book toward one sleeve-level scale λ from realized book vol
+   *  (volCap) and/or RiskGuard drawdown (drawdown), with a hysteresis band
+   *  and a minimum order size. Momentum sleeves only (the meanrev runner
+   *  would silently ignore it). Absent = OFF AND the legacy candidate hash. */
+  exposureControl?: ExposureControlConfig;
   /** Present iff the manifest sleeve is "meanrev" (enforced in validateManifest). */
   meanrev?: MeanRevSimParams;
   /** Hard-stop axis (stop-sizing sweep) — valid on EVERY sleeve, including
@@ -242,6 +251,7 @@ const VALID_CANDIDATE_KEYS = new Set<keyof CandidateConfig>([
   "timeStop",
   "marketTrend",
   "risk",
+  "exposureControl",
   "meanrev",
   "hardStop",
   "profitLock",
@@ -335,6 +345,59 @@ function validateRisk(r: unknown): void {
     if (sr.costBpsPerSide !== undefined && (!Number.isFinite(sr.costBpsPerSide) || (sr.costBpsPerSide as number) < 0)) {
       throw new Error("risk.shadowResume.costBpsPerSide must be a non-negative number of bps");
     }
+  }
+}
+
+/**
+ * Validate an ExposureControlConfig (RW4a). Strict key allowlists at every
+ * level — an unknown key would be silently dropped by the engine (config that
+ * changes nothing). At least one axis (volCap, drawdown) must be present:
+ * a control with no axis is λ ≡ 1, i.e. the incumbent plus a hash change.
+ * Units: drawdown.* are FRACTIONS like RiskGuardConfig (0.05 = 5%);
+ * volCap.annualizedPct is PERCENT like VolTargetConfig (35 = 35%/yr);
+ * minScale/band are fractions; minOrderUsd is USD.
+ */
+function validateExposureControl(x: unknown): void {
+  if (!x || typeof x !== "object" || Array.isArray(x)) throw new Error("exposureControl must be an object");
+  const obj = x as Record<string, unknown>;
+  const allowed = ["volCap", "drawdown", "minScale", "band", "minOrderUsd"];
+  const unknown = Object.keys(obj).filter(k => !allowed.includes(k));
+  if (unknown.length > 0) throw new Error(`exposureControl has unknown keys: ${unknown.join(", ")}`);
+  if (obj.volCap === undefined && obj.drawdown === undefined) {
+    throw new Error("exposureControl needs at least one axis: volCap and/or drawdown");
+  }
+  if (obj.volCap !== undefined) {
+    const v = obj.volCap as Record<string, unknown>;
+    if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("exposureControl.volCap must be an object");
+    const vUnknown = Object.keys(v).filter(k => !["annualizedPct", "fastBars", "slowBars"].includes(k));
+    if (vUnknown.length > 0) throw new Error(`exposureControl.volCap has unknown keys: ${vUnknown.join(", ")}`);
+    if (!Number.isFinite(v.annualizedPct) || (v.annualizedPct as number) < 1 || (v.annualizedPct as number) > 300) {
+      throw new Error("exposureControl.volCap.annualizedPct must be PERCENT-units in [1, 300], e.g. 35 = 35%/yr");
+    }
+    if (!Number.isInteger(v.fastBars) || (v.fastBars as number) < 2) throw new Error("exposureControl.volCap.fastBars must be an integer >= 2");
+    if (!Number.isInteger(v.slowBars) || (v.slowBars as number) < (v.fastBars as number)) throw new Error("exposureControl.volCap.slowBars must be an integer >= fastBars");
+  }
+  if (obj.drawdown !== undefined) {
+    const d = obj.drawdown as Record<string, unknown>;
+    if (!d || typeof d !== "object" || Array.isArray(d)) throw new Error("exposureControl.drawdown must be an object");
+    const dUnknown = Object.keys(d).filter(k => !["startPct", "endPct"].includes(k));
+    if (dUnknown.length > 0) throw new Error(`exposureControl.drawdown has unknown keys: ${dUnknown.join(", ")}`);
+    const start = d.startPct as number, end = d.endPct as number;
+    if (!Number.isFinite(start) || start < 0 || start >= 1) {
+      throw new Error("exposureControl.drawdown.startPct must be a drawdown FRACTION in [0, 1), e.g. 0.05 = 5%");
+    }
+    if (!Number.isFinite(end) || end <= start || end > 1) {
+      throw new Error("exposureControl.drawdown.endPct must be a drawdown FRACTION in (startPct, 1]");
+    }
+  }
+  if (!Number.isFinite(obj.minScale) || (obj.minScale as number) <= 0 || (obj.minScale as number) > 1) {
+    throw new Error("exposureControl.minScale must be a fraction in (0, 1] (0 would flatten the book — use the pauses for that)");
+  }
+  if (!Number.isFinite(obj.band) || (obj.band as number) < 0 || (obj.band as number) >= 1) {
+    throw new Error("exposureControl.band must be a fraction in [0, 1), e.g. 0.10 = 10 pp of kept size");
+  }
+  if (!Number.isFinite(obj.minOrderUsd) || (obj.minOrderUsd as number) < 0) {
+    throw new Error("exposureControl.minOrderUsd must be a non-negative number of USD");
   }
 }
 
@@ -534,7 +597,7 @@ function validatePortfolioStrategy(st: unknown, where: string): void {
   const s = st as Record<string, unknown>;
   const trendKeys = ["kind", "universe", "inceptionGuardBars", "volLookback", "covLookback", "portfolioVolTarget", "perAssetCap", "maxGross", "blendHorizons", "maLong", "signalBandPct"];
   if (s.kind === "volManaged") {
-    assertKeys(s, ["kind", "universe", "inceptionGuardBars", "volLookback", "covLookback", "portfolioVolTarget", "annualization", "perAssetCap", "maxGross"], where);
+    assertKeys(s, ["kind", "universe", "inceptionGuardBars", "volLookback", "covLookback", "portfolioVolTarget", "annualization", "perAssetCap", "maxGross", "drawdownBrake", "fastVolLookback"], where);
     assertSymbolList(s.universe, `${where}.universe`);
     for (const key of ["inceptionGuardBars", "volLookback", "covLookback"]) {
       if (!posInt(s[key])) throw new Error(`${where}.${key} must be a positive integer`);
@@ -543,6 +606,23 @@ function validatePortfolioStrategy(st: unknown, where: string): void {
     if (s.annualization !== 252 && s.annualization !== 365) throw new Error(`${where}.annualization must be 252 or 365`);
     if (!finiteIn(s.perAssetCap, 0, 1, true)) throw new Error(`${where}.perAssetCap must be a weight FRACTION in (0, 1]`);
     if (!finiteIn(s.maxGross, 0, 2, true)) throw new Error(`${where}.maxGross must be a gross FRACTION in (0, 2]`);
+    // RW4b (optional knobs): absent = RW2/RW3 behavior and hashes.
+    if (s.fastVolLookback !== undefined) {
+      if (!posInt(s.fastVolLookback, 2) || (s.fastVolLookback as number) >= (s.covLookback as number)) {
+        throw new Error(`${where}.fastVolLookback must be an integer >= 2 and < covLookback (a FASTER estimate)`);
+      }
+    }
+    if (s.drawdownBrake !== undefined) {
+      const b = s.drawdownBrake;
+      if (!b || typeof b !== "object" || Array.isArray(b)) throw new Error(`${where}.drawdownBrake must be an object`);
+      const br = b as Record<string, unknown>;
+      assertKeys(br, ["startDrawdown", "maxDrawdown", "floorScale"], `${where}.drawdownBrake`);
+      if (!finiteIn(br.startDrawdown, 0, 1, false, true)) throw new Error(`${where}.drawdownBrake.startDrawdown must be a drawdown FRACTION in [0, 1)`);
+      if (!finiteIn(br.maxDrawdown, 0, 1, true) || (br.maxDrawdown as number) <= (br.startDrawdown as number)) {
+        throw new Error(`${where}.drawdownBrake.maxDrawdown must be a drawdown FRACTION in (0, 1] and > startDrawdown`);
+      }
+      if (!finiteIn(br.floorScale, 0, 1, true)) throw new Error(`${where}.drawdownBrake.floorScale must be in (0, 1] (a zero floor could never recover)`);
+    }
     return;
   }
   if (s.kind === "xassetTrend") {
@@ -583,7 +663,37 @@ function validatePortfolioStrategy(st: unknown, where: string): void {
     }
     return;
   }
-  throw new Error(`${where}.kind must be "xassetTrend", "factorCore", "cryptoTrend" or "volManaged"`);
+  if (s.kind === "copySignal") {
+    assertKeys(s, ["kind", "source", "lookbackDays", "minDistinctInsiders", "minDollar", "topN", "holdDays", "holdSessions", "weighting", "volLookback", "perNameCap", "maxGross", "exclude", "roles",
+      "insiderClass", "exclude10b5_1", "maxReportLagDays", "minDollarPerInsider"], where);
+    if (typeof s.source !== "string" || s.source.length === 0) throw new Error(`${where}.source must be a non-empty event source name`);
+    for (const key of ["lookbackDays", "minDistinctInsiders", "topN"]) {
+      if (!posInt(s[key])) throw new Error(`${where}.${key} must be a positive integer`);
+    }
+    if ((s.holdDays === undefined) === (s.holdSessions === undefined)) throw new Error(`${where} needs exactly one of holdDays (calendar days) / holdSessions (sessions)`);
+    for (const key of ["holdDays", "holdSessions"]) {
+      if (s[key] !== undefined && !posInt(s[key])) throw new Error(`${where}.${key} must be a positive integer`);
+    }
+    if (!finiteIn(s.minDollar, 0, Infinity)) throw new Error(`${where}.minDollar must be a non-negative dollar amount (0 = no floor)`);
+    if (s.weighting !== "equal" && s.weighting !== "inverseVol") throw new Error(`${where}.weighting must be "equal" or "inverseVol"`);
+    if (s.weighting === "inverseVol") {
+      if (!posInt(s.volLookback, 2)) throw new Error(`${where}.volLookback must be an integer >= 2 (inverseVol)`);
+    } else if (s.volLookback !== undefined) {
+      throw new Error(`${where}.volLookback is only for weighting "inverseVol" (config that changes nothing)`);
+    }
+    if (!finiteIn(s.perNameCap, 0, 1, true)) throw new Error(`${where}.perNameCap must be a weight FRACTION in (0, 1]`);
+    if (!finiteIn(s.maxGross, 0, 2, true)) throw new Error(`${where}.maxGross must be a gross FRACTION in (0, 2]`);
+    assertSymbolList(s.exclude, `${where}.exclude`, true);
+    if (s.roles !== undefined) assertSymbolList(s.roles, `${where}.roles`);
+    if (s.insiderClass !== undefined && s.insiderClass !== "all" && s.insiderClass !== "opportunistic" && s.insiderClass !== "routine") {
+      throw new Error(`${where}.insiderClass must be "all", "opportunistic" or "routine"`);
+    }
+    if (s.exclude10b5_1 !== undefined && typeof s.exclude10b5_1 !== "boolean") throw new Error(`${where}.exclude10b5_1 must be boolean`);
+    if (s.maxReportLagDays !== undefined && !finiteIn(s.maxReportLagDays, 0, 3650)) throw new Error(`${where}.maxReportLagDays must be a number of days in [0, 3650]`);
+    if (s.minDollarPerInsider !== undefined && !finiteIn(s.minDollarPerInsider, 0, Infinity)) throw new Error(`${where}.minDollarPerInsider must be a non-negative dollar amount`);
+    return;
+  }
+  throw new Error(`${where}.kind must be "xassetTrend", "factorCore", "cryptoTrend", "volManaged" or "copySignal"`);
 }
 
 function validateVenueRules(v: unknown, where: string): void {
@@ -652,6 +762,8 @@ export function validateCandidate(c: unknown): CandidateConfig {
   if (obj.risk !== undefined) validateRisk(obj.risk);
   // `volSizing` is momentum-only (forbidden below), shape-validated up front.
   if (obj.volSizing !== undefined) validateVolSizing(obj.volSizing);
+  // `exposureControl` (RW4a) is momentum-only (forbidden below), shape-validated up front.
+  if (obj.exposureControl !== undefined) validateExposureControl(obj.exposureControl);
 
   // New sweepable axes (2026-09): typed strictly here; sleeve ownership is
   // enforced below (momentum-only vs meanrev-only lists).
@@ -684,7 +796,7 @@ export function validateCandidate(c: unknown): CandidateConfig {
     // maxGrossExposureMult left this list 2026-10-05: runMeanRevReplay now
     // forwards it to MeanRevEngine (it is no longer config that changes
     // nothing on meanrev) — see the G gross-cap diagnostic.
-    const forbidden = ["entryPct", "exitPct", "maxLongs", "maxShorts", "shortEntryPct", "shortExitPct", "shortRegime", "shortUniverse", "shortStop", "notionalPctPerSlot", "volTarget", "volSizing", "tsmTrail", "sharpeGate", "timeStop", "marketTrend", "risk", "cooldownBarsAfterStop", "slotHysteresis", "regime", "profitLock", "lookbackDays", "maLengthDays", "lookbackDaysList"]
+    const forbidden = ["entryPct", "exitPct", "maxLongs", "maxShorts", "shortEntryPct", "shortExitPct", "shortRegime", "shortUniverse", "shortStop", "notionalPctPerSlot", "volTarget", "volSizing", "tsmTrail", "sharpeGate", "timeStop", "marketTrend", "risk", "exposureControl", "cooldownBarsAfterStop", "slotHysteresis", "regime", "profitLock", "lookbackDays", "maLengthDays", "lookbackDaysList"]
       .filter(k => obj[k] !== undefined);
     if (forbidden.length > 0) {
       throw new Error(`meanrev CandidateConfig must not set momentum-only keys: ${forbidden.join(", ")}`);
@@ -838,6 +950,12 @@ export interface DataConfig {
    *  a candidate hash (not forwarded to the replay config). Absent = every
    *  symbol reports under its sleeve. */
   assetClasses?: Record<string, string>;
+  /** copySignal manifests only (required there, forbidden elsewhere): the signals
+   *  database (table signal_events, scripts/lib/signalData.ts). `dbPath` is a
+   *  machine-local path like data.dbPath: runtime-only, excluded from configHash and
+   *  from every candidate hash; the rows copySignal can consume enter the run's DATA
+   *  identity (hashSignalEvents) instead. Absent = every legacy manifest and its hashes. */
+  signals?: { dbPath: string };
 }
 
 export interface WindowConfig {
@@ -1413,6 +1531,14 @@ export function validateManifest(m: ExperimentManifest): ExperimentManifest {
     }
   }
   if (isPortfolioManifest) validatePortfolioManifest(m);
+  if (m.data.signals !== undefined) {
+    if (!isPortfolioManifest) throw new Error("data.signals is portfolio-manifest-only (copySignal)");
+    const sg = m.data.signals as unknown as Record<string, unknown>;
+    if (!sg || typeof sg !== "object" || Array.isArray(sg)) throw new Error("data.signals must be an object { dbPath }");
+    const unknown = Object.keys(sg).filter(k => k !== "dbPath");
+    if (unknown.length > 0) throw new Error(`data.signals has unknown keys: ${unknown.join(", ")}`);
+    if (typeof sg.dbPath !== "string" || sg.dbPath.length === 0) throw new Error("data.signals.dbPath must be a non-empty path");
+  }
   if (m.data.assetClasses !== undefined) {
     if (!isPortfolioManifest) throw new Error("data.assetClasses is portfolio-manifest-only (reporting labels for the RW diagnostics)");
     const ac = m.data.assetClasses;
@@ -1502,10 +1628,15 @@ export function validatePortfolioManifest(m: ExperimentManifest): void {
   if (m.data.perpsMembership !== undefined || m.data.liquidityRank !== undefined) {
     throw new Error("portfolio manifests do not use data.perpsMembership / data.liquidityRank (momentum-kernel axes; config that changes nothing here)");
   }
-  if (kind === "factorCore") {
-    if (m.data.membership === undefined) throw new Error("factorCore requires data.membership (point-in-time index universe)");
+  if (kind === "factorCore" || kind === "copySignal") {
+    if (m.data.membership === undefined) throw new Error(`${kind} requires data.membership (point-in-time index universe)`);
   } else if (m.data.membership !== undefined) {
     throw new Error(`${kind} must not set data.membership (its universe is the explicit strategy.universe)`);
+  }
+  if (kind === "copySignal") {
+    if (m.data.signals === undefined) throw new Error("copySignal requires data.signals (the signals database)");
+  } else if (m.data.signals !== undefined) {
+    throw new Error(`${kind} must not set data.signals (config that changes nothing; copySignal only)`);
   }
   const declared = new Set(m.data.universe);
   for (const c of m.candidates) {
@@ -1514,7 +1645,12 @@ export function validatePortfolioManifest(m: ExperimentManifest): void {
     if (s.kind === "volManaged" && s.annualization !== (isCrypto ? 365 : 252)) {
       throw new Error(`${where}: volManaged annualization must be ${isCrypto ? 365 : 252} for sleeve "${m.sleeve}"`);
     }
-    if (s.kind === "factorCore") {
+    if (s.kind === "copySignal") {
+      // The domain is the point-in-time membership; the events name the symbols. The shared Alpaca wallet
+      // closes by aggregate position: no candidate may hold a live sleeve's symbol or a treasury ETF.
+      const missing = missingLiveExcludes(s.exclude);
+      if (missing.length > 0) throw new Error(`${where}: exclude must list every live stock universe and treasury symbol (shared Alpaca wallet); missing: ${missing.join(", ")}`);
+    } else if (s.kind === "factorCore") {
       if (s.overlay && !declared.has(s.overlay.ref)) throw new Error(`${where}: overlay.ref ${s.overlay.ref} must be in data.universe`);
     } else {
       const missing = s.universe.filter(sym => !declared.has(sym));
@@ -1538,6 +1674,7 @@ export function loadManifest(path: string): ExperimentManifest {
   // dbPath — and sliceDb — out of the config hash anyway).
   m.data.dbPath = expandDataPath(m.data.dbPath);
   if (m.data.sliceDb !== undefined) m.data.sliceDb = expandDataPath(m.data.sliceDb);
+  if (m.data.signals !== undefined) m.data.signals = { ...m.data.signals, dbPath: expandDataPath(m.data.signals.dbPath) };
   return m;
 }
 
@@ -1672,6 +1809,8 @@ export function candidateToReplayConfig(
     timeStop: c.timeStop,
     marketTrend: c.marketTrend,
     risk: c.risk,
+    // RW4a exposure control: absent = OFF AND the legacy hash.
+    exposureControl: c.exposureControl,
     // 2026-09 axes (simulator stream): undefined values are dropped by
     // canonicalJson, so every legacy candidate keeps its legacy hash.
     // `regime: "off"` is manifest sugar for `{ enabled: false }`.
@@ -1701,6 +1840,10 @@ export function candidateToReplayConfig(
     // §12-septies G0: runtime-only slice-DB path (excluded from
     // hashReplayConfig alongside dbPath; absent = legacy).
     sliceDbPath: m.data.sliceDb,
+    // copySignal (research-only signals DB): runtime-only path like dbPath,
+    // excluded from hashReplayConfig; the KEY is added only when set, so every
+    // legacy resolved config is byte-identical.
+    ...(m.data.signals ? { signalsDbPath: m.data.signals.dbPath } : {}),
   };
   // RW portfolio candidate (2026-10-20): the strategy config + venue rules
   // ride on the resolved config so hashReplayConfig covers them (candidate
@@ -2490,7 +2633,10 @@ export function manifestIdentity(m: ExperimentManifest, preResolvedAsOfMs?: numb
   // dbPath AND sliceDb are machine-local paths (runtime-only): both excluded.
   // sliceDb was never set by any legacy manifest, so every pre-existing
   // configHash is byte-identical.
-  const { dbPath: _dbPath, sliceDb: _sliceDb, ...semanticData } = rest.data;
+  // data.signals (copySignal) keeps its presence in the identity but not its
+  // machine-local dbPath (its ROWS enter the data hash); absent for every legacy manifest.
+  const { dbPath: _dbPath, sliceDb: _sliceDb, signals: _signals, ...semanticDataBase } = rest.data;
+  const semanticData = _signals !== undefined ? { ...semanticDataBase, signals: {} } : semanticDataBase;
 
   // Resolve asOf to exact epoch
   const asOfMs = preResolvedAsOfMs ?? resolveAsOf(m);
@@ -2556,9 +2702,18 @@ export async function runWalkForward(
     // §12-septies G0: the 15:45-slice rows are consumed data, so they are
     // part of the run's data identity. Legacy manifests (no sliceDb) keep
     // dataHash = the bars hash, byte-identical.
-    const dataHash = m.data.sliceDb
+    const barsAndSlicesHash = m.data.sliceDb
       ? hashString(canonicalJson({ bars: barsDataHash, closeSlices: hashCloseSlices(m.data.sliceDb) }))
       : barsDataHash;
+    // copySignal: the event rows a replay can consume (every row of the candidates'
+    // sources known before the last fold ends) are consumed data too. Legacy
+    // manifests (no data.signals) keep dataHash byte-identical.
+    const dataHash = m.data.signals
+      ? hashString(canonicalJson({
+        base: barsAndSlicesHash,
+        signals: hashSignalEvents(m.data.signals.dbPath, m.candidates.flatMap(c => (c.portfolio?.strategy.kind === "copySignal" ? [c.portfolio.strategy.source] : [])), replayToMs),
+      }))
+      : barsAndSlicesHash;
     // Data or code corrections must never overwrite evidence from an older run.
     const manifestHash = runIdentityHash(configHash, dataHash, codeHash);
     const outputDir = join("data", "backtests", manifestHash);

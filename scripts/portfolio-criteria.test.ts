@@ -241,6 +241,7 @@ describe("RW2 §8.5 R1–R7", () => {
   test("designs come from manifest names; exact thresholds and no RW1 gates", () => {
     for (const design of ["E1", "E2", "E3"] as const) {
       expect(rw2DesignOf(`rw2-${design.toLowerCase()}-synthetic`)).toBe(design);
+      expect(rw2DesignOf(`rw3-${design.toLowerCase()}-synthetic`)).toBe(design);
       const report = rw2({ design, summary: summaryOf(outer, stress, { breakEvenSlippageBps: 12 }) });
       expect(report.thresholds).toEqual(RW2_CRITERIA[design]);
       expect(Object.keys(report.criteria)).toEqual(["R1", "R2", "R3", "R4", "R5", "R6", "R7"]);
@@ -249,6 +250,7 @@ describe("RW2 §8.5 R1–R7", () => {
       expect(report.verdict).toMatch(/CUMPLE R1–R7/);
     }
     expect(() => rw2DesignOf("rw2-e4-no")).toThrow(/manifest name/);
+    expect(() => rw2DesignOf("rw4-e1-no")).toThrow(/manifest name/);
     expect(() => designOf({ kind: "volManaged" } as PortfolioStrategyConfig)).toThrow(/RW2/);
     expect(parseCriteriaArtifacts(["x", "--control", "c", "--authoritative", "a"])).toEqual({ controlArtifact: "c", authoritativeArtifact: "a" });
     expect(() => parseCriteriaArtifacts(["--control", "--authoritative", "a"])).toThrow(/expects/);

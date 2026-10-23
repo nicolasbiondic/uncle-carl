@@ -399,3 +399,159 @@ describe("tick() scheduling", () => {
     expect(e.beats).toEqual([]);
   });
 });
+
+// 2026-10-23: Alpaca's stop cancel is asynchronous, the engine's sells came back
+// `http_403 insufficient qty available for order (requested: X, available: 0)` and were
+// marked applied: nothing retried until the next session.
+describe("held-quantity sell rejections are retried within the session", () => {
+  const HELD = "http_403 insufficient qty available for order (requested: 10, available: 0)";
+  const SPY_CID = portfolioClientOrderId(SLEEVE, SESSION, "SPY");
+
+  function setup(reject: { times?: number; error?: string } = {}) {
+    seedOpenTrade("pf_spy", SLEEVE, { symbol: "SPY", strategy: PORTFOLIO_ENGINE_STRATEGY, entryPrice: 400, quantity: 10 });
+    const venue = new FakeVenue();
+    venue.positions_ = [{ symbol: "SPY", qty: 10, avgEntryPrice: 400 }];
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    venue.behavior.SPY = { kind: "reject", error: HELD, ...reject };
+    return venue;
+  }
+  // Sell SPY entirely, buy GLD with the proceeds.
+  const mk = (venue: FakeVenue, over: Partial<PortfolioEngineOptions> = {}) => engine(venue, { decide: fixedDecide({ GLD: 0.1 }), ...over });
+
+  test("rejected sell stays unapplied and the pass stays decided; the buy waits; the next ticks resume with the SAME client id until it fills", async () => {
+    const venue = setup({ times: 2 });
+    const decide = fixedDecide({ GLD: 0.1 });
+    const e1 = engine(venue, { decide });
+    const rep1 = await e1.tick();
+    expect(rep1.status).toBe("retrying");
+    expect(rep1.rejected).toBe(0);
+    expect(e1.beats).toEqual(["portfolio:momentum_stocks"]); // a retrying pass is alive, not failing
+    let dec = getPortfolioDecision(SLEEVE, VERSION, SESSION)!;
+    expect(dec.status).toBe("decided");
+    expect(dec.orders.map(o => [o.intent.symbol, o.applied, o.attempts ?? 0])).toEqual([["SPY", false, 1], ["GLD", false, 0]]);
+    expect(dec.note).toContain("retrying next tick");
+    expect(venue.submits.map(s => s.order.symbol)).toEqual(["SPY"]); // GLD buy deferred behind the sell
+    expect(row("SPY").quantity).toBe(10);
+    expect(e1.alerts).toHaveLength(0);
+    // Progress was recorded and stops were refreshed even though orders are pending:
+    expect(decide.calls).toHaveLength(2); // decision + the post-fill refresh
+    expect(dec.memory).toEqual({ n: 1, lastAsOf: AS_OF }); // memory = the FIRST call's until the pass closes
+
+    // A restart between ticks changes nothing: attempts live in the decision row.
+    const e2 = engine(venue, { decide });
+    const rep2 = await e2.tick();
+    expect(rep2.status).toBe("retrying");
+    dec = getPortfolioDecision(SLEEVE, VERSION, SESSION)!;
+    expect(dec.orders[0].attempts).toBe(2);
+    expect(dec.memory).toEqual({ n: 1, lastAsOf: AS_OF });
+    // Every refresh re-decided from that same first-call memory (the core advances once per session).
+    expect(decide.calls.slice(1).every(c => (c.book.memory as any).n === 1)).toBe(true);
+
+    const e3 = engine(venue, { decide });
+    const rep3 = await e3.tick();
+    expect(rep3.status).toBe("resumed");
+    expect(rep3.rejected).toBe(0);
+    dec = getPortfolioDecision(SLEEVE, VERSION, SESSION)!;
+    expect(dec.status).toBe("submitted");
+    expect(dec.orders.every(o => o.applied && o.result?.ok)).toBe(true);
+    expect(dec.memory).toEqual({ n: 2, lastAsOf: AS_OF }); // refreshed once, at close
+    expect(venue.submits.filter(s => s.order.symbol === "SPY")).toHaveLength(3);
+    expect(new Set(venue.submits.filter(s => s.order.symbol === "SPY").map(s => s.clientOrderId))).toEqual(new Set([SPY_CID]));
+    expect(venue.submits.filter(s => s.order.symbol === "GLD")).toHaveLength(1); // bought once, after the sell
+    expect(venue.submits.map(s => s.order.symbol).slice(-2)).toEqual(["SPY", "GLD"]);
+    expect(row("SPY")).toMatchObject({ status: "closed", close_reason: PORTFOLIO_REBALANCE_CLOSE_REASON });
+    expect(row("GLD").quantity).toBeGreaterThan(0);
+    expect(e3.alerts).toHaveLength(0);
+    // Done: later ticks do nothing.
+    expect((await engine(venue, { decide }).tick()).status).toBe("already_done");
+    expect(venue.submits).toHaveLength(4);
+  });
+
+  test("the cap per order per session: the Nth rejection is terminal and pages once; the deferred buy then goes; a session never loops", async () => {
+    const venue = setup(); // rejects forever
+    const statuses: string[] = [];
+    const alerts: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      const e = mk(venue, { maxSellAttempts: 3, alert: (_c, m) => alerts.push(m) });
+      statuses.push((await e.tick()).status);
+    }
+    expect(statuses).toEqual(["retrying", "retrying", "resumed", "already_done", "already_done", "already_done", "already_done", "already_done"]);
+    expect(venue.submits.filter(s => s.order.symbol === "SPY")).toHaveLength(3); // exactly the cap
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toContain("sell SPY");
+    expect(alerts[0]).toContain("gave up after 3 attempts");
+    const dec = getPortfolioDecision(SLEEVE, VERSION, SESSION)!;
+    expect(dec.status).toBe("submitted");
+    expect(dec.orders.find(o => o.intent.symbol === "SPY")).toMatchObject({ applied: true, attempts: 3 });
+    expect(dec.orders.find(o => o.intent.symbol === "SPY")!.result).toMatchObject({ ok: false, status: "rejected" });
+    expect(row("SPY").quantity).toBe(10); // the sell never happened; the row is still the broker's truth
+    expect(venue.submits.filter(s => s.order.symbol === "GLD")).toHaveLength(1); // the buy was not lost
+  });
+
+  test("default cap is 5 submissions", async () => {
+    const venue = setup();
+    const statuses: string[] = [];
+    for (let i = 0; i < 6; i++) statuses.push((await mk(venue).tick()).status);
+    expect(statuses).toEqual(["retrying", "retrying", "retrying", "retrying", "resumed", "already_done"]);
+    expect(venue.submits.filter(s => s.order.symbol === "SPY")).toHaveLength(5);
+  });
+
+  test("every other rejection stays terminal on the first attempt (no retry, pass submitted)", async () => {
+    for (const error of ["http_422 asset SPY is not tradable", "insufficient buying power", "http_403 forbidden"]) {
+      getDB().exec("DELETE FROM trades; DELETE FROM portfolio_decisions;");
+      const venue = setup({ error });
+      const e = mk(venue);
+      const rep = await e.runSession(WINDOW);
+      expect(rep.status).toBe("submitted");
+      expect(rep.rejected).toBe(1);
+      expect(venue.submits.filter(s => s.order.symbol === "SPY")).toHaveLength(1);
+      expect(getPortfolioDecision(SLEEVE, VERSION, SESSION)!.orders[0]).toMatchObject({ applied: true });
+      expect(getPortfolioDecision(SLEEVE, VERSION, SESSION)!.orders[0].attempts).toBeUndefined();
+    }
+  });
+
+  test("a BUY rejected with the same words is terminal: only sells are retryable", async () => {
+    const venue = new FakeVenue();
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    venue.behavior.TLT = { kind: "reject", error: HELD };
+    const rep = await engine(venue).runSession(WINDOW);
+    expect(rep.status).toBe("submitted");
+    expect(rep.rejected).toBe(1);
+  });
+
+  test("a retried sell that fills is applied once (row sold, no double apply) even when only part was refused first", async () => {
+    const venue = setup({ times: 1 });
+    await mk(venue).runSession(WINDOW);
+    const rep = await mk(venue).runSession(WINDOW);
+    expect(rep.status).toBe("resumed");
+    expect(rep.orders.find(o => o.intent.symbol === "SPY")!.result).toMatchObject({ ok: true, filledQty: 10 });
+    expect(venue.positions_.find(p => p.symbol === "SPY")).toBeUndefined();
+    expect(getDB().prepare(`SELECT COUNT(*) c FROM trades WHERE account_id = ? AND symbol = 'SPY' AND status = 'closed'`).get(SLEEVE)).toEqual({ c: 1 });
+  });
+
+  test("a resume of a retrying sell asks the venue to release the incumbent's stops again; unconfirmed cancels are logged, not paged", async () => {
+    const venue = setup({ times: 1 });
+    const calls: string[][] = [];
+    venue.releaseLegacyStops = async (symbols) => { calls.push([...symbols]); return { released: ["s1"], unconfirmed: ["s2"] }; };
+    const e = mk(venue);
+    await e.runSession(WINDOW);
+    expect(calls).toHaveLength(1);
+    const e2 = mk(venue);
+    await e2.runSession(WINDOW);
+    expect(calls).toHaveLength(2);
+    expect(e.alerts).toHaveLength(0);
+    expect(e2.alerts).toHaveLength(0);
+    const msgs = (getDB().prepare(`SELECT message FROM activity_log WHERE account_id = ?`).all(SLEEVE) as any[]).map(r => r.message).join("\n");
+    expect(msgs).toContain("released 1 incumbent stop order(s)");
+    expect(msgs).toContain("not confirmed");
+    expect(msgs).toContain("s2");
+  });
+
+  test("a venue that still answers releaseLegacyStops with a bare id array keeps working", async () => {
+    const venue = setup({ times: 0 });
+    venue.releaseLegacyStops = async () => ["s1"];
+    const rep = await mk(venue).runSession(WINDOW);
+    expect(rep.status).toBe("submitted");
+    expect((getDB().prepare(`SELECT message FROM activity_log WHERE account_id = ?`).all(SLEEVE) as any[]).map(r => r.message).join("\n")).toContain("released 1 incumbent stop order(s)");
+  });
+});

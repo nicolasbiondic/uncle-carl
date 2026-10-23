@@ -86,6 +86,89 @@ describe("boundedAlpacaStockSymbols", () => {
   });
 });
 
+describe("boundedAlpacaStockSymbols: stop-protected symbols first", () => {
+  const universe = Array.from({ length: 50 }, (_, i) => `SYM${i.toString().padStart(2, "0")}`);
+
+  test("over the cap, the slots go to stop-protected symbols before the rest, each group sorted", () => {
+    const held = universe.slice(0, 44);
+    const protectedSyms = universe.slice(20, 44); // 24 protected, all sorting AFTER the unprotected SYM00..19
+    const { symbols, droppedHeld } = boundedAlpacaStockSymbols(held, universe, 30, protectedSyms);
+    expect(symbols).toEqual([...universe.slice(20, 44), ...universe.slice(0, 6)]); // 24 protected + first 6 of the others
+    expect(droppedHeld).toEqual(universe.slice(6, 20));
+    for (const p of protectedSyms) expect(symbols).toContain(p);
+  });
+
+  test("with every protected symbol under the cap nothing protected is dropped; no priority = the old order", () => {
+    const held = [...universe].reverse().slice(0, 44);
+    expect(boundedAlpacaStockSymbols(held, universe, 30, ["SYM43", "SYM42"]).symbols.slice(0, 2)).toEqual(["SYM42", "SYM43"]);
+    expect(boundedAlpacaStockSymbols(held, universe, 30, []).symbols).toEqual(boundedAlpacaStockSymbols(held, universe).symbols);
+  });
+});
+
+describe("AccountManager IEX WS subscription (refreshAlpacaWsSubscriptions)", () => {
+  async function run(manager: any): Promise<string[]> {
+    const out: string[] = [];
+    const realLog = console.log;
+    console.log = (...args: any[]) => out.push(args.join(" "));
+    try { await manager.refreshAlpacaWsSubscriptions(); } finally { console.log = realLog; }
+    return out.filter(l => l.includes("IEX stock WS limit"));
+  }
+  function setup(rows: Array<{ id: string; sleeve: string; symbol: string; strategy: string }>) {
+    const subscribed: string[][] = [];
+    const manager: any = makeAccountManager({ alpaca: { startRealTimeStream: async (s: string[]) => { subscribed.push(s); } } });
+    for (const r of rows) {
+      seedOpenTrade(r.id, r.sleeve, { symbol: r.symbol, strategy: r.strategy });
+      manager.accounts.get(r.sleeve).positions.set(r.symbol, { symbol: r.symbol, market: "stock" });
+    }
+    return { manager, subscribed };
+  }
+  const sym = (n: number) => `ZZ${String(n).padStart(2, "0")}`;
+
+  test("44 held stocks, the 13+ over the cap are all portfolio/treasury rows: ONE warn (not error), and nothing on the next refreshes", async () => {
+    const rows = [
+      ...Array.from({ length: 11 }, (_, i) => ({ id: `m${i}`, sleeve: "meanrev_stocks", symbol: sym(i + 40), strategy: "MEANREV" })), // sort AFTER the pf names
+      ...Array.from({ length: 32 }, (_, i) => ({ id: `p${i}`, sleeve: "momentum_stocks", symbol: sym(i), strategy: "PORTFOLIO" })),
+      { id: "boxx", sleeve: "momentum_stocks", symbol: "BOXX", strategy: "MOMENTUM" },
+    ];
+    const { manager, subscribed } = setup(rows);
+    const lines = await run(manager);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("[WARN]");
+    expect(lines[0]).not.toContain("[ERROR]");
+    expect(lines[0]).toContain("14 held stocks"); // 44 − 30
+    expect(subscribed).toHaveLength(1);
+    // The 11 stop-protected MEANREV symbols hold slots even though they sort last; BOXX (treasury) has no stop.
+    for (const r of rows.filter(r => r.strategy === "MEANREV")) expect(subscribed[0]).toContain(r.symbol);
+    expect(subscribed[0]).toHaveLength(30);
+    // Unchanged set: no log at all (used to ERROR every 5 min), no resubscribe.
+    expect(await run(manager)).toEqual([]);
+    expect(await run(manager)).toEqual([]);
+    expect(subscribed).toHaveLength(1);
+  });
+
+  test("a stop-protected symbol that does not fit is an ERROR, logged once per subscription change", async () => {
+    const rows = Array.from({ length: 33 }, (_, i) => ({ id: `s${i}`, sleeve: "momentum_stocks", symbol: sym(i), strategy: "MOMENTUM" }));
+    const { manager, subscribed } = setup(rows);
+    const lines = await run(manager);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("[ERROR]");
+    expect(lines[0]).toContain("3 of them have a stop-protected row");
+    expect(await run(manager)).toEqual([]);
+    // A new protected holding changes the subscribed set → logged again.
+    seedOpenTrade("s-new", "momentum_stocks", { symbol: "AAA", strategy: "MOMENTUM" });
+    manager.accounts.get("momentum_stocks").positions.set("AAA", { symbol: "AAA", market: "stock" });
+    const again = await run(manager);
+    expect(again).toHaveLength(1);
+    expect(again[0]).toContain("[ERROR]");
+    expect(subscribed).toHaveLength(2);
+  });
+
+  test("under the cap: no limit log at all", async () => {
+    const { manager } = setup([{ id: "a", sleeve: "momentum_stocks", symbol: "SPY", strategy: "PORTFOLIO" }]);
+    expect(await run(manager)).toEqual([]);
+  });
+});
+
 describe("AccountManager stop-loss protection", () => {
   test("closes a position when the broker price breaches the stop", async () => {
     seedOpenTrade("stop-loss-test", "momentum_crypto", { symbol: "BTC/USD", market: "crypto" });

@@ -16,6 +16,7 @@ import { num } from "../fmt.js";
 export function templateLabel(tpl) {
   if (tpl === "momentum_tsm") return t("Momentum TSM", "Momentum TSM");
   if (tpl === "meanrev_connors") return t("Mean reversion (Connors RSI2)", "Reversión a la media (Connors RSI2)");
+  if (tpl === "portfolio") return t("Portfolio engine (RW2)", "Motor de cartera (RW2)");
   return tpl;
 }
 
@@ -139,6 +140,11 @@ export function portfolioRowHtml(p, writable) {
     ? ` · <span class="muted">${t("pending restart — applies on the next restart", "pendiente de reinicio — se aplica en el próximo reinicio")}</span>`
     : "";
   const archived = p.status === "archived" ? ` · <span class="muted">${t("archived", "archivado")}</span>` : "";
+  // RW2: the incumbent row of a sleeve the LIVE portfolio engine manages — its own engine is not
+  // built this boot; nothing is disabled, the book is managed by the named definition.
+  const managed = p.managedBy
+    ? ` · <span class="muted" title="${t("This row's engine is not built; the portfolio engine manages the sleeve's book", "El motor de esta fila no se construye; el motor de cartera gestiona el libro del sleeve")}">${t("managed by the portfolio engine", "gestionado por el motor de cartera")} (${esc(p.managedBy)})</span>`
+    : "";
   const actions = writable ? `<td class="pf-actions">
       <button class="acc-btn" data-pf-edit="${esc(p.id)}">${t("Edit", "Editar")}</button>
       <button class="acc-btn danger" data-pf-archive="${esc(p.id)}" data-pf-archived="${p.status === "archived" ? "1" : "0"}">
@@ -146,7 +152,7 @@ export function portfolioRowHtml(p, writable) {
       </button>
     </td>` : "";
   return `<tr class="${p.status === "archived" ? "pf-row-archived" : ""}">
-    <td><b>${esc(p.name)}</b>${unvalidated}<div class="muted" style="font-size:var(--t-xs)">${esc(p.id)}${pending}${archived}</div></td>
+    <td><b>${esc(p.name)}</b>${unvalidated}<div class="muted" style="font-size:var(--t-xs)">${esc(p.id)}${pending}${archived}${managed}</div></td>
     <td>${esc(templateLabel(p.template))}</td>
     <td>${esc(accountLabel(p.account))}</td>
     <td>$${num(p.capital, 0)}</td>
@@ -192,14 +198,22 @@ function accountOptionsHtml(accounts, selected) {
   return accounts.map((a) => `<option value="${esc(a)}" ${a === selected ? "selected" : ""}>${esc(accountLabel(a))}</option>`).join("");
 }
 
+/** A preset whose validated model runs on the portfolio engine (RW2) is
+ *  listed but disabled: the cutover script creates it, not this form. */
 function presetOptionsHtml(presets, selected) {
-  return presets.map((p) => `<option value="${esc(p.id)}" ${p.id === selected ? "selected" : ""}>${esc(p.name)} (${esc(accountLabel(p.account))})</option>`).join("");
+  return presets.map((p) => {
+    const creatable = p.creatable !== false;
+    const suffix = creatable ? "" : ` — ${t("portfolio engine, via script", "motor de cartera, vía script")}`;
+    return `<option value="${esc(p.id)}" ${p.id === selected ? "selected" : ""} ${creatable ? "" : "disabled"}>${esc(p.name)} (${esc(accountLabel(p.account))})${suffix}</option>`;
+  }).join("");
 }
 
 /** Example params for a free template: the validated preset sharing that
- *  template (never a blank editor for the owner to guess the shape of). */
+ *  template (never a blank editor for the owner to guess the shape of). A
+ *  preset whose validated model moved to the portfolio engine still carries
+ *  its builtin incumbent's params under `incumbentTemplate`. */
 export function exampleParamsFor(presets, template) {
-  const match = (presets || []).find((p) => p.template === template);
+  const match = (presets || []).find((p) => p.template === template || p.incumbentTemplate === template);
   return match ? match.exampleParams : {};
 }
 

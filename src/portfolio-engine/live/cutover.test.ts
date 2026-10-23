@@ -119,6 +119,11 @@ describe("misconfiguration fails closed (live refused, incumbent keeps managing)
     expect(w.live).toEqual([]);
     expect(msgs(w)).toContain("membership");
   });
+  test("copySignal is research-only: no live signal source", () => {
+    const w = refused(peDefinition("momentum_stocks", { runMode: "live", params: { strategy: { kind: "copySignal" } as any } }));
+    expect(w.live).toEqual([]);
+    expect(msgs(w)).toContain("research only");
+  });
   test("design/venue mismatch and symbols outside the sleeve's row symbol space", () => {
     expect(msgs(refused(peDefinition("momentum_stocks", { params: { strategy: { ...XASSET, kind: "cryptoTrend" } as any } })))).toContain("does not belong on venue");
     // USDC rows are XXX/USDC: a canonical XXX/USD universe would make an adopted row and the design two positions.

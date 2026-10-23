@@ -22,6 +22,10 @@ export interface PersistedOrder {
   applied: boolean;
   /** Skipped before submission (observer, trading disabled, …). */
   skipped?: string;
+  /** Submissions of this order that the venue rejected as RETRYABLE (a sell refused because the
+   *  shares are still held by a resting order). Capped per session; the order stays unapplied
+   *  (same client order id) until it fills, is rejected for another reason, or hits the cap. */
+  attempts?: number;
 }
 
 export interface PortfolioDecisionRecord {

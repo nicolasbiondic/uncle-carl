@@ -28,6 +28,19 @@ const et = (key: string, hourET: number, min = 0) =>
   Date.parse(`${key}T00:00:00Z`) + (hourET + 5) * 3_600_000 + min * 60_000;
 
 describe("one observation per ET day", () => {
+  test("NYSE holiday marks are dropped, without a false missing-session gap", () => {
+    makeTestDb();
+    for (const [key, equity] of [["2026-01-16", 100], ["2026-01-17", 100], ["2026-01-19", 100], ["2026-01-20", 102]] as const) {
+      rawSnap("momentum_stocks", equity, et(key, 22), 5);
+    }
+    const s = getDailySleeveReturns("momentum_stocks", { now: et("2026-01-21", 12) });
+    expect(s.nDailyMarks).toBe(2);
+    expect(s.returns.map(r => r.dateKey)).toEqual(["2026-01-20"]);
+    expect(s.returns[0].ret).toBeCloseTo(0.02, 12);
+    expect(s.gaps).toHaveLength(0);
+    expect(nextGridDay("2026-01-16", true)).toBe("2026-01-20");
+    expect(nextGridDay("2026-01-16", false)).toBe("2026-01-17");
+  });
   test("several snapshots the same ET day → one mark (the last); 23:30 ET vs 00:30 ET split correctly", () => {
     makeTestDb();
     // momentum_crypto (binance ⇒ calendar grid). Jan 5/6/7 2026 (Mon/Tue/Wed).

@@ -36,6 +36,29 @@ export interface MembershipView {
   members(date: SessionDate): readonly string[];
 }
 
+/** One public event of a signal source (e.g. an SEC Form 4 open-market purchase). */
+export interface SignalEvent {
+  source: string;
+  symbol: string;
+  /** When the event became PUBLIC (never when it happened). */
+  knownAtMs: number;
+  /** The producer's magnitude (SEC Form 4: dollar value of the purchase). */
+  weight: number;
+  /** Producer-specific JSON. `actors: string[]` = the distinct actors behind the event (insider CIKs…). */
+  meta: Readonly<Record<string, unknown>>;
+}
+
+/** Point-in-time view of signal events (copySignal). Never returns an event known after `cutoffMs`. */
+export interface SignalView {
+  /** Last COMPLETED session a decision may read. */
+  readonly asOf: SessionDate;
+  /** Last instant a decision at `asOf` may know about (end of that session's day). */
+  readonly cutoffMs: number;
+  /** Events of `source` known within the last `lookbackDays` calendar days up to and including `asOf`,
+   *  oldest → newest; [] when none. Never an event with knownAtMs > cutoffMs. */
+  events(source: string, lookbackDays: number): readonly SignalEvent[];
+}
+
 /** A holding of the sleeve. Long-only designs keep qty ≥ 0. */
 export interface Position {
   symbol: string;
@@ -75,6 +98,8 @@ export interface StopLevel {
 export interface DecideInput {
   view: PriceView;
   membership?: MembershipView;
+  /** Signal events (copySignal only; other kinds ignore it). */
+  signals?: SignalView;
   book: BookState;
   config: PortfolioStrategyConfig;
   /** The session the resulting orders execute in (the one after `asOf`). D2 reconstitutes when it is the
@@ -87,7 +112,55 @@ export type Decide = (input: DecideInput) => TargetBook;
 
 // ── Strategy configs: the manifest candidate's `portfolio` block ─────────────
 
-export type PortfolioStrategyConfig = XassetTrendConfig | FactorCoreConfig | CryptoTrendConfig | VolManagedConfig;
+export type PortfolioStrategyConfig = XassetTrendConfig | FactorCoreConfig | CryptoTrendConfig | VolManagedConfig | CopySignalConfig;
+
+/** Copy-trading on a public event stream (e.g. SEC Form 4 open-market purchases): long-only.
+ *  At each decision the events of `source` known within the last `lookbackDays` calendar days (incl. asOf) that
+ *  pass the event filters (`exclude`, `roles`, `insiderClass`, `exclude10b5_1`, `maxReportLagDays`) and were not
+ *  already used by an earlier pick of the same symbol are grouped by symbol. A symbol qualifies when it has
+ *  >= minDistinctInsiders distinct actors (`meta.actors`; with `minDollarPerInsider` only actors with at least that
+ *  much total `weight` count) and >= minDollar of `weight`. Qualifiers are ranked (distinct actors desc, dollars
+ *  desc, symbol asc) and fill the free slots up to `topN` (a full book never rotates); each pick is held
+ *  `holdDays` calendar days or `holdSessions` sessions of the symbol's own bars from its selection through memory
+ *  (a fresh qualifying cluster on a held name renews the clock), then dropped. Slot size = maxGross / topN, so gross is
+ *  maxGross × picks/topN: the rest is cash. Needs `DecideInput.signals`; `membership` (when given) restricts NEW
+ *  picks to the members at the execution session. */
+export interface CopySignalConfig {
+  kind: "copySignal";
+  /** Event source, e.g. "sec-form4-buy". */
+  source: string;
+  lookbackDays: number;
+  /** Distinct `meta.actors` required (SEC: distinct insiders). */
+  minDistinctInsiders: number;
+  /** Minimum sum of `weight` over the qualifying events (SEC: dollars). 0 = no floor. */
+  minDollar: number;
+  topN: number;
+  /** Calendar days a pick is held from its selection. Exactly one of holdDays / holdSessions. */
+  holdDays?: number;
+  /** Sessions (bars of the picked symbol after its selection) a pick is held. Exactly one of holdDays / holdSessions. */
+  holdSessions?: number;
+  weighting: "equal" | "inverseVol";
+  /** Daily-return stdev lookback; REQUIRED for inverseVol, forbidden for equal. */
+  volLookback?: number;
+  /** Max weight of one symbol (fraction of equity). */
+  perNameCap: number;
+  /** Max sum of weights when all topN slots are filled. */
+  maxGross: number;
+  /** Symbols never held. */
+  exclude: string[];
+  /** When present, an event counts only if its `meta.role` has any of these (SEC: "officer" | "director" | "tenPercentOwner" | "other"). */
+  roles?: string[];
+  /** Which actors' events count, by the producer's point-in-time class (`meta.insiderClass`: SEC Form 4 =
+   *  Cohen-Malloy-Pomorski "opportunistic" | "routine" | "unknown"). Absent = "all". "routine" is the placebo control. */
+  insiderClass?: "all" | "opportunistic" | "routine";
+  /** Drop events flagged `meta.plan10b5_1 === true` (a pre-scheduled Rule 10b5-1 plan). Absent = false. */
+  exclude10b5_1?: boolean;
+  /** Drop events whose `meta.lagDays` (transaction → public) exceeds this, or is unknown. Absent = no limit. */
+  maxReportLagDays?: number;
+  /** An actor counts toward minDistinctInsiders only with at least this much total `weight` on the symbol in the
+   *  window (SEC: dollars); the cluster's dollars are then those of the qualifying actors' events. Absent = 0. */
+  minDollarPerInsider?: number;
+}
 
 /** RW2 (E1–E3): always invested — inverse-vol weights, one scale to the portfolio vol
  *  target, per-name cap, max gross. No timing signal, no stops: every eligible symbol
@@ -109,6 +182,25 @@ export interface VolManagedConfig {
   perAssetCap: number;
   /** Max sum of weights (1 = no margin). */
   maxGross: number;
+  /** RW4b (optional; absent = RW2/RW3 behavior, same outputs and hashes). The target vol is scaled down
+   *  continuously as the sleeve's drawdown from its in-memory equity peak deepens, and restored as it recovers. */
+  drawdownBrake?: DrawdownBrakeConfig;
+  /** RW4b (optional; absent = RW2/RW3 behavior). Window (sessions, 2 ≤ n < covLookback) of a faster covariance
+   *  estimate: the portfolio vol used for the scale is max(fast, covLookback) estimate, so leverage drops quickly
+   *  in a crash. Weights still use `volLookback`. */
+  fastVolLookback?: number;
+}
+
+/** Drawdown brake: multiplier on the vol target = 1 while drawdown ≤ startDrawdown, then linear down to
+ *  floorScale at maxDrawdown, flat at floorScale beyond. Drawdown is a fraction of the peak of the sleeve's
+ *  book equity as seen at past decisions (no look-ahead). */
+export interface DrawdownBrakeConfig {
+  /** Fraction in [0, 1): drawdown at which de-risking starts. */
+  startDrawdown: number;
+  /** Fraction in (0, 1], > startDrawdown: drawdown at which the multiplier reaches the floor. */
+  maxDrawdown: number;
+  /** Multiplier floor in (0, 1] (never 0: a zero floor could not recover). */
+  floorScale: number;
 }
 
 /** Signal shared by D1 and D3: mean of the blend horizons' returns > band AND close > SMA(maLong). */
@@ -253,6 +345,15 @@ export interface VenueAdapter {
   /** Cutover: cancel the resting protective stops the INCUMBENT engine armed on these symbols
    *  (targeted, by exact id, only orders stamped by this bot). Rows adopted by the portfolio engine
    *  leave the incumbent's stop machinery; a stale resting stop would otherwise keep firing on them
-   *  and block the engine's own sells. Returns the cancelled order ids. Optional. */
-  releaseLegacyStops?(symbols: readonly string[]): Promise<string[]>;
+   *  and block the engine's own sells. Returns the cancelled order ids (a bare array = all of them
+   *  are settled) or, for venues whose cancel is asynchronous, the ids split by whether the venue
+   *  CONFIRMED the cancel (the shares stay held until then). Optional. */
+  releaseLegacyStops?(symbols: readonly string[]): Promise<string[] | LegacyStopRelease>;
+}
+
+export interface LegacyStopRelease {
+  /** Cancelled and confirmed terminal at the venue (shares released). */
+  released: string[];
+  /** Cancel accepted but not confirmed within the venue's bounded wait (shares may still be held). */
+  unconfirmed: string[];
 }

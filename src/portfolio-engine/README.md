@@ -124,13 +124,30 @@ unlinked) pages every boot ("orphaned").
   to the broker (broker = truth): a smaller broker quantity shrinks/closes the
   row (`PORTFOLIO_RECONCILED`), a larger one is reported and left alone.
 - Versions and scorecard (`src/portfolio/modelVersions.ts`): a sleeve going live
-  on the portfolio engine APPENDS a version there (`<sleeve>@pe-<candidate>`),
-  never edits a past one; it must be the last entry before the engine may run
-  live (boot check above and the script's). The scorecard attributes a row to
-  the version that opened it, so adopted rows keep the incumbent's version and
-  the new rows carry the engine's. Rolling back appends nothing by itself: add
-  an entry for the incumbent's config in the next deploy (until then new
-  incumbent rows are stamped with the engine's version; their `since` bounds it).
+  on the portfolio engine APPENDS a version there (`<sleeve>@pe-<candidate>`,
+  with `engine: "portfolio"`, `manifest`, `candidate` and `artifact`), never
+  edits a past one; it must be the last entry before the engine may run live
+  (boot check above and the script's). That entry is the ONE source every
+  peripheral consumer reads: the scorecard band (its OOS daily returns),
+  Telegram's POR DEBAJO page, cost calibration's break-even curve, the
+  tearsheet, `LIVE_SLEEVE_MANIFESTS`, `VALIDATED_PRESETS` (template
+  `portfolio`, not creatable from the dashboard) and the governor's evidence
+  version — so nothing judges the engine against the incumbent's artifact.
+  The scorecard attributes a row to the version that opened it, so adopted
+  rows keep the incumbent's version and the new rows carry the engine's.
+  Rolling back appends nothing by itself: add an entry for the incumbent's
+  config in the next deploy (until then new incumbent rows are stamped with
+  the engine's version; their `since` bounds it).
+- Peripheral consumers of the INCUMBENT's config: `scripts/parity-check.ts`
+  skips a sleeve whose live manager is the engine (reads `platform_portfolios`;
+  explicit SKIPPED line, no page) — decision parity for the engine is an open
+  item (OPEN.md); `liveSleeveConfig(sleeve).managedBy` says "portfolio" and its
+  derivation is the rollback config; the dashboard registry lists the
+  incumbent row as "gestionado por el motor de cartera (pe_x)" and the `pe_*`
+  row with the sleeve's band; the governor registers the sleeve itself under
+  the engine's version (`index.ts`). Cost calibration and the decision funnel
+  get no observations from the engine (no `fills`/`decision_passes` rows —
+  OPEN.md).
 
 ### Runbook (per sleeve; `scripts/portfolio-engine-cutover.ts`, dry-run by default)
 
@@ -144,10 +161,14 @@ unlinked) pages every boot ("orphaned").
    `MODEL_VERSIONS[sleeve]` and deploy; no other definition on the sleeve.
 3. Live: `--mode live` (same manifest and candidate; dry-run, read, `--apply`),
    restart the bot AT A QUIET TIME (stocks: before 09:35 ET, crypto: not within
-   a minute of 00:00 UTC). The boot log says `LIVE on the portfolio engine`;
-   the first pass adopts and trades the delta. Verify: `activity_log` rows
+   a minute of 00:00 UTC). The boot log says `LIVE on the portfolio engine`
+   and `applied pending edits: pe_<sleeve>` (the row's `status` goes
+   `pending_restart` → `active` on the boot that reads it); the first pass
+   adopts and trades the delta. Verify: `activity_log` rows
    "adopted"/"released", rows `strategy = 'PORTFOLIO'`, no pages, `/healthz/full`
-   heartbeat fresh, the incumbent's engine absent from the boot log.
+   heartbeat fresh, the incumbent's engine absent from the boot log, the next
+   04:45 parity cron printing `SKIPPED — live manager is the portfolio engine`
+   for the sleeve.
 4. Rollback: `--mode rollback` (back to observer, keeps evidence) or
    `--mode rollback --remove` (deletes the definition), `--apply`, restart. The
    boot re-tags the `PORTFOLIO` rows and arms Binance stops before the
@@ -157,8 +178,37 @@ unlinked) pages every boot ("orphaned").
    engine's). `PORTFOLIOS_SOURCE=code` is also a full rollback: definitions are
    not read, the rows are handed back.
 
+## copySignal (research only)
+
+A generic copy-trading kind (`CopySignalConfig` in `types.ts`, kernel `copySignal.ts`): events of a
+`source` (SEC Form 4 open-market purchases = `"sec-form4-buy"`) known within `lookbackDays` calendar
+days, grouped by symbol; a symbol qualifies with `minDistinctInsiders` distinct `meta.actors` and
+`minDollar` of total `weight`; ranked (actors desc, dollars desc, symbol) into `topN` slots; each pick
+held `holdDays` calendar days or `holdSessions` sessions (exactly one) from its selection through
+`memory.copySignal`, long-only, slot size `maxGross/topN`, `equal` or `inverseVol` inside it, `perNameCap`.
+Optional event filters (absent = off): `roles`, `insiderClass` (`all | opportunistic | routine`, from
+`meta.insiderClass`; `routine` is the placebo), `exclude10b5_1` (`meta.plan10b5_1`), `maxReportLagDays`
+(`meta.lagDays`; an unknown lag is dropped) and `minDollarPerInsider` (an actor counts only with its own
+dollars on the symbol). Every copySignal candidate must `exclude` the live stock universes and the treasury
+ETFs (`scripts/lib/liveStockExcludes.ts`; `validatePortfolioManifest` enforces it).
+
+- Point in time: `DecideInput.signals` is a `SignalView` (`asOf`, `cutoffMs`, `events(source, lookbackDays)`);
+  the research implementation (`scripts/lib/signalData.ts`) clips at the end of `asOf`'s day, and the
+  kernel drops any event with `knownAtMs > cutoffMs` anyway. Events an earlier pick already used (`spent`)
+  never count twice; a fresh qualifying cluster on a held name renews its clock.
+- `membership`, when given, gates NEW picks to the members at the execution session (copySignal
+  manifests require `data.membership`: its domain is the point-in-time index).
+- Data: `$UC_RESEARCH_DATA_DIR/signals.db`, table `signal_events(source, symbol, known_at_ms, weight,
+  meta_json)`, shared with other producers. SEC: `bun scripts/sec-insider-fetch.ts` then
+  `bun scripts/sec-insider-build.ts` (see `docs/reports/copy-insider.md`).
+- Manifest: `data.signals = { dbPath }` (required for copySignal, forbidden elsewhere; the path is
+  runtime-only, the rows enter the data hash), candidates carry `portfolio.strategy.kind = "copySignal"`.
+  Criteria: design D4 (`scripts/portfolio-criteria.ts`), benchmarks SPY and the equal-weight members.
+- Live refuses it (`cutover.ts`, `PortfolioEngine.ts`, `wiring.ts`): no live signal source exists yet.
+
 ### Not done here
 
-No definition is written by the code, and no `MODEL_VERSIONS` entry exists
-(that is part of each cutover). `factorCore` cannot run until a live
-point-in-time membership source exists.
+No definition is written by the code (that is each cutover's script run).
+`factorCore` cannot run until a live point-in-time membership source exists.
+The engine writes no `fills` and no `decision_passes` rows, and no decision
+parity exists for it (both in OPEN.md with falsifiers).

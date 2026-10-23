@@ -23,7 +23,7 @@ import { existsSync, statSync, unlinkSync } from "fs";
 import { config } from "../config";
 import { createLogger } from "../utils/logger";
 import { eventBus, EVENTS } from "../utils/events";
-import { getTradingStats, getRecentTrades, getDB, getAssetBalances, RECONCILE_CLOSE_SQL, getETDayStart, insertActivity, getSyncState, setSyncState } from "../db/database";
+import { getTradingStats, getRecentTrades, getDB, getAssetBalances, RECONCILE_CLOSE_SQL, getETDayStart, getEquityPnlDisplay, insertActivity, getSyncState, setSyncState } from "../db/database";
 import {
   computeScorecard, openHistoricalReadonly, formatScorecardDigestLines,
   bandEpisodeTransitions, MODEL_START,
@@ -51,6 +51,8 @@ const DEPLOY_MARKER = "data/.deploy-restart";
 // data/ is gitignored; see src/telegram/outbox.ts for the full doctrine.
 const OUTBOX_PATH = "data/telegram-outbox.json";
 const OUTBOX_DRAIN_INTERVAL_MS = 30_000;
+const CONNECT_RETRY_BASE_MS = 15_000;
+const CONNECT_RETRY_CAP_MS = 10 * 60_000;
 
 // Short tag per profile — keep Telegram lines under 80 chars on mobile.
 const SHORT: Record<string, string> = {
@@ -87,12 +89,28 @@ export function circuitProfileId(id: unknown): string {
   return HEARTBEAT_PROFILE[s] ?? s;
 }
 
+/** sync_state key of a band episode: the model version when known (`<sleeve>@<name>`), else the sleeve. */
+export function bandEpisodeKey(sleeve: string, modelVersion: string | null | undefined): string {
+  return modelVersion && modelVersion.startsWith(`${sleeve}@`) ? modelVersion : sleeve;
+}
+/** Inverse of bandEpisodeKey: the sleeve a stored episode key belongs to. */
+export function sleeveOfBandEpisodeKey(key: string): string {
+  const i = key.indexOf("@");
+  return i > 0 ? key.slice(0, i) : key;
+}
+
 export class TelegramReporter {
   private token: string;
   private chatId: string;
   /** Operator chat for engineering alerts; "" = log-only (see sendOps). */
   private opsChatId: string;
   private enabled = false;
+  private initStarted = false;
+  private connectionPending = false;
+  private stopped = false;
+  private connectRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private connectRetryDelayMs = CONNECT_RETRY_BASE_MS;
+  private plannedDeploy = false;
   private pollOffset = 0;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private polling = false;
@@ -121,54 +139,77 @@ export class TelegramReporter {
   }
 
   async init() {
+    if (this.initStarted || this.stopped) return;
+    this.initStarted = true;
     if (!this.token || this.token === "your_telegram_bot_token" || this.token.length < 20) {
       log.warn("Telegram bot token not configured — notifications disabled");
       return;
     }
 
-    // Durable outbox BEFORE the getMe probe: if this very boot happens inside
-    // the network cut (the 2026-09-25 class — a restart often accompanies the
-    // incident), getMe fails and `enabled` stays false, but the drain timer
-    // must still deliver whatever a previous process queued once the network
-    // returns. Each entry carries its own backoff gate; drain is a no-op on
-    // an empty queue.
-    this.outbox = this.outbox ?? new TelegramOutbox(OUTBOX_PATH);
-    if (!this.outboxTimer) this.outboxTimer = setInterval(() => { void this.drainOutbox(); }, OUTBOX_DRAIN_INTERVAL_MS);
-
+    // Decide at BOOT, not after getMe: a network cut can delay connection past
+    // the marker's freshness window. Consume it once and remember the result.
     try {
-      const me = await this.apiCall("getMe");
-      if (!me?.ok) throw new Error("Invalid bot token");
-      log.info(`🤖 Telegram bot connected: @${me.result.username}`);
-      this.enabled = true;
-
-      if (!this.chatId || this.chatId === "your_chat_id") {
-        log.info("Chat ID not set — waiting for /start command...");
+      if (existsSync(DEPLOY_MARKER)) {
+        this.plannedDeploy = Date.now() - statSync(DEPLOY_MARKER).mtime.getTime() < 180_000;
+        unlinkSync(DEPLOY_MARKER);
       }
+    } catch { /* marker unreadable → treat as unexpected, announce */ }
 
-      this.setupEventListeners();
-      this.startPolling();
+    // A configured token awaiting validation may queue messages immediately.
+    // The durable drain keeps its existing per-entry caps, TTL and backoff.
+    this.outbox = this.outbox ?? new TelegramOutbox(OUTBOX_PATH);
+    this.connectionPending = true;
+    if (!this.outboxTimer) this.outboxTimer = setInterval(() => { void this.drainOutbox(); }, OUTBOX_DRAIN_INTERVAL_MS);
+    await this.connect();
+  }
 
-      // Announce ONLY on unexpected restarts (crash / host reboot) — the ones
-      // worth a ping. Planned deploys drop a fresh marker (auto-deploy.sh) so we
-      // stay quiet and don't spam the chat on every code push.
-      let plannedDeploy = false;
-      try {
-        if (existsSync(DEPLOY_MARKER)) {
-          plannedDeploy = Date.now() - statSync(DEPLOY_MARKER).mtime.getTime() < 180_000;
-          unlinkSync(DEPLOY_MARKER);
-        }
-      } catch { /* marker unreadable → treat as unexpected, announce */ }
-      if (plannedDeploy) {
-        log.info("Telegram: planned deploy restart — startup banner suppressed");
-      } else {
-        // OPERATOR audience: a restart is plumbing, not a trading event. The
-        // user's positions and protections are re-verified on boot either
-        // way, so there is nothing for them to act on.
-        await this.sendOps("🟢 <b>Uncle Carl</b> operativo de nuevo tras un reinicio inesperado. Posiciones y protecciones verificadas.");
+  private async connect(): Promise<void> {
+    // No in-band 429 sleep here: all connection retries belong to the
+    // background timer, so an outage never holds up the rest of boot.
+    const result = await this.apiCallOnce("getMe");
+    if (this.stopped) return; // stop may have run while the probe was in flight
+    const me = result?.data;
+    const status = result?.status;
+    const code = me?.error_code;
+    const retryable = !result || status === 429 || (status != null && status >= 500) ||
+      code === 429 || (typeof code === "number" && code >= 500);
+    if (retryable || me?.ok !== true || (status != null && status >= 400)) {
+      const rejected = !retryable && ((status != null && status >= 400 && status < 500) ||
+        (me?.ok === false && typeof code === "number" && code >= 400 && code < 500));
+      if (rejected) {
+        this.connectionPending = false;
+        log.error(`Telegram init failed: Invalid bot token (getMe HTTP ${status}, error_code ${code ?? "unknown"})`);
+        if (this.outboxTimer) { clearInterval(this.outboxTimer); this.outboxTimer = null; }
+        return;
       }
-    } catch (e: any) {
-      log.error(`Telegram init failed: ${e.message}`);
-      this.enabled = false;
+      const reason = result ? `HTTP ${status}, error_code ${code ?? "unknown"}` : "network/parse failure";
+      const delay = this.connectRetryDelayMs;
+      log.warn(`Telegram getMe temporarily unavailable (${reason}) — retrying in ${delay}ms; notifications queued`);
+      this.connectRetryDelayMs = Math.min(delay * 2, CONNECT_RETRY_CAP_MS);
+      this.connectRetryTimer = setTimeout(() => {
+        this.connectRetryTimer = null;
+        return this.connect();
+      }, delay);
+      return;
+    }
+    log.info(`🤖 Telegram bot connected: @${me.result?.username}`);
+    this.enabled = true;
+    this.connectionPending = false;
+
+    if (!this.chatId || this.chatId === "your_chat_id") {
+      log.info("Chat ID not set — waiting for /start command...");
+    }
+
+    this.setupEventListeners();
+    this.startPolling();
+
+    if (this.plannedDeploy) {
+      log.info("Telegram: planned deploy restart — startup banner suppressed");
+    } else {
+      // OPERATOR audience: a restart is plumbing, not a trading event. The
+      // user's positions and protections are re-verified on boot either
+      // way, so there is nothing for them to act on.
+      await this.sendOps("🟢 <b>Uncle Carl</b> operativo de nuevo tras un reinicio inesperado. Posiciones y protecciones verificadas.");
     }
   }
 
@@ -254,9 +295,15 @@ export class TelegramReporter {
    *  caller already fires this with `await this.send(...)` and ignores the
    *  return value, so this is additive, not a behavior change for them. */
   async send(text: string, chatId?: string): Promise<boolean> {
-    if (!this.enabled) return false;
+    if (this.stopped || (!this.enabled && !this.connectionPending)) return false;
     const target = chatId || this.chatId;
     if (!target || target === "your_chat_id") return false;
+    if (!this.enabled) {
+      if (this.outbox?.enqueue(target, text)) {
+        log.warn(`Telegram connection pending — queued for retry, ${this.outbox.size()} pending`);
+      }
+      return false; // queued is not a delivery acknowledgement
+    }
     const outcome = await this.attemptSend(text, target);
     if (outcome === "retryable" && this.outbox) {
       // Network cut / 5xx / exhausted 429 (the 2026-09-25 lost-pages class):
@@ -292,7 +339,7 @@ export class TelegramReporter {
   /** Reentrancy-guarded drain pass (the interval must never stack passes
    *  behind a slow 15s fetch timeout). Public-ish for tests via `as any`. */
   private async drainOutbox(): Promise<void> {
-    if (!this.outbox || this.drainingOutbox) return;
+    if (this.stopped || (!this.enabled && !this.connectionPending) || !this.outbox || this.drainingOutbox) return;
     this.drainingOutbox = true;
     try {
       await this.outbox.drain((chatId, text) => this.attemptSend(text, chatId));
@@ -529,10 +576,10 @@ export class TelegramReporter {
     const totalPos = accounts.reduce((s: number, a: any) => s + (a.positions || 0), 0);
 
     // Rendimiento 7D: active sleeves with ≥1 closed trade in the window,
-    // best→worst by 7D pnl. No day/equity/all-time clutter — that's /status
+    // best→worst by 7D marked equity, not cutover realization dates. No all-time clutter — that's /status
     // and /profits' job; this is the weekly scoreboard only.
     const sleeveRows: string[] = [];
-    const sleevePnls: Array<{ id: string; pnl: number; w: number; l: number; paused: boolean }> = [];
+    const sleevePnls: Array<{ id: string; pnl: number; mtm: number | null; w: number; l: number; paused: boolean }> = [];
     for (const a of accounts) {
       const wkQ = db
         .prepare(
@@ -545,11 +592,11 @@ export class TelegramReporter {
         .get(a.id, weekStart) as { pnl: number; w: number; l: number } | undefined;
       const w = wkQ?.w ?? 0, l = wkQ?.l ?? 0;
       if (w + l < 1) continue; // "≥1 weekly close" — silent sleeves don't clutter the scoreboard
-      sleevePnls.push({ id: a.id, pnl: +(wkQ?.pnl ?? 0), w, l, paused: !!a.paused });
+      sleevePnls.push({ id: a.id, pnl: +(wkQ?.pnl ?? 0), mtm: getEquityPnlDisplay(a.id, 7)?.pnl ?? null, w, l, paused: !!a.paused });
     }
-    sleevePnls.sort((x, y) => y.pnl - x.pnl);
+    sleevePnls.sort((x, y) => (y.mtm ?? -Infinity) - (x.mtm ?? -Infinity) || x.id.localeCompare(y.id));
     for (const r of sleevePnls) {
-      sleeveRows.push(`${profileName(r.id)} realizado ${signMoney(r.pnl)} · ${r.w}W/${r.l}L${r.paused ? " ⏸" : ""}`);
+      sleeveRows.push(`${profileName(r.id)} MtM ${r.mtm == null ? "—" : signMoney(r.mtm)} · realizado ${signMoney(r.pnl)} · ${r.w}W/${r.l}L${r.paused ? " ⏸" : ""}`);
     }
 
     // Header truth: alpaca_main + binance_main (+ binance_coinm_main once
@@ -578,7 +625,7 @@ export class TelegramReporter {
 
     if (sleeveRows.length > 0) {
       lines.push("");
-      lines.push("<b>Rendimiento 7D realizado</b>");
+      lines.push("<b>Rendimiento 7D a mercado</b>");
       for (const r of sleeveRows) lines.push(r);
     }
 
@@ -773,14 +820,20 @@ export class TelegramReporter {
   private async checkScorecardBandEpisodes(): Promise<void> {
     const sc = this.computeScorecardNow();
     if (!sc) return;
+    // Episode key = the MODEL VERSION the band judges (`<sleeve>@<name>`,
+    // bandEpisodeKey), not the sleeve: a new model starts with no episode, so
+    // a "below" left by the retired model never turns into a false "volvió
+    // DENTRO" for its successor (RW2 cutover 2026-10-23). Keys of retired
+    // versions stay in the stored map untouched.
     const current: Record<string, BandStatus> = {};
-    for (const e of sc.entities) if (e.kind === "sleeve" && e.band) current[e.id] = e.band.status;
+    for (const e of sc.entities) if (e.kind === "sleeve" && e.band) current[bandEpisodeKey(e.id, e.band.modelVersion)] = e.band.status;
 
     let prev: Partial<Record<string, BandEpisodeState>> = {};
     try { prev = JSON.parse(getSyncState(TelegramReporter.BAND_STATE_KEY) ?? "{}"); } catch {}
     const { transitions, next } = bandEpisodeTransitions(prev, current);
 
-    for (const tr of transitions) {
+    for (const tr0 of transitions) {
+      const tr = { ...tr0, sleeve: sleeveOfBandEpisodeKey(tr0.sleeve) };
       const e = sc.entities.find(x => x.id === tr.sleeve);
       const b = e?.band;
       const fmt = (x: number | null | undefined) => x == null ? "—" : `${x >= 0 ? "+" : ""}${x.toFixed(1)}%`;
@@ -878,7 +931,11 @@ export class TelegramReporter {
   // ══════════════════════════════════════════
 
   stop() {
-    if (this.pollTimer) clearInterval(this.pollTimer);
+    this.stopped = true;
+    this.enabled = false;
+    this.connectionPending = false;
+    if (this.connectRetryTimer) { clearTimeout(this.connectRetryTimer); this.connectRetryTimer = null; }
+    if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
     if (this.outboxTimer) { clearInterval(this.outboxTimer); this.outboxTimer = null; }
   }
 }

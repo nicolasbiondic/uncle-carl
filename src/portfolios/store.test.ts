@@ -14,6 +14,7 @@ import {
   initPlatformPortfolios,
   loadPlatformPortfolioDefinitions,
   loadPlatformPortfolioRows,
+  markPendingPortfoliosActive,
   resolvePortfoliosSource,
   updatePlatformPortfolio,
 } from "./store";
@@ -103,5 +104,101 @@ describe("boot seed refreshes untouched builtin rows (2026-10-04)", () => {
     expect(byId.meanrev_stocks.capital).toBe(55_000); // the owner's value survives the boot
     expect(byId.meanrev_stocks.source).toBe("owner");
     expect(byId.momentum_stocks.updatedAt).toBe(1_000); // equal to builtin → untouched
+  });
+});
+
+describe("RW3 (2026-10-23): prod's untouched momentum_crypto builtin row picks up the brake-off params at boot", () => {
+  test("a source='builtin' row seeded with the pre-RW3 params (no regime, vt35-2026-09-23, v8-crypto-no-hard-sl) is refreshed; the same row flipped to 'owner' is frozen", () => {
+    const old = (db: Database) => {
+      const r = loadPlatformPortfolioRows(db).find((x) => x.id === "momentum_crypto")!;
+      const { regime: _drop, ...rest } = r.params as any;
+      const params = { ...rest, modelVersion: "vt35-2026-09-23", governor: { promotionEligible: false, evidenceVersion: "v8-crypto-no-hard-sl" } };
+      db.run("UPDATE platform_portfolios SET params_json = ? WHERE id = 'momentum_crypto'", [JSON.stringify(params)]);
+    };
+    const db = new Database(":memory:");
+    initPlatformPortfolios(db, 1_000);
+    old(db);
+    expect((loadPlatformPortfolioRows(db).find((x) => x.id === "momentum_crypto")!.params as any).regime).toBeUndefined();
+    initPlatformPortfolios(db, 2_000);
+    const row = loadPlatformPortfolioRows(db).find((x) => x.id === "momentum_crypto")!;
+    expect(row.source).toBe("builtin");
+    expect((row.params as any).regime).toEqual({ correlationCeiling: 1.01 });
+    expect((row.params as any).modelVersion).toBe("vt35-corroff-2026-10-23");
+    expect((row.params as any).governor.evidenceVersion).toBe("v8.5-crypto-corroff");
+    expect(row.updatedAt).toBe(2_000);
+    // The engine config the db source builds carries the ceiling.
+    const plan: any = buildPortfolioPlan(loadPlatformPortfolioDefinitions(db).find((d) => d.id === "momentum_crypto")!, 0);
+    expect(plan.engineConfig.regime).toEqual({ barMinutes: 60, correlationCeiling: 1.01 });
+
+    const frozen = new Database(":memory:");
+    initPlatformPortfolios(frozen, 1_000);
+    old(frozen);
+    frozen.run("UPDATE platform_portfolios SET source = 'owner' WHERE id = 'momentum_crypto'");
+    initPlatformPortfolios(frozen, 2_000);
+    expect((loadPlatformPortfolioRows(frozen).find((x) => x.id === "momentum_crypto")!.params as any).regime).toBeUndefined();
+  });
+});
+
+describe("boot applies pending edits: pending_restart → active (2026-10-23, RW2 cutover rows stayed pending forever)", () => {
+  test("every pending_restart row flips to active with the boot's timestamp; archived and active rows are untouched; idempotent", () => {
+    const db = new Database(":memory:");
+    initPlatformPortfolios(db);
+    db.run("UPDATE platform_portfolios SET status = 'pending_restart', updated_at = 1 WHERE id IN ('momentum_stocks', 'meanrev_stocks')");
+    db.run("UPDATE platform_portfolios SET status = 'archived', updated_at = 1 WHERE id = 'momentum_btc'");
+    db.run(`INSERT INTO platform_portfolios (id, name, template, account, capital, mode, enabled, params_json, status, validation, source, created_at, updated_at)
+            VALUES ('pe_momentum_stocks', 'pe', 'portfolio', 'alpaca_main', 50000, 'live', 1, '{"engine":"portfolio","sleeve":"momentum_stocks","runMode":"live"}', 'pending_restart', 'validated', 'owner', 1, 1)`);
+    const before = Object.fromEntries(loadPlatformPortfolioRows(db).map(r => [r.id, r.updatedAt]));
+
+    expect(markPendingPortfoliosActive(db, 777)).toEqual(["meanrev_stocks", "momentum_stocks", "pe_momentum_stocks"]);
+    const rows = Object.fromEntries(loadPlatformPortfolioRows(db).map(r => [r.id, r]));
+    for (const id of ["meanrev_stocks", "momentum_stocks", "pe_momentum_stocks"]) {
+      expect(rows[id].status).toBe("active");
+      expect(rows[id].updatedAt).toBe(777);
+    }
+    expect(rows.momentum_btc.status).toBe("archived");
+    expect(rows.momentum_btc.updatedAt).toBe(1);
+    expect(rows.momentum_crypto.status).toBe("active");
+    expect(rows.momentum_crypto.updatedAt).toBe(before.momentum_crypto);
+    // The pe_ row keeps everything that makes it run live: only the label moved.
+    expect(rows.pe_momentum_stocks.mode).toBe("live");
+    expect(rows.pe_momentum_stocks.enabled).toBe(true);
+    expect((rows.pe_momentum_stocks.params as any).runMode).toBe("live");
+
+    expect(markPendingPortfoliosActive(db, 888)).toEqual([]);
+    expect(loadPlatformPortfolioRows(db).find(r => r.id === "momentum_stocks")!.updatedAt).toBe(777);
+  });
+});
+
+describe("RW4a (2026-10-23): prod's untouched momentum_crypto_usdc builtin row picks up the exposure control at boot", () => {
+  test("a source='builtin' row seeded with the pre-RW4a params (no exposureControl, v8.3-usdc-daily) is refreshed — same modelVersion (no RiskState re-anchor); the same row flipped to 'owner' is frozen", () => {
+    const knob = { drawdown: { startPct: 0.1, endPct: 0.4 }, minScale: 0.25, band: 0.1, minOrderUsd: 100 };
+    const old = (db: Database) => {
+      const r = loadPlatformPortfolioRows(db).find((x) => x.id === "momentum_crypto_usdc")!;
+      const { exposureControl: _drop, ...rest } = r.params as any;
+      const params = { ...rest, governor: { evidenceVersion: "v8.3-usdc-daily" } };
+      db.run("UPDATE platform_portfolios SET params_json = ? WHERE id = 'momentum_crypto_usdc'", [JSON.stringify(params)]);
+    };
+    const db = new Database(":memory:");
+    initPlatformPortfolios(db, 1_000);
+    old(db);
+    expect((loadPlatformPortfolioRows(db).find((x) => x.id === "momentum_crypto_usdc")!.params as any).exposureControl).toBeUndefined();
+    initPlatformPortfolios(db, 2_000);
+    const row = loadPlatformPortfolioRows(db).find((x) => x.id === "momentum_crypto_usdc")!;
+    expect(row.source).toBe("builtin");
+    expect((row.params as any).exposureControl).toEqual(knob);
+    expect((row.params as any).modelVersion).toBe("daily-s5-blend3-2026-09-26"); // NOT bumped: the live drawdown is the control's input
+    expect((row.params as any).governor.evidenceVersion).toBe("v8.6-usdc-xc-dd");
+    expect(row.updatedAt).toBe(2_000);
+    // The engine config the db source builds carries the knob (factory forwards it).
+    const plan: any = buildPortfolioPlan(loadPlatformPortfolioDefinitions(db).find((d) => d.id === "momentum_crypto_usdc")!, 0);
+    expect(plan.engineConfig.exposureControl).toEqual(knob);
+    expect(plan.engineConfig.modelVersion).toBe("daily-s5-blend3-2026-09-26");
+
+    const frozen = new Database(":memory:");
+    initPlatformPortfolios(frozen, 1_000);
+    old(frozen);
+    frozen.run("UPDATE platform_portfolios SET source = 'owner' WHERE id = 'momentum_crypto_usdc'");
+    initPlatformPortfolios(frozen, 2_000);
+    expect((loadPlatformPortfolioRows(frozen).find((x) => x.id === "momentum_crypto_usdc")!.params as any).exposureControl).toBeUndefined();
   });
 });

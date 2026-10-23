@@ -42,7 +42,7 @@ import { Database } from "bun:sqlite";
 import { computeTurnoverAnnual, hashReplayConfig, type ClosedTrade, type ReplayResult } from "./backtest-momentum-wf";
 import { isPortfolioReplayConfig, type PortfolioReplayConfig, type ReplayRunner } from "./walk-forward";
 import { INITIAL_RISK_STATE, type RiskState } from "../src/strategies/momentum/RiskGuard";
-import { decide, planOrders, stopFillPrice, fillCost, dailyMarginInterest, dailyFunding } from "../src/portfolio-engine";
+import { decide, planOrders, stopFillPrice, fillCost, dailyMarginInterest, dailyFunding, rebaseDrawdownMemory } from "../src/portfolio-engine";
 import type { BookState, CostModel, DecideInput, PlanOrders, PortfolioStrategyConfig, Position, SessionDate, TargetBook } from "../src/portfolio-engine/types";
 import {
   IndexMembershipView,
@@ -58,6 +58,7 @@ import {
   perpSymbolFor,
   type SessionSeries,
 } from "./lib/portfolioData";
+import { SignalBook, assertSignalCoverage, loadSignalEvents, signalCoverage } from "./lib/signalData";
 
 // ── kernel injection ──────────────────────────────────────────────────────
 
@@ -126,10 +127,10 @@ export const runPortfolioReplay: ReplayRunner = makePortfolioRunner();
 
 /** cfg.universe is the protocol's DOMAIN (data identity, LOO, ex-top-decile
  *  reruns): trend/volManaged trade strategy.universe ∩ domain; factorCore's
- *  domain is the point-in-time membership, its exclusions travel in
- *  strategy.exclude (the rerun helpers extend that list). */
+ *  and copySignal's domain is the point-in-time membership, its exclusions
+ *  travel in strategy.exclude (the rerun helpers extend that list). */
 export function effectiveStrategy(strategy: PortfolioStrategyConfig, domain: ReadonlySet<string>): PortfolioStrategyConfig {
-  if (strategy.kind === "factorCore") return strategy;
+  if (strategy.kind === "factorCore" || strategy.kind === "copySignal") return strategy;
   const universe = strategy.universe.filter(s => domain.has(s));
   if (universe.length === 0) throw new Error("portfolio runner: strategy.universe ∩ cfg.universe is empty");
   return universe.length === strategy.universe.length ? strategy : { ...strategy, universe };
@@ -184,19 +185,31 @@ export function simulatePortfolioWindow(
   const db = new Database(cfg.dbPath, { readonly: true });
   let series: Map<string, SessionSeries>;
   let membership: IndexMembershipView | undefined;
+  let signalBook: SignalBook | undefined;
   let fundingBySession: Map<string, Map<SessionDate, number>> | undefined;
   try {
     let symbols: string[];
-    if (strategy.kind === "factorCore") {
-      if (!cfg.membership) throw new Error("portfolio runner: factorCore requires cfg.membership (data.membership in the manifest)");
+    if (strategy.kind === "factorCore" || strategy.kind === "copySignal") {
+      if (!cfg.membership) throw new Error(`portfolio runner: ${strategy.kind} requires cfg.membership (data.membership in the manifest)`);
       membership = IndexMembershipView.load(db, cfg.membership.index, cfg.membership.exclude ?? []);
       symbols = [...new Set([...cfg.universe, cfg.refSymbol, ...membership.overlapping(loadFrom, toMs)])];
+      if (strategy.kind === "copySignal") {
+        if (!cfg.signalsDbPath) throw new Error("portfolio runner: copySignal requires cfg.signalsDbPath (data.signals in the manifest)");
+        // Events known before the fold ends, from the first lookback window that can touch the first session.
+        const sdb = new Database(cfg.signalsDbPath, { readonly: true });
+        try {
+          assertSignalCoverage(signalCoverage(sdb, strategy.source), strategy.source, fromMs, toMs, strategy.lookbackDays);
+          signalBook = new SignalBook(loadSignalEvents(sdb, strategy.source, loadFrom - strategy.lookbackDays * DAY_MS, toMs), calendar);
+        } finally {
+          sdb.close();
+        }
+      }
     } else {
       symbols = [...new Set([...strategy.universe, cfg.refSymbol])];
     }
     series = loadSessionSeries(db, symbols, cfg.source, cfg.timeframe, loadFrom, toMs, calendar);
     if (costModel.funding === "real") {
-      const tradable = strategy.kind === "factorCore" ? [] : strategy.universe;
+      const tradable = strategy.kind === "factorCore" || strategy.kind === "copySignal" ? [] : strategy.universe;
       // Settlements stamped at/after toMs belong to the next fold (the book
       // is liquidated at the last close): load strictly before toMs.
       const events = loadFundingRates(db, tradable.map(perpSymbolFor), fromMs, toMs);
@@ -316,7 +329,8 @@ export function simulatePortfolioWindow(
       if (px !== undefined) { refPrices[p.symbol] = px; equityRef += p.qty * px; }
     }
     const book: BookState = { equity: equityRef, positions: bookPositions, memory };
-    const target = decideFn({ view, membership, book, config: strategy, executionSession: d });
+    // `signals` (copySignal only): the view clips at asOf's day end, like `view` clips bars.
+    const target = decideFn({ view, membership, ...(signalBook ? { signals: signalBook.at(asOf) } : {}), book, config: strategy, executionSession: d });
     for (const s of Object.keys(target.weights)) {
       if (refPrices[s] === undefined) {
         const px = view.lastClose(s);
@@ -430,7 +444,8 @@ export function simulatePortfolioWindow(
     dayStartEquity: finalEquity,
     dayStartedAt: lastT,
     lastEvalAt: lastT,
-    portfolioMemory: memory,
+    // RW4b: a drawdown brake's high-water mark crosses folds in the next fold's dollars (no-op without a brake).
+    portfolioMemory: ruined ? memory : rebaseDrawdownMemory(memory, prevEquity, finalEquity, cfg.initialEquity) as Record<string, unknown>,
   };
 
   return {

@@ -1,4 +1,4 @@
-import type { FactorCoreConfig, MembershipView, PriceView, SessionDate } from "./types";
+import type { DrawdownBrakeConfig, FactorCoreConfig, MembershipView, PriceView, SessionDate } from "./types";
 import { compareSymbols, dailyReturns, lowVolScore, momentumReturn, priceHistory, rankScores } from "./signals";
 
 export function inverseVolWeights(vols: Readonly<Record<string, number>>): Record<string, number> {
@@ -49,16 +49,28 @@ export function portfolioVol(weights: Readonly<Record<string, number>>, covarian
  * proportional gross reduction. NO redistribution/releveraging after caps. */
 export function scaleToVolTarget(
   vols: Readonly<Record<string, number>>, covariance: Covariance, annualization: number,
-  target: number, perAssetCap: number, maxGross: number,
+  target: number, perAssetCap: number, maxGross: number, fastCovariance?: Covariance,
 ): { weights: Record<string, number>; scale: number; uncappedVol: number; finalVol: number } {
   const base = inverseVolWeights(vols);
-  const uncappedVol = portfolioVol(base, covariance, annualization);
+  // RW4b: with a fast covariance the risk the scale reacts to is the larger of the two estimates.
+  const uncappedVol = fastCovariance
+    ? Math.max(portfolioVol(base, covariance, annualization), portfolioVol(base, fastCovariance, annualization))
+    : portfolioVol(base, covariance, annualization);
   // No estimable risk means no finite leverage estimate, not infinite leverage.
   const scale = uncappedVol > 0 ? target / uncappedVol : 0;
   const weights = Object.fromEntries(Object.keys(base).map(s => [s, Math.max(0, Math.min(perAssetCap, base[s] * scale))]));
   const gross = Object.values(weights).reduce((a, b) => a + b, 0);
   if (gross > maxGross) for (const s of Object.keys(weights)) weights[s] *= maxGross / gross;
   return { weights, scale, uncappedVol, finalVol: portfolioVol(weights, covariance, annualization) };
+}
+
+/** RW4b drawdown brake: 1 up to `startDrawdown`, linear down to `floorScale` at `maxDrawdown`, flat beyond.
+ *  Pure function of the CURRENT drawdown, so it restores itself as the drawdown recovers. */
+export function drawdownBrakeScale(drawdown: number, brake: DrawdownBrakeConfig): number {
+  if (!(drawdown > brake.startDrawdown)) return 1;
+  if (drawdown >= brake.maxDrawdown) return brake.floorScale;
+  const progress = (drawdown - brake.startDrawdown) / (brake.maxDrawdown - brake.startDrawdown);
+  return 1 - progress * (1 - brake.floorScale);
 }
 
 /** D2 water-filling: preserve relative inverse vols among uncapped names.

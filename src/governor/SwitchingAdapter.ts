@@ -10,6 +10,9 @@
 //                    close on the REAL broker (never strand a real position
 //                    after a demotion); otherwise route to shadow. NEVER
 //                    passes through the RiskEngine veto — see its docstring.
+//   scalePosition  → same row-based routing (RW4a exposure control); a
+//                    reduction is veto-free like a close, an add-back is
+//                    gated like an open.
 //   getOpenPositions → live rows always; PLUS shadow rows when mode=shadow,
 //                    so a demoted engine keeps managing residual real
 //                    positions to exit while opening only simulated ones.
@@ -105,6 +108,37 @@ export class SwitchingAdapter implements MomentumBrokerAdapter {
     return hasLiveRow
       ? this.real.closePosition(action)
       : this.shadow.closePosition(action);
+  }
+
+  /**
+   * Exposure-control resize (RW4a, 2026-10-23) — routed like closePosition:
+   * a LIVE row for the symbol → the real adapter (a demoted engine keeps
+   * resizing the real position it still holds), else the shadow book.
+   * A reduction (factor < 1) is de-risking and, like a close, NEVER meets the
+   * RiskEngine veto or the TRADING_ENABLED backstop. An add-back (factor > 1)
+   * is an ENTRY: it passes both, exactly like openPosition, with the add's
+   * notional = (factor − 1) × the held position's mark notional (read from
+   * the target book), so the per-order cap applies too.
+   * A real adapter without the method answers ok:false "unsupported" rather
+   * than emulating a close+reopen; the engine logs it per tick.
+   */
+  async scalePosition(action: { symbol: string; side: "buy" | "sell"; factor: number; reason?: string }): Promise<{ ok: boolean; reason?: string }> {
+    const hasLiveRow = getOpenTrades(this.liveAccountId).some(t => t.symbol === action.symbol);
+    const target = hasLiveRow ? this.real : this.shadow;
+    if (!target.scalePosition) return { ok: false, reason: `${hasLiveRow ? "real" : "shadow"} adapter has no scalePosition (unsupported)` };
+    if (action.factor > 1) {
+      // The add's notional for the veto = (factor − 1) × the held position's
+      // mark notional, read from the target book (one read on a rare event).
+      const held = (await target.getOpenPositions()).find(p => p.symbol === action.symbol && p.side === action.side);
+      if (!held) return { ok: false, reason: "no held position to add to" };
+      const veto = this.riskEngine.evaluateSubmit(
+        { sleeve: this.sleeve, symbol: action.symbol, side: action.side, notionalUsd: (action.factor - 1) * Math.abs(held.notional), quantity: (action.factor - 1) * held.quantity },
+        { currentPositionSide: action.side, currentPositionQty: held.quantity },
+      );
+      if (!veto.allow) return { ok: false, reason: veto.code };
+      if (!isTradingEnabled()) return { ok: false, reason: "trading_disabled" };
+    }
+    return target.scalePosition(action);
   }
 
   async fetchCandles(symbol: string, bars: number): Promise<OHLCV[]> {

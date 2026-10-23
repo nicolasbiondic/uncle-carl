@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "fs";
+import { describe, expect, test, spyOn } from "bun:test";
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 // Stale @types/node in this repo lacks rmSync (same class as the mkdirSync
 // options idiom in database.ts) — runtime has it, typings don't.
 const { rmSync } = require("fs") as { rmSync: (p: string, o?: any) => void };
@@ -7,6 +7,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { TelegramOutbox, OUTBOX_MAX_ENTRIES, type SendOutcome } from "./outbox";
 import { TelegramReporter } from "./telegram-reporter";
+import { eventBus, EVENTS } from "../utils/events";
 
 function withTmp<T>(fn: (dir: string) => T | Promise<T>): Promise<T> {
   const dir = mkdtempSync(join(tmpdir(), "tg-outbox-"));
@@ -109,6 +110,197 @@ describe("TelegramOutbox — durable retry queue (2026-09-25 lost-pages class)",
     const box = new TelegramOutbox(path, () => 0);
     expect(box.size()).toBe(0);
     expect(box.enqueue("OPS", "still works")).toBe(true);
+  }));
+});
+
+describe("TelegramReporter boot connection recovery", () => {
+  // Fake only this reporter's HTTP/timers; no real API calls, sleeps or data/ writes.
+  async function bootTest(fn: (h: any) => Promise<void>) {
+    await withTmp(async dir => {
+      const cwd = process.cwd();
+      process.chdir(dir);
+      const reporter = new TelegramReporter();
+      const r = reporter as any;
+      r.token = "1234567890:FAKE-TEST-TOKEN-ABCDEFGHIJK";
+      r.chatId = "USER";
+      r.opsChatId = "OPS";
+      const boxPath = join(dir, "outbox.json");
+      const outbox = new TelegramOutbox(boxPath);
+      r.outbox = outbox;
+      const timers = new Map<any, { fn: () => any; ms: number }>();
+      const intervals = new Map<any, { fn: () => any; ms: number }>();
+      let id = 0;
+      const timeout = spyOn(globalThis, "setTimeout").mockImplementation(((fn: any, ms: number) => {
+        const key = ++id; timers.set(key, { fn, ms }); return key;
+      }) as any);
+      const clear = spyOn(globalThis, "clearTimeout").mockImplementation(((key: any) => { timers.delete(key); }) as any);
+      const interval = spyOn(globalThis, "setInterval").mockImplementation(((fn: any, ms: number) => {
+        const key = ++id; intervals.set(key, { fn, ms }); return key;
+      }) as any);
+      const clearInt = spyOn(globalThis, "clearInterval").mockImplementation(((key: any) => { intervals.delete(key); }) as any);
+      const logs: string[] = [];
+      const logger = spyOn(console, "log").mockImplementation((s: any) => { logs.push(String(s)); });
+      const calls: Array<{ method: string; body: any }> = [];
+      let probe: () => Promise<Response> = async () => Response.json({ ok: true, result: { username: "test_bot" } });
+      const http = spyOn(globalThis, "fetch").mockImplementation((async (url: any, init: any) => {
+        const method = String(url).split("/").pop()!;
+        calls.push({ method, body: init.body ? JSON.parse(init.body) : null });
+        return method === "getMe" ? probe() : Response.json({ ok: true, result: [] });
+      }) as any);
+      const events = [EVENTS.ORDER_FILLED, EVENTS.POSITION_CLOSED, EVENTS.CIRCUIT_BREAKER, EVENTS.ERROR_BURST];
+      const before = events.map(e => eventBus.listeners(e));
+      try {
+        await fn({ reporter, r, outbox, boxPath, timers, intervals, logs, calls,
+          setProbe: (p: typeof probe) => { probe = p; },
+          retry: async () => {
+            expect(timers.size).toBe(1);
+            const [key, timer] = [...timers][0];
+            timers.delete(key);
+            await timer.fn();
+          },
+          listenerCounts: () => events.map((e, i) => eventBus.listenerCount(e) - before[i].length),
+        });
+      } finally {
+        reporter.stop();
+        events.forEach((e, i) => {
+          for (const listener of eventBus.listeners(e)) if (!before[i].includes(listener)) eventBus.removeListener(e, listener as (...args: any[]) => void);
+        });
+        http.mockRestore(); logger.mockRestore(); timeout.mockRestore(); clear.mockRestore(); interval.mockRestore(); clearInt.mockRestore();
+        process.chdir(cwd);
+      }
+    });
+  }
+
+  test("network failure at init recovers once, delivering durable user/ops messages queued while pending", () => bootTest(async h => {
+    h.setProbe(async () => { throw new Error("ECONNRESET"); });
+    await h.reporter.init();
+    expect(h.r.enabled).toBe(false);
+    expect([...h.timers.values()][0].ms).toBe(15_000);
+    expect(await h.reporter.send("daily report")).toBe(false);
+    expect(await h.reporter.sendOps("ops page")).toBe(false);
+    expect(new TelegramOutbox(h.boxPath).size()).toBe(2);
+    expect(h.calls.every((c: any) => c.method === "getMe")).toBe(true);
+    h.setProbe(async () => Response.json({ ok: true, result: { username: "test_bot" } }));
+    await h.retry();
+    expect(h.r.enabled).toBe(true);
+    expect(h.listenerCounts()).toEqual([1, 1, 1, 1]);
+    expect([...h.intervals.values()].filter((t: any) => t.ms === 10_000)).toHaveLength(1);
+    await h.r.drainOutbox(); // the existing 30s drain cadence resumes delivery
+    expect(h.outbox.size()).toBe(0);
+    const delayed = h.calls.filter((c: any) => c.body?.text?.includes("(retrasado, original"));
+    expect(delayed.map((c: any) => c.body.chat_id)).toEqual(["USER", "OPS"]);
+    expect(delayed[0].body.text).toContain("daily report");
+    await h.reporter.init();
+    expect(h.listenerCounts()).toEqual([1, 1, 1, 1]);
+    expect(h.calls.filter((c: any) => c.method === "getMe")).toHaveLength(2);
+    expect(h.timers.size).toBe(0);
+    expect(h.logs.join("\n")).not.toContain("Invalid bot token");
+  }));
+
+  for (const status of [400, 401, 404]) {
+    test(`getMe ${status} is an invalid token, never retries or queues`, () => bootTest(async h => {
+      h.setProbe(async () => Response.json({ ok: false, error_code: status }, { status }));
+      await h.reporter.init();
+      expect(h.r.enabled).toBe(false);
+      expect(h.timers.size).toBe(0);
+      expect(h.listenerCounts()).toEqual([0, 0, 0, 0]);
+      await h.reporter.send("not queued");
+      await h.reporter.sendOps("not queued either");
+      expect(h.outbox.size()).toBe(0);
+      expect(h.logs.join("\n")).toContain("Invalid bot token");
+      await h.r.drainOutbox();
+      expect(h.calls).toHaveLength(1);
+    }));
+  }
+
+  for (const status of [429, 500, 503]) {
+    test(`getMe ${status} retries in the background with capped exponential backoff`, () => bootTest(async h => {
+      h.setProbe(async () => Response.json({ ok: false, error_code: status, parameters: { retry_after: 3600 } }, { status }));
+      await h.reporter.init();
+      for (const delay of [15_000, 30_000, 60_000, 120_000, 240_000, 480_000, 600_000, 600_000]) {
+        expect([...h.timers.values()][0].ms).toBe(delay);
+        await h.retry();
+      }
+      expect(h.logs.join("\n")).not.toContain("Invalid bot token");
+      h.reporter.stop();
+      expect(h.timers.size).toBe(0);
+      expect(h.intervals.size).toBe(0);
+      await h.reporter.send("stopped");
+      expect(h.outbox.size()).toBe(0);
+    }));
+  }
+
+  test("a JSON parse failure is retryable, not an invalid token", () => bootTest(async h => {
+    h.setProbe(async () => new Response("not JSON", { status: 502 }));
+    await h.reporter.init();
+    expect(h.timers.size).toBe(1);
+    expect(h.logs.join("\n")).not.toContain("Invalid bot token");
+  }));
+
+  test("a later definitive rejection stops retries and disables queueing/draining", () => bootTest(async h => {
+    h.setProbe(async () => { throw new Error("ECONNRESET"); });
+    await h.reporter.init();
+    await h.reporter.send("before rejection");
+    h.setProbe(async () => Response.json({ ok: false, error_code: 401 }, { status: 200 }));
+    await h.retry();
+    expect(h.r.enabled).toBe(false);
+    expect(h.timers.size).toBe(0);
+    expect(h.intervals.size).toBe(0);
+    await h.reporter.send("after rejection");
+    await h.r.drainOutbox();
+    expect(h.outbox.size()).toBe(1); // the durable old entry is retained, not sent
+    expect(h.calls.every((c: any) => c.method === "getMe")).toBe(true);
+    expect(h.logs.join("\n")).toContain("Invalid bot token");
+  }));
+
+  test("pending messages retain the outbox's dedupe, cap and per-entry backoff on recovery", () => bootTest(async h => {
+    h.setProbe(async () => { throw new Error("ECONNRESET"); });
+    await h.reporter.init();
+    for (let i = 0; i < OUTBOX_MAX_ENTRIES + 1; i++) await h.reporter.send(`message ${i}`);
+    await h.reporter.send(`message ${OUTBOX_MAX_ENTRIES}`);
+    expect(h.outbox.size()).toBe(OUTBOX_MAX_ENTRIES);
+    expect(h.outbox.list()[0].text).toBe("message 1");
+    await h.outbox.drain(async () => "retryable");
+    const nextAttemptAt = h.outbox.list()[0].nextAttemptAt;
+    h.setProbe(async () => Response.json({ ok: true, result: { username: "test_bot" } }));
+    await h.retry();
+    await h.r.drainOutbox();
+    expect(h.outbox.size()).toBe(1);
+    expect(h.outbox.list()[0].nextAttemptAt).toBe(nextAttemptAt);
+    expect(h.outbox.list()[0].text).toBe("message 1");
+  }));
+
+  for (const planned of [true, false]) {
+    test(`startup banner uses the marker at boot (planned=${planned}), not at late connection`, () => bootTest(async h => {
+      mkdirSync("data");
+      if (planned) writeFileSync("data/.deploy-restart", "");
+      h.setProbe(async () => { throw new Error("ECONNRESET"); });
+      await h.reporter.init();
+      expect(existsSync("data/.deploy-restart")).toBe(false);
+      // Reverse the marker's state while disconnected; only the boot decision counts.
+      if (!planned) writeFileSync("data/.deploy-restart", "");
+      const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 600_000);
+      try {
+        h.setProbe(async () => Response.json({ ok: true, result: { username: "test_bot" } }));
+        await h.retry();
+        const banners = h.calls.filter((c: any) => c.body?.text?.includes("reinicio inesperado"));
+        expect(banners).toHaveLength(planned ? 0 : 1);
+        if (!planned) expect(banners[0].body.chat_id).toBe("OPS");
+      } finally { clock.mockRestore(); }
+    }));
+  }
+
+  test("stop during an in-flight getMe cannot resurrect polling or retry timers", () => bootTest(async h => {
+    let resolve!: (r: Response) => void;
+    h.setProbe(() => new Promise<Response>(r => { resolve = r; }));
+    const boot = h.reporter.init();
+    h.reporter.stop();
+    resolve(Response.json({ ok: true, result: { username: "test_bot" } }));
+    await boot;
+    expect(h.r.enabled).toBe(false);
+    expect(h.listenerCounts()).toEqual([0, 0, 0, 0]);
+    expect(h.intervals.size).toBe(0);
+    expect(h.timers.size).toBe(0);
   }));
 });
 

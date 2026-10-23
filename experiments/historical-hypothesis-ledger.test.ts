@@ -3,8 +3,14 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { researchDataPath } from "../scripts/lib/researchData";
+import { loadArtifactOuterDailyReturns } from "../scripts/lib/combinedPortfolioReturns";
+import { compareArtifacts } from "../scripts/rw3-compare-artifacts";
 
 const root = join(import.meta.dir, "..");
+// The public export drops docs/reports/** (scripts/public-export/exclude.txt),
+// so a source path there is checked only where that directory exists.
+const sourcePathPresent = (p: string) =>
+  existsSync(join(root, p)) || (p.startsWith("docs/reports/") && !existsSync(join(root, "docs/reports")));
 const ledger = JSON.parse(readFileSync(join(import.meta.dir, "historical-hypothesis-ledger-v1.json"), "utf8"));
 
 function canonical(value: unknown): string {
@@ -1388,4 +1394,839 @@ describe("historical hypothesis ledger", () => {
       expect(normalized).toContainEqual(expected);
     }
   });
+
+  // ── RW3 "más agresivo" (docs/reports/RW-reescritura-rentable.md §10) + COPY D4 (§11.1) ──
+  // Trials 402 → 424, chained across seven batches. The manifests were pre-registered before any run.
+  // (a)/(b): R1–R7 from rw2-criteria.json against the live sleeve re-run; (c1)/(c2): the §10.4
+  // criteria derived from summary.json + the same-days comparison + the combined book; D4: rw-criteria.json.
+  const rw3Portfolio = [
+    // batch, authoritative key, claims key, manifests (prior each), [candidate, volTarget, maxGross]
+    ["rw3-a-e1-stocks-lev-2026-10-23", "authoritativeArtifactRw3E1Lev", "rw3E1Lev", "e1Rerun", 402,
+      [["rw3-e1-stocks-lev-vt20-g150-v1.json", "vt20-g150", 0.2, 1.5], ["rw3-e1-stocks-lev-vt25-g150-v1.json", "vt25-g150", 0.25, 1.5],
+       ["rw3-e1-stocks-lev-vt25-g200-v1.json", "vt25-g200", 0.25, 2], ["rw3-e1-stocks-lev-vt30-g200-v1.json", "vt30-g200", 0.3, 2]], "vt30-g200"],
+    ["rw3-a-e2-meanrev-lev-2026-10-23", "authoritativeArtifactRw3E2Lev", "rw3E2Lev", "e2", 406,
+      [["rw3-e2-meanrev-lev-vt20-g150-v1.json", "vt20-g150", 0.2, 1.5], ["rw3-e2-meanrev-lev-vt25-g150-v1.json", "vt25-g150", 0.25, 1.5],
+       ["rw3-e2-meanrev-lev-vt25-g200-v1.json", "vt25-g200", 0.25, 2], ["rw3-e2-meanrev-lev-vt30-g200-v1.json", "vt30-g200", 0.3, 2]], "vt30-g200"],
+    ["rw3-b-levetf-book-2026-10-23", "authoritativeArtifactRw3Etf", "rw3Etf", "e1Rerun", 410,
+      [["rw3-e1-levetf-vt20-v1.json", "vt20", 0.2, 1], ["rw3-e1-levetf-vt30-v1.json", "vt30", 0.3, 1], ["rw3-e1-levetf-vt40-v1.json", "vt40", 0.4, 1]], "vt40"],
+  ] as const;
+  // [batch, manifest, candidate, prior, volTarget, correlationCeiling | undefined, maxGrossExposureMult | undefined]
+  const rw3C1Manifests = [
+    ["rw3-c1-momentum-crypto-2026-10-23", "momentum-crypto-rw3-vt-50-pure-v1.json", "vt-50", 413, 50, undefined, 2.5875],
+    ["rw3-c1-momentum-crypto-2026-10-23", "momentum-crypto-rw3-vt-70-pure-v1.json", "vt-70", 414, 70, undefined, 2.5875],
+    ["rw3-c1-momentum-crypto-2026-10-23", "momentum-crypto-rw3-vt-35-corr92-pure-v1.json", "vt-35-corr92", 415, 35, 0.92, undefined],
+    ["rw3-c1-momentum-crypto-2026-10-23", "momentum-crypto-rw3-vt-50-corr92-pure-v1.json", "vt-50-corr92", 416, 50, 0.92, 2.5875],
+    ["rw3-c1-corroff-2026-10-23", "momentum-crypto-rw3-vt-35-corroff-pure-v1.json", "vt-35-corr92", 419, 35, 1.01, undefined],
+  ] as const;
+  const rw3C2Manifests = [
+    ["momentum-crypto-usdc-daily-s5-rw3-vt50-pure-v1.json", "d13-s5-vt50", 417, 50],
+    ["momentum-crypto-usdc-daily-s5-rw3-vt70-pure-v1.json", "d13-s5-vt70", 418, 70],
+  ] as const;
+  const rw3Batches = ledger.batches.slice(-10, -3); // RW4 appends three more batches after these seven
+
+  // §10.4 (c1)/(c2) criteria on the ledger's own candidate rows. maxDdPct: 45 for c1, the control's DD for c2.
+  const rw3KernelMeets = (c: any, controlGatesFailed: string[], maxDdPct: number) =>
+    c.sharpeCommonDays >= c.controlSharpeCommonDays &&
+    c.maxDrawdownPct <= maxDdPct &&
+    c.outerPsr >= 0.95 &&
+    c.foldPsr.filter((p: number) => p > 0.5).length >= 2 &&
+    c.worstLooRatio >= 0.6 &&
+    c.combinedBookMaxDrawdownPct <= 20 &&
+    c.gatesFailed.every((g: string) => controlGatesFailed.includes(g));
+
+  test("RW3 (a)/(b)/(c1)/(c2) and COPY D4 align with their manifests and batches; only c1 corroff passes, D4's C4 defect is recorded (2026-10-23)", () => {
+    // Seven batches chained 402 → 424.
+    expect(rw3Batches.map((b: any) => b.id)).toEqual([
+      "rw3-a-e1-stocks-lev-2026-10-23", "rw3-a-e2-meanrev-lev-2026-10-23", "rw3-b-levetf-book-2026-10-23",
+      "rw3-c1-momentum-crypto-2026-10-23", "rw3-c2-usdc-vt-2026-10-23", "rw3-c1-corroff-2026-10-23", "copy-d4-insider-clusters-2026-10-23",
+    ]);
+    expect(rw3Batches.map((b: any) => b.hypothesisCount)).toEqual([4, 4, 3, 4, 2, 1, 4]);
+    let prev = 402;
+    for (const b of rw3Batches) {
+      expect(b.priorUniqueTrials).toBe(prev);
+      expect(b.resultingUniqueTrials).toBe(prev + b.hypothesisCount);
+      expect(b.inventoryComplete).toBe(false);
+      expect(b.resultsComplete).toBe(false);
+      expect(b.executionReported).toBe(true);
+      for (const p of b.sourcePaths) expect(sourcePathPresent(p)).toBe(true);
+      prev = b.resultingUniqueTrials;
+    }
+    expect(prev).toBe(424);
+    expect(rw3Batches.at(-1).resultingUniqueTrials).toBe(424);
+
+    // (a)/(b): one candidate per manifest, one axis (vol target, maxGross), chained priors.
+    for (const [batchId, key, claimsKey, , prior, manifests, best] of rw3Portfolio) {
+      const batch = ledger.batches.find((b: any) => b.id === batchId);
+      expect(batch.priorUniqueTrials).toBe(prior);
+      expect(batch.hypothesisCount).toBe(manifests.length);
+      manifests.forEach(([file, cand, vt, gross], i) => {
+        const m = JSON.parse(readFileSync(join(root, "experiments", file), "utf8"));
+        expect(m.trialAccounting).toEqual({ priorUniqueTrials: prior + i, complete: false });
+        expect(m.candidates).toHaveLength(1);
+        expect(m.candidates[0].name).toBe(cand);
+        expect(m.candidates[0].portfolio.strategy).toMatchObject({ kind: "volManaged", portfolioVolTarget: vt, maxGross: gross });
+        expect(batch.sourcePaths).toContain(`experiments/${file}`);
+      });
+      // Every frontier point fails the owner's drawdown budget and R3: frontier references, not candidates.
+      const art = ledger[key];
+      expect(art.verdict).toContain("REFERENCIA DE FRONTERA");
+      expect(art.verdict).toContain("REFUTADO");
+      expect(art.verdict).toContain("NO SE CABLEA");
+      expect(art.frontier.map((p: any) => p.candidate)).toEqual(manifests.map(m => m[1]));
+      for (const p of art.frontier) expect(p.criteriaFailed).toEqual(["R2_maxDrawdown", "R3_vsControl"]);
+      expect(art[claimsKey].criteriaFailed).toEqual(["R2_maxDrawdown", "R3_vsControl"]);
+      expect(art[claimsKey].maxDrawdownPct).toBeGreaterThan(25);
+      expect(art[claimsKey].r3StrategySharpe).toBeLessThan(art[claimsKey].r3ControlSharpe);
+      // The referenced point is the family's best return.
+      const top = [...art.frontier].sort((a: any, b: any) => b.stitchedReturnPct - a.stitchedReturnPct)[0];
+      expect(top.candidate).toBe(best);
+      expect(art.path).toContain(top.artifact);
+    }
+    expect(ledger.authoritativeArtifactRw3E1Lev.rw3E1Lev.controlArtifact).toBe("33b0ac05");
+    expect(ledger.authoritativeArtifactRw3E2Lev.rw3E2Lev.controlArtifact).toBe("0b088ca3");
+    expect(ledger.authoritativeArtifactRw3Etf.rw3Etf.controlArtifact).toBe("33b0ac05");
+
+    // (c1): five candidates, the pinned control at +0; exactly one passes every §10.4 criterion.
+    const ctl = ledger.rw3Controls;
+    expect(ctl.trialsAdded).toBe(0);
+    const control = JSON.parse(readFileSync(join(root, "experiments", "momentum-crypto-rw3-control-vt35-pure-v1.json"), "utf8"));
+    expect(control.trialAccounting.priorUniqueTrials).toBe(402);
+    expect(control.candidates[0].regime?.correlationCeiling).toBeUndefined();
+    for (const [batchId, file, cand, prior, vt, ceiling, cap] of rw3C1Manifests) {
+      const m = JSON.parse(readFileSync(join(root, "experiments", file), "utf8"));
+      expect(m.asOf).toBe("2026-10-02T08:00:00Z");
+      expect(m.trialAccounting).toEqual({ priorUniqueTrials: prior, complete: false });
+      expect(m.candidates).toHaveLength(1);
+      expect(m.candidates[0].name).toBe(cand);
+      expect(m.candidates[0].volTarget.annualizedPct).toBe(vt);
+      expect(m.candidates[0].regime?.correlationCeiling).toBe(ceiling);
+      expect(m.candidates[0].maxGrossExposureMult).toBe(cap);
+      expect(ledger.batches.find((b: any) => b.id === batchId).sourcePaths).toContain(`experiments/${file}`);
+    }
+    const c1 = ledger.authoritativeArtifactRw3C1;
+    expect(c1.verdict).toContain("VALIDADO");
+    expect(c1.candidates.map((c: any) => c.candidate)).toEqual(["vt-50", "vt-70", "vt-35-corr92", "vt-50-corr92", "vt-35-corroff"]);
+    expect(c1.candidates.filter((c: any) => rw3KernelMeets(c, ctl.controls.cryptoPinned.gatesFailed, 45)).map((c: any) => c.candidate)).toEqual(c1.passingCandidates);
+    expect(c1.passingCandidates).toEqual(["vt-35-corroff"]);
+    const w = c1.rw3C1;
+    expect(c1.path).toContain("efc086b4");
+    expect(w.candidateOnCommonDays.sharpe).toBeGreaterThanOrEqual(w.controlOnCommonDays.sharpe);
+    expect(w.maxDrawdownPct).toBeLessThanOrEqual(45);
+    expect(w.outerPsr).toBeGreaterThanOrEqual(0.95);
+    expect(w.gatesFailed).toEqual(["maxDisplacementShare"]); // the same failed gate as the control
+    expect(c1.control.gatesFailed).toEqual(["maxDisplacementShare"]);
+    expect(w.combined.maxDrawdown).toBeLessThanOrEqual(0.2);
+    // The near miss stays recorded as a miss: corr92 alone loses 0.008 Sharpe to the control.
+    expect(c1.candidates.find((c: any) => c.candidate === "vt-35-corr92").sharpeCommonDays).toBeLessThan(c1.control.candidateOnCommonDays.sharpe);
+
+    // (c2): both below the control's Sharpe; the referenced point is the best return.
+    const c2 = ledger.authoritativeArtifactRw3C2;
+    expect(c2.verdict).toContain("REFUTADO");
+    expect(c2.verdict).toContain("NO SE CABLEA");
+    expect(c2.passingCandidates).toEqual([]);
+    expect(c2.candidates.filter((c: any) => rw3KernelMeets(c, ctl.controls.usdc.gatesFailed, c2.control.maxDrawdownPct)).map((c: any) => c.candidate)).toEqual([]);
+    for (const c of c2.candidates) expect(c.sharpeCommonDays).toBeLessThan(c.controlSharpeCommonDays);
+    const topC2 = [...c2.candidates].sort((a: any, b: any) => b.stitchedReturnPct - a.stitchedReturnPct)[0];
+    expect(topC2.candidate).toBe("d13-s5-vt70");
+    expect(c2.path).toContain(topC2.artifact);
+    const rwBatchC2 = ledger.batches.find((b: any) => b.id === "rw3-c2-usdc-vt-2026-10-23");
+    for (const [file, cand, prior, vt] of rw3C2Manifests) {
+      const m = JSON.parse(readFileSync(join(root, "experiments", file), "utf8"));
+      expect(m.trialAccounting).toEqual({ priorUniqueTrials: prior, complete: false });
+      expect(m.candidates[0].name).toBe(cand);
+      expect(m.candidates[0].volTarget.annualizedPct).toBe(vt);
+      expect(m.candidates[0].maxGrossExposureMult).toBe(2.3);
+      expect(rwBatchC2.sourcePaths).toContain(`experiments/${file}`);
+    }
+
+    // D4: refuted by C1, C2, C3, C5, C6b; the C4 pass is recorded as invalid, not hidden.
+    const d4m = JSON.parse(readFileSync(join(root, "experiments", "copy-d4-insider-clusters-v1.json"), "utf8"));
+    expect(d4m.trialAccounting).toEqual({ priorUniqueTrials: 420, complete: false });
+    expect(d4m.candidates.map((c: any) => [c.name, c.portfolio.strategy.holdSessions, c.portfolio.strategy.minDistinctInsiders])).toEqual(
+      [["A-h21", 21, 2], ["A-h63", 63, 2], ["A-h126", 126, 2], ["A-c3-h21", 21, 3]]);
+    expect(rw3Batches.at(-1).sourcePaths).toContain("experiments/copy-d4-insider-clusters-v1.json");
+    const d4 = ledger.authoritativeArtifactCopyD4;
+    expect(d4.verdict).toContain("REFUTADO");
+    expect(d4.verdict).toContain("NO SE CABLEA");
+    expect(d4.copyD4.criteriaFailed).toEqual(["C1_psr", "C2_maxDrawdown", "C3_stressSharpe", "C5_vsMarket", "C6b_exTopDecile"]);
+    expect(d4.copyD4.criteriaPassed).toEqual(["C4_vsPassive", "C6_yearShare", "C7_breakEvenExtraBps"]);
+    expect(d4.copyD4.c4Passive).toBe(0);
+    expect(d4.copyD4.c4Pass).toBe(true); // what rw-criteria.json says
+    expect(d4.defect).toMatchObject({ id: "C4_passiveSharpeExactlyZero", c4PassIsValid: false, verdictDependsOnC4: false });
+    expect(rw3Batches.at(-1).evidence).toContain("INVALIDO");
+    expect(rw3Batches.at(-1).evidence).toContain("EXACTAMENTE 0");
+  });
+
+  testWithDb("RW3 and COPY D4 artifacts exist on disk and reproduce the ledger claims", () => {
+    const round4 = (x: number) => Math.round(x * 10000) / 10000;
+    const pct2 = (x: number) => Math.round(x * 10000) / 100; // round to 4 dp, then percent
+    const readJson = (p: string) => JSON.parse(readFileSync(p, "utf8"));
+    const backtests = join(root, "data", "backtests");
+    const dirOf = (prefix: string) => {
+      const d = readdirSync(backtests).find(x => x.startsWith(prefix));
+      if (!d) throw new Error(`artifact ${prefix} not found under data/backtests`);
+      return join(backtests, d);
+    };
+    const dirOfPath = (declared: string) => dirOf(declared.replace(/^data\/backtests\//, "").replace(/\/$/, "").slice(0, 8));
+    const perf = (p: any) => ({ sharpe: round4(p.sharpe), totalReturn: round4(p.totalReturn), cagr: round4(p.cagr), maxDrawdown: round4(p.maxDrawdown) });
+    const base = (s: any) => ({
+      outerFoldReturnsPct: s.outerTests.map((t: { result: { totalReturn: number } }) => round2(t.result.totalReturn * 100)),
+      stitchedReturnPct: round2(s.stitchedOos.totalReturn * 100),
+      sharpe: round3(s.stitchedOos.sharpe),
+      maxDrawdownPct: round2(s.stitchedOos.maxDrawdown * 100),
+      outerPsr: round3(s.outerPsr),
+    });
+    const ctlDir = (k: string) => dirOfPath(ledger.rw3Controls.controls[k].path);
+    // Fixed-capital combined book (§10.4): E1 re-run, E2, crypto, USDC, aligned OOS sessions.
+    const combinedMemo = new Map<string, { commonDays: number; totalReturn: number; maxDrawdown: number }>();
+    const combined = (crypto: string, usdc: string) => {
+      const memoKey = `${crypto}|${usdc}`;
+      const hit = combinedMemo.get(memoKey);
+      if (hit) return hit;
+      const books: Array<[string, number]> = [[ctlDir("e1Rerun"), 50000], [ctlDir("e2"), 50000], [crypto, 5000], [usdc, 5000]];
+      const maps = books.map(([d]) => new Map(loadArtifactOuterDailyReturns(d).map(x => [x.date, x.ret] as [string, number])));
+      const dates = [...maps[0].keys()].filter(d => maps.every(m => m.has(d))).sort();
+      let eq = books.map(b => b[1]);
+      let peak = eq.reduce((a, b) => a + b, 0);
+      let maxDd = 0;
+      for (const d of dates) {
+        eq = eq.map((e, i) => e * (1 + (maps[i].get(d) ?? 0)));
+        const tot = eq.reduce((a, b) => a + b, 0);
+        peak = Math.max(peak, tot);
+        maxDd = Math.max(maxDd, (peak - tot) / peak);
+      }
+      const result = { commonDays: dates.length, totalReturn: round4(eq.reduce((a, b) => a + b, 0) / books.reduce((a, b) => a + b[1], 0) - 1), maxDrawdown: round4(maxDd) };
+      combinedMemo.set(memoKey, result);
+      return result;
+    };
+
+    // Controls (+0, no trial).
+    const dataHashOf = (dir: string) => readJson(join(dir, "summary.json")).dataHash.slice(0, 8);
+    for (const [k, gates] of [["e1Rerun", false], ["e2", false], ["cryptoPinned", true], ["usdc", true]] as const) {
+      const claims = ledger.rw3Controls.controls[k];
+      const dir = ctlDir(k);
+      const s = readJson(join(dir, "summary.json"));
+      expect(claims.artifact).toBe(dir.split("/").pop()!.slice(0, 8));
+      expect(claims.dataHash).toBe(dataHashOf(dir));
+      expect({ outerFoldReturnsPct: claims.outerFoldReturnsPct, stitchedReturnPct: claims.stitchedReturnPct, sharpe: claims.sharpe, maxDrawdownPct: claims.maxDrawdownPct, outerPsr: claims.outerPsr }).toEqual(base(s));
+      if (gates) expect(claims.gatesFailed).toEqual(Object.values(s.acceptance).filter((g: any) => !g.pass).map((g: any) => g.gate).sort());
+    }
+    {
+      const claims = ledger.rw3Controls.controls.e1Rerun;
+      const c = readJson(join(ctlDir("e1Rerun"), "rw2-criteria.json"));
+      expect(claims.criteriaFailed).toEqual((Object.values(c.criteria) as any[]).filter(x => x.pass === false).map(x => x.id).sort());
+      expect(claims.selectedPerFold).toEqual(c.reported.outerSelection.map((x: any) => x.candidateName));
+    }
+
+    // (a)/(b): full R1–R7 claims for the referenced point, compact claims for every frontier point.
+    const portfolioClaims = (dir: string, controlDir: string) => {
+      const s = readJson(join(dir, "summary.json"));
+      const c = readJson(join(dir, "rw2-criteria.json"));
+      const cr: any[] = Object.values(c.criteria);
+      const r3 = cr.find(x => x.id === "R3_vsControl");
+      const cmp = compareArtifacts(dir, controlDir, 252);
+      return {
+        ...base(s),
+        trades: s.stitchedOos.trades,
+        criteriaFailed: cr.filter(x => x.pass === false).map(x => x.id).sort(),
+        criteriaVerdict: c.verdict,
+        selectedPerFold: c.reported.outerSelection.map((x: any) => x.candidateName),
+        r3StrategySharpe: round3(r3.detail.strategySharpe),
+        r3ControlSharpe: round3(r3.detail.controlSharpe),
+        r3CommonDays: r3.detail.commonDays,
+        controlArtifact: controlDir.split("/").pop()!.slice(0, 8),
+        stressSharpe: round3(cr.find(x => x.id === "R4_stressSharpe").value),
+        maxYearPnlShare: round3(cr.find(x => x.id === "R5_yearShare").value),
+        exTopDecileSharpe: round3(cr.find(x => x.id === "R6_exTopDecile").value),
+        meanGross: round3(c.reported.avgGross),
+        ordersPerSessionOos: round2(c.reported.ordersPerSession),
+        turnoverAnnual: round2(c.reported.turnoverAnnual),
+        marginInterestUsd: Math.round(c.reported.marginInterest),
+        strategyOnCommonDays: perf(cmp.candidate),
+        controlOnCommonDays: perf(cmp.control),
+      };
+    };
+    for (const [, key, claimsKey, controlKey, , manifests] of rw3Portfolio) {
+      const art = ledger[key];
+      const controlDir = ctlDir(controlKey);
+      expect(art[claimsKey]).toEqual(portfolioClaims(dirOfPath(art.path), controlDir));
+      expect(art.frontier).toHaveLength(manifests.length);
+      for (const p of art.frontier) {
+        const dir = dirOf(p.artifact);
+        const v = portfolioClaims(dir, controlDir);
+        // The artifact was produced by the pre-registered manifest, in order.
+        expect(readJson(join(dir, "manifest-resolved.json")).name).toBe(manifests[art.frontier.indexOf(p)][0].replace(/\.json$/, ""));
+        expect(p).toEqual({
+          candidate: p.candidate, artifact: p.artifact, stitchedReturnPct: v.stitchedReturnPct, sharpe: v.sharpe, maxDrawdownPct: v.maxDrawdownPct,
+          cagrPctCommonDays: pct2(v.strategyOnCommonDays.cagr), meanGross: v.meanGross, marginInterestUsd: v.marginInterestUsd, criteriaFailed: v.criteriaFailed,
+        });
+        expect(v.selectedPerFold.every((n: string) => n === p.candidate)).toBe(true);
+      }
+      // Same data as the control (the ETF book has its own universe, so its hash differs by construction).
+      if (key !== "authoritativeArtifactRw3Etf") expect(dataHashOf(dirOfPath(art.path))).toBe(dataHashOf(controlDir));
+    }
+
+    // (c1)/(c2): summary.json + same-days comparison + combined book.
+    const kernelClaims = (dir: string, controlDir: string, comb?: ReturnType<typeof combined>) => {
+      const s = readJson(join(dir, "summary.json"));
+      const cmp = compareArtifacts(dir, controlDir, 365);
+      const worst = Math.min(...s.loo.map((l: any) => l.stitchedSharpe));
+      return {
+        selected: s.selectedCandidate.name,
+        ...base(s),
+        trades: s.stitchedOos.trades,
+        foldPsr: s.foldPsr.map((f: any) => round3(f.psr)),
+        gatesFailed: Object.values(s.acceptance).filter((g: any) => !g.pass).map((g: any) => g.gate).sort(),
+        worstLooSharpe: round3(worst),
+        worstLooRatio: round3(worst / s.stitchedOos.sharpe),
+        controlArtifact: controlDir.split("/").pop()!.slice(0, 8),
+        commonDays: cmp.commonDays, from: cmp.from, to: cmp.to,
+        candidateOnCommonDays: perf(cmp.candidate),
+        controlOnCommonDays: perf(cmp.control),
+        deltaSharpe: round3(cmp.deltaSharpe),
+        combined: comb,
+      };
+    };
+    const compact = (name: string, dir: string, v: ReturnType<typeof kernelClaims> & { combined: ReturnType<typeof combined> }) => ({
+      candidate: name, artifact: dir.split("/").pop()!.slice(0, 8),
+      stitchedReturnPct: v.stitchedReturnPct, sharpe: v.sharpe, maxDrawdownPct: v.maxDrawdownPct, outerPsr: v.outerPsr, foldPsr: v.foldPsr,
+      worstLooRatio: v.worstLooRatio, gatesFailed: v.gatesFailed, commonDays: v.commonDays,
+      sharpeCommonDays: v.candidateOnCommonDays.sharpe, controlSharpeCommonDays: v.controlOnCommonDays.sharpe,
+      cagrPctCommonDays: pct2(v.candidateOnCommonDays.cagr), maxDrawdownPctCommonDays: pct2(v.candidateOnCommonDays.maxDrawdown),
+      combinedBookMaxDrawdownPct: pct2(v.combined.maxDrawdown),
+    });
+    const cryptoCtl = ctlDir("cryptoPinned");
+    const usdcCtl = ctlDir("usdc");
+    const c1 = ledger.authoritativeArtifactRw3C1;
+    const c1Control = kernelClaims(cryptoCtl, cryptoCtl, combined(cryptoCtl, usdcCtl));
+    expect(c1.control).toEqual(c1Control);
+    for (const p of c1.candidates) {
+      const dir = dirOf(p.artifact);
+      const v = { ...kernelClaims(dir, cryptoCtl, combined(dir, usdcCtl)), combined: combined(dir, usdcCtl) };
+      expect(p).toEqual(compact(p.candidate, dir, v));
+      expect(dataHashOf(dir)).toBe(dataHashOf(cryptoCtl));
+      // Re-derive the §10.4 verdict from the artifacts, not from the ledger's own rows.
+      expect(rw3KernelMeets(compact(p.candidate, dir, v), c1Control.gatesFailed, 45)).toBe(c1.passingCandidates.includes(p.candidate));
+    }
+    expect(c1.rw3C1).toEqual(kernelClaims(dirOfPath(c1.path), cryptoCtl, combined(dirOfPath(c1.path), usdcCtl)));
+    expect(c1.rw3C1.combined.maxDrawdown).toBeLessThanOrEqual(0.2);
+    expect(c1.control.combined.maxDrawdown).toBeLessThan(c1.rw3C1.combined.maxDrawdown);
+
+    const c2 = ledger.authoritativeArtifactRw3C2;
+    const c2Control = kernelClaims(usdcCtl, usdcCtl);
+    expect(c2.control).toEqual(c2Control);
+    for (const p of c2.candidates) {
+      const dir = dirOf(p.artifact);
+      const v = { ...kernelClaims(dir, usdcCtl, combined(cryptoCtl, dir)), combined: combined(cryptoCtl, dir) };
+      expect(p).toEqual(compact(p.candidate, dir, v));
+      expect(dataHashOf(dir)).toBe(dataHashOf(usdcCtl));
+      expect(rw3KernelMeets(compact(p.candidate, dir, v), c2Control.gatesFailed, c2Control.maxDrawdownPct)).toBe(false);
+    }
+    const c2Top = dirOfPath(c2.path);
+    expect(c2.rw3C2).toEqual(kernelClaims(c2Top, usdcCtl, combined(cryptoCtl, c2Top)));
+
+    // D4: summary.json + rw-criteria.json, including the C4 defect.
+    const d4 = ledger.authoritativeArtifactCopyD4;
+    const d4Dir = dirOfPath(d4.path);
+    const s = readJson(join(d4Dir, "summary.json"));
+    const c = readJson(join(d4Dir, "rw-criteria.json"));
+    const cr: any[] = Object.values(c.criteria);
+    const claims = d4.copyD4;
+    expect({
+      outerFoldReturnsPct: claims.outerFoldReturnsPct, stitchedReturnPct: claims.stitchedReturnPct, sharpe: claims.sharpe, maxDrawdownPct: claims.maxDrawdownPct, outerPsr: claims.outerPsr,
+    }).toEqual(base(s));
+    expect(claims.trades).toBe(s.stitchedOos.trades);
+    expect(claims.benchSharpe).toBe(round3(s.stitchedOos.benchSharpe));
+    expect(claims.benchReturnPct).toBe(round2(s.stitchedOos.benchReturn * 100));
+    expect(claims.criteriaFailed).toEqual(cr.filter(x => x.pass === false).map(x => x.id).sort());
+    expect(claims.criteriaPassed).toEqual(cr.filter(x => x.pass === true).map(x => x.id).sort());
+    expect(claims.criteriaVerdict).toBe(c.verdict);
+    expect(claims.selectedPerFold).toEqual(c.reported.outerSelection.map((x: any) => x.candidateName));
+    expect([claims.c1, claims.c2, claims.c3, claims.c6, claims.c6b]).toEqual([c.criteria.C1.value, c.criteria.C2.value, c.criteria.C3.value, c.criteria.C6.value, c.criteria.C6b.value].map(round3));
+    expect([claims.c4Strategy, claims.c5Market, claims.c5Value]).toEqual([c.criteria.C4.detail.strategySharpe, c.criteria.C5.detail.marketSharpe, c.criteria.C5.value].map(round3));
+    expect(claims.c8).toBe(c.criteria.C8.pass); // null: external, never computed
+    // The defect: the passive benchmark's Sharpe is exactly 0, so C4's pass is not evidence.
+    expect(c.criteria.C4.detail.passiveSharpe).toBe(0);
+    expect(claims.c4Passive).toBe(0);
+    expect(claims.c4Obs).toBe(c.criteria.C4.detail.observations);
+    expect(c.criteria.C4.pass).toBe(true);
+    // The verdict stands without C4: five other criteria fail on their own.
+    expect(cr.filter(x => x.id !== "C4_vsPassive" && x.pass === false).map(x => x.id).sort()).toEqual(claims.criteriaFailed);
+  }, 120_000); // ~25 artifact reads plus eight combined-book rebuilds
+
+  // ── RW4 b/a (docs/reports/RW-reescritura-rentable.md §14 and §13) ──
+  // Trials 424 → 428 (RW4b, four E1 leveraged-with-brake chains) → 431 (RW4a c1, momentum_crypto) → 435 (RW4a c2, USDC).
+  // The manifests were pre-registered before any run. RW4b fails R3 in all four; RW4a c1 fails in all three;
+  // RW4a c2 has ONE chain that meets every §13.4 criterion by a hair, and it is NOT wired (replication and the
+  // Binance scalePosition come first).
+  // §13.4 criteria for the RW4a kernels: one id per failed criterion, from a compact row and the control's failed gates.
+  // (R3 = Sharpe on the common days; DD_commonDays = drawdown on the common days not worse than the control's;
+  // DD_sleeveGate = the sleeve's own gate: 45% in c1, the control's own drawdown in c2; the rest as §13.4.)
+  const rw4aCriteriaFailed = (c: any, controlGatesFailed: string[], sleeveMaxDdPct: number): string[] =>
+    ([
+      ["R3_sharpeCommonDays", c.sharpeCommonDays < c.controlSharpeCommonDays],
+      ["DD_commonDays", c.maxDrawdownPctCommonDays > c.controlMaxDrawdownPctCommonDays],
+      ["DD_sleeveGate", c.maxDrawdownPct > sleeveMaxDdPct],
+      ["PSR", c.outerPsr < 0.95],
+      ["foldPsr", c.foldPsr.filter((p: number) => p > 0.5).length < 2],
+      ["worstLoo", c.worstLooRatio < 0.6],
+      ["combinedBookDD", c.combinedBookMaxDrawdownPct > 20],
+      ["acceptanceGates", c.gatesFailed.some((g: string) => !controlGatesFailed.includes(g))],
+    ] as Array<[string, boolean]>).filter(([, failed]) => failed).map(([id]) => id);
+
+  // ── RW4 recompute helpers: artifacts on disk → the claims the ledger records ──
+  const rw4Calc = () => {
+    const r2 = (x: number) => Math.round(x * 100) / 100;
+    const r3 = (x: number) => Math.round(x * 1000) / 1000;
+    const r4 = (x: number) => Math.round(x * 10000) / 10000;
+    const pct2 = (x: number) => Math.round(x * 10000) / 100; // round to 4 dp, then percent
+    const readJson = (p: string) => JSON.parse(readFileSync(p, "utf8"));
+    const backtests = join(root, "data", "backtests");
+    const dirOf = (prefix: string) => {
+      const d = readdirSync(backtests).find(x => x.startsWith(prefix));
+      if (!d) throw new Error(`artifact ${prefix} not found under data/backtests`);
+      return join(backtests, d);
+    };
+    const dirOfPath = (declared: string) => dirOf(declared.replace(/^data\/backtests\//, "").replace(/\/$/, "").slice(0, 8));
+    const short = (dir: string) => dir.split("/").pop()!.slice(0, 8);
+    const perf = (p: any) => ({ sharpe: r4(p.sharpe), totalReturn: r4(p.totalReturn), cagr: r4(p.cagr), maxDrawdown: r4(p.maxDrawdown) });
+    const base = (s: any) => ({
+      outerFoldReturnsPct: s.outerTests.map((t: { result: { totalReturn: number } }) => r2(t.result.totalReturn * 100)),
+      stitchedReturnPct: r2(s.stitchedOos.totalReturn * 100),
+      sharpe: r3(s.stitchedOos.sharpe),
+      maxDrawdownPct: r2(s.stitchedOos.maxDrawdown * 100),
+      outerPsr: r3(s.outerPsr),
+    });
+    const seriesMemo = new Map<string, Map<string, number>>();
+    const series = (dir: string) => {
+      let m = seriesMemo.get(dir);
+      if (!m) { m = new Map(loadArtifactOuterDailyReturns(dir).map(x => [x.date, x.ret] as [string, number])); seriesMemo.set(dir, m); }
+      return m;
+    };
+    const dataHashOf = (dir: string) => readJson(join(dir, "summary.json")).dataHash.slice(0, 8);
+    const ids = { e1: "33b0ac05", e2: "0b088ca3", crypto: "efc086b4", usdc: "d0f7fd6f" };
+    const dirs = { e1: dirOf(ids.e1), e2: dirOf(ids.e2), crypto: dirOf(ids.crypto), usdc: dirOf(ids.usdc) };
+
+    // §13.4: fixed-capital combined book (50k/50k/5k/5k), series aligned by OOS session.
+    const combinedMemo = new Map<string, { commonDays: number; totalReturn: number; maxDrawdown: number }>();
+    const combined = (crypto: string, usdc: string) => {
+      const memoKey = `${crypto}|${usdc}`;
+      const hit = combinedMemo.get(memoKey);
+      if (hit) return hit;
+      const books: Array<[string, number]> = [[dirs.e1, 50000], [dirs.e2, 50000], [crypto, 5000], [usdc, 5000]];
+      const maps = books.map(([d]) => series(d));
+      const dates = [...maps[0].keys()].filter(d => maps.every(m => m.has(d))).sort();
+      let eq = books.map(b => b[1]);
+      let peak = eq.reduce((a, b) => a + b, 0);
+      let maxDd = 0;
+      for (const d of dates) {
+        eq = eq.map((e, i) => e * (1 + (maps[i].get(d) ?? 0)));
+        const tot = eq.reduce((a, b) => a + b, 0);
+        peak = Math.max(peak, tot);
+        maxDd = Math.max(maxDd, (peak - tot) / peak);
+      }
+      const result = { commonDays: dates.length, totalReturn: r4(eq.reduce((a, b) => a + b, 0) / books.reduce((a, b) => a + b[1], 0) - 1), maxDrawdown: r4(maxDd) };
+      combinedMemo.set(memoKey, result);
+      return result;
+    };
+
+    // §13.6: what the control cost in orders, from summary.json → outerTests[].result.exposureStats.
+    const exposureOf = (s: any) => {
+      const xs: any[] = s.outerTests.map((t: any) => t.result.exposureStats);
+      if (xs.some(x => !x)) return undefined;
+      const sum = (k: string) => xs.reduce((a, x) => a + x[k], 0);
+      return {
+        resizes: sum("resizes"), reductions: sum("reductions"), addBacks: sum("addBacks"), deferredUp: sum("deferredUp"),
+        resizeNotionalUsd: Math.round(sum("resizeNotionalUsd")),
+        resizesPerFold: xs.map(x => x.resizes),
+        meanScalePerFold: xs.map(x => r3(x.meanScale)),
+        minScale: r3(Math.min(...xs.map(x => x.minScale))),
+        pctTicksBelowOne: r2((100 * sum("ticksBelowOne")) / sum("ticks")),
+      };
+    };
+    const kernelClaims = (dir: string, controlDir: string, comb: ReturnType<typeof combined>) => {
+      const s = readJson(join(dir, "summary.json"));
+      const cmp = compareArtifacts(dir, controlDir, 365);
+      const worst = Math.min(...s.loo.map((l: any) => l.stitchedSharpe));
+      const exposure = exposureOf(s);
+      return {
+        selected: s.selectedCandidate.name,
+        ...base(s),
+        trades: s.stitchedOos.trades,
+        foldPsr: s.foldPsr.map((f: any) => r3(f.psr)),
+        gatesFailed: Object.values(s.acceptance).filter((g: any) => !g.pass).map((g: any) => g.gate).sort(),
+        worstLooSharpe: r3(worst),
+        worstLooRatio: r3(worst / s.stitchedOos.sharpe),
+        dataHash: s.dataHash.slice(0, 8),
+        feesUsd: Math.round(s.stitchedOos.fees),
+        controlArtifact: short(controlDir),
+        commonDays: cmp.commonDays, from: cmp.from, to: cmp.to,
+        candidateOnCommonDays: perf(cmp.candidate),
+        controlOnCommonDays: perf(cmp.control),
+        deltaSharpe: r3(cmp.deltaSharpe),
+        combined: comb,
+        ...(exposure ? { exposure } : {}),
+      };
+    };
+    type KernelClaims = ReturnType<typeof kernelClaims>;
+    const rw4aRow = (dir: string, v: KernelClaims, control: KernelClaims, sleeveMaxDdPct: number) => {
+      const row = {
+        candidate: v.selected, artifact: short(dir),
+        stitchedReturnPct: v.stitchedReturnPct, sharpe: v.sharpe, maxDrawdownPct: v.maxDrawdownPct, outerPsr: v.outerPsr, foldPsr: v.foldPsr,
+        worstLooRatio: v.worstLooRatio, gatesFailed: v.gatesFailed, commonDays: v.commonDays,
+        sharpeCommonDays: v.candidateOnCommonDays.sharpe, controlSharpeCommonDays: v.controlOnCommonDays.sharpe,
+        cagrPctCommonDays: pct2(v.candidateOnCommonDays.cagr), controlCagrPctCommonDays: pct2(v.controlOnCommonDays.cagr),
+        maxDrawdownPctCommonDays: pct2(v.candidateOnCommonDays.maxDrawdown), controlMaxDrawdownPctCommonDays: pct2(v.controlOnCommonDays.maxDrawdown),
+        combinedBookMaxDrawdownPct: pct2(v.combined.maxDrawdown),
+        feesUsd: v.feesUsd, controlFeesUsd: control.feesUsd,
+        ...(v.exposure ? { exposure: v.exposure } : {}),
+      };
+      return { ...row, criteriaFailed: rw4aCriteriaFailed(row, control.gatesFailed, sleeveMaxDdPct) };
+    };
+
+    // §14.3: A1 (account = E1 variant + E2, $50k each, no reallocation) recomputed from the two chains.
+    const account = (dir: string) => {
+      const mine = series(dir), e1 = series(dirs.e1), e2 = series(dirs.e2);
+      const common = [...mine.keys()].filter(d => e1.has(d) && e2.has(d)).sort();
+      const run = (a: Map<string, number>) => {
+        let ea = 1, eb = 1, peak = 1, maxDd = 0;
+        for (const d of common) {
+          ea *= 1 + a.get(d)!; eb *= 1 + e2.get(d)!;
+          const equity = (ea + eb) / 2;
+          peak = Math.max(peak, equity);
+          maxDd = Math.max(maxDd, (peak - equity) / peak);
+        }
+        return r4(maxDd);
+      };
+      return { commonDays: common.length, candidateMaxDrawdown: run(mine), controlMaxDrawdown: run(e1) };
+    };
+    const rw4bClaims = (dir: string) => {
+      const s = readJson(join(dir, "summary.json"));
+      const c = readJson(join(dir, "rw4b-criteria.json"));
+      const cr: any[] = Object.values(c.criteria);
+      const cmp = compareArtifacts(dir, dirs.e1, 252);
+      const acct = account(dir);
+      const window = (w: any) => ({
+        sleeveMaxDrawdownPct: pct2(w.detail.candidate.sleeve.maxDrawdown), accountMaxDrawdownPct: pct2(w.detail.candidate.account.maxDrawdown),
+        controlSleeveMaxDrawdownPct: pct2(w.detail.control.sleeve.maxDrawdown), controlAccountMaxDrawdownPct: pct2(w.detail.control.account.maxDrawdown),
+        sessions: w.detail.sessions,
+      });
+      return {
+        ...base(s),
+        trades: s.stitchedOos.trades,
+        criteriaFailed: cr.filter(x => x.pass === false).map(x => x.id).sort(),
+        criteriaPassed: cr.filter(x => x.pass === true).map(x => x.id).sort(),
+        criteriaVerdict: c.verdict,
+        selectedPerFold: c.reported.outerSelection.map((x: any) => x.candidateName),
+        r1Psr: r3(c.criteria.R1.value),
+        r2SleeveMaxDrawdownPct: pct2(c.criteria.R2.value),
+        r3StrategySharpe: r3(c.criteria.R3.detail.strategySharpe),
+        r3ControlSharpe: r3(c.criteria.R3.detail.controlSharpe),
+        r3CommonDays: c.criteria.R3.detail.commonDays,
+        r3DeltaSharpe: r3(c.criteria.R3.value),
+        stressSharpe: r3(c.criteria.R4.value),
+        maxYearPnlShare: r3(c.criteria.R5.value),
+        exTopDecileSharpe: r3(c.criteria.R6.value),
+        accountMaxDrawdownPct: pct2(acct.candidateMaxDrawdown),
+        accountControlMaxDrawdownPct: pct2(acct.controlMaxDrawdown),
+        accountCommonDays: acct.commonDays,
+        haircutPsr: r3(c.criteria.H1.value),
+        haircutStressSharpe: r3(c.criteria.H2.value),
+        marginInterestUsd: Math.round(c.criteria.M1.detail.marginInterestPaidUsd),
+        marginInterestShareOfNetPnl: r3(c.criteria.M1.detail.marginInterestShareOfNetPnl),
+        crash2020: window(c.criteria.S1),
+        bear2022: window(c.criteria.S2),
+        meanGross: r3(c.reported.avgGross),
+        ordersPerSessionOos: r2(c.reported.ordersPerSession),
+        turnoverAnnual: r2(c.reported.turnoverAnnual),
+        controlArtifact: short(dirs.e1), partnerArtifact: short(dirs.e2),
+        strategyOnCommonDays: perf(cmp.candidate),
+        controlOnCommonDays: perf(cmp.control),
+        deltaSharpeSameDays: r3(cmp.deltaSharpe),
+      };
+    };
+    type Rw4bClaims = ReturnType<typeof rw4bClaims>;
+    const rw4bRow = (name: string, dir: string, v: Rw4bClaims) => ({
+      candidate: name, artifact: short(dir),
+      stitchedReturnPct: v.stitchedReturnPct, sharpe: v.sharpe, maxDrawdownPct: v.maxDrawdownPct, deltaSharpeVsE1: v.deltaSharpeSameDays,
+      cagrPctCommonDays: pct2(v.strategyOnCommonDays.cagr), accountMaxDrawdownPct: v.accountMaxDrawdownPct,
+      marginInterestUsd: v.marginInterestUsd, meanGross: v.meanGross, turnoverAnnual: v.turnoverAnnual, criteriaFailed: v.criteriaFailed,
+    });
+    return { r2, r3, r4, pct2, readJson, dirOf, dirOfPath, short, base, dataHashOf, dirs, ids, combined, kernelClaims, rw4aRow, account, rw4bClaims, rw4bRow, series };
+  };
+
+  const rw4Batches = ledger.batches.slice(-3);
+  // [manifest, candidate, volTarget, maxGross, prior, fastVol]
+  const rw4bManifests = [
+    ["rw4b-e1-lev-vt20-g150-brake-v1.json", "vt20-g150-brake-fast5", 0.2, 1.5, 424, true],
+    ["rw4b-e1-lev-vt25-g150-brake-v1.json", "vt25-g150-brake-fast5", 0.25, 1.5, 425, true],
+    ["rw4b-e1-lev-vt25-g200-brake-v1.json", "vt25-g200-brake-fast5", 0.25, 2, 426, true],
+    ["rw4b-e1-lev-vt20-g150-brakeonly-v1.json", "vt20-g150-brake", 0.2, 1.5, 427, false],
+  ] as const;
+  const rw4DdC1 = { startPct: 0.05, endPct: 0.25 };
+  const rw4VolC1 = { annualizedPct: 50, fastBars: 120, slowBars: 504 };
+  const rw4DdC2 = { startPct: 0.1, endPct: 0.4 };
+  const rw4VolC2 = { annualizedPct: 80, fastBars: 10, slowBars: 42 };
+  // [manifest, candidate, prior, volCap, drawdown, softDrawdownPct]
+  const rw4aC1Manifests = [
+    ["momentum-crypto-rw4a-xc-dd-pure-v1.json", "vt35-corroff-xc-dd", 428, undefined, rw4DdC1, undefined],
+    ["momentum-crypto-rw4a-xc-vol-pure-v1.json", "vt35-corroff-xc-vol", 429, rw4VolC1, undefined, undefined],
+    ["momentum-crypto-rw4a-xc-both-pure-v1.json", "vt35-corroff-xc-both", 430, rw4VolC1, rw4DdC1, undefined],
+  ] as const;
+  const rw4aC2Manifests = [
+    ["momentum-crypto-usdc-daily-s5-rw4a-xc-dd-pure-v1.json", "d13-s5-xc-dd", 431, undefined, rw4DdC2, undefined],
+    ["momentum-crypto-usdc-daily-s5-rw4a-xc-vol-pure-v1.json", "d13-s5-xc-vol", 432, rw4VolC2, undefined, undefined],
+    ["momentum-crypto-usdc-daily-s5-rw4a-xc-both-pure-v1.json", "d13-s5-xc-both", 433, rw4VolC2, rw4DdC2, undefined],
+    ["momentum-crypto-usdc-daily-s5-rw4a-xc-dd-nosoftdd-pure-v1.json", "d13-s5-xc-dd-nosoftdd", 434, undefined, rw4DdC2, 1.0],
+  ] as const;
+
+  test("RW4 b/a align with their manifests and batches; RW4b and RW4a-c1 fail, RW4a-c2's winner passes, is replicated and wired (2026-10-23)", () => {
+    // Three batches chained 424 → 428 → 431 → 435, and the ledger ends at 435.
+    expect(rw4Batches.map((b: any) => b.id)).toEqual(["rw4b-e1-lev-brake-2026-10-23", "rw4a-c1-momentum-crypto-2026-10-23", "rw4a-c2-usdc-2026-10-23"]);
+    expect(rw4Batches.map((b: any) => b.hypothesisCount)).toEqual([4, 3, 4]);
+    let prev = 424;
+    for (const b of rw4Batches) {
+      expect(b.priorUniqueTrials).toBe(prev);
+      expect(b.resultingUniqueTrials).toBe(prev + b.hypothesisCount);
+      expect(b.inventoryComplete).toBe(false);
+      expect(b.resultsComplete).toBe(false);
+      expect(b.executionReported).toBe(true);
+      for (const p of b.sourcePaths) expect(sourcePathPresent(p)).toBe(true);
+      prev = b.resultingUniqueTrials;
+    }
+    expect(prev).toBe(435);
+    expect(ledger.batches.at(-1).resultingUniqueTrials).toBe(435);
+    expect(ledger.batches.at(-4).resultingUniqueTrials).toBe(424); // RW3/D4 end where RW4 begins
+
+    // Manifests: one candidate each, the pre-registered knobs, priors chained 424..434.
+    const manifestOf = (file: string) => JSON.parse(readFileSync(join(root, "experiments", file), "utf8"));
+    rw4bManifests.forEach(([file, cand, vt, gross, prior, fast]) => {
+      const m = manifestOf(file);
+      expect(m.trialAccounting).toEqual({ priorUniqueTrials: prior, complete: false });
+      expect(m.candidates).toHaveLength(1);
+      expect(m.candidates[0].name).toBe(cand);
+      expect(m.candidates[0].portfolio.strategy).toMatchObject({
+        kind: "volManaged", portfolioVolTarget: vt, maxGross: gross, drawdownBrake: { startDrawdown: 0.05, maxDrawdown: 0.2, floorScale: 0.25 },
+      });
+      expect(m.candidates[0].portfolio.strategy.fastVolLookback).toBe(fast ? 5 : undefined);
+      expect(rw4Batches[0].sourcePaths).toContain(`experiments/${file}`);
+    });
+    for (const [batch, manifests, asOf] of [[rw4Batches[1], rw4aC1Manifests, "2026-10-02T08:00:00Z"], [rw4Batches[2], rw4aC2Manifests, "2026-09-26T00:00:00Z"]] as const) {
+      for (const [file, cand, prior, volCap, drawdown, soft] of manifests) {
+        const m = manifestOf(file);
+        expect(m.asOf).toBe(asOf);
+        expect(m.trialAccounting).toEqual({ priorUniqueTrials: prior, complete: false });
+        expect(m.candidates).toHaveLength(1);
+        expect(m.candidates[0].name).toBe(cand);
+        expect(m.candidates[0].exposureControl).toEqual({
+          ...(volCap ? { volCap } : {}), ...(drawdown ? { drawdown } : {}), minScale: 0.25, band: 0.1, minOrderUsd: 100,
+        });
+        expect(m.candidates[0].risk?.softDrawdownPct).toBe(soft);
+        expect(batch.sourcePaths).toContain(`experiments/${file}`);
+      }
+    }
+    for (const [file] of rw4aC1Manifests) {
+      const c = manifestOf(file).candidates[0];
+      expect(c.volTarget.annualizedPct).toBe(35);
+      expect(c.regime.correlationCeiling).toBe(1.01); // the live vt35-corroff config
+    }
+
+    // Controls at +0: E1, E2 and USDC are the ones rw3Controls already records; the crypto control is RW3 c1's validated candidate.
+    const ctl = ledger.rw4Controls;
+    expect(ctl.trialsAdded).toBe(0);
+    expect(ctl.controls.e1).toMatchObject({ artifact: "33b0ac05", path: ledger.rw3Controls.controls.e1Rerun.path, dataHash: ledger.rw3Controls.controls.e1Rerun.dataHash });
+    expect(ctl.controls.e2).toMatchObject({ artifact: "0b088ca3", path: ledger.rw3Controls.controls.e2.path, dataHash: ledger.rw3Controls.controls.e2.dataHash });
+    expect(ctl.controls.usdc).toMatchObject({ artifact: "d0f7fd6f", path: ledger.rw3Controls.controls.usdc.path, dataHash: ledger.rw3Controls.controls.usdc.dataHash });
+    expect(ctl.controls.cryptoLive.path).toBe(ledger.authoritativeArtifactRw3C1.path);
+    expect(ctl.controls.cryptoLive.path).toContain("efc086b4");
+
+    // RW4b: all four fail ONLY R3; the reference is the best return, not a candidate.
+    const b4 = ledger.authoritativeArtifactRw4b;
+    expect(b4.verdict).toContain("REFERENCIA DE FRONTERA");
+    expect(b4.verdict).toContain("REFUTADO");
+    expect(b4.verdict).toContain("NO SE CABLEA");
+    expect(b4.frontier.map((p: any) => p.candidate)).toEqual(rw4bManifests.map(m => m[1]));
+    for (const p of b4.frontier) {
+      expect(p.criteriaFailed).toEqual(["R3_vsControl"]);
+      expect(p.deltaSharpeVsE1).toBeLessThan(0);
+      expect(p.maxDrawdownPct).toBeLessThanOrEqual(25); // R2 passes
+      expect(p.accountMaxDrawdownPct).toBeLessThanOrEqual(20); // A1 passes
+    }
+    const top4 = [...b4.frontier].sort((a: any, b: any) => b.stitchedReturnPct - a.stitchedReturnPct)[0];
+    expect(top4.candidate).toBe("vt25-g150-brake-fast5");
+    expect(b4.path).toContain(top4.artifact);
+    expect(b4.rw4b.criteriaFailed).toEqual(["R3_vsControl"]);
+    expect(b4.rw4b.criteriaVerdict).toBe("FALLA: R3");
+    expect(b4.rw4b.r3StrategySharpe).toBeLessThan(b4.rw4b.r3ControlSharpe);
+    expect(b4.rw4b.accountMaxDrawdownPct).toBeLessThan(b4.rw4b.accountControlMaxDrawdownPct); // the brake does lower the account drawdown
+    expect(b4.rw4b.controlArtifact).toBe("33b0ac05");
+    expect(b4.rw4b.partnerArtifact).toBe("0b088ca3");
+    expect(rw4Batches[0].evidence).toContain("REFUTADOS LOS 4");
+
+    // RW4a c1: three refuted candidates; the §13.4 verdict re-derived from the ledger's own rows.
+    const c1 = ledger.authoritativeArtifactRw4aC1;
+    expect(c1.verdict).toContain("REFERENCIA DE FRONTERA");
+    expect(c1.verdict).toContain("REFUTADO");
+    expect(c1.verdict).toContain("NO SE CABLEA");
+    expect(c1.passingCandidates).toEqual([]);
+    expect(c1.candidates.map((c: any) => c.candidate)).toEqual(rw4aC1Manifests.map(m => m[1]));
+    expect(c1.control.gatesFailed).toEqual(["maxDisplacementShare"]);
+    for (const c of c1.candidates) {
+      const failed = rw4aCriteriaFailed(c, c1.control.gatesFailed, 45);
+      expect(c.criteriaFailed).toEqual(failed);
+      expect(failed).toContain("R3_sharpeCommonDays");
+      expect(c.sharpeCommonDays).toBeLessThan(c.controlSharpeCommonDays);
+      expect(c.controlSharpeCommonDays).toBe(c1.control.candidateOnCommonDays.sharpe);
+    }
+    const topC1 = [...c1.candidates].sort((a: any, b: any) => b.stitchedReturnPct - a.stitchedReturnPct)[0];
+    expect(topC1.candidate).toBe("vt35-corroff-xc-dd");
+    expect(c1.path).toContain(topC1.artifact);
+    expect(c1.rw4aC1.selected).toBe("vt35-corroff-xc-dd");
+    expect(rw4Batches[1].evidence).toContain("REFUTADOS LOS 3");
+
+    // RW4a c2: exactly one chain meets every criterion, by a hair; replicated and wired (feat/rw4a-usdc-xc).
+    const c2 = ledger.authoritativeArtifactRw4aC2;
+    expect(c2.verdict).toContain("PASA TODOS LOS CRITERIOS");
+    expect(c2.verdict).toContain("POR LA MINIMA");
+    expect(c2.verdict).toContain("REPLICADO y CABLEADO");
+    expect(c2.candidates.map((c: any) => c.candidate)).toEqual(rw4aC2Manifests.map(m => m[1]));
+    expect(c2.control.gatesFailed).toEqual(["maxDrawdown", "minExcessReturnVsBench"]);
+    for (const c of c2.candidates) expect(c.criteriaFailed).toEqual(rw4aCriteriaFailed(c, c2.control.gatesFailed, c2.control.maxDrawdownPct));
+    expect(c2.candidates.filter((c: any) => c.criteriaFailed.length === 0).map((c: any) => c.candidate)).toEqual(c2.passingCandidates);
+    expect(c2.passingCandidates).toEqual(["d13-s5-xc-dd"]);
+    expect(c2.candidates.find((c: any) => c.candidate === "d13-s5-xc-both").criteriaFailed).toEqual(["R3_sharpeCommonDays"]);
+    expect(c2.candidates.find((c: any) => c.candidate === "d13-s5-xc-dd-nosoftdd").criteriaFailed).toEqual(
+      ["R3_sharpeCommonDays", "DD_commonDays", "DD_sleeveGate", "PSR", "acceptanceGates"]);
+    expect(c2.path).toContain("8892c1e9");
+    expect(c2.rw4aC2.selected).toBe("d13-s5-xc-dd");
+    const w = c2.rw4aC2;
+    expect(w.candidateOnCommonDays.sharpe).toBeGreaterThanOrEqual(w.controlOnCommonDays.sharpe);
+    expect(w.candidateOnCommonDays.maxDrawdown).toBeLessThanOrEqual(w.controlOnCommonDays.maxDrawdown);
+    expect(w.maxDrawdownPct).toBeLessThanOrEqual(c2.control.maxDrawdownPct);
+    expect(w.outerPsr).toBeGreaterThanOrEqual(0.95);
+    expect(w.foldPsr.filter((p: number) => p > 0.5)).toHaveLength(3);
+    expect(w.worstLooRatio).toBeGreaterThanOrEqual(0.6);
+    expect(w.combined.maxDrawdown).toBeLessThanOrEqual(0.2);
+    expect(w.gatesFailed).toEqual(c2.control.gatesFailed); // the same two gates the control fails
+    expect(w.exposure.resizes).toBe(w.exposure.reductions + w.exposure.addBacks);
+    // "by a hair": the margins are tiny, and the return is slightly BELOW the control's.
+    expect(w.candidateOnCommonDays.sharpe - w.controlOnCommonDays.sharpe).toBeLessThan(0.02);
+    expect(w.controlOnCommonDays.maxDrawdown - w.candidateOnCommonDays.maxDrawdown).toBeLessThan(0.01);
+    expect(w.stitchedReturnPct).toBeLessThan(c2.control.stitchedReturnPct);
+    // Wired (feat/rw4a-usdc-xc) after the independent replication passed (RW §13.6).
+    expect(c2.wiring).toMatchObject({ status: "passes; replicated; wired", wired: true, version: "momentum_crypto_usdc@daily-d13s5-xc-dd", riskStateReanchor: false });
+    expect(c2.wiring.satisfied).toHaveLength(3);
+    expect(c2.wiring.requiredBeforeWiring).toBeUndefined();
+    const rep = c2.wiring.replication;
+    expect(rep.maxAbsDeltaSharpePerFold).toBeLessThan(rep.limit);
+    expect(rep.limit).toBe(0.10);
+    expect(rep.maxAbsDeltaSharpePerFold).toBeLessThan(1e-13);
+    expect(rep.winnerFoldSharpe).toHaveLength(3);
+    expect(rep.controlFoldSharpe).toHaveLength(3);
+    rep.winnerFoldSharpe.forEach((v: number, i: number) => expect(Math.abs(v - rep.controlFoldSharpe[i])).toBeLessThan(0.10));
+    expect(rep.resizes).toBe(w.exposure.resizes);           // the same 104 resizes as the artifact
+    expect(rep.reductions).toBe(w.exposure.reductions);
+    expect(rep.addBacks).toBe(w.exposure.addBacks);
+    expect(rep.controlResizes).toBe(0);
+    expect(rep.deltaSharpeCommonDays).toBeCloseTo(w.deltaSharpe, 9);
+    expect(c2.verdict).toContain("REPLICADO y CABLEADO");
+    expect(rw4Batches[2].evidence).toContain("REPLICADO y CABLEADO");
+    expect(rw4Batches[2].evidence).not.toContain("PENDIENTE de replica");
+
+    // The claim "wired" holds in the code (CI-safe, source text): the knob in the USDC plan, scalePosition on the
+    // Binance adapter, the version with this artifact in the version table — and the live candidate lock reads it.
+    const indexSrc = readFileSync(join(root, "src/index.ts"), "utf8");
+    expect(indexSrc.split("exposureControl: {").length - 1).toBe(1); // the USDC plan only (momentum_crypto's candidates failed)
+    expect(indexSrc).toContain("MOMENTUM_USDC_EXPOSURE_CONTROL");
+    const adapterSrc = readFileSync(join(root, "src/strategies/momentum/BinanceMomentumAdapter.ts"), "utf8");
+    expect(adapterSrc).toContain("async scalePosition(");
+    const versionsSrc = readFileSync(join(root, "src/portfolio/modelVersions.ts"), "utf8");
+    expect(versionsSrc).toContain(`id: "${c2.wiring.version}"`);
+    expect(versionsSrc).toContain(c2.path.replace(/^data\/backtests\//, "").replace(/\/$/, ""));
+    expect(versionsSrc).toContain('manifest: "experiments/momentum-crypto-usdc-daily-s5-rw4a-xc-dd-pure-v1.json"');
+    expect(readFileSync(join(root, "src/config/liveSleeveConfigs.ts"), "utf8")).toContain("exposureControl: { ...MOMENTUM_USDC_EXPOSURE_CONTROL");
+    expect(readFileSync(join(root, "src/portfolios/builtin.ts"), "utf8")).toContain("exposureControl: { drawdown: { startPct: 0.1, endPct: 0.4 }, minScale: 0.25, band: 0.1, minOrderUsd: 100 }");
+  });
+
+  testWithDb("RW4 artifacts exist on disk and reproduce the ledger claims (same-day comparison, combined book, account drawdown)", () => {
+    const k = rw4Calc();
+    const { dirOf, dirOfPath, readJson, dirs, dataHashOf, base, r4 } = k;
+    const manifestStem = (file: string) => file.replace(/\.json$/, "");
+
+    // Controls (+0): artifact, data hash, and (crypto) the full chain claims.
+    const ctl = ledger.rw4Controls.controls;
+    expect(ctl.e1.path).toBe(`data/backtests/${dirs.e1.split("/").pop()}/`);
+    expect(ctl.e2.path).toBe(`data/backtests/${dirs.e2.split("/").pop()}/`);
+    expect(ctl.usdc.path).toBe(`data/backtests/${dirs.usdc.split("/").pop()}/`);
+    expect(ctl.cryptoLive.path).toBe(`data/backtests/${dirs.crypto.split("/").pop()}/`);
+    expect([ctl.e1.dataHash, ctl.e2.dataHash, ctl.usdc.dataHash, ctl.cryptoLive.dataHash]).toEqual([dataHashOf(dirs.e1), dataHashOf(dirs.e2), dataHashOf(dirs.usdc), dataHashOf(dirs.crypto)]);
+    const cs = readJson(join(dirs.crypto, "summary.json"));
+    expect({ outerFoldReturnsPct: ctl.cryptoLive.outerFoldReturnsPct, stitchedReturnPct: ctl.cryptoLive.stitchedReturnPct, sharpe: ctl.cryptoLive.sharpe, maxDrawdownPct: ctl.cryptoLive.maxDrawdownPct, outerPsr: ctl.cryptoLive.outerPsr })
+      .toEqual({ ...base(cs) });
+    expect(ctl.cryptoLive.gatesFailed).toEqual(Object.values(cs.acceptance).filter((g: any) => !g.pass).map((g: any) => g.gate).sort());
+    expect(ctl.cryptoLive.selected).toBe(cs.selectedCandidate.name);
+
+    // RW4b: rw4b-criteria.json + compareArtifacts(R3 days) + the account (A1) recomputed from the two chains.
+    const b4 = ledger.authoritativeArtifactRw4b;
+    for (const p of b4.frontier) {
+      const dir = dirOf(p.artifact);
+      const v = k.rw4bClaims(dir);
+      expect(p).toEqual(k.rw4bRow(p.candidate, dir, v));
+      const idx = b4.frontier.indexOf(p);
+      expect(readJson(join(dir, "manifest-resolved.json")).name).toBe(manifestStem(rw4bManifests[idx][0]));
+      expect(readJson(join(dir, "rw4b-criteria.json")).manifest).toBe(`experiments/${rw4bManifests[idx][0]}`);
+      expect(v.selectedPerFold.every((n: string) => n === p.candidate)).toBe(true);
+      expect(dataHashOf(dir)).toBe(dataHashOf(dirs.e1));
+      // R3: the criteria file and the same-day comparison agree, and it is the only failure.
+      expect(v.r3DeltaSharpe).toBe(v.deltaSharpeSameDays);
+      expect(v.r3CommonDays).toBe(readJson(join(dir, "rw4b-criteria.json")).reported.commonDays);
+      expect(v.r3ControlSharpe).toBe(k.r3(compareArtifacts(dir, dirs.e1, 252).control.sharpe));
+      expect(v.criteriaFailed).toEqual(["R3_vsControl"]);
+      // A1 recomputed (E1 variant + E2, $50k each) equals what portfolio-wf wrote.
+      const acct = k.account(dir);
+      const a1 = readJson(join(dir, "rw4b-criteria.json")).criteria.A1;
+      expect(acct.candidateMaxDrawdown).toBe(r4(a1.value));
+      expect(acct.controlMaxDrawdown).toBe(r4(a1.detail.controlAccount.maxDrawdown));
+      expect(acct.commonDays).toBe(a1.detail.commonDays);
+      expect(a1.pass).toBe(acct.candidateMaxDrawdown <= 0.2);
+    }
+    expect(b4.rw4b).toEqual(k.rw4bClaims(dirOfPath(b4.path)));
+
+    // RW4a: summary.json + same-day comparison + combined book, and the §13.4 verdict from the artifacts.
+    const checkFamily = (art: any, manifests: ReadonlyArray<readonly [string, string, ...unknown[]]>, controlDir: string, sleeveMaxDdPct: (control: any) => number,
+      combinedOf: (candidateDir: string) => ReturnType<typeof k.combined>) => {
+      const control = k.kernelClaims(controlDir, controlDir, combinedOf(controlDir));
+      expect(art.control).toEqual(control);
+      const sleeveMax = sleeveMaxDdPct(control);
+      art.candidates.forEach((p: any, i: number) => {
+        const dir = dirOf(p.artifact);
+        const v = k.kernelClaims(dir, controlDir, combinedOf(dir));
+        expect(p).toEqual(k.rw4aRow(dir, v, control, sleeveMax));
+        expect(readJson(join(dir, "manifest-resolved.json")).name).toBe(manifestStem(manifests[i][0]));
+        expect(v.selected).toBe(manifests[i][1]);
+        expect(dataHashOf(dir)).toBe(dataHashOf(controlDir));
+        // The same-day comparison is the §13.4 one: both sides on the control's common days (ppy 365).
+        expect(v.commonDays).toBe(control.commonDays);
+        expect(v.controlOnCommonDays).toEqual(control.candidateOnCommonDays);
+        expect(v.deltaSharpe).toBe(k.r3(v.candidateOnCommonDays.sharpe - v.controlOnCommonDays.sharpe));
+        // Re-derive the verdict from the artifact, not from the ledger's own row.
+        expect(k.rw4aRow(dir, v, control, sleeveMax).criteriaFailed.length === 0).toBe(art.passingCandidates.includes(p.candidate));
+        // The resize telemetry is in summary.json and adds up.
+        const xs = readJson(join(dir, "summary.json")).outerTests.map((t: any) => t.result.exposureStats);
+        expect(xs.every((x: any) => x && x.resizes === x.reductions + x.addBacks)).toBe(true);
+      });
+      return control;
+    };
+    const c1 = ledger.authoritativeArtifactRw4aC1;
+    checkFamily(c1, rw4aC1Manifests, dirs.crypto, () => 45, d => k.combined(d, dirs.usdc));
+    expect(c1.rw4aC1).toEqual(k.kernelClaims(dirOfPath(c1.path), dirs.crypto, k.combined(dirOfPath(c1.path), dirs.usdc)));
+    const c2 = ledger.authoritativeArtifactRw4aC2;
+    checkFamily(c2, rw4aC2Manifests, dirs.usdc, control => control.maxDrawdownPct, d => k.combined(dirs.crypto, d));
+    expect(c2.rw4aC2).toEqual(k.kernelClaims(dirOfPath(c2.path), dirs.usdc, k.combined(dirs.crypto, dirOfPath(c2.path))));
+    // The winner's common-day margins straight from compareArtifacts, not from the ledger.
+    const cmp = compareArtifacts(dirOfPath(c2.path), dirs.usdc, 365);
+    expect(cmp.candidate.sharpe).toBeGreaterThanOrEqual(cmp.control.sharpe);
+    expect(cmp.candidate.maxDrawdown).toBeLessThanOrEqual(cmp.control.maxDrawdown);
+    expect(cmp.commonDays).toBe(c2.rw4aC2.commonDays);
+  }, 120_000); // ~15 artifact reads plus the combined-book rebuilds
 });

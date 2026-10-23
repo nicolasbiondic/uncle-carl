@@ -55,6 +55,13 @@ beforeAll(() => {
   weekStart = getETDayStart(Date.now() - 6 * 86_400_000);
   weekTradeTime = weekStart + 2 * 86_400_000; // safely inside the 7D window, before today
 
+  // Realization order is the OPPOSITE of economic performance: a cutover
+  // cashing an old gain must not win the weekly equity scoreboard.
+  for (const [id, move] of [["meanrev_stocks", -100], ["momentum_stocks", 50], ["momentum_crypto", 10]] as const) {
+    saveEquitySnapshot(id, 10_000, 10_000, 0, weekStart - 60_000);
+    saveEquitySnapshot(id, 10_000 + move, 10_000 + move, 0, Date.now());
+  }
+
   // ── alpaca_main / binance_main truth: Inicio (first-ever) → 7D anchor →
   // today anchor (== latest, for the "valid zero pct" case) → latest. ──
   saveEquitySnapshot("alpaca_main", 101_800, 90_000, 0, Date.now() - 20 * 86_400_000);
@@ -148,15 +155,14 @@ describe("composeDailyDigest — trade/position counts (active summaries only)",
 });
 
 describe("Rendimiento 7D — active sleeves, ≥1 weekly close, best→worst, no clutter", () => {
-  test("sorted descending by 7D pnl with exact W/L", () => {
+  test("sorted by 7D marked equity, with realization and W/L reported separately", () => {
     const msg = reporter.composeDailyDigest();
     const lines = msg.split("\n");
-    const idx = lines.indexOf("<b>Rendimiento 7D realizado</b>");
+    const idx = lines.indexOf("<b>Rendimiento 7D a mercado</b>");
     expect(idx).toBeGreaterThan(-1);
-    // Best→worst by 7D pnl: +296.03, then −3.91 (still beats −32.86).
-    expect(lines[idx + 1]).toBe("Reversión Stocks realizado +$296.03 · 5W/1L");
-    expect(lines[idx + 2]).toBe("Momentum Cripto realizado −$3.91 · 0W/1L");
-    expect(lines[idx + 3]).toBe("Momentum Stocks realizado −$32.86 · 1W/1L");
+    expect(lines[idx + 1]).toBe("Momentum Stocks MtM +$50.00 · realizado −$32.86 · 1W/1L");
+    expect(lines[idx + 2]).toBe("Momentum Cripto MtM +$10.00 · realizado −$3.91 · 0W/1L");
+    expect(lines[idx + 3]).toBe("Reversión Stocks MtM −$100.00 · realizado +$296.03 · 5W/1L");
   });
 
   test("the reconcile close never inflates meanrev_stocks' 7D pnl or W count", () => {

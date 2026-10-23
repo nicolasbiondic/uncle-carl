@@ -20,6 +20,7 @@
  */
 import { DEFAULT_MEANREV_CONFIG } from "../strategies/meanrev/MeanRevEngine";
 import { EQUITY_SEMANTICS, type EquitySemantics } from "../strategies/momentum/RiskGuard";
+import { currentModelVersion } from "../portfolio/modelVersions";
 import { builtinPortfolio } from "./builtin";
 import type { PlatformPortfolioRow } from "./store";
 import type {
@@ -32,16 +33,32 @@ import type {
 } from "./types";
 
 /** The four validated presets — each one IS a live sleeve whose manifest /
- *  artifact justifies its exact params (vivo = validado). The mapping is
- *  locked against src/config/liveSleeveConfigs.ts's LIVE_SLEEVE_MANIFESTS
- *  by validate.test.ts (data mirror, not an import: liveSleeveConfigs
- *  imports src/index.ts and this module sits UNDER it in the import graph). */
-export const VALIDATED_PRESETS: Record<string, { template: PortfolioTemplate; manifestPath: string }> = {
-  momentum_stocks: { template: "momentum_tsm", manifestPath: "experiments/momentum-stocks-daily-blend3-k150-exposure-v1.json" },
-  meanrev_stocks: { template: "meanrev_connors", manifestPath: "experiments/meanrev-slot12-pure-v1.json" },
-  momentum_crypto: { template: "momentum_tsm", manifestPath: "experiments/momentum-crypto-2026w-control-pure-v1.json" },
-  momentum_crypto_usdc: { template: "momentum_tsm", manifestPath: "experiments/momentum-crypto-usdc-daily-s5-pure-v1.json" },
-};
+ *  artifact justifies its exact params (vivo = validado). The manifest is
+ *  the sleeve's CURRENT model version's (src/portfolio/modelVersions.ts, one
+ *  source with liveSleeveConfigs' LIVE_SLEEVE_MANIFESTS and the scorecard
+ *  band; locked by validate.test.ts). A sleeve whose current version runs on
+ *  the portfolio engine (RW2) has template "portfolio" and `portfolioEngine`
+ *  set: its validated design is NOT the builtin incumbent params, and a
+ *  preset cannot create it — scripts/portfolio-engine-cutover.ts writes the
+ *  design with its provenance hash (validateCreatePortfolio refuses). */
+export interface ValidatedPreset {
+  template: PortfolioTemplate;
+  manifestPath: string;
+  /** Present when the validated model runs on the portfolio engine. */
+  portfolioEngine?: { version: string; candidate: string | null };
+}
+export const VALIDATED_PRESETS: Record<string, ValidatedPreset> = Object.fromEntries(
+  (["momentum_stocks", "meanrev_stocks", "momentum_crypto", "momentum_crypto_usdc"] as const).map((id) => {
+    const v = currentModelVersion(id);
+    if (!v?.manifest) throw new Error(`VALIDATED_PRESETS: MODEL_VERSIONS['${id}'] current version names no manifest`);
+    const pe = v.engine === "portfolio";
+    return [id, {
+      template: pe ? "portfolio" : builtinPortfolio(id).template,
+      manifestPath: v.manifest,
+      ...(pe ? { portfolioEngine: { version: v.id, candidate: v.candidate ?? null } } : {}),
+    } satisfies ValidatedPreset];
+  }),
+);
 
 /** Which equity semantics each broker account's ledger uses — a portfolio
  *  on an account MUST read that account's semantics, or RiskGuard would
@@ -116,7 +133,7 @@ export function portfolioUniverse(template: PortfolioTemplate, params: Portfolio
     // RW portfolio engine: the trend designs carry their universe; the
     // point-in-time core (factorCore) has none to declare here.
     const s = (params as PortfolioEngineParams).strategy;
-    return s && s.kind !== "factorCore" && Array.isArray(s.universe) ? [...s.universe] : [];
+    return s && s.kind !== "factorCore" && s.kind !== "copySignal" && Array.isArray(s.universe) ? [...s.universe] : [];
   }
   const u = (params as MomentumTsmParams).universe;
   return Array.isArray(u) ? u : [];
@@ -165,6 +182,28 @@ export function validateMomentumParams(
     if (!inRange(v.annualizedPct, 1, 200)) errors.push("params.volTarget.annualizedPct: expected 1..200");
     if (!isInt(v.lookbackBars, 2, 5000)) errors.push("params.volTarget.lookbackBars: expected integer 2..5000");
     if (!inRange(v.minScale, 0.01, 1) || !inRange(v.maxScale, 1, 3)) errors.push("params.volTarget: expected 0.01 ≤ minScale ≤ 1 ≤ maxScale ≤ 3");
+  }
+  if (p.exposureControl != null) {
+    const x = p.exposureControl;
+    if (x.volCap == null && x.drawdown == null) errors.push("params.exposureControl: needs volCap and/or drawdown");
+    if (x.volCap != null) {
+      if (!inRange(x.volCap.annualizedPct, 1, 300)) errors.push("params.exposureControl.volCap.annualizedPct: expected 1..300");
+      if (!isInt(x.volCap.fastBars, 2, 5000)) errors.push("params.exposureControl.volCap.fastBars: expected integer 2..5000");
+      if (!isInt(x.volCap.slowBars, 2, 5000) || x.volCap.slowBars < x.volCap.fastBars) errors.push("params.exposureControl.volCap.slowBars: expected integer ≥ fastBars");
+    }
+    if (x.drawdown != null) {
+      if (!inRange(x.drawdown.startPct, 0, 0.999)) errors.push("params.exposureControl.drawdown.startPct: expected fraction 0..1");
+      if (!inRange(x.drawdown.endPct, 0, 1) || !(x.drawdown.endPct > x.drawdown.startPct)) errors.push("params.exposureControl.drawdown.endPct: expected fraction in (startPct, 1]");
+    }
+    if (!inRange(x.minScale, 1e-6, 1)) errors.push("params.exposureControl.minScale: expected (0, 1]");
+    if (!inRange(x.band, 0, 0.999)) errors.push("params.exposureControl.band: expected fraction 0..1");
+    if (!inRange(x.minOrderUsd, 0, 1e9)) errors.push("params.exposureControl.minOrderUsd: expected ≥ 0");
+  }
+  if (p.regime != null) {
+    // Correlation lives in [-1, 1]; 1.01 is the "brake OFF" value (RW3), so the cap sits just above it.
+    if (typeof p.regime !== "object" || (p.regime.correlationCeiling !== undefined && !inRange(p.regime.correlationCeiling, 0.1, 1.01))) {
+      errors.push("params.regime.correlationCeiling: expected 0.1..1.01");
+    }
   }
   if (p.tsmTrail != null) checkTrailStop("params.tsmTrail", p.tsmTrail, errors);
   if (p.volStop != null) checkTrailStop("params.volStop", p.volStop, errors);
@@ -311,6 +350,11 @@ export function validateCreatePortfolio(req: CreatePortfolioRequest, ctx: Portfo
     const meta = VALIDATED_PRESETS[preset];
     if (!meta) {
       errors.push(`preset: '${preset}' is not a validated preset (have: ${Object.keys(VALIDATED_PRESETS).join(", ")})`);
+    } else if (meta.portfolioEngine) {
+      // RW2: the validated model of this sleeve is a portfolio-engine design, not the builtin
+      // incumbent params a preset would copy — creating "validated" TSM/Connors params from it
+      // would label the retired model as the validated one.
+      errors.push(`preset: '${preset}' — its validated model (${meta.portfolioEngine.version}) runs on the portfolio engine from ${meta.manifestPath}${meta.portfolioEngine.candidate ? ` candidate ${meta.portfolioEngine.candidate}` : ""}; a preset cannot create it: use scripts/portfolio-engine-cutover.ts (observer, then live), which writes the design with its provenance hash`);
     } else if (errors.length === 0) {
       template = meta.template;
       params = presetParamsFor(preset, id, capital);

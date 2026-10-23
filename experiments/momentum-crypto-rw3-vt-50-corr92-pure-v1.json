@@ -1,0 +1,103 @@
+{
+  "name": "momentum-crypto-rw3-vt-50-corr92-pure-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTERED (2026-10-22) BEFORE any run, docs/reports/RW-reescritura-rentable.md §10 (RW3 'más agresivo'). Family (c1) momentum_crypto (the only sleeve with measured edge; flat since ~2026-10-12 because the live correlation brake reads 0.85-0.86 against the 0.85 ceiling). Byte-for-byte copy of momentum-crypto-2026w-control-pure-v1 (vt-35, 8 majors, 4 x 0.375, stop 4%, sharpeGate {30d,0}, soft-DD untouched — relaxing the soft-DD was refuted three times: breakers-v1, marketgate-nosoftdd, ddscale) with asOf pinned to 2026-10-02T08:00:00Z (= asOfResolved of the control artifact 06e1a160, so folds and OOS days are identical) and ONE change: both axes: vol target 50 AND correlationCeiling 0.92. candidate.maxGrossExposureMult 2.5875 = live cap 1.725 x 1.5 (line-E convention) — the live MOMENTUM_CRYPTO_MAX_GROSS_EXPOSURE_MULT would need the same change. PRIORS: gates-v1 (2026-09-13) refuted regime-OFF (correlation AND vol-spike off: DD +4.6pp); sizing-v2 measured vt-50 inner Sharpe 1.28 vs vt-35 1.56 but vt-50 won outer fold 1 (+180.9%/DD 40.9); line E measured k=1.5 flat scaling at +556.8%/Sharpe 1.159/DD 39.8% vs control 1.313/32.6%. CRITERIA: the control's acceptance gates (unchanged below) PLUS, against the control on the same OOS days (06e1a160's data hash 50ad44f0 does NOT reproduce on the current historical.db — the 8-name 1h universe + funding hashed 77c87d51 on 2026-10-22 — so the director first runs the pinned control copy momentum-crypto-rw3-control-vt35-pure-v1, +0, and compares against it): Sharpe >= control (R3), maxDD <= 45% (sleeve gate) and the combined-book OOS maxDD <= 20% (line-E operationalization of the owner's 25% budget), PSR >= 0.95, >= 2/3 folds PSR > 0.5, worst LOO >= 0.6 x Sharpe. Pre-registered pick among passing chains: highest CAGR, ties to lower maxDD. Pure chain of 1 candidate. Trials 416 -> 417.",
+  "trialAccounting": {
+    "priorUniqueTrials": 416,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-10-02T08:00:00Z",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt-50-corr92",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 50,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "regime": {
+        "correlationCeiling": 0.92
+      },
+      "maxGrossExposureMult": 2.5875
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

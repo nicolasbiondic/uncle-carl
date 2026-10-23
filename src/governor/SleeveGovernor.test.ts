@@ -6,7 +6,7 @@ import { SwitchingAdapter } from "./SwitchingAdapter";
 import { eventBus, EVENTS } from "../utils/events";
 import type { MomentumBrokerAdapter } from "../strategies/momentum/MomentumEngine";
 import type { CurrentPosition } from "../strategies/momentum/Rebalancer";
-import { makeTestDb } from "../test-support/db";
+import { makeTestDb, rawSnap } from "../test-support/db";
 
 beforeAll(() => {
   makeTestDb();
@@ -59,6 +59,26 @@ function activityCount(sleeve: string, like: string): number {
 }
 
 describe("SleeveGovernor — demotion is RECOMMENDATION-ONLY (owner mandate: always live)", () => {
+  test("without a band, live equity loss is not hidden by realizing pre-window gains", () => {
+    const sleeve = "momentum_crypto";
+    const gov = new SleeveGovernor({ cacheMs: 0 });
+    gov.register({ sleeve, kind: "live" });
+    gov.setEvidenceEpoch(sleeve, Date.now() - 91 * DAY);
+    seedMany(sleeve, 30, 100, { closeReason: "MODEL_CUTOVER" });
+    rawSnap(sleeve, 5000, Date.now() - 91 * DAY, 5);
+    rawSnap(sleeve, 4900, Date.now() - DAY, 5);
+    try {
+      gov.evaluate();
+      const row = getDB().prepare("SELECT message FROM activity_log WHERE account_id=? AND message LIKE 'RECOMMEND_REDESIGN%' ORDER BY id DESC LIMIT 1").get(sleeve) as { message: string };
+      expect(row.message).toContain("PnL $-100.00 (MtM");
+      expect(row.message).toContain("realized $3000.00");
+      expect(gov.getMode(sleeve)).toBe("live");
+    } finally {
+      for (const table of ["trades", "activity_log"]) getDB().prepare(`DELETE FROM ${table} WHERE account_id=?`).run(sleeve);
+      getDB().prepare("DELETE FROM equity_snapshots WHERE profile_id=?").run(sleeve);
+      getDB().prepare("DELETE FROM sleeve_modes WHERE sleeve=?").run(sleeve);
+    }
+  });
   test("live sleeve meeting every bleed criterion → RECOMMEND_REDESIGN (never a demotion), mode NEVER changes", () => {
     const gov = new SleeveGovernor({ cacheMs: 0 });
     gov.register({ sleeve: "gov_demote", kind: "live" });

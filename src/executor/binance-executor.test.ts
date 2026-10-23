@@ -720,6 +720,53 @@ describe("getOpenProtectiveOrders — algo-order quantity shape (totalQty, no or
   });
 });
 
+describe("cancelAllOrders exceptClientOrderIds (RW4a: the re-sized stop is placed first, then the old ones are swept around it)", () => {
+  test("our stamped stops are canceled in BOTH stores except the excluded ids; anonymous stops stay (aggregate not flat)", async () => {
+    const keepRegular = fapiClientOrderId("stop:BTCUSDT:buy:new");
+    const keepAlgo = fapiClientOrderId("stop:BTCUSDT:buy:new-algo");
+    const oldRegular = fapiClientOrderId("stop:BTCUSDT:buy:old");
+    const oldAlgo = fapiClientOrderId("stop:BTCUSDT:buy:old-algo");
+    const deletes: string[] = [];
+    const exec = make({
+      signedRequest: async (method: string, path: string, params: any) => {
+        if (method === "GET" && path === "/fapi/v1/openOrders") return [
+          { orderId: 1, clientOrderId: keepRegular, type: "STOP_MARKET", reduceOnly: "true" },
+          { orderId: 2, clientOrderId: oldRegular, type: "STOP_MARKET", reduceOnly: "true" },
+          { orderId: 3, clientOrderId: "web_manual", type: "STOP_MARKET", reduceOnly: "true" }, // anonymous — never touched unless aggregateFlat
+        ];
+        if (method === "GET" && path === "/fapi/v1/openAlgoOrders") return [
+          { algoId: 11, clientAlgoId: keepAlgo, orderType: "STOP_MARKET", reduceOnly: "true" },
+          { algoId: 12, clientAlgoId: oldAlgo, orderType: "STOP_MARKET", reduceOnly: "true" },
+        ];
+        if (method === "DELETE") { deletes.push(`${path}:${params.orderId ?? params.algoId}`); return {}; }
+        throw new Error(`unexpected ${method} ${path}`);
+      },
+    });
+    await exec.cancelAllOrders("BTC/USD", { exceptClientOrderIds: [keepRegular, keepAlgo] });
+    expect(deletes.sort()).toEqual(["/fapi/v1/algoOrder:12", "/fapi/v1/order:2"]);
+  });
+
+  test("without the option every stamped stop goes (the pre-existing sweep is unchanged)", async () => {
+    const a = fapiClientOrderId("stop:BTCUSDT:buy:a");
+    const b = fapiClientOrderId("stop:BTCUSDT:buy:b");
+    const deletes: string[] = [];
+    const exec = make({
+      signedRequest: async (method: string, path: string, params: any) => {
+        if (method === "GET" && path === "/fapi/v1/openOrders") return [
+          { orderId: 1, clientOrderId: a, type: "STOP_MARKET", reduceOnly: "true" },
+          { orderId: 2, clientOrderId: b, type: "STOP_MARKET", reduceOnly: "true" },
+        ];
+        if (method === "GET" && path === "/fapi/v1/openAlgoOrders") return [];
+        if (method === "DELETE") { deletes.push(String(params.orderId)); return {}; }
+        throw new Error(`unexpected ${method} ${path}`);
+      },
+    });
+    await exec.cancelAllOrders("BTC/USD");
+    expect(deletes.sort()).toEqual(["1", "2"]);
+    expect(exec.cancelAllOrders("BTC/USD", { exceptClientOrderIds: [] })).resolves.toBeUndefined();
+  });
+});
+
 describe("getReverseSymbolMap (shim needs it public)", () => {
   test("reverses raw Binance symbol → alpaca symbol", () => {
     const rev = new BinanceExecutor().getReverseSymbolMap();

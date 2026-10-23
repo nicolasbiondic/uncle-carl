@@ -8,9 +8,20 @@
 //
 //   momentum_stocks ↔ experiments/momentum-stocks-daily-blend3-pure-v1.json
 //   meanrev_stocks  ↔ experiments/meanrev-breadth7-pure-v1.json
-//   momentum_crypto ↔ experiments/momentum-crypto-vt35-pure-v1.json
-//   momentum_crypto_usdc ↔ experiments/momentum-crypto-usdc-daily-s5-pure-v1.json
-//     (AUTHORITATIVE, not gate-certified — owner rule; see liveSleeveConfigs.ts)
+//   momentum_crypto ↔ experiments/momentum-crypto-rw3-vt-35-corroff-pure-v1.json
+//     (RW3 2026-10-23: vt-35 with the correlation-collapse brake OFF, ceiling 1.01)
+//   momentum_crypto_usdc ↔ experiments/momentum-crypto-usdc-daily-s5-rw4a-xc-dd-pure-v1.json
+//     (RW4a 2026-10-23: the d13-s5 kernel plus the drawdown exposure control;
+//     byte copy of momentum-crypto-usdc-daily-s5-pure-v1 + the knob — the
+//     kernel itself is AUTHORITATIVE, not gate-certified — owner rule)
+//
+// RW2 (2026-10-23): momentum_stocks and meanrev_stocks run on the PORTFOLIO
+// ENGINE (MODEL_VERSIONS current version `engine: "portfolio"`). Their
+// LIVE_SLEEVE_MANIFESTS entry is the RW2 manifest whose candidate the registry
+// definition is hash-locked to at boot (cutover.ts); the incumbent derivation
+// below is still locked against the INCUMBENT manifest (what a rollback
+// returns to), and the "what runs" lock for those sleeves is the manifest +
+// candidate + artifact named by the version (see "portfolio-engine sleeves").
 //
 // EVERY decision-affecting candidate key must be equal, or be listed in
 // DECLARED_KEY_EXCEPTIONS below with its reason. The universe is compared
@@ -23,25 +34,38 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
 import {
+  LIVE_SLEEVE_IDS,
   LIVE_SLEEVE_MANIFESTS,
   MEANREV_STOCKS_VOL_STOP,
+  MOMENTUM_CRYPTO_REGIME,
   MOMENTUM_CRYPTO_VOL_TARGET,
   MOMENTUM_SLEEVE_SHARPE_GATE,
   MOMENTUM_STOCKS_SLOT_HYSTERESIS,
   effectiveRiskConfig,
+  incumbentManifest,
   liveSleeveConfig,
+  sleeveManagedBy,
   type LiveSleeveId,
 } from "../src/config/liveSleeveConfigs";
+import { MODEL_VERSIONS, currentModelVersion, currentModelManifests } from "../src/portfolio/modelVersions";
+import { VALIDATED_PRESETS } from "../src/portfolios/validate";
 import { validateCandidate, type CandidateConfig, type ExperimentManifest } from "./walk-forward";
 import { DEFAULT_MEANREV_CONFIG } from "../src/strategies/meanrev/MeanRevEngine";
-import { MOMENTUM_STOCKS_DAILY_HORIZON, MOMENTUM_STOCKS_DAILY_VOL_STOP, dailyHorizonMaxLookback } from "../src/index";
+import { MOMENTUM_STOCKS_DAILY_HORIZON, MOMENTUM_STOCKS_DAILY_VOL_STOP, MOMENTUM_USDC_EXPOSURE_CONTROL, dailyHorizonMaxLookback, momentumUsdcPortfolioPlan } from "../src/index";
+import { builtinPortfolio } from "../src/portfolios/builtin";
 import { GROSS_CAP_HEADROOM } from "../src/config/grossCap";
 import { DEFAULT_TSM_CONFIG } from "../src/strategies/momentum/TimeSeriesMomentum";
 
 const ROOT = join(import.meta.dir, "..");
 
+/** The manifest of what RUNS (LIVE_SLEEVE_MANIFESTS = the current version's). */
 function loadManifest(sleeve: LiveSleeveId): ExperimentManifest {
   return JSON.parse(readFileSync(join(ROOT, LIVE_SLEEVE_MANIFESTS[sleeve]), "utf-8"));
+}
+/** The manifest the INCUMBENT derivation is locked against (equal to the
+ *  above while the incumbent runs). */
+function loadIncumbentManifest(sleeve: LiveSleeveId): ExperimentManifest {
+  return JSON.parse(readFileSync(join(ROOT, incumbentManifest(sleeve)), "utf-8"));
 }
 
 // ── DECLARED live↔validated differences ──────────────────────────────────
@@ -89,9 +113,16 @@ function compareCandidateKeys(sleeve: LiveSleeveId, live: object, manifest: Cand
 }
 
 for (const sleeve of Object.keys(LIVE_SLEEVE_MANIFESTS) as LiveSleeveId[]) {
-  describe(`vivo=validado — ${sleeve}`, () => {
-    const m = loadManifest(sleeve);
+  describe(`vivo=validado — ${sleeve} (incumbent derivation ↔ incumbent manifest${sleeveManagedBy(sleeve) === "portfolio" ? "; the sleeve RUNS on the portfolio engine, see below" : ""})`, () => {
+    const m = loadIncumbentManifest(sleeve);
     const live = liveSleeveConfig(sleeve);
+
+    test("manifestPath is the incumbent's; managedBy follows the version table", () => {
+      expect(live.manifestPath).toBe(incumbentManifest(sleeve));
+      expect(live.managedBy).toBe(currentModelVersion(sleeve)?.engine === "portfolio" ? "portfolio" : "incumbent");
+      if (live.managedBy === "incumbent") expect(LIVE_SLEEVE_MANIFESTS[sleeve]).toBe(live.manifestPath);
+      else expect(LIVE_SLEEVE_MANIFESTS[sleeve]).not.toBe(live.manifestPath);
+    });
 
     test("manifest is a single-candidate pure chain", () => {
       expect(m.candidates.length).toBe(1);
@@ -161,9 +192,126 @@ describe("declared environmental differences (data plumbing)", () => {
     // chain was run at (P2-costs: ~17 bps slippage + 3 bps commission/side).
     expect(m.costs.base).toEqual({ slippageBps: 17, commissionBps: 3 });
   });
-  test("stock manifests' ledger.leverage: 2 (momentum, Reg-T headroom the 1.0× gross never uses) / 1 (meanrev)", () => {
-    expect(loadManifest("momentum_stocks").ledger.leverage).toBe(2);
-    expect(loadManifest("meanrev_stocks").ledger.leverage).toBe(1);
+  test("incumbent stock manifests' ledger.leverage: 2 (momentum, Reg-T headroom the 1.0× gross never uses) / 1 (meanrev)", () => {
+    expect(loadIncumbentManifest("momentum_stocks").ledger.leverage).toBe(2);
+    expect(loadIncumbentManifest("meanrev_stocks").ledger.leverage).toBe(1);
+  });
+});
+
+// ── portfolio-engine sleeves (RW2): one source of truth for "what runs" ──
+describe("portfolio-engine sleeves — the version table names manifest, candidate and artifact; every consumer reads it", () => {
+  test("LIVE_SLEEVE_MANIFESTS and VALIDATED_PRESETS ARE the current versions' manifests, for every live sleeve", () => {
+    const current = currentModelManifests();
+    for (const id of LIVE_SLEEVE_IDS) {
+      expect(LIVE_SLEEVE_MANIFESTS[id]).toBe(current[id]);
+      expect(VALIDATED_PRESETS[id].manifestPath).toBe(current[id]);
+    }
+  });
+  test("momentum_stocks and meanrev_stocks run on the portfolio engine since 2026-10-23: RW2 manifest + vt15 candidate + E1/E2 artifact", () => {
+    expect(currentModelVersion("momentum_stocks")).toMatchObject({
+      id: "momentum_stocks@pe-vt15", engine: "portfolio", candidate: "vt15",
+      manifest: "experiments/rw2-e1-stocks-volmanaged-v1.json",
+      artifact: { dir: "data/backtests/b2324d4f74f15042af8bfba4170df8b41f05e8ec033e324bebe8e284e24e5236", shiftDays: 0 },
+    });
+    expect(currentModelVersion("meanrev_stocks")).toMatchObject({
+      id: "meanrev_stocks@pe-vt15", engine: "portfolio", candidate: "vt15",
+      manifest: "experiments/rw2-e2-meanrev-volmanaged-v1.json",
+      artifact: { dir: "data/backtests/0b088ca320e3521d8bff05b10c1ad7eed2816bc2a1b0b927eb3134e2a3dca4c2", shiftDays: 0 },
+    });
+    expect(sleeveManagedBy("momentum_stocks")).toBe("portfolio");
+    expect(sleeveManagedBy("meanrev_stocks")).toBe("portfolio");
+    expect(sleeveManagedBy("momentum_crypto")).toBe("incumbent");
+    expect(sleeveManagedBy("momentum_crypto_usdc")).toBe("incumbent");
+  });
+  test("momentum_crypto_usdc RW4a (2026-10-23): the current version names the xc-dd manifest + artifact (daily replay ⇒ shiftDays −1, what dailyReturnShiftDays infers for timeframe 1d); the live candidate IS the manifest's; the knob is the ONE change vs the control", () => {
+    const v = currentModelVersion("momentum_crypto_usdc")!;
+    expect(v).toMatchObject({
+      id: "momentum_crypto_usdc@daily-d13s5-xc-dd",
+      manifest: "experiments/momentum-crypto-usdc-daily-s5-rw4a-xc-dd-pure-v1.json",
+      artifact: { dir: "data/backtests/8892c1e950818ee724cbd5473ffdb6d207aefc98ae1f054d3bdf08e4eebad607", shiftDays: -1 },
+    });
+    expect(v.engine).toBeUndefined();
+    expect(LIVE_SLEEVE_MANIFESTS.momentum_crypto_usdc).toBe(v.manifest!);
+    expect(incumbentManifest("momentum_crypto_usdc")).toBe(v.manifest!);
+    const m = loadManifest("momentum_crypto_usdc");
+    expect(m.data.timeframe).toBe("1d");
+    expect((m as any).asOf).toBe("2026-09-26T00:00:00Z"); // the control's asOf — same folds, same OOS days
+    expect(m.candidates.length).toBe(1);
+    const cand: any = m.candidates[0];
+    const knob = { drawdown: { startPct: 0.1, endPct: 0.4 }, minScale: 0.25, band: 0.1, minOrderUsd: 100 };
+    expect(cand.exposureControl).toEqual(knob);
+    expect(cand.exposureControl.volCap).toBeUndefined(); // drawdown axis only (the vol and both axes failed R3)
+    expect(cand.risk).toEqual({ peakHalfLifeDays: 30 });   // the soft-DD pause is NOT touched (the no-soft-DD candidate failed everything)
+    expect(liveSleeveConfig("momentum_crypto_usdc").candidate.exposureControl).toEqual(cand.exposureControl);
+    expect(MOMENTUM_USDC_EXPOSURE_CONTROL).toEqual(knob);
+    // Rollback target: the control version's manifest, whose candidate is this one minus the knob, byte for byte.
+    const list = MODEL_VERSIONS.momentum_crypto_usdc;
+    expect(list[list.length - 2].id).toBe("momentum_crypto_usdc@daily-d13s5");
+    expect(list[list.length - 2].manifest).toBe("experiments/momentum-crypto-usdc-daily-s5-pure-v1.json");
+    const controlManifest: any = JSON.parse(readFileSync(join(ROOT, list[list.length - 2].manifest!), "utf-8"));
+    const control: any = controlManifest.candidates[0];
+    expect(control.exposureControl).toBeUndefined();
+    const { exposureControl: _x, name: _n, ...rest } = cand;
+    const { exposureControl: _x2, name: _n2, ...controlRest } = control;
+    expect(rest).toEqual(controlRest);
+    expect(controlManifest.asOf).toBe((m as any).asOf);
+    expect(controlManifest.data).toEqual(m.data);
+    expect(controlManifest.costs).toEqual(m.costs);
+    // Every consumer carries the same knob: the plan's engine config and the builtin registry row.
+    expect(momentumUsdcPortfolioPlan().engineConfig.exposureControl).toEqual(knob);
+    expect((builtinPortfolio("momentum_crypto_usdc").params as any).exposureControl).toEqual(knob);
+  });
+
+  test("momentum_crypto RW3 (2026-10-23): the current version names the corroff manifest + artifact (hourly replay ⇒ shiftDays 0); the live candidate IS the manifest's", () => {
+    const v = currentModelVersion("momentum_crypto")!;
+    expect(v).toMatchObject({
+      id: "momentum_crypto@vt35-corroff",
+      manifest: "experiments/momentum-crypto-rw3-vt-35-corroff-pure-v1.json",
+      artifact: { dir: "data/backtests/efc086b47776235749e7013458360f8131cb3d3629b0a143f6c994d2bb16f240", shiftDays: 0 },
+    });
+    expect(v.engine).toBeUndefined(); // incumbent engine: its config describes what trades
+    expect(LIVE_SLEEVE_MANIFESTS.momentum_crypto).toBe(v.manifest!);
+    expect(incumbentManifest("momentum_crypto")).toBe(v.manifest!);
+    const m = loadManifest("momentum_crypto");
+    expect(m.candidates.length).toBe(1);
+    const cand: any = m.candidates[0];
+    expect(cand.regime).toEqual({ correlationCeiling: 1.01 }); // brake OFF only: no `enabled:false`, the vol-spike check stays ON
+    expect(liveSleeveConfig("momentum_crypto").candidate.regime).toEqual(cand.regime);
+    expect(MOMENTUM_CRYPTO_REGIME).toEqual(cand.regime);
+    // The rollback target (the control the artifact was measured against) is the previous version's manifest.
+    const list = MODEL_VERSIONS.momentum_crypto;
+    expect(list[list.length - 2].id).toBe("momentum_crypto@vt35");
+    expect(list[list.length - 2].manifest).toBe("experiments/momentum-crypto-2026w-control-pure-v1.json");
+    const control: any = JSON.parse(readFileSync(join(ROOT, list[list.length - 2].manifest!), "utf-8")).candidates[0];
+    expect(control.regime).toBeUndefined();
+    // Everything else of the candidate is the control's, byte for byte (the experiment's single change).
+    const { regime: _r, name: _n, ...rest } = cand;
+    const { regime: _r2, name: _n2, ...controlRest } = control;
+    expect(rest).toEqual(controlRest);
+  });
+  for (const sleeve of LIVE_SLEEVE_IDS.filter(s => sleeveManagedBy(s) === "portfolio")) {
+    test(`${sleeve}: the named manifest holds the named candidate with a volManaged portfolio block on the sleeve's venue, same universe as the incumbent (universes stay disjoint)`, () => {
+      const v = currentModelVersion(sleeve)!;
+      const m: any = loadManifest(sleeve);
+      const cand = m.candidates.find((c: any) => c.name === v.candidate);
+      expect(cand).toBeTruthy();
+      expect(cand.portfolio?.strategy?.kind).toBe("volManaged");
+      expect(cand.portfolio?.venue?.venue).toBe("alpaca");
+      expect(cand.portfolio.strategy.annualization).toBe(252);
+      expect([...cand.portfolio.strategy.universe].sort()).toEqual([...liveSleeveConfig(sleeve).universe].sort());
+      // Same data plumbing as the incumbent: the band and the parity proposal compare like with like.
+      expect({ source: m.data.source, timeframe: m.data.timeframe, barMinutes: m.data.barMinutes })
+        .toEqual({ source: "alpaca_wide", timeframe: "1d", barMinutes: 1440 });
+      expect(m.ledger.initialEquity).toBe(liveSleeveConfig(sleeve).initialEquity);
+    });
+  }
+  test("every version that names an artifact also names a manifest, and shiftDays is 0 unless it is a daily MOMENTUM replay (session labelled by its END)", () => {
+    for (const [sleeve, list] of Object.entries(MODEL_VERSIONS)) {
+      for (const v of list) {
+        if (v.artifact) expect({ sleeve, id: v.id, manifest: typeof v.manifest }).toEqual({ sleeve, id: v.id, manifest: "string" });
+        if (v.artifact && v.engine === "portfolio") expect(v.artifact.shiftDays).toBe(0);
+      }
+    }
   });
 });
 
@@ -187,6 +335,21 @@ describe("index.ts wiring literals ↔ module constants", () => {
     const literal = `volTarget: { annualizedPct: ${v.annualizedPct}, lookbackBars: ${v.lookbackBars}, minScale: ${v.minScale}, maxScale: ${v.maxScale} }`;
     expect(count(literal)).toBe(1);
     expect(count("volTarget: {")).toBe(1);
+  });
+
+  test("exposureControl wired exactly once in index.ts (the USDC plan, from MOMENTUM_USDC_EXPOSURE_CONTROL); momentum_crypto's three RW4a candidates failed and must NOT carry it", () => {
+    expect(count("exposureControl: {")).toBe(1);
+    expect(count("exposureControl: { ...MOMENTUM_USDC_EXPOSURE_CONTROL")).toBe(1);
+    expect(liveSleeveConfig("momentum_crypto").candidate.exposureControl).toBeUndefined();
+    expect(liveSleeveConfig("momentum_stocks").candidate.exposureControl).toBeUndefined();
+    expect(liveSleeveConfig("meanrev_stocks").candidate.exposureControl).toBeUndefined();
+  });
+
+  test("crypto regime literal (correlation brake OFF, RW3) matches MOMENTUM_CRYPTO_REGIME — exactly once, on momentum_crypto's plan only", () => {
+    const r = MOMENTUM_CRYPTO_REGIME;
+    expect(r).toEqual({ correlationCeiling: 1.01 });
+    expect(count(`regime: { barMinutes: 60, correlationCeiling: ${r.correlationCeiling} },`)).toBe(1);
+    expect(count("correlationCeiling:")).toBe(1);
   });
 
   test("meanrev volStop literal matches MEANREV_STOCKS_VOL_STOP — exactly once", () => {
@@ -247,8 +410,8 @@ describe("derivation invariants", () => {
     expect(c.hardStop).toEqual(m.candidates[0].hardStop);
   });
 
-  test("stocks daily vol stop constant equals the k8 leg of the manifest", () => {
-    const m = loadManifest("momentum_stocks");
+  test("stocks daily vol stop constant equals the k8 leg of the INCUMBENT manifest (rollback config)", () => {
+    const m = loadIncumbentManifest("momentum_stocks");
     expect({ mode: "volScaled", ...MOMENTUM_STOCKS_DAILY_VOL_STOP }).toEqual(m.candidates[0].hardStop as any);
   });
 });

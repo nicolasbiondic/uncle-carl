@@ -10,10 +10,10 @@
 import express from "express";
 import type { BandReading } from "../../portfolio/scorecard";
 import type { PlatformPortfolioRow, PortfoliosSource } from "../../portfolios/store";
-import type { MomentumTsmParams, PortfolioParams } from "../../portfolios/types";
+import type { MomentumTsmParams, PortfolioEngineParams, PortfolioParams } from "../../portfolios/types";
 import { DEFAULT_MEANREV_CONFIG } from "../../strategies/meanrev/MeanRevEngine";
 import { builtinPortfolio } from "../../portfolios/builtin";
-import { VALIDATED_PRESETS, validateCreatePortfolio, validatePatchPortfolio } from "../../portfolios/validate";
+import { VALIDATED_PRESETS, portfolioUniverse, validateCreatePortfolio, validatePatchPortfolio } from "../../portfolios/validate";
 
 /** F3d write deps — all injected; absent = the write API answers 501
  *  (read-only deploy). Writes persist to the registry in BOTH sources but
@@ -54,6 +54,13 @@ export interface PlatformPortfolioBandView {
 
 export interface PlatformPortfolioView {
   id: string;
+  /** The sleeve whose book this row describes: the id, or params.sleeve for a
+   *  portfolio-engine definition (its band is that sleeve's). */
+  sleeve: string;
+  /** RW2: id of the LIVE portfolio-engine definition that manages this sleeve
+   *  instead of this row's engine (incumbent rows only); null = this row's
+   *  engine is the manager (or the row is itself a definition). */
+  managedBy: string | null;
   name: string;
   template: string;
   account: string;
@@ -83,8 +90,24 @@ export interface PlatformPortfolioView {
  *  DEFAULT_MEANREV_CONFIG (single source — index.ts never overrode it). */
 export function universeSizeOf(row: Pick<PlatformPortfolioRow, "template" | "params">): number {
   if (row.template === "meanrev_connors") return DEFAULT_MEANREV_CONFIG.universe.length;
+  if (row.template === "portfolio") return portfolioUniverse(row.template, row.params).length;
   const p = row.params as MomentumTsmParams;
   return Array.isArray(p.universe) ? p.universe.length : 0;
+}
+
+/** Pure, RW2: which registry rows manage which sleeve this boot's registry
+ *  describes. A LIVE portfolio definition (template portfolio, enabled, mode
+ *  live, params.runMode live — the boot resolver's predicate) replaces the
+ *  incumbent row named by params.sleeve: that row is listed as managed by the
+ *  definition, and the definition carries the sleeve id its band belongs to. */
+export function portfolioManagers(rows: readonly Pick<PlatformPortfolioRow, "id" | "template" | "enabled" | "mode" | "status" | "params">[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const r of rows) {
+    if (r.template !== "portfolio" || !r.enabled || r.mode !== "live" || r.status === "archived") continue;
+    const p = r.params as PortfolioEngineParams;
+    if (p?.runMode === "live" && typeof p.sleeve === "string") out[p.sleeve] = r.id;
+  }
+  return out;
 }
 
 /** Pure: one registry row + the runtime source + its band reading → the
@@ -94,9 +117,13 @@ export function platformPortfolioView(
   origin: PortfoliosSource,
   band: BandReading | null,
   effectiveMode: string | null = null,
+  managers: Record<string, string> = {},
 ): PlatformPortfolioView {
+  const peSleeve = row.template === "portfolio" ? (row.params as PortfolioEngineParams).sleeve ?? null : null;
   return {
     id: row.id,
+    sleeve: peSleeve ?? row.id,
+    managedBy: managers[row.id] ?? null,
     name: row.name,
     template: row.template,
     account: row.account,
@@ -119,10 +146,17 @@ export function platformPortfolioView(
 export interface PlatformPortfoliosMetaPreset {
   id: string;
   name: string;
+  /** Template of the VALIDATED model ("portfolio" for a sleeve on the portfolio engine). */
   template: string;
   account: string;
-  /** The preset's own params — the UI prefills a free-template textarea with
-   *  the example of the preset sharing its template (never a blank editor). */
+  /** The builtin incumbent's template — the one `exampleParams` belong to
+   *  (equals `template` unless the validated model is a portfolio-engine design). */
+  incumbentTemplate: string;
+  /** false when the validated model runs on the portfolio engine: the create
+   *  form lists it disabled (scripts/portfolio-engine-cutover.ts creates it). */
+  creatable: boolean;
+  /** The builtin incumbent's params — the UI prefills a free-template textarea
+   *  with the example sharing that template (never a blank editor). */
   exampleParams: unknown;
 }
 
@@ -140,7 +174,10 @@ export interface PlatformPortfoliosMeta {
 export function platformPortfoliosMeta(deps: PlatformPortfoliosDeps): PlatformPortfoliosMeta {
   const presets = Object.entries(VALIDATED_PRESETS).map(([id, meta]) => {
     const def = builtinPortfolio(id);
-    return { id, name: def.name, template: meta.template, account: def.account, exampleParams: def.params };
+    return {
+      id, name: def.name, template: meta.template, account: def.account,
+      incumbentTemplate: def.template, creatable: !meta.portfolioEngine, exampleParams: def.params,
+    };
   });
   return { writable: !!deps.write, presets, accounts: deps.write ? deps.write.accounts() : [] };
 }
@@ -168,7 +205,12 @@ export function registerPlatformPortfoliosRoutes(app: express.Application, deps:
       const modeOf = (id: string): string | null => {
         try { return deps.effectiveMode?.(id) ?? null; } catch { return null; }
       };
-      res.json(deps.listPortfolios().map((r) => platformPortfolioView(r, deps.source, bands[r.id] ?? null, modeOf(r.id))));
+      const rows = deps.listPortfolios();
+      const managers = portfolioManagers(rows);
+      res.json(rows.map((r) => {
+        const sleeve = r.template === "portfolio" ? (r.params as PortfolioEngineParams).sleeve ?? r.id : r.id;
+        return platformPortfolioView(r, deps.source, bands[sleeve] ?? null, modeOf(sleeve), managers);
+      }));
     } catch (e: any) {
       res.status(500).json({ error: e?.message ?? "platform portfolios unavailable" });
     }

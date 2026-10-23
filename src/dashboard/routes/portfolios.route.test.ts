@@ -7,7 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import express from "express";
 import { Database } from "bun:sqlite";
-import { registerPlatformPortfoliosRoutes, platformPortfolioView, universeSizeOf } from "./portfolios";
+import { registerPlatformPortfoliosRoutes, platformPortfolioView, portfolioManagers, universeSizeOf } from "./portfolios";
 import {
   initPlatformPortfolios,
   insertPlatformPortfolio,
@@ -74,6 +74,8 @@ describe("universeSizeOf / platformPortfolioView (pure)", () => {
     const v = platformPortfolioView(rows.momentum_stocks, "code", BELOW);
     expect(v).toEqual({
       id: "momentum_stocks",
+      sleeve: "momentum_stocks",
+      managedBy: null,
       name: rows.momentum_stocks.name,
       template: "momentum_tsm",
       account: "alpaca_main",
@@ -94,6 +96,32 @@ describe("universeSizeOf / platformPortfolioView (pure)", () => {
   test("no band reading → band null (never fabricated)", () => {
     expect(platformPortfolioView(rows.momentum_btc, "db", null).band).toBeNull();
     expect(platformPortfolioView(rows.momentum_btc, "db", null).origin).toBe("db");
+  });
+
+  test("RW2: a LIVE portfolio-engine definition manages its sleeve — the incumbent row says so, the definition carries the sleeve and its universe size", () => {
+    const pe: PlatformPortfolioRow = {
+      id: "pe_momentum_stocks", name: "momentum_stocks on the portfolio engine (vt15)", template: "portfolio", account: "alpaca_main",
+      capital: 50_000, mode: "live", enabled: true, status: "active", validation: "validated", source: "owner", createdAt: 1, updatedAt: 1,
+      params: { engine: "portfolio", sleeve: "momentum_stocks", runMode: "live", strategyVersion: "momentum_stocks@pe-vt15", heartbeatName: "portfolio:momentum_stocks",
+        loggerContext: "Portfolio:momentum_stocks", venue: "alpaca", minOrderNotional: 5, rebalanceBand: 0.01,
+        strategy: { kind: "volManaged", universe: ["SPY", "QQQ", "IWM"], inceptionGuardBars: 252, volLookback: 63, covLookback: 21, portfolioVolTarget: 0.15, annualization: 252, maxWeightPerName: 0.25, maxGross: 1 } } as any,
+    };
+    const observer: PlatformPortfolioRow = { ...pe, id: "pe_obs", mode: "shadow", params: { ...(pe.params as any), runMode: "observer" } };
+    const all = [rows.momentum_stocks, rows.meanrev_stocks, pe, observer];
+    const managers = portfolioManagers(all);
+    expect(managers).toEqual({ momentum_stocks: "pe_momentum_stocks" }); // the observer manages nothing
+    expect(portfolioManagers([{ ...pe, enabled: false }])).toEqual({});
+    expect(portfolioManagers([{ ...pe, status: "archived" }])).toEqual({});
+
+    const incumbent = platformPortfolioView(rows.momentum_stocks, "db", BELOW, "live", managers);
+    expect(incumbent.managedBy).toBe("pe_momentum_stocks");
+    expect(incumbent.enabled).toBe(true); // nothing is "disabled": the book is managed by the definition
+    const def = platformPortfolioView(pe, "db", BELOW, "live", managers);
+    expect(def.sleeve).toBe("momentum_stocks");
+    expect(def.managedBy).toBeNull();
+    expect(def.universeSize).toBe(3);
+    expect(def.band?.status).toBe("below"); // the sleeve's band, looked up by params.sleeve
+    expect(platformPortfolioView(rows.meanrev_stocks, "db", null, "live", managers).managedBy).toBeNull();
   });
 });
 
@@ -188,9 +216,18 @@ describe("GET /api/platform/portfolios/meta", () => {
         expect(body.accounts).toEqual([]);
         expect(body.presets.length).toBe(4);
         const byId = Object.fromEntries(body.presets.map((p: any) => [p.id, p]));
-        expect(byId.momentum_stocks.template).toBe("momentum_tsm");
+        // RW2 (2026-10-23): the two stock sleeves' validated model is a
+        // portfolio-engine design — listed, not creatable from the form; the
+        // builtin incumbent's params stay as the free-template example.
+        expect(byId.momentum_stocks.template).toBe("portfolio");
+        expect(byId.momentum_stocks.incumbentTemplate).toBe("momentum_tsm");
+        expect(byId.momentum_stocks.creatable).toBe(false);
         expect(byId.momentum_stocks.account).toBe("alpaca_main");
-        expect(byId.meanrev_stocks.template).toBe("meanrev_connors");
+        expect(byId.meanrev_stocks.template).toBe("portfolio");
+        expect(byId.meanrev_stocks.incumbentTemplate).toBe("meanrev_connors");
+        expect(byId.meanrev_stocks.creatable).toBe(false);
+        expect(byId.momentum_crypto.template).toBe("momentum_tsm");
+        expect(byId.momentum_crypto.creatable).toBe(true);
         expect(byId.momentum_stocks.exampleParams).toBeTruthy();
       },
     );

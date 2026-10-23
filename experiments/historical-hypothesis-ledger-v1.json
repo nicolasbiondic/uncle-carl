@@ -1093,6 +1093,216 @@
       "resultsComplete": false,
       "executionReported": true,
       "evidence": "RW2 E3, rediseno de momentum_crypto_usdc (pre-registro docs/reports/RW-reescritura-rentable.md SS8 @ e80e72b, manifest 6ee72fd ANTES de todo ensayo): siempre invertido en su propio universo, pesos 1/sigma, escala unica a la vol objetivo (covarianza 21d), tope por nombre, bruto <= 1 (sin margen), sin senal ni stops; ventana y costes del manifest del sleeve actual. +2: 400->402. RESULTADO REFUTADO: cadena vt30/vt30/vt20, retorno OOS +117.44%, Sharpe 0.788, DD 37.1%, PSR 0.938; R3 Sharpe 0.809 vs 1.028 del sleeve actual re-corrido (d0f7fd6f) en 1410 sesiones comunes; criterios fallados: R1_psr, R2_maxDrawdown, R3_vsControl, R5_yearShare. NO SE CABLEA: momentum_crypto_usdc sigue con su configuracion. authoritativeArtifactRw2E3 y RW SS9."
+    },
+    {
+      "id": "rw3-a-e1-stocks-lev-2026-10-23",
+      "sourceCommit": "b566d9f (17 manifests + control fijado ANTES de todo ensayo; pre-registro vinculante docs/reports/RW-reescritura-rentable.md SS10 @ befc835)",
+      "sourcePaths": [
+        "experiments/rw3-e1-stocks-lev-vt20-g150-v1.json",
+        "experiments/rw3-e1-stocks-lev-vt25-g150-v1.json",
+        "experiments/rw3-e1-stocks-lev-vt25-g200-v1.json",
+        "experiments/rw3-e1-stocks-lev-vt30-g200-v1.json",
+        "scripts/portfolio-replay.ts",
+        "scripts/portfolio-wf.ts",
+        "scripts/portfolio-criteria.ts",
+        "scripts/rw3-compare-artifacts.ts",
+        "src/portfolio-engine/decide.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 4,
+      "priorUniqueTrials": 402,
+      "resultingUniqueTrials": 406,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW3 (a) E1 apalancado, rediseno agresivo de momentum_stocks (pre-registro RW SS10; 4 cadenas puras de 1 candidato, un solo eje: vol objetivo y maxGross con interes Reg-T 6.5% sobre lo prestado; misma construccion de rw2-e1, mismo tope por nombre 0.25, misma ventana y asOf). +4: 402->406. RESULTADO REFUTADO como cableado, valido como frontera: los 4 fallan R2 (DD > 25%, el presupuesto del dueno) y R3 (Sharpe bajo el del control en las mismas 1755 sesiones); pasan R1, R4, R5, R6, R7. Control (+0): rw2-e1 re-corrido sobre los datos de hoy (33b0ac05, hash de datos ee75275b; el hash de datos de b2324d4f ya no se reproduce): cadena mixta vt20/vt15/vt15, +287.04%, Sharpe 1.29, DD 23.82%. Ese re-corrido falla R3 contra el autoritativo por -0.001 y NO es un ensayo: son los mismos disenos sobre datos refrescados; authoritativeArtifactRw2E1 no cambia. Frontera (retorno / Sharpe / DD, mismas sesiones): vt20-g150: +431.03% / Sharpe 1.248 / DD 28.89% / R3 1.249 vs 1.29; vt25-g150: +526.23% / Sharpe 1.204 / DD 34.56% / R3 1.204 vs 1.29; vt25-g200: +673.1% / Sharpe 1.24 / DD 35.56% / R3 1.24 vs 1.29; vt30-g200: +776.16% / Sharpe 1.176 / DD 41.76% / R3 1.176 vs 1.29. Cada escalon de retorno compra mas DD y menos Sharpe; el interes de margen pagado crece con el bruto medio (USD 7348 a 22561). NO SE CABLEA: ademas momentum_stocks esta congelado hasta 2027-01-21 (RW SS2.6). authoritativeArtifactRw3E1Lev (punto de mayor retorno vt30-g200 como referencia de frontera) y RW SS10."
+    },
+    {
+      "id": "rw3-a-e2-meanrev-lev-2026-10-23",
+      "sourceCommit": "b566d9f (17 manifests + control fijado ANTES de todo ensayo; pre-registro vinculante docs/reports/RW-reescritura-rentable.md SS10 @ befc835)",
+      "sourcePaths": [
+        "experiments/rw3-e2-meanrev-lev-vt20-g150-v1.json",
+        "experiments/rw3-e2-meanrev-lev-vt25-g150-v1.json",
+        "experiments/rw3-e2-meanrev-lev-vt25-g200-v1.json",
+        "experiments/rw3-e2-meanrev-lev-vt30-g200-v1.json",
+        "scripts/portfolio-replay.ts",
+        "scripts/portfolio-wf.ts",
+        "scripts/portfolio-criteria.ts",
+        "scripts/rw3-compare-artifacts.ts",
+        "src/portfolio-engine/decide.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 4,
+      "priorUniqueTrials": 406,
+      "resultingUniqueTrials": 410,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW3 (a) E2 apalancado, rediseno agresivo de meanrev_stocks (pre-registro RW SS10; mismo diseno que (a) E1 sobre el universo de E2: tope por nombre 0.10, 6 folds, interes Reg-T 6.5%). +4: 406->410. RESULTADO REFUTADO como cableado, valido como frontera: los 4 fallan R2 y R3 en las mismas 1851 sesiones; pasan R1, R4, R5, R6, R7. Control (+0): 0b088ca3 (el autoritativo de rw2-e2, hash de datos 898c5720 que se reproduce hoy): +149.7%, Sharpe 1.109, DD 21.0%. Frontera (retorno / Sharpe / DD): vt20-g150: +219.38% / Sharpe 0.972 / DD 26.84% / R3 0.972 vs 1.109; vt25-g150: +249.6% / Sharpe 0.972 / DD 29.97% / R3 0.972 vs 1.109; vt25-g200: +303.35% / Sharpe 0.936 / DD 31.82% / R3 0.936 vs 1.109; vt30-g200: +317.91% / Sharpe 0.902 / DD 35.21% / R3 0.902 vs 1.109. vt20-g150 y vt25-g150 dan casi el mismo Sharpe (0.9719 y 0.9722); el Sharpe baja y el DD sube con cada escalon. NO SE CABLEA: meanrev_stocks congelado hasta 2027-01-21 (RW SS2.6). authoritativeArtifactRw3E2Lev (punto de mayor retorno vt30-g200 como referencia de frontera) y RW SS10."
+    },
+    {
+      "id": "rw3-b-levetf-book-2026-10-23",
+      "sourceCommit": "b566d9f (17 manifests + control fijado ANTES de todo ensayo; pre-registro vinculante docs/reports/RW-reescritura-rentable.md SS10 @ befc835)",
+      "sourcePaths": [
+        "experiments/rw3-e1-levetf-vt20-v1.json",
+        "experiments/rw3-e1-levetf-vt30-v1.json",
+        "experiments/rw3-e1-levetf-vt40-v1.json",
+        "scripts/portfolio-replay.ts",
+        "scripts/portfolio-wf.ts",
+        "scripts/portfolio-criteria.ts",
+        "scripts/rw3-compare-artifacts.ts",
+        "src/portfolio-engine/decide.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 3,
+      "priorUniqueTrials": 410,
+      "resultingUniqueTrials": 413,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW3 (b) libro volManaged de ETFs apalancados (TQQQ, UPRO, TECL, TNA, USD, TMF, UGL), maxGross 1 sin margen, construccion de E1, tope 0.25, vol objetivo 20/30/40%; SOXL fuera por el validador de barras (+54.8% real del 2025-04-09). Datos descargados 2026-10-22 (hash 58fb21ee). Control: momentum_stocks@pe-vt15 re-corrido (33b0ac05, +0). +3: 410->413. RESULTADO REFUTADO: los 3 fallan R2 y R3 (Sharpe 0.956/0.865/0.834 contra 1.290 en 1755 sesiones comunes); subir la vol objetivo compra retorno con Sharpe decreciente (consistente con el arrastre de volatilidad de los fondos de reajuste diario declarado como caso en contra, no medido aqui por separado). vt20: +265.77% / Sharpe 0.956 / DD 34.28% / R3 0.956 vs 1.29; vt30: +358.34% / Sharpe 0.865 / DD 45.94% / R3 0.865 vs 1.29; vt40: +422.32% / Sharpe 0.834 / DD 55.23% / R3 0.834 vs 1.29. Bruto medio 0.62/0.83/0.93, interes de margen USD 8-90 (sin margen de cuenta). El retorno mas alto (vt40, +422.3%) viene con DD 55.2%. NO SE CABLEA. authoritativeArtifactRw3Etf (punto de mayor retorno vt40 como referencia de frontera) y RW SS10."
+    },
+    {
+      "id": "rw3-c1-momentum-crypto-2026-10-23",
+      "sourceCommit": "b566d9f (17 manifests + control fijado ANTES de todo ensayo; pre-registro vinculante docs/reports/RW-reescritura-rentable.md SS10 @ befc835)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-rw3-control-vt35-pure-v1.json",
+        "experiments/momentum-crypto-rw3-vt-50-pure-v1.json",
+        "experiments/momentum-crypto-rw3-vt-70-pure-v1.json",
+        "experiments/momentum-crypto-rw3-vt-35-corr92-pure-v1.json",
+        "experiments/momentum-crypto-rw3-vt-50-corr92-pure-v1.json",
+        "scripts/walk-forward.ts",
+        "scripts/rw3-compare-artifacts.ts",
+        "scripts/lib/combinedPortfolioReturns.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 4,
+      "priorUniqueTrials": 413,
+      "resultingUniqueTrials": 417,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW3 (c1) momentum_crypto: vol objetivo y freno de correlacion sobre copia byte a byte del control vt-35 con asOf fijado (2026-10-02T08:00:00Z). Control fijado (+0): 39f732bc (hash de datos 77c87d51; el autoritativo 06e1a160 ya no reproduce su hash de datos): +509.78%, Sharpe 1.313, DD 32.58%, falla solo maxDisplacementShare. +4: 413->417. Criterios RW SS10.4 (c1): puertas acceptance como el control, Sharpe >= control en los mismos dias, DD <= 45%, PSR >= 0.95, >= 2 de 3 folds con PSR > 0.5, peor LOO >= 0.6 x Sharpe, DD del libro combinado (capitales fijos 50k/50k/5k/5k) <= 20%. REFUTADOS los 4: vt-50: +252.03% / Sharpe 0.873 / DD 52.44% / delta Sharpe vs control -0.44; vt-70: +892.09% / Sharpe 1.233 / DD 48.58% / delta Sharpe vs control -0.061; vt-35-corr92: +517% / Sharpe 1.304 / DD 34.55% / delta Sharpe vs control -0.008; vt-50-corr92: +554.44% / Sharpe 1.164 / DD 42.27% / delta Sharpe vs control -0.148. vt-50 y vt-70 fallan DD (52.4% y 48.6% > 45%) y Sharpe; vt-70 ademas falla LOO (0.594 < 0.6) pese a ser el mayor retorno (+892.09%); vt-50-corr92 falla Sharpe y la puerta looMaxDrawdown; vt-35-corr92 pierde por 0.008 Sharpe frente al control (-0.008 en los mismos dias). Subir la vol objetivo por encima de 35% no compra Sharpe. NO SE CABLEA ninguno de estos 4. authoritativeArtifactRw3C1 (incluye la tabla de los 5 candidatos c1) y RW SS10."
+    },
+    {
+      "id": "rw3-c2-usdc-vt-2026-10-23",
+      "sourceCommit": "b566d9f (17 manifests + control fijado ANTES de todo ensayo; pre-registro vinculante docs/reports/RW-reescritura-rentable.md SS10 @ befc835)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-usdc-daily-s5-rw3-vt50-pure-v1.json",
+        "experiments/momentum-crypto-usdc-daily-s5-rw3-vt70-pure-v1.json",
+        "scripts/walk-forward.ts",
+        "scripts/rw3-compare-artifacts.ts",
+        "scripts/lib/combinedPortfolioReturns.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 2,
+      "priorUniqueTrials": 417,
+      "resultingUniqueTrials": 419,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW3 (c2) kernel diario USDC d13-s5 con exposicion por vol objetivo (50% y 70%, maxGrossExposureMult 2.3). Control: d0f7fd6f (hash de datos 55da03c9 reproducido, +0): +324.34%, Sharpe 1.028, DD 52.58%. +2: 417->419. REFUTADOS: d13-s5-vt50: +231.07% / Sharpe 0.948 / DD 45.83% / delta Sharpe vs control -0.08 (1410 dias comunes); d13-s5-vt70: +335.11% / Sharpe 0.991 / DD 50.97% / delta Sharpe vs control -0.037 (1410 dias comunes). Ambos quedan bajo el Sharpe del control (criterio R3 de c2); fallan las mismas puertas que el control (maxDrawdown, minExcessReturnVsBench). vt70 supera al control en retorno (+335.11% vs +324.34%) y en DD por 1.6 pp, pero no en Sharpe; PSR 0.975 y fold PSR [0.834, 0.79, 0.919]. NO SE CABLEA: momentum_crypto_usdc sigue como esta. authoritativeArtifactRw3C2 (punto de mayor retorno vt70 como referencia de frontera) y RW SS10."
+    },
+    {
+      "id": "rw3-c1-corroff-2026-10-23",
+      "sourceCommit": "befc835 (manifest anadido por el director ANTES de todo ensayo de c1-corroff; RW SS10.7)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-rw3-vt-35-corroff-pure-v1.json",
+        "scripts/walk-forward.ts",
+        "scripts/rw3-compare-artifacts.ts",
+        "scripts/lib/combinedPortfolioReturns.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 1,
+      "priorUniqueTrials": 419,
+      "resultingUniqueTrials": 420,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW3 (c1) freno de correlacion APAGADO (regime.correlationCeiling 1.01; el chequeo de pico de vol sigue encendido), vt-35 intacto; el candidato se llama vt-35-corr92 por herencia del manifest pero el techo es 1.01. Nunca se habia aislado (gates-v1 apago los dos chequeos). Pertenece a la familia c1; va en lote aparte porque su ensayo es el 419->420 (c2 ocupa 417->419) y la cadena de ensayos debe seguir contigua. +1: 419->420. RESULTADO VALIDADO por los criterios RW SS10.4 (c1): Sharpe 1.3313 vs 1.3126 del control en 1575 dias comunes (delta +0.019), DD 34.31% <= 45%, PSR 0.998, fold PSR [0.963, 0.988, 0.687], peor LOO 0.703 del Sharpe (>= 0.6), DD del libro combinado 13.96% <= 20% (control 13.8%), retorno +546.66% frente a +509.78%; falla la misma puerta acceptance que el control (maxDisplacementShare 0.615 > 0.35) y approved sigue en false por el inventario de ensayos incompleto. Es el UNICO candidato de RW3 que cumple todos los criterios pre-registrados de su familia. Replica independiente pendiente y decision de cableado del dueno/quorum: no se cablea aqui; subir el tope vivo no hace falta (maxGrossExposureMult sin cambio). authoritativeArtifactRw3C1 y RW SS10."
+    },
+    {
+      "id": "copy-d4-insider-clusters-2026-10-23",
+      "sourceCommit": "9f88272 (manifest ANTES de todo ensayo; pre-registro vinculante docs/reports/RW-reescritura-rentable.md SS11.1)",
+      "sourcePaths": [
+        "experiments/copy-d4-insider-clusters-v1.json",
+        "scripts/portfolio-replay.ts",
+        "scripts/portfolio-wf.ts",
+        "scripts/portfolio-criteria.ts",
+        "src/portfolio-engine/copySignal.ts",
+        "docs/reports/copy-insider.md",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 4,
+      "priorUniqueTrials": 420,
+      "resultingUniqueTrials": 424,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "COPY D4, compras en grupo de directivos (Form 4 de la SEC): >= 2 directivos oportunistas con >= 25000 USD cada uno en 14 dias, sin 10b5-1, entrada a la apertura siguiente, tenencia fija, maximo 15 nombres, solo largos; S&P 500 point-in-time menos los simbolos de los sleeves vivos; 2016-02 -> 2026-09, 6 folds externos. Candidatos A-h21, A-h63, A-h126, A-c3-h21. +4: 420->424. RESULTADO REFUTADO: cadena mixta A-h21/A-h126/A-h21/A-h21/A-h21/A-h21, retorno OOS +46.55%, Sharpe 0.316, DD 56.57%, PSR 0.818 frente a SPY +259.37% / Sharpe 0.859 los mismos folds; falla C1 (PSR 0.818 < 0.95), C2 (DD 0.566 > 0.25), C3 (Sharpe stress 0.299 < 0.5), C5 (Sharpe 0.316 contra SPY 0.858: exceso -0.543) y C6b (Sharpe sin el decil superior 0.021 < 0.3); pasa C6 (un ano maximo = 45.5% del P&L, 2019) y C7. DEFECTO REGISTRADO, NO OCULTO: el 'pase' de C4 que muestra rw-criteria.json es INVALIDO. El benchmark pasivo copySignal (equiponderado de los miembros point-in-time) devolvio Sharpe EXACTAMENTE 0 en 2295 observaciones (detail.passiveSharpe 0), consistente con un libro pasivo que nunca invirtio (retornos nulos); el calculo del pasivo (passiveCopyBenchmarkDecide en scripts/portfolio-criteria.ts) tiene un fallo sin diagnosticar en este lote. C4 no se puede usar como evidencia a favor ni en contra, y no hay Sharpe pasivo valido que reportar. El veredicto NO depende de C4: C1, C2, C3, C5 y C6b fallan por si solos, y C8 queda como criterio externo, no calculado, porque el diseno ya falla otros. El diagnostico un-directivo / oportunistas frente a rutinarios y la comparacion de los otros 3 candidatos no estan en este artefacto. NO SE CABLEA. authoritativeArtifactCopyD4 y RW SS11.1."
+    },
+    {
+      "id": "rw4b-e1-lev-brake-2026-10-23",
+      "sourceCommit": "4b6f695 + 61f9e52 (4 manifests con priors 424..427 y criterios SS14.3 publicados ANTES de todo ensayo; pre-registro vinculante docs/reports/RW-reescritura-rentable.md SS14)",
+      "sourcePaths": [
+        "experiments/rw4b-e1-lev-vt20-g150-brake-v1.json",
+        "experiments/rw4b-e1-lev-vt25-g150-brake-v1.json",
+        "experiments/rw4b-e1-lev-vt25-g200-brake-v1.json",
+        "experiments/rw4b-e1-lev-vt20-g150-brakeonly-v1.json",
+        "scripts/portfolio-wf.ts",
+        "scripts/portfolio-criteria.ts",
+        "scripts/rw3-compare-artifacts.ts",
+        "scripts/lib/combinedPortfolioReturns.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 4,
+      "priorUniqueTrials": 424,
+      "resultingUniqueTrials": 428,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW4b (condicion del quorum Q3): E1 (momentum_stocks, 11 nombres, pesos 1/sigma a 63 dias, covarianza a 21 dias, tope 0.25 por nombre) APALANCADO con freno por drawdown (multiplicador de la vol objetivo: 1 hasta un 5% de drawdown del libro del sleeve, lineal hasta 0.25 en el 20%) y vol rapida (la vol de cartera es el maximo de las covarianzas de 5 y 21 dias). Candidatos, cadenas puras de 1: vt20 x1.5 freno + vol rapida, vt25 x1.5 freno + vol rapida, vt25 x2.0 freno + vol rapida, vt20 x1.5 SOLO freno (ablacion de la vol rapida). Interes de margen 6.5% en base y en stress. +4: 424->428. Controles (+0, no son ensayos): E1 33b0ac05 (hash de datos ee75275b) y E2 0b088ca3 (898c5720), en rw4Controls. Criterios RW SS14.3 (R1-R7 de E1, A1 drawdown de la cuenta E1+E2 <= 20%, H1/H2 con el recorte de -0.18 de Sharpe, M1 margen >= 6.5%, S1/S2 crash de feb-mar 2020 y bajista 2022 por separado), calculados por scripts/portfolio-wf.ts en rw4b-criteria.json de cada artefacto. RESULTADO REFUTADOS LOS 4, todos fallan UNICAMENTE R3 (Sharpe por debajo del de E1 en los mismos 1755 dias; E1 1.290): vt20-g150 freno + vol rapida (872a1e06) +257.54% / Sharpe 1.190 / DD 19.73% / cuenta 17.49% / delta Sharpe -0.100; vt25-g150 freno + vol rapida (9dce12d2) +299.08% / 1.168 / 21.55% / 18.38% / -0.123; vt25-g200 freno + vol rapida (ca99f2b9) +289.92% / 1.092 / 21.75% / 18.85% / -0.198; vt20-g150 solo freno (1a30086e) +272.72% / 1.174 / 20.95% / 19.00% / -0.116. Los demas criterios PASAN en los cuatro: R1 (PSR >= 0.998), R2 (DD del sleeve <= 21.75% frente al limite 25%), R4-R7, A1 (cuenta <= 18.85%; con el E1 de control 19.71%), H1 (PSR con recorte >= 0.988), H2, M1 y los crashes de 2020 y 2022. LECTURA: el freno controla el drawdown (E1 sin apalancar 23.82%) pero tras cada caida recorta la exposicion y se pierde el rebote; con el, el apalancamiento rinde lo que E1 sin apalancar (+287.04%) con peor Sharpe; sin el, supera el limite de drawdown (RW3, rw3Controls/authoritativeArtifactRw3E1Lev). La vol rapida suma +0.016 de Sharpe frente a la ablacion solo-freno (1.190 vs 1.174) a costa de casi duplicar la rotacion anual (13.82x vs 7.27x). Ninguno cumple, asi que no hay replica independiente que pedir; NO SE CABLEA y para 2027-01-21 no hay candidato que cablear: E1 sigue como esta. authoritativeArtifactRw4b (punto de mayor retorno como referencia de frontera), rw4Controls y RW SS14."
+    },
+    {
+      "id": "rw4a-c1-momentum-crypto-2026-10-23",
+      "sourceCommit": "8ba26a0 + 0ec5517 (control de exposicion exposureControl por defecto apagado + 7 manifests; priors renumerados 428->435 tras RW4b, ANTES de todo ensayo; pre-registro vinculante docs/reports/RW-reescritura-rentable.md SS13)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-rw4a-xc-dd-pure-v1.json",
+        "experiments/momentum-crypto-rw4a-xc-vol-pure-v1.json",
+        "experiments/momentum-crypto-rw4a-xc-both-pure-v1.json",
+        "scripts/walk-forward.ts",
+        "scripts/rw3-compare-artifacts.ts",
+        "scripts/lib/combinedPortfolioReturns.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 3,
+      "priorUniqueTrials": 428,
+      "resultingUniqueTrials": 431,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW4a (c1) momentum_crypto (horario, vt-35, freno de correlacion apagado, la config viva desde 2026-10-23): control de exposicion a nivel de cartera que REDUCE posiciones abiertas (exposureControl: una escala lambda en [0.25, 1] por tick; eje drawdown = rampa lineal sobre el drawdown del RiskGuard, eje vol = max(sigma rapida, sigma lenta) del libro ponderado por exposicion; banda 10 pp, orden minima 100 USD; las reducciones se ejecutan tambien con las entradas bloqueadas, los re-aumentos respetan los gates de entrada y nunca pasan de tamano completo). Copia byte a byte del control con asOf fijado (2026-10-02T08:00:00Z). Control (+0): efc086b4 (hash de datos 77c87d51 reproducido), +546.66% / Sharpe 1.331 / DD 34.31% / PSR 0.998; falla solo maxDisplacementShare. Candidatos: drawdown 5%->25% (xc-dd), vol 50%/ano con ventanas 120 y 504 barras (xc-vol), ambos (xc-both). +3: 428->431. Criterios RW SS13.4 (c1): puertas acceptance como el control, Sharpe >= control en los mismos 1575 dias, DD en dias comunes <= el del control (33.57%) y el del sleeve <= 45%, PSR >= 0.95, >= 2/3 folds con PSR > 0.5, peor LOO >= 0.6 x Sharpe, DD del libro combinado (50k/50k/5k/5k, E1 33b0ac05, E2 0b088ca3, USDC d0f7fd6f) <= 20%. RESULTADO REFUTADOS LOS 3, todos fallan R3 (Sharpe en dias comunes 1.331 del control): xc-dd (f2ce3833) +398.09% / Sharpe 1.215 / DD 41.05% en dias comunes (43.38% cosido), 429 redimensionados (258 recortes, 171 re-aumentos) -> falla R3 y el DD en dias comunes; xc-vol (6131738d) +205.80% / 0.963 / DD 37.24%, 4237 redimensionados -> falla R3, DD en dias comunes y la puerta maxTurnoverAnnual; xc-both (5bfcb72a) +251.35% / 1.072 / DD 33.80%, 3797 redimensionados -> falla R3, maxTurnoverAnnual y, por 0.23 pp (33.80% vs 33.57%), el DD en dias comunes (la tabla de SS13.6 solo cita R3 y rotacion para xc-both; el criterio de DD en dias comunes de SS13.4 tambien falla, el veredicto no cambia). Pasan en los tres PSR (>= 0.975), folds (2/3 con PSR > 0.5), peor LOO (>= 0.737) y libro combinado (<= 14.09%). Lectura: recortar posiciones abiertas EMPEORA en este sleeve, el kernel horario ya dimensiona por volatilidad (vt-35 a 720 barras), el recorte llega tarde y se pierde el rebote, y los ejes de vol disparan miles de ordenes (cada una paga 5 + 4 bps por lado). NO SE CABLEA: momentum_crypto sigue con vt35-corroff. authoritativeArtifactRw4aC1 (punto de mayor retorno como referencia de frontera) y RW SS13."
+    },
+    {
+      "id": "rw4a-c2-usdc-2026-10-23",
+      "sourceCommit": "8ba26a0 + 0ec5517 (control de exposicion exposureControl por defecto apagado + 7 manifests; priors renumerados 428->435 tras RW4b, ANTES de todo ensayo; pre-registro vinculante docs/reports/RW-reescritura-rentable.md SS13)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-usdc-daily-s5-rw4a-xc-dd-pure-v1.json",
+        "experiments/momentum-crypto-usdc-daily-s5-rw4a-xc-vol-pure-v1.json",
+        "experiments/momentum-crypto-usdc-daily-s5-rw4a-xc-both-pure-v1.json",
+        "experiments/momentum-crypto-usdc-daily-s5-rw4a-xc-dd-nosoftdd-pure-v1.json",
+        "scripts/walk-forward.ts",
+        "scripts/rw3-compare-artifacts.ts",
+        "scripts/lib/combinedPortfolioReturns.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 4,
+      "priorUniqueTrials": 431,
+      "resultingUniqueTrials": 435,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW4a (c2) momentum_crypto_usdc (kernel diario d13-s5, la config viva): el mismo control de exposicion que reduce posiciones abiertas, copia byte a byte del control con asOf 2026-09-26T00:00:00Z. Control (+0): d0f7fd6f (hash de datos 55da03c9 reproducido), +324.34% / Sharpe 1.028 / DD 52.58% / PSR 0.978; falla maxDrawdown y minExcessReturnVsBench. Candidatos: drawdown 10%->40% con la pausa soft-DD binaria encendida (xc-dd), vol 80%/ano con ventanas 10 y 42 barras (xc-vol), ambos (xc-both), y drawdown con la pausa soft-DD APAGADA (risk.softDrawdownPct 1.0; xc-dd-nosoftdd). +4: 431->435. Criterios RW SS13.4 (c2) como en c1, con la puerta del sleeve = DD no peor que el control (52.58%) y 1410 dias comunes. RESULTADO: UNO CUMPLE TODO, POR LA MINIMA: d13-s5-xc-dd (8892c1e9) +320.63% / Sharpe cosido 1.038; en 1410 dias comunes Sharpe 1.0383 frente a 1.0282 del control (+0.010), CAGR 45.08% frente a 45.41%, DD 51.95% frente a 52.58%; PSR 0.978, folds [0.925, 0.722, 0.909], peor LOO 0.741 x Sharpe, DD del libro combinado 13.84% (<= 20%); falla las mismas dos puertas acceptance que el control. Coste: 104 redimensionados (69 recortes y 35 re-aumentos; 36/55/13 por fold, ~27 al ano), 166 re-aumentos aplazados por gate o tope, lambda media por fold 0.979/0.917/0.989 y minima 0.476, comisiones 75 USD frente a 68 del control. Los otros 3 FALLAN: xc-vol (c52fdaf6) +257.71% / 0.951 / DD 53.33% (R3, DD en dias comunes y tope de DD del sleeve); xc-both (ea8d5341) +267.39% / 0.977 / DD 51.56% (solo R3); xc-dd-nosoftdd (27198e07) +198.26% / 0.832 / DD 54.76% / PSR 0.946 (R3, DD, PSR y las puertas looMaxDrawdown, minOuterPsr y stressMaxDrawdown: quitar la pausa binaria empeora todo, alli la pausa ayuda). HONESTIDAD: el margen es minimo (+0.010 de Sharpe, -0.63 pp de DD, retorno ligeramente MENOR que el control) y es el mejor de 4 con 435 ensayos previos y trialAccounting incompleto (approved sigue false); en dinero es neutro y no arregla que USDC este bajo su banda. ESTADO: pasa; REPLICADO y CABLEADO. La replica independiente (Python, sin codigo del proyecto, 2026-10-23) reproduce los tres folds con |dSharpe| < 1e-14 (limite 0.10) y los mismos 104 redimensionados (69/35; cero en el control). Los tres requisitos de SS13.4 estan cumplidos en la rama feat/rw4a-usdc-xc: scalePosition en BinanceMomentumAdapter (+ SwitchingAdapter y ShadowAdapter) con tests, version momentum_crypto_usdc@daily-d13s5-xc-dd en src/portfolio/modelVersions.ts y exposureControl en el plan y en la fila builtin. El RiskState NO se re-ancla (el mismo kernel construyo el drawdown vivo que lee el control). authoritativeArtifactRw4aC2.wiring y RW SS13.6."
     }
   ],
   "trialSensitivityFinding": {
@@ -3017,6 +3227,1701 @@
         "sharpe": 1.0282,
         "totalReturn": 3.2434,
         "maxDrawdown": 0.5258
+      }
+    }
+  },
+  "authoritativeArtifactRw3E1Lev": {
+    "path": "data/backtests/9536d164311cfe81a4edad93eade668d57092fec132afc2110f25a0858c30112/",
+    "manifest": "experiments/rw3-e1-stocks-lev-vt*-g*-v1.json @ b566d9f (pre-registro antes de correr)",
+    "date": "2026-10-23",
+    "verdict": "REFERENCIA DE FRONTERA (punto de mayor retorno, vt30-g200), no un candidato: REFUTADO por RW SS10.4 (a): falla R2 (DD 41.76% > 25%) y R3 (Sharpe 1.176 vs 1.29 del control re-corrido en 1755 sesiones comunes); pasa R1, R4-R7. Los otros 3 puntos de la familia tambien fallan R2 y R3. NO SE CABLEA; momentum_stocks congelado hasta 2027-01-21.",
+    "rw3E1Lev": {
+      "outerFoldReturnsPct": [
+        138.01,
+        93.15,
+        90.58
+      ],
+      "stitchedReturnPct": 776.16,
+      "sharpe": 1.176,
+      "maxDrawdownPct": 41.76,
+      "outerPsr": 0.998,
+      "trades": 33,
+      "criteriaFailed": [
+        "R2_maxDrawdown",
+        "R3_vsControl"
+      ],
+      "criteriaVerdict": "FALLA: R2, R3",
+      "selectedPerFold": [
+        "vt30-g200",
+        "vt30-g200",
+        "vt30-g200"
+      ],
+      "r3StrategySharpe": 1.176,
+      "r3ControlSharpe": 1.29,
+      "r3CommonDays": 1755,
+      "controlArtifact": "33b0ac05",
+      "stressSharpe": 1.16,
+      "maxYearPnlShare": 0.252,
+      "exTopDecileSharpe": 1.033,
+      "meanGross": 1.627,
+      "ordersPerSessionOos": 1.85,
+      "turnoverAnnual": 9.68,
+      "marginInterestUsd": 22561,
+      "strategyOnCommonDays": {
+        "sharpe": 1.1762,
+        "totalReturn": 7.7616,
+        "cagr": 0.3646,
+        "maxDrawdown": 0.4176
+      },
+      "controlOnCommonDays": {
+        "sharpe": 1.2905,
+        "totalReturn": 2.8704,
+        "cagr": 0.2139,
+        "maxDrawdown": 0.2382
+      }
+    },
+    "frontier": [
+      {
+        "candidate": "vt20-g150",
+        "artifact": "c512c100",
+        "stitchedReturnPct": 431.03,
+        "sharpe": 1.248,
+        "maxDrawdownPct": 28.89,
+        "cagrPctCommonDays": 27.02,
+        "meanGross": 1.155,
+        "marginInterestUsd": 7348,
+        "criteriaFailed": [
+          "R2_maxDrawdown",
+          "R3_vsControl"
+        ]
+      },
+      {
+        "candidate": "vt25-g150",
+        "artifact": "3d81c93a",
+        "stitchedReturnPct": 526.23,
+        "sharpe": 1.204,
+        "maxDrawdownPct": 34.56,
+        "cagrPctCommonDays": 30.05,
+        "meanGross": 1.299,
+        "marginInterestUsd": 10829,
+        "criteriaFailed": [
+          "R2_maxDrawdown",
+          "R3_vsControl"
+        ]
+      },
+      {
+        "candidate": "vt25-g200",
+        "artifact": "49a1160c",
+        "stitchedReturnPct": 673.1,
+        "sharpe": 1.24,
+        "maxDrawdownPct": 35.56,
+        "cagrPctCommonDays": 34.04,
+        "meanGross": 1.458,
+        "marginInterestUsd": 17080,
+        "criteriaFailed": [
+          "R2_maxDrawdown",
+          "R3_vsControl"
+        ]
+      },
+      {
+        "candidate": "vt30-g200",
+        "artifact": "9536d164",
+        "stitchedReturnPct": 776.16,
+        "sharpe": 1.176,
+        "maxDrawdownPct": 41.76,
+        "cagrPctCommonDays": 36.46,
+        "meanGross": 1.627,
+        "marginInterestUsd": 22561,
+        "criteriaFailed": [
+          "R2_maxDrawdown",
+          "R3_vsControl"
+        ]
+      }
+    ]
+  },
+  "authoritativeArtifactRw3E2Lev": {
+    "path": "data/backtests/896c735e2a87408c335dd732d9a441fb9f28d46f498381c93612d54092af54c4/",
+    "manifest": "experiments/rw3-e2-meanrev-lev-vt*-g*-v1.json @ b566d9f (pre-registro antes de correr)",
+    "date": "2026-10-23",
+    "verdict": "REFERENCIA DE FRONTERA (punto de mayor retorno, vt30-g200), no un candidato: REFUTADO por RW SS10.4 (a): falla R2 (DD 35.21% > 25%) y R3 (Sharpe 0.902 vs 1.109 del control en 1851 sesiones comunes); pasa R1, R4-R7. Los otros 3 puntos tambien fallan R2 y R3. NO SE CABLEA; meanrev_stocks congelado hasta 2027-01-21.",
+    "rw3E2Lev": {
+      "outerFoldReturnsPct": [
+        1.29,
+        70.78,
+        7.53,
+        35.61,
+        10.71,
+        49.65
+      ],
+      "stitchedReturnPct": 317.91,
+      "sharpe": 0.902,
+      "maxDrawdownPct": 35.21,
+      "outerPsr": 0.99,
+      "trades": 192,
+      "criteriaFailed": [
+        "R2_maxDrawdown",
+        "R3_vsControl"
+      ],
+      "criteriaVerdict": "FALLA: R2, R3",
+      "selectedPerFold": [
+        "vt30-g200",
+        "vt30-g200",
+        "vt30-g200",
+        "vt30-g200",
+        "vt30-g200",
+        "vt30-g200"
+      ],
+      "r3StrategySharpe": 0.902,
+      "r3ControlSharpe": 1.109,
+      "r3CommonDays": 1851,
+      "controlArtifact": "0b088ca3",
+      "stressSharpe": 0.888,
+      "maxYearPnlShare": 0.264,
+      "exTopDecileSharpe": 0.763,
+      "meanGross": 1.861,
+      "ordersPerSessionOos": 1.35,
+      "turnoverAnnual": 6.77,
+      "marginInterestUsd": 24723,
+      "strategyOnCommonDays": {
+        "sharpe": 0.9024,
+        "totalReturn": 3.1791,
+        "cagr": 0.2144,
+        "maxDrawdown": 0.3521
+      },
+      "controlOnCommonDays": {
+        "sharpe": 1.1088,
+        "totalReturn": 1.497,
+        "cagr": 0.1324,
+        "maxDrawdown": 0.21
+      }
+    },
+    "frontier": [
+      {
+        "candidate": "vt20-g150",
+        "artifact": "006f1e03",
+        "stitchedReturnPct": 219.38,
+        "sharpe": 0.972,
+        "maxDrawdownPct": 26.84,
+        "cagrPctCommonDays": 17.09,
+        "meanGross": 1.365,
+        "marginInterestUsd": 10754,
+        "criteriaFailed": [
+          "R2_maxDrawdown",
+          "R3_vsControl"
+        ]
+      },
+      {
+        "candidate": "vt25-g150",
+        "artifact": "ebf1f01f",
+        "stitchedReturnPct": 249.6,
+        "sharpe": 0.972,
+        "maxDrawdownPct": 29.97,
+        "cagrPctCommonDays": 18.53,
+        "meanGross": 1.42,
+        "marginInterestUsd": 12049,
+        "criteriaFailed": [
+          "R2_maxDrawdown",
+          "R3_vsControl"
+        ]
+      },
+      {
+        "candidate": "vt25-g200",
+        "artifact": "3c181ce9",
+        "stitchedReturnPct": 303.35,
+        "sharpe": 0.936,
+        "maxDrawdownPct": 31.82,
+        "cagrPctCommonDays": 20.86,
+        "meanGross": 1.787,
+        "marginInterestUsd": 22642,
+        "criteriaFailed": [
+          "R2_maxDrawdown",
+          "R3_vsControl"
+        ]
+      },
+      {
+        "candidate": "vt30-g200",
+        "artifact": "896c735e",
+        "stitchedReturnPct": 317.91,
+        "sharpe": 0.902,
+        "maxDrawdownPct": 35.21,
+        "cagrPctCommonDays": 21.44,
+        "meanGross": 1.861,
+        "marginInterestUsd": 24723,
+        "criteriaFailed": [
+          "R2_maxDrawdown",
+          "R3_vsControl"
+        ]
+      }
+    ]
+  },
+  "authoritativeArtifactRw3Etf": {
+    "path": "data/backtests/f922db5571616689a50ddd7dd67283cdb654a3af084fb173a76d7a1e2b4cc819/",
+    "manifest": "experiments/rw3-e1-levetf-vt*-v1.json @ b566d9f (pre-registro antes de correr)",
+    "date": "2026-10-23",
+    "verdict": "REFERENCIA DE FRONTERA (punto de mayor retorno, vt40), no un candidato: REFUTADO por RW SS10.4 (b): falla R2 (DD 55.23% > 25%) y R3 (Sharpe 0.834 vs 1.29 del control momentum_stocks@pe-vt15 en 1755 sesiones comunes); pasa R1, R4-R7. Los 3 puntos de la familia fallan R2 y R3. NO SE CABLEA.",
+    "rw3Etf": {
+      "outerFoldReturnsPct": [
+        110.7,
+        35.39,
+        83.09
+      ],
+      "stitchedReturnPct": 422.32,
+      "sharpe": 0.834,
+      "maxDrawdownPct": 55.23,
+      "outerPsr": 0.984,
+      "trades": 21,
+      "criteriaFailed": [
+        "R2_maxDrawdown",
+        "R3_vsControl"
+      ],
+      "criteriaVerdict": "FALLA: R2, R3",
+      "selectedPerFold": [
+        "vt40",
+        "vt40",
+        "vt40"
+      ],
+      "r3StrategySharpe": 0.834,
+      "r3ControlSharpe": 1.29,
+      "r3CommonDays": 1755,
+      "controlArtifact": "33b0ac05",
+      "stressSharpe": 0.828,
+      "maxYearPnlShare": 0.271,
+      "exTopDecileSharpe": 0.729,
+      "meanGross": 0.934,
+      "ordersPerSessionOos": 0.94,
+      "turnoverAnnual": 4.43,
+      "marginInterestUsd": 90,
+      "strategyOnCommonDays": {
+        "sharpe": 0.8344,
+        "totalReturn": 4.2232,
+        "cagr": 0.2672,
+        "maxDrawdown": 0.5523
+      },
+      "controlOnCommonDays": {
+        "sharpe": 1.2905,
+        "totalReturn": 2.8704,
+        "cagr": 0.2139,
+        "maxDrawdown": 0.2382
+      }
+    },
+    "frontier": [
+      {
+        "candidate": "vt20",
+        "artifact": "3e16de82",
+        "stitchedReturnPct": 265.77,
+        "sharpe": 0.956,
+        "maxDrawdownPct": 34.28,
+        "cagrPctCommonDays": 20.41,
+        "meanGross": 0.618,
+        "marginInterestUsd": 8,
+        "criteriaFailed": [
+          "R2_maxDrawdown",
+          "R3_vsControl"
+        ]
+      },
+      {
+        "candidate": "vt30",
+        "artifact": "dc9d6bd0",
+        "stitchedReturnPct": 358.34,
+        "sharpe": 0.865,
+        "maxDrawdownPct": 45.94,
+        "cagrPctCommonDays": 24.37,
+        "meanGross": 0.831,
+        "marginInterestUsd": 47,
+        "criteriaFailed": [
+          "R2_maxDrawdown",
+          "R3_vsControl"
+        ]
+      },
+      {
+        "candidate": "vt40",
+        "artifact": "f922db55",
+        "stitchedReturnPct": 422.32,
+        "sharpe": 0.834,
+        "maxDrawdownPct": 55.23,
+        "cagrPctCommonDays": 26.72,
+        "meanGross": 0.934,
+        "marginInterestUsd": 90,
+        "criteriaFailed": [
+          "R2_maxDrawdown",
+          "R3_vsControl"
+        ]
+      }
+    ]
+  },
+  "authoritativeArtifactRw3C1": {
+    "path": "data/backtests/efc086b47776235749e7013458360f8131cb3d3629b0a143f6c994d2bb16f240/",
+    "manifest": "experiments/momentum-crypto-rw3-vt-35-corroff-pure-v1.json @ befc835 (pre-registro antes de correr)",
+    "date": "2026-10-23",
+    "verdict": "VALIDADO por los criterios pre-registrados RW SS10.4 (c1): el unico candidato de RW3 que los cumple todos. Freno de correlacion apagado (techo 1.01), vt-35: Sharpe 1.331 vs 1.313 del control fijado en 1575 dias comunes, DD 34.31% <= 45%, PSR 0.998, fold PSR 0.963/0.988/0.687, peor LOO 0.703 del Sharpe, DD del libro combinado 13.96% <= 20% (control 13.8%); falla la misma puerta acceptance que el control (maxDisplacementShare). approved sigue en false por el inventario incompleto. Replica independiente y decision de cableado pendientes; no se cablea aqui.",
+    "criteria": {
+      "minDeltaSharpe": 0,
+      "maxDrawdownPct": 45,
+      "minPsr": 0.95,
+      "minFoldsPsrAbove05": 2,
+      "minWorstLooRatio": 0.6,
+      "maxCombinedBookDrawdownPct": 20,
+      "acceptanceGatesFailedSubsetOfControl": true,
+      "combinedBook": "capitales fijos 50000/50000/5000/5000: E1 re-corrido 33b0ac05, E2 0b088ca3, cripto bajo prueba, USDC d0f7fd6f; series OOS alineadas por sesion"
+    },
+    "rw3C1": {
+      "selected": "vt-35-corr92",
+      "outerFoldReturnsPct": [
+        92.85,
+        196.81,
+        12.98
+      ],
+      "stitchedReturnPct": 546.66,
+      "sharpe": 1.33,
+      "maxDrawdownPct": 34.31,
+      "outerPsr": 0.998,
+      "trades": 1312,
+      "foldPsr": [
+        0.963,
+        0.988,
+        0.687
+      ],
+      "gatesFailed": [
+        "maxDisplacementShare"
+      ],
+      "worstLooSharpe": 0.935,
+      "worstLooRatio": 0.703,
+      "controlArtifact": "39f732bc",
+      "commonDays": 1575,
+      "from": "2022-06-11",
+      "to": "2026-10-02",
+      "candidateOnCommonDays": {
+        "sharpe": 1.3313,
+        "totalReturn": 5.6388,
+        "cagr": 0.5516,
+        "maxDrawdown": 0.3357
+      },
+      "controlOnCommonDays": {
+        "sharpe": 1.3126,
+        "totalReturn": 5.2491,
+        "cagr": 0.5299,
+        "maxDrawdown": 0.3181
+      },
+      "deltaSharpe": 0.019,
+      "combined": {
+        "commonDays": 931,
+        "totalReturn": 1.0223,
+        "maxDrawdown": 0.1396
+      }
+    },
+    "control": {
+      "selected": "vt-35",
+      "outerFoldReturnsPct": [
+        79.05,
+        202.95,
+        12.42
+      ],
+      "stitchedReturnPct": 509.78,
+      "sharpe": 1.313,
+      "maxDrawdownPct": 32.58,
+      "outerPsr": 0.997,
+      "trades": 1229,
+      "foldPsr": [
+        0.95,
+        0.99,
+        0.685
+      ],
+      "gatesFailed": [
+        "maxDisplacementShare"
+      ],
+      "worstLooSharpe": 0.944,
+      "worstLooRatio": 0.719,
+      "controlArtifact": "39f732bc",
+      "commonDays": 1575,
+      "from": "2022-06-11",
+      "to": "2026-10-02",
+      "candidateOnCommonDays": {
+        "sharpe": 1.3126,
+        "totalReturn": 5.2491,
+        "cagr": 0.5299,
+        "maxDrawdown": 0.3181
+      },
+      "controlOnCommonDays": {
+        "sharpe": 1.3126,
+        "totalReturn": 5.2491,
+        "cagr": 0.5299,
+        "maxDrawdown": 0.3181
+      },
+      "deltaSharpe": 0,
+      "combined": {
+        "commonDays": 931,
+        "totalReturn": 1.0134,
+        "maxDrawdown": 0.138
+      }
+    },
+    "candidates": [
+      {
+        "candidate": "vt-50",
+        "artifact": "c8524ba7",
+        "stitchedReturnPct": 252.03,
+        "sharpe": 0.873,
+        "maxDrawdownPct": 52.44,
+        "outerPsr": 0.969,
+        "foldPsr": [
+          0.892,
+          0.971,
+          0.423
+        ],
+        "worstLooRatio": 0.769,
+        "gatesFailed": [
+          "looMaxDrawdown",
+          "maxDisplacementShare",
+          "maxDrawdown"
+        ],
+        "commonDays": 1575,
+        "sharpeCommonDays": 0.873,
+        "controlSharpeCommonDays": 1.3126,
+        "cagrPctCommonDays": 34.68,
+        "maxDrawdownPctCommonDays": 50.54,
+        "combinedBookMaxDrawdownPct": 13.93
+      },
+      {
+        "candidate": "vt-70",
+        "artifact": "13e20a0b",
+        "stitchedReturnPct": 892.09,
+        "sharpe": 1.233,
+        "maxDrawdownPct": 48.58,
+        "outerPsr": 0.995,
+        "foldPsr": [
+          0.901,
+          0.99,
+          0.72
+        ],
+        "worstLooRatio": 0.594,
+        "gatesFailed": [
+          "maxDisplacementShare",
+          "maxDrawdown"
+        ],
+        "commonDays": 1575,
+        "sharpeCommonDays": 1.2515,
+        "controlSharpeCommonDays": 1.3126,
+        "cagrPctCommonDays": 73.56,
+        "maxDrawdownPctCommonDays": 43.19,
+        "combinedBookMaxDrawdownPct": 13.89
+      },
+      {
+        "candidate": "vt-35-corr92",
+        "artifact": "1eaa635c",
+        "stitchedReturnPct": 517,
+        "sharpe": 1.304,
+        "maxDrawdownPct": 34.55,
+        "outerPsr": 0.997,
+        "foldPsr": [
+          0.955,
+          0.989,
+          0.673
+        ],
+        "worstLooRatio": 0.705,
+        "gatesFailed": [
+          "maxDisplacementShare"
+        ],
+        "commonDays": 1575,
+        "sharpeCommonDays": 1.3049,
+        "controlSharpeCommonDays": 1.3126,
+        "cagrPctCommonDays": 53.47,
+        "maxDrawdownPctCommonDays": 33.81,
+        "combinedBookMaxDrawdownPct": 13.96
+      },
+      {
+        "candidate": "vt-50-corr92",
+        "artifact": "42d41674",
+        "stitchedReturnPct": 554.44,
+        "sharpe": 1.164,
+        "maxDrawdownPct": 42.27,
+        "outerPsr": 0.993,
+        "foldPsr": [
+          0.876,
+          0.99,
+          0.652
+        ],
+        "worstLooRatio": 0.651,
+        "gatesFailed": [
+          "looMaxDrawdown",
+          "maxDisplacementShare"
+        ],
+        "commonDays": 1575,
+        "sharpeCommonDays": 1.1648,
+        "controlSharpeCommonDays": 1.3126,
+        "cagrPctCommonDays": 55.61,
+        "maxDrawdownPctCommonDays": 40.29,
+        "combinedBookMaxDrawdownPct": 13.97
+      },
+      {
+        "candidate": "vt-35-corroff",
+        "artifact": "efc086b4",
+        "stitchedReturnPct": 546.66,
+        "sharpe": 1.33,
+        "maxDrawdownPct": 34.31,
+        "outerPsr": 0.998,
+        "foldPsr": [
+          0.963,
+          0.988,
+          0.687
+        ],
+        "worstLooRatio": 0.703,
+        "gatesFailed": [
+          "maxDisplacementShare"
+        ],
+        "commonDays": 1575,
+        "sharpeCommonDays": 1.3313,
+        "controlSharpeCommonDays": 1.3126,
+        "cagrPctCommonDays": 55.16,
+        "maxDrawdownPctCommonDays": 33.57,
+        "combinedBookMaxDrawdownPct": 13.96
+      }
+    ],
+    "passingCandidates": [
+      "vt-35-corroff"
+    ]
+  },
+  "authoritativeArtifactRw3C2": {
+    "path": "data/backtests/f0f1319ab9917bf925e31fced12cacac58af60335e2001ddace6973322071026/",
+    "manifest": "experiments/momentum-crypto-usdc-daily-s5-rw3-vt*-pure-v1.json @ b566d9f (pre-registro antes de correr)",
+    "date": "2026-10-23",
+    "verdict": "REFERENCIA DE FRONTERA (punto de mayor retorno, vt70), no un candidato: REFUTADO por RW SS10.4 (c2): Sharpe 0.991 < 1.028 del control d0f7fd6f en 1410 dias comunes (vt50: 0.948). Retorno +335.11% vs +324.34% del control y DD 50.97% vs 52.58%, pero no mejora el Sharpe. NO SE CABLEA.",
+    "rw3C2": {
+      "selected": "d13-s5-vt70",
+      "outerFoldReturnsPct": [
+        65.23,
+        43.92,
+        82.98
+      ],
+      "stitchedReturnPct": 335.11,
+      "sharpe": 0.991,
+      "maxDrawdownPct": 50.97,
+      "outerPsr": 0.975,
+      "trades": 102,
+      "foldPsr": [
+        0.834,
+        0.79,
+        0.919
+      ],
+      "gatesFailed": [
+        "maxDrawdown",
+        "minExcessReturnVsBench"
+      ],
+      "worstLooSharpe": 0.851,
+      "worstLooRatio": 0.859,
+      "controlArtifact": "d0f7fd6f",
+      "commonDays": 1410,
+      "from": "2022-11-15",
+      "to": "2026-09-25",
+      "candidateOnCommonDays": {
+        "sharpe": 0.9914,
+        "totalReturn": 3.3511,
+        "cagr": 0.4636,
+        "maxDrawdown": 0.5097
+      },
+      "controlOnCommonDays": {
+        "sharpe": 1.0282,
+        "totalReturn": 3.2434,
+        "cagr": 0.4541,
+        "maxDrawdown": 0.5258
+      },
+      "deltaSharpe": -0.037,
+      "combined": {
+        "commonDays": 931,
+        "totalReturn": 1.0093,
+        "maxDrawdown": 0.1385
+      }
+    },
+    "control": {
+      "selected": "d13-s5-blend-63-126-252",
+      "outerFoldReturnsPct": [
+        100.42,
+        27.54,
+        66
+      ],
+      "stitchedReturnPct": 324.34,
+      "sharpe": 1.028,
+      "maxDrawdownPct": 52.58,
+      "outerPsr": 0.978,
+      "trades": 106,
+      "foldPsr": [
+        0.917,
+        0.739,
+        0.904
+      ],
+      "gatesFailed": [
+        "maxDrawdown",
+        "minExcessReturnVsBench"
+      ],
+      "worstLooSharpe": 0.806,
+      "worstLooRatio": 0.784,
+      "controlArtifact": "d0f7fd6f",
+      "commonDays": 1410,
+      "from": "2022-11-15",
+      "to": "2026-09-25",
+      "candidateOnCommonDays": {
+        "sharpe": 1.0282,
+        "totalReturn": 3.2434,
+        "cagr": 0.4541,
+        "maxDrawdown": 0.5258
+      },
+      "controlOnCommonDays": {
+        "sharpe": 1.0282,
+        "totalReturn": 3.2434,
+        "cagr": 0.4541,
+        "maxDrawdown": 0.5258
+      },
+      "deltaSharpe": 0
+    },
+    "candidates": [
+      {
+        "candidate": "d13-s5-vt50",
+        "artifact": "6d7d131e",
+        "stitchedReturnPct": 231.07,
+        "sharpe": 0.948,
+        "maxDrawdownPct": 45.83,
+        "outerPsr": 0.969,
+        "foldPsr": [
+          0.905,
+          0.679,
+          0.884
+        ],
+        "worstLooRatio": 0.868,
+        "gatesFailed": [
+          "maxDrawdown",
+          "minExcessReturnVsBench"
+        ],
+        "commonDays": 1410,
+        "sharpeCommonDays": 0.9483,
+        "controlSharpeCommonDays": 1.0282,
+        "cagrPctCommonDays": 36.36,
+        "maxDrawdownPctCommonDays": 45.83,
+        "combinedBookMaxDrawdownPct": 13.83
+      },
+      {
+        "candidate": "d13-s5-vt70",
+        "artifact": "f0f1319a",
+        "stitchedReturnPct": 335.11,
+        "sharpe": 0.991,
+        "maxDrawdownPct": 50.97,
+        "outerPsr": 0.975,
+        "foldPsr": [
+          0.834,
+          0.79,
+          0.919
+        ],
+        "worstLooRatio": 0.859,
+        "gatesFailed": [
+          "maxDrawdown",
+          "minExcessReturnVsBench"
+        ],
+        "commonDays": 1410,
+        "sharpeCommonDays": 0.9914,
+        "controlSharpeCommonDays": 1.0282,
+        "cagrPctCommonDays": 46.36,
+        "maxDrawdownPctCommonDays": 50.97,
+        "combinedBookMaxDrawdownPct": 13.85
+      }
+    ],
+    "passingCandidates": []
+  },
+  "authoritativeArtifactCopyD4": {
+    "path": "data/backtests/a910d39a1cf7a7efdf10ef880d678ec18cac5d32c4a48f0d69e3a22da8ed607d/",
+    "manifest": "experiments/copy-d4-insider-clusters-v1.json @ 9f88272 (pre-registro antes de correr)",
+    "date": "2026-10-23",
+    "verdict": "REFUTADO por los criterios pre-registrados RW SS11.1: falla C1 (PSR 0.818), C2 (DD 56.57%), C3 (Sharpe stress 0.299), C5 (Sharpe 0.316 vs SPY 0.858) y C6b (0.021). El pase de C4 es INVALIDO (el Sharpe del pasivo copySignal salio exactamente 0: defecto del calculo del pasivo) y el veredicto no depende de el. NO SE CABLEA.",
+    "copyD4": {
+      "outerFoldReturnsPct": [
+        15.89,
+        -7.23,
+        7.49,
+        10.6,
+        14.89,
+        -0.2
+      ],
+      "stitchedReturnPct": 46.55,
+      "sharpe": 0.316,
+      "maxDrawdownPct": 56.57,
+      "outerPsr": 0.818,
+      "trades": 439,
+      "criteriaFailed": [
+        "C1_psr",
+        "C2_maxDrawdown",
+        "C3_stressSharpe",
+        "C5_vsMarket",
+        "C6b_exTopDecile"
+      ],
+      "criteriaPassed": [
+        "C4_vsPassive",
+        "C6_yearShare",
+        "C7_breakEvenExtraBps"
+      ],
+      "criteriaVerdict": "FALLA: C1, C2, C3, C5, C6b",
+      "selectedPerFold": [
+        "A-h21",
+        "A-h126",
+        "A-h21",
+        "A-h21",
+        "A-h21",
+        "A-h21"
+      ],
+      "c1": 0.818,
+      "c2": 0.566,
+      "c3": 0.299,
+      "c4Strategy": 0.316,
+      "c4Passive": 0,
+      "c4Pass": true,
+      "c4Obs": 2295,
+      "c5Market": 0.858,
+      "c5Value": -0.543,
+      "c6": 0.455,
+      "c6b": 0.021,
+      "c7": true,
+      "c8": null,
+      "ordersPerSession": 0.42,
+      "turnoverAnnual": 6.63,
+      "meanGross": 0.39,
+      "benchSharpe": 0.859,
+      "benchReturnPct": 259.37
+    },
+    "defect": {
+      "id": "C4_passiveSharpeExactlyZero",
+      "detail": "rw-criteria.json C4.detail.passiveSharpe == 0 en 2295 observaciones: el benchmark pasivo equiponderado copySignal (passiveCopyBenchmarkDecide) devolvio una serie con Sharpe exactamente 0 (consistente con un libro pasivo sin posiciones, retornos nulos). Causa sin diagnosticar en este lote.",
+      "c4PassIsValid": false,
+      "verdictDependsOnC4": false
+    }
+  },
+  "rw3Controls": {
+    "date": "2026-10-23",
+    "trialsAdded": 0,
+    "controls": {
+      "e1Rerun": {
+        "artifact": "33b0ac05",
+        "path": "data/backtests/33b0ac05db80fb9c9c60b961f9b85dd899622d9da7e2420bf81903551cf849bc/",
+        "dataHash": "ee75275b",
+        "outerFoldReturnsPct": [
+          75.11,
+          50.07,
+          47.28
+        ],
+        "stitchedReturnPct": 287.04,
+        "sharpe": 1.29,
+        "maxDrawdownPct": 23.82,
+        "outerPsr": 0.999,
+        "criteriaFailed": [
+          "R3_vsControl"
+        ],
+        "selectedPerFold": [
+          "vt20",
+          "vt15",
+          "vt15"
+        ],
+        "note": "rw2-e1 re-corrido sobre los datos de hoy (+0, no es ensayo); falla R3 contra el autoritativo b2324d4f por -0.001 (1.290 vs 1.291) y su cadena es mixta vt20/vt15/vt15"
+      },
+      "e2": {
+        "artifact": "0b088ca3",
+        "path": "data/backtests/0b088ca320e3521d8bff05b10c1ad7eed2816bc2a1b0b927eb3134e2a3dca4c2/",
+        "dataHash": "898c5720",
+        "outerFoldReturnsPct": [
+          3.97,
+          33.85,
+          6.46,
+          19.45,
+          9.69,
+          28.64
+        ],
+        "stitchedReturnPct": 149.7,
+        "sharpe": 1.109,
+        "maxDrawdownPct": 21.0,
+        "outerPsr": 0.997,
+        "note": "autoritativo de rw2-e2 (+0), hash de datos 898c5720 reproducido"
+      },
+      "cryptoPinned": {
+        "artifact": "39f732bc",
+        "path": "data/backtests/39f732bc3d84a7366cde1969974b6a77a62dbc39f20448ee06e2ea349904b12f/",
+        "dataHash": "77c87d51",
+        "outerFoldReturnsPct": [
+          79.05,
+          202.95,
+          12.42
+        ],
+        "stitchedReturnPct": 509.78,
+        "sharpe": 1.313,
+        "maxDrawdownPct": 32.58,
+        "outerPsr": 0.997,
+        "note": "control vt-35 con asOf fijado en el asOfResolved de 06e1a160 (+0)",
+        "selected": "vt-35",
+        "gatesFailed": [
+          "maxDisplacementShare"
+        ]
+      },
+      "usdc": {
+        "artifact": "d0f7fd6f",
+        "path": "data/backtests/d0f7fd6f6c524f4d3d0132301f918683d8de14762ab1dce477f07fe511928c95/",
+        "dataHash": "55da03c9",
+        "outerFoldReturnsPct": [
+          100.42,
+          27.54,
+          66.0
+        ],
+        "stitchedReturnPct": 324.34,
+        "sharpe": 1.028,
+        "maxDrawdownPct": 52.58,
+        "outerPsr": 0.978,
+        "note": "control USDC d13-s5 (+0), hash de datos 55da03c9 reproducido",
+        "gatesFailed": [
+          "maxDrawdown",
+          "minExcessReturnVsBench"
+        ]
+      }
+    }
+  },
+  "authoritativeArtifactRw4b": {
+    "path": "data/backtests/9dce12d256e24e7d31ffe63ea8bd7ff37a9afeeb6b1af56574c0f78969cfe912/",
+    "manifest": "experiments/rw4b-e1-lev-vt*-g*-brake*-v1.json @ 4b6f695 + 61f9e52 (pre-registro antes de correr)",
+    "date": "2026-10-23",
+    "verdict": "REFERENCIA DE FRONTERA (punto de mayor retorno, vt25-g150-brake-fast5), no un candidato: REFUTADO por RW SS14.3: falla R3 (Sharpe 1.168 vs 1.290 de E1 en 1755 sesiones comunes, delta -0.123); pasa R1, R2, R4-R7, A1, H1, H2, M1, S1 y S2. Los otros 3 candidatos tambien fallan SOLO R3. NO SE CABLEA; E1 sigue como esta y para 2027-01-21 no hay candidato.",
+    "rw4b": {
+      "outerFoldReturnsPct": [
+        89.27,
+        47.21,
+        43.23
+      ],
+      "stitchedReturnPct": 299.08,
+      "sharpe": 1.168,
+      "maxDrawdownPct": 21.55,
+      "outerPsr": 0.998,
+      "trades": 33,
+      "criteriaFailed": [
+        "R3_vsControl"
+      ],
+      "criteriaPassed": [
+        "A1_accountDrawdown",
+        "H1_haircutPsr",
+        "H2_haircutStressSharpe",
+        "M1_marginCost",
+        "R1_psr",
+        "R2_maxDrawdown",
+        "R4_stressSharpe",
+        "R5_yearShare",
+        "R6_exTopDecile",
+        "R7_breakEvenExtraBps",
+        "S1_crash2020",
+        "S2_bear2022"
+      ],
+      "criteriaVerdict": "FALLA: R3",
+      "selectedPerFold": [
+        "vt25-g150-brake-fast5",
+        "vt25-g150-brake-fast5",
+        "vt25-g150-brake-fast5"
+      ],
+      "r1Psr": 0.998,
+      "r2SleeveMaxDrawdownPct": 21.55,
+      "r3StrategySharpe": 1.168,
+      "r3ControlSharpe": 1.29,
+      "r3CommonDays": 1755,
+      "r3DeltaSharpe": -0.123,
+      "stressSharpe": 1.12,
+      "maxYearPnlShare": 0.23,
+      "exTopDecileSharpe": 0.975,
+      "accountMaxDrawdownPct": 18.38,
+      "accountControlMaxDrawdownPct": 19.71,
+      "accountCommonDays": 1721,
+      "haircutPsr": 0.993,
+      "haircutStressSharpe": 0.94,
+      "marginInterestUsd": 7241,
+      "marginInterestShareOfNetPnl": 0.048,
+      "crash2020": {
+        "sleeveMaxDrawdownPct": 16.47,
+        "accountMaxDrawdownPct": 18.57,
+        "controlSleeveMaxDrawdownPct": 19.05,
+        "controlAccountMaxDrawdownPct": 19.77,
+        "sessions": 41
+      },
+      "bear2022": {
+        "sleeveMaxDrawdownPct": 20.53,
+        "accountMaxDrawdownPct": 15.93,
+        "controlSleeveMaxDrawdownPct": 23.23,
+        "controlAccountMaxDrawdownPct": 16.86,
+        "sessions": 251
+      },
+      "meanGross": 1.048,
+      "ordersPerSessionOos": 2.32,
+      "turnoverAnnual": 13.28,
+      "controlArtifact": "33b0ac05",
+      "partnerArtifact": "0b088ca3",
+      "strategyOnCommonDays": {
+        "sharpe": 1.1679,
+        "totalReturn": 2.9908,
+        "cagr": 0.2193,
+        "maxDrawdown": 0.2155
+      },
+      "controlOnCommonDays": {
+        "sharpe": 1.2905,
+        "totalReturn": 2.8704,
+        "cagr": 0.2139,
+        "maxDrawdown": 0.2382
+      },
+      "deltaSharpeSameDays": -0.123
+    },
+    "frontier": [
+      {
+        "candidate": "vt20-g150-brake-fast5",
+        "artifact": "872a1e06",
+        "stitchedReturnPct": 257.54,
+        "sharpe": 1.19,
+        "maxDrawdownPct": 19.73,
+        "deltaSharpeVsE1": -0.1,
+        "cagrPctCommonDays": 20.02,
+        "accountMaxDrawdownPct": 17.49,
+        "marginInterestUsd": 4923,
+        "meanGross": 0.948,
+        "turnoverAnnual": 13.82,
+        "criteriaFailed": [
+          "R3_vsControl"
+        ]
+      },
+      {
+        "candidate": "vt25-g150-brake-fast5",
+        "artifact": "9dce12d2",
+        "stitchedReturnPct": 299.08,
+        "sharpe": 1.168,
+        "maxDrawdownPct": 21.55,
+        "deltaSharpeVsE1": -0.123,
+        "cagrPctCommonDays": 21.93,
+        "accountMaxDrawdownPct": 18.38,
+        "marginInterestUsd": 7241,
+        "meanGross": 1.048,
+        "turnoverAnnual": 13.28,
+        "criteriaFailed": [
+          "R3_vsControl"
+        ]
+      },
+      {
+        "candidate": "vt25-g200-brake-fast5",
+        "artifact": "ca99f2b9",
+        "stitchedReturnPct": 289.92,
+        "sharpe": 1.092,
+        "maxDrawdownPct": 21.75,
+        "deltaSharpeVsE1": -0.198,
+        "cagrPctCommonDays": 21.52,
+        "accountMaxDrawdownPct": 18.85,
+        "marginInterestUsd": 10160,
+        "meanGross": 1.118,
+        "turnoverAnnual": 18.79,
+        "criteriaFailed": [
+          "R3_vsControl"
+        ]
+      },
+      {
+        "candidate": "vt20-g150-brake",
+        "artifact": "1a30086e",
+        "stitchedReturnPct": 272.72,
+        "sharpe": 1.174,
+        "maxDrawdownPct": 20.95,
+        "deltaSharpeVsE1": -0.116,
+        "cagrPctCommonDays": 20.74,
+        "accountMaxDrawdownPct": 19,
+        "marginInterestUsd": 5806,
+        "meanGross": 0.989,
+        "turnoverAnnual": 7.27,
+        "criteriaFailed": [
+          "R3_vsControl"
+        ]
+      }
+    ],
+    "controls": {
+      "e1": "33b0ac05",
+      "partner": "0b088ca3",
+      "authoritativeDiagnostic": "b2324d4f"
+    }
+  },
+  "authoritativeArtifactRw4aC1": {
+    "path": "data/backtests/f2ce38334150590c1ff0706f390dd2947a13394f3b131570684b1a8a8b557789/",
+    "manifest": "experiments/momentum-crypto-rw4a-xc-{dd,vol,both}-pure-v1.json @ 0ec5517 (pre-registro antes de correr)",
+    "date": "2026-10-23",
+    "verdict": "REFERENCIA DE FRONTERA (punto de mayor retorno, xc-dd), no un candidato: REFUTADO por RW SS13.4 (c1): los 3 candidatos fallan R3 (Sharpe en 1575 dias comunes 1.215 / 0.963 / 1.072 frente a 1.331 del control efc086b4) y el DD en dias comunes (41.05% / 37.24% / 33.80% frente a 33.57%); vol y both ademas la puerta maxTurnoverAnnual. Recortar posiciones abiertas empeora en momentum_crypto. NO SE CABLEA: momentum_crypto sigue con vt35-corroff.",
+    "control": {
+      "selected": "vt-35-corr92",
+      "outerFoldReturnsPct": [
+        92.85,
+        196.81,
+        12.98
+      ],
+      "stitchedReturnPct": 546.66,
+      "sharpe": 1.33,
+      "maxDrawdownPct": 34.31,
+      "outerPsr": 0.998,
+      "trades": 1312,
+      "foldPsr": [
+        0.963,
+        0.988,
+        0.687
+      ],
+      "gatesFailed": [
+        "maxDisplacementShare"
+      ],
+      "worstLooSharpe": 0.935,
+      "worstLooRatio": 0.703,
+      "dataHash": "77c87d51",
+      "feesUsd": 1328,
+      "controlArtifact": "efc086b4",
+      "commonDays": 1575,
+      "from": "2022-06-11",
+      "to": "2026-10-02",
+      "candidateOnCommonDays": {
+        "sharpe": 1.3313,
+        "totalReturn": 5.6388,
+        "cagr": 0.5516,
+        "maxDrawdown": 0.3357
+      },
+      "controlOnCommonDays": {
+        "sharpe": 1.3313,
+        "totalReturn": 5.6388,
+        "cagr": 0.5516,
+        "maxDrawdown": 0.3357
+      },
+      "deltaSharpe": 0,
+      "combined": {
+        "commonDays": 931,
+        "totalReturn": 1.0223,
+        "maxDrawdown": 0.1396
+      }
+    },
+    "candidates": [
+      {
+        "candidate": "vt35-corroff-xc-dd",
+        "artifact": "f2ce3833",
+        "stitchedReturnPct": 398.09,
+        "sharpe": 1.211,
+        "maxDrawdownPct": 43.38,
+        "outerPsr": 0.994,
+        "foldPsr": [
+          0.967,
+          0.98,
+          0.542
+        ],
+        "worstLooRatio": 0.786,
+        "gatesFailed": [
+          "maxDisplacementShare"
+        ],
+        "commonDays": 1575,
+        "sharpeCommonDays": 1.215,
+        "controlSharpeCommonDays": 1.3313,
+        "cagrPctCommonDays": 46.22,
+        "controlCagrPctCommonDays": 55.16,
+        "maxDrawdownPctCommonDays": 41.05,
+        "controlMaxDrawdownPctCommonDays": 33.57,
+        "combinedBookMaxDrawdownPct": 13.99,
+        "feesUsd": 1263,
+        "controlFeesUsd": 1328,
+        "exposure": {
+          "resizes": 429,
+          "reductions": 258,
+          "addBacks": 171,
+          "deferredUp": 1110,
+          "resizeNotionalUsd": 105485,
+          "resizesPerFold": [
+            115,
+            182,
+            132
+          ],
+          "meanScalePerFold": [
+            0.911,
+            0.884,
+            0.903
+          ],
+          "minScale": 0.413,
+          "pctTicksBelowOne": 64.19
+        },
+        "criteriaFailed": [
+          "R3_sharpeCommonDays",
+          "DD_commonDays"
+        ]
+      },
+      {
+        "candidate": "vt35-corroff-xc-vol",
+        "artifact": "6131738d",
+        "stitchedReturnPct": 205.8,
+        "sharpe": 0.962,
+        "maxDrawdownPct": 38.6,
+        "outerPsr": 0.975,
+        "foldPsr": [
+          0.958,
+          0.953,
+          0.406
+        ],
+        "worstLooRatio": 0.817,
+        "gatesFailed": [
+          "maxDisplacementShare",
+          "maxTurnoverAnnual"
+        ],
+        "commonDays": 1575,
+        "sharpeCommonDays": 0.9633,
+        "controlSharpeCommonDays": 1.3313,
+        "cagrPctCommonDays": 30.42,
+        "controlCagrPctCommonDays": 55.16,
+        "maxDrawdownPctCommonDays": 37.24,
+        "controlMaxDrawdownPctCommonDays": 33.57,
+        "combinedBookMaxDrawdownPct": 14.09,
+        "feesUsd": 1658,
+        "controlFeesUsd": 1328,
+        "exposure": {
+          "resizes": 4237,
+          "reductions": 2120,
+          "addBacks": 2117,
+          "deferredUp": 1202,
+          "resizeNotionalUsd": 1210552,
+          "resizesPerFold": [
+            1699,
+            1687,
+            851
+          ],
+          "meanScalePerFold": [
+            0.967,
+            0.946,
+            0.98
+          ],
+          "minScale": 0.466,
+          "pctTicksBelowOne": 22.17
+        },
+        "criteriaFailed": [
+          "R3_sharpeCommonDays",
+          "DD_commonDays",
+          "acceptanceGates"
+        ]
+      },
+      {
+        "candidate": "vt35-corroff-xc-both",
+        "artifact": "5bfcb72a",
+        "stitchedReturnPct": 251.35,
+        "sharpe": 1.069,
+        "maxDrawdownPct": 35.21,
+        "outerPsr": 0.986,
+        "foldPsr": [
+          0.966,
+          0.96,
+          0.491
+        ],
+        "worstLooRatio": 0.737,
+        "gatesFailed": [
+          "maxDisplacementShare",
+          "maxTurnoverAnnual"
+        ],
+        "commonDays": 1575,
+        "sharpeCommonDays": 1.0718,
+        "controlSharpeCommonDays": 1.3313,
+        "cagrPctCommonDays": 34.73,
+        "controlCagrPctCommonDays": 55.16,
+        "maxDrawdownPctCommonDays": 33.8,
+        "controlMaxDrawdownPctCommonDays": 33.57,
+        "combinedBookMaxDrawdownPct": 14.07,
+        "feesUsd": 1662,
+        "controlFeesUsd": 1328,
+        "exposure": {
+          "resizes": 3797,
+          "reductions": 1919,
+          "addBacks": 1878,
+          "deferredUp": 536,
+          "resizeNotionalUsd": 1268260,
+          "resizesPerFold": [
+            1292,
+            1812,
+            693
+          ],
+          "meanScalePerFold": [
+            0.896,
+            0.869,
+            0.911
+          ],
+          "minScale": 0.466,
+          "pctTicksBelowOne": 73.95
+        },
+        "criteriaFailed": [
+          "R3_sharpeCommonDays",
+          "DD_commonDays",
+          "acceptanceGates"
+        ]
+      }
+    ],
+    "passingCandidates": [],
+    "rw4aC1": {
+      "selected": "vt35-corroff-xc-dd",
+      "outerFoldReturnsPct": [
+        93.99,
+        164.69,
+        -2.99
+      ],
+      "stitchedReturnPct": 398.09,
+      "sharpe": 1.211,
+      "maxDrawdownPct": 43.38,
+      "outerPsr": 0.994,
+      "trades": 1314,
+      "foldPsr": [
+        0.967,
+        0.98,
+        0.542
+      ],
+      "gatesFailed": [
+        "maxDisplacementShare"
+      ],
+      "worstLooSharpe": 0.952,
+      "worstLooRatio": 0.786,
+      "dataHash": "77c87d51",
+      "feesUsd": 1263,
+      "controlArtifact": "efc086b4",
+      "commonDays": 1575,
+      "from": "2022-06-11",
+      "to": "2026-10-02",
+      "candidateOnCommonDays": {
+        "sharpe": 1.215,
+        "totalReturn": 4.1407,
+        "cagr": 0.4622,
+        "maxDrawdown": 0.4105
+      },
+      "controlOnCommonDays": {
+        "sharpe": 1.3313,
+        "totalReturn": 5.6388,
+        "cagr": 0.5516,
+        "maxDrawdown": 0.3357
+      },
+      "deltaSharpe": -0.116,
+      "combined": {
+        "commonDays": 931,
+        "totalReturn": 0.9961,
+        "maxDrawdown": 0.1399
+      },
+      "exposure": {
+        "resizes": 429,
+        "reductions": 258,
+        "addBacks": 171,
+        "deferredUp": 1110,
+        "resizeNotionalUsd": 105485,
+        "resizesPerFold": [
+          115,
+          182,
+          132
+        ],
+        "meanScalePerFold": [
+          0.911,
+          0.884,
+          0.903
+        ],
+        "minScale": 0.413,
+        "pctTicksBelowOne": 64.19
+      }
+    }
+  },
+  "authoritativeArtifactRw4aC2": {
+    "path": "data/backtests/8892c1e950818ee724cbd5473ffdb6d207aefc98ae1f054d3bdf08e4eebad607/",
+    "manifest": "experiments/momentum-crypto-usdc-daily-s5-rw4a-xc-{dd,vol,both,dd-nosoftdd}-pure-v1.json @ 0ec5517 (pre-registro antes de correr)",
+    "date": "2026-10-23",
+    "verdict": "PASA TODOS LOS CRITERIOS RW SS13.4 (c2) POR LA MINIMA; REPLICADO y CABLEADO (rama feat/rw4a-usdc-xc, version momentum_crypto_usdc@daily-d13s5-xc-dd). d13-s5-xc-dd (control por drawdown 10%->40%, pausa soft-DD encendida): Sharpe 1.038 vs 1.028 del control d0f7fd6f en 1410 dias comunes, DD 51.95% vs 52.58%, PSR 0.978, 3/3 folds con PSR > 0.5, peor LOO 0.741 x Sharpe, DD del libro combinado 13.84%; mismas puertas acceptance falladas que el control. Margen minimo, retorno ligeramente menor (+320.63% vs +324.34%), mejor de 4 con 435 ensayos previos; neutro en dinero. Los otros 3 candidatos fallan. approved=false (trialAccounting incompleto). Replica independiente (Python, sin codigo del proyecto, 2026-10-23, RW SS13.6): reproduce los tres folds del ganador y del control con |dSharpe| < 1e-14 (limite 0.10) — ganador 1.387/0.578/1.243, control 1.341/0.620/1.214 —, los mismos 104 redimensionados (69 recortes, 35 re-aumentos), cero en el control, y la misma diferencia en dias comunes +0.010; error maximo de equity 4e-12 USD en 59 verificaciones. Fe de erratas: la recta del eje drawdown va de 1 en startPct a 0 en endPct con suelo minScale (suelo al 32.5% de dd en USDC), que es lo que se corrio, se replico y se cablea.",
+    "control": {
+      "selected": "d13-s5-blend-63-126-252",
+      "outerFoldReturnsPct": [
+        100.42,
+        27.54,
+        66
+      ],
+      "stitchedReturnPct": 324.34,
+      "sharpe": 1.028,
+      "maxDrawdownPct": 52.58,
+      "outerPsr": 0.978,
+      "trades": 106,
+      "foldPsr": [
+        0.917,
+        0.739,
+        0.904
+      ],
+      "gatesFailed": [
+        "maxDrawdown",
+        "minExcessReturnVsBench"
+      ],
+      "worstLooSharpe": 0.806,
+      "worstLooRatio": 0.784,
+      "dataHash": "55da03c9",
+      "feesUsd": 68,
+      "controlArtifact": "d0f7fd6f",
+      "commonDays": 1410,
+      "from": "2022-11-15",
+      "to": "2026-09-25",
+      "candidateOnCommonDays": {
+        "sharpe": 1.0282,
+        "totalReturn": 3.2434,
+        "cagr": 0.4541,
+        "maxDrawdown": 0.5258
+      },
+      "controlOnCommonDays": {
+        "sharpe": 1.0282,
+        "totalReturn": 3.2434,
+        "cagr": 0.4541,
+        "maxDrawdown": 0.5258
+      },
+      "deltaSharpe": 0,
+      "combined": {
+        "commonDays": 931,
+        "totalReturn": 1.0223,
+        "maxDrawdown": 0.1396
+      }
+    },
+    "candidates": [
+      {
+        "candidate": "d13-s5-xc-dd",
+        "artifact": "8892c1e9",
+        "stitchedReturnPct": 320.63,
+        "sharpe": 1.038,
+        "maxDrawdownPct": 51.95,
+        "outerPsr": 0.978,
+        "foldPsr": [
+          0.925,
+          0.722,
+          0.909
+        ],
+        "worstLooRatio": 0.741,
+        "gatesFailed": [
+          "maxDrawdown",
+          "minExcessReturnVsBench"
+        ],
+        "commonDays": 1410,
+        "sharpeCommonDays": 1.0383,
+        "controlSharpeCommonDays": 1.0282,
+        "cagrPctCommonDays": 45.08,
+        "controlCagrPctCommonDays": 45.41,
+        "maxDrawdownPctCommonDays": 51.95,
+        "controlMaxDrawdownPctCommonDays": 52.58,
+        "combinedBookMaxDrawdownPct": 13.84,
+        "feesUsd": 75,
+        "controlFeesUsd": 68,
+        "exposure": {
+          "resizes": 104,
+          "reductions": 69,
+          "addBacks": 35,
+          "deferredUp": 166,
+          "resizeNotionalUsd": 29823,
+          "resizesPerFold": [
+            36,
+            55,
+            13
+          ],
+          "meanScalePerFold": [
+            0.979,
+            0.917,
+            0.989
+          ],
+          "minScale": 0.476,
+          "pctTicksBelowOne": 27.5
+        },
+        "criteriaFailed": []
+      },
+      {
+        "candidate": "d13-s5-xc-vol",
+        "artifact": "c52fdaf6",
+        "stitchedReturnPct": 257.71,
+        "sharpe": 0.95,
+        "maxDrawdownPct": 53.33,
+        "outerPsr": 0.968,
+        "foldPsr": [
+          0.924,
+          0.649,
+          0.908
+        ],
+        "worstLooRatio": 0.818,
+        "gatesFailed": [
+          "maxDrawdown",
+          "minExcessReturnVsBench"
+        ],
+        "commonDays": 1410,
+        "sharpeCommonDays": 0.9511,
+        "controlSharpeCommonDays": 1.0282,
+        "cagrPctCommonDays": 39.12,
+        "controlCagrPctCommonDays": 45.41,
+        "maxDrawdownPctCommonDays": 53.33,
+        "controlMaxDrawdownPctCommonDays": 52.58,
+        "combinedBookMaxDrawdownPct": 14,
+        "feesUsd": 108,
+        "controlFeesUsd": 68,
+        "exposure": {
+          "resizes": 502,
+          "reductions": 256,
+          "addBacks": 246,
+          "deferredUp": 283,
+          "resizeNotionalUsd": 145121,
+          "resizesPerFold": [
+            182,
+            247,
+            73
+          ],
+          "meanScalePerFold": [
+            0.983,
+            0.971,
+            0.995
+          ],
+          "minScale": 0.55,
+          "pctTicksBelowOne": 13.61
+        },
+        "criteriaFailed": [
+          "R3_sharpeCommonDays",
+          "DD_commonDays",
+          "DD_sleeveGate"
+        ]
+      },
+      {
+        "candidate": "d13-s5-xc-both",
+        "artifact": "ea8d5341",
+        "stitchedReturnPct": 267.39,
+        "sharpe": 0.976,
+        "maxDrawdownPct": 51.56,
+        "outerPsr": 0.971,
+        "foldPsr": [
+          0.921,
+          0.674,
+          0.908
+        ],
+        "worstLooRatio": 0.745,
+        "gatesFailed": [
+          "maxDrawdown",
+          "minExcessReturnVsBench"
+        ],
+        "commonDays": 1410,
+        "sharpeCommonDays": 0.9766,
+        "controlSharpeCommonDays": 1.0282,
+        "cagrPctCommonDays": 40.09,
+        "controlCagrPctCommonDays": 45.41,
+        "maxDrawdownPctCommonDays": 51.56,
+        "controlMaxDrawdownPctCommonDays": 52.58,
+        "combinedBookMaxDrawdownPct": 13.87,
+        "feesUsd": 108,
+        "controlFeesUsd": 68,
+        "exposure": {
+          "resizes": 489,
+          "reductions": 257,
+          "addBacks": 232,
+          "deferredUp": 209,
+          "resizeNotionalUsd": 142422,
+          "resizesPerFold": [
+            185,
+            227,
+            77
+          ],
+          "meanScalePerFold": [
+            0.962,
+            0.899,
+            0.985
+          ],
+          "minScale": 0.55,
+          "pctTicksBelowOne": 37.77
+        },
+        "criteriaFailed": [
+          "R3_sharpeCommonDays"
+        ]
+      },
+      {
+        "candidate": "d13-s5-xc-dd-nosoftdd",
+        "artifact": "27198e07",
+        "stitchedReturnPct": 198.26,
+        "sharpe": 0.831,
+        "maxDrawdownPct": 54.76,
+        "outerPsr": 0.946,
+        "foldPsr": [
+          0.891,
+          0.652,
+          0.868
+        ],
+        "worstLooRatio": 0.755,
+        "gatesFailed": [
+          "looMaxDrawdown",
+          "maxDrawdown",
+          "minExcessReturnVsBench",
+          "minOuterPsr",
+          "stressMaxDrawdown"
+        ],
+        "commonDays": 1410,
+        "sharpeCommonDays": 0.8316,
+        "controlSharpeCommonDays": 1.0282,
+        "cagrPctCommonDays": 32.72,
+        "controlCagrPctCommonDays": 45.41,
+        "maxDrawdownPctCommonDays": 54.76,
+        "controlMaxDrawdownPctCommonDays": 52.58,
+        "combinedBookMaxDrawdownPct": 14.15,
+        "feesUsd": 85,
+        "controlFeesUsd": 68,
+        "exposure": {
+          "resizes": 174,
+          "reductions": 93,
+          "addBacks": 81,
+          "deferredUp": 20,
+          "resizeNotionalUsd": 41509,
+          "resizesPerFold": [
+            62,
+            86,
+            26
+          ],
+          "meanScalePerFold": [
+            0.966,
+            0.891,
+            0.977
+          ],
+          "minScale": 0.451,
+          "pctTicksBelowOne": 31.47
+        },
+        "criteriaFailed": [
+          "R3_sharpeCommonDays",
+          "DD_commonDays",
+          "DD_sleeveGate",
+          "PSR",
+          "acceptanceGates"
+        ]
+      }
+    ],
+    "passingCandidates": [
+      "d13-s5-xc-dd"
+    ],
+    "rw4aC2": {
+      "selected": "d13-s5-xc-dd",
+      "outerFoldReturnsPct": [
+        103.28,
+        23.77,
+        67.18
+      ],
+      "stitchedReturnPct": 320.63,
+      "sharpe": 1.038,
+      "maxDrawdownPct": 51.95,
+      "outerPsr": 0.978,
+      "trades": 107,
+      "foldPsr": [
+        0.925,
+        0.722,
+        0.909
+      ],
+      "gatesFailed": [
+        "maxDrawdown",
+        "minExcessReturnVsBench"
+      ],
+      "worstLooSharpe": 0.769,
+      "worstLooRatio": 0.741,
+      "dataHash": "55da03c9",
+      "feesUsd": 75,
+      "controlArtifact": "d0f7fd6f",
+      "commonDays": 1410,
+      "from": "2022-11-15",
+      "to": "2026-09-25",
+      "candidateOnCommonDays": {
+        "sharpe": 1.0383,
+        "totalReturn": 3.2063,
+        "cagr": 0.4508,
+        "maxDrawdown": 0.5195
+      },
+      "controlOnCommonDays": {
+        "sharpe": 1.0282,
+        "totalReturn": 3.2434,
+        "cagr": 0.4541,
+        "maxDrawdown": 0.5258
+      },
+      "deltaSharpe": 0.01,
+      "combined": {
+        "commonDays": 931,
+        "totalReturn": 1.0266,
+        "maxDrawdown": 0.1384
+      },
+      "exposure": {
+        "resizes": 104,
+        "reductions": 69,
+        "addBacks": 35,
+        "deferredUp": 166,
+        "resizeNotionalUsd": 29823,
+        "resizesPerFold": [
+          36,
+          55,
+          13
+        ],
+        "meanScalePerFold": [
+          0.979,
+          0.917,
+          0.989
+        ],
+        "minScale": 0.476,
+        "pctTicksBelowOne": 27.5
+      }
+    },
+    "wiring": {
+      "status": "passes; replicated; wired",
+      "wired": true,
+      "version": "momentum_crypto_usdc@daily-d13s5-xc-dd",
+      "branch": "feat/rw4a-usdc-xc",
+      "replication": {
+        "date": "2026-10-23",
+        "method": "Python independiente, sin codigo del proyecto (RW SS13.6)",
+        "maxAbsDeltaSharpePerFold": 1e-14,
+        "limit": 0.1,
+        "winnerFoldSharpe": [
+          1.387,
+          0.578,
+          1.243
+        ],
+        "controlFoldSharpe": [
+          1.341,
+          0.62,
+          1.214
+        ],
+        "resizes": 104,
+        "reductions": 69,
+        "addBacks": 35,
+        "controlResizes": 0,
+        "deltaSharpeCommonDays": 0.01,
+        "maxEquityErrorUsd": 4e-12,
+        "checks": 59,
+        "erratum": "eje drawdown: recta de 1 en startPct a 0 en endPct con suelo minScale (suelo al 32.5% de dd), no 'a minScale en endPct'; es lo corrido, replicado y cableado"
+      },
+      "satisfied": [
+        "replica independiente con |dSharpe| <= 0.10 por fold: < 1e-14",
+        "scalePosition en BinanceMomentumAdapter (reduccion reduceOnly parcial con ledger parcial en la fila, re-aumento con promedio de entrada y stop al precio original, stop nativo re-dimensionado colocando el nuevo antes de barrer los anteriores) + SwitchingAdapter + ShadowAdapter, con tests",
+        "version momentum_crypto_usdc@daily-d13s5-xc-dd en src/portfolio/modelVersions.ts (manifest + artefacto 8892c1e9, shiftDays -1) y exposureControl en el plan de src/index.ts y en la fila builtin"
+      ],
+      "riskStateReanchor": false,
+      "riskStateReanchorReason": "el mismo kernel construyo el drawdown vivo que lee el control; re-anclar lo dejaria ciego y soltaria la pausa soft-DD (el candidato sin soft-DD fallo todo)",
+      "source": "docs/reports/RW-reescritura-rentable.md SS13.4 y SS13.6"
+    }
+  },
+  "rw4Controls": {
+    "date": "2026-10-23",
+    "trialsAdded": 0,
+    "note": "controles de RW4a y RW4b, ninguno es ensayo: E1 33b0ac05, E2 0b088ca3 y USDC d0f7fd6f ya estan registrados en rw3Controls (se comprueban contra el); el control cripto horario efc086b4 es el candidato VALIDADO de authoritativeArtifactRw3C1, ahora usado como control de c1.",
+    "controls": {
+      "e1": {
+        "artifact": "33b0ac05",
+        "path": "data/backtests/33b0ac05db80fb9c9c60b961f9b85dd899622d9da7e2420bf81903551cf849bc/",
+        "dataHash": "ee75275b",
+        "recordedIn": "rw3Controls.controls.e1Rerun"
+      },
+      "e2": {
+        "artifact": "0b088ca3",
+        "path": "data/backtests/0b088ca320e3521d8bff05b10c1ad7eed2816bc2a1b0b927eb3134e2a3dca4c2/",
+        "dataHash": "898c5720",
+        "recordedIn": "rw3Controls.controls.e2"
+      },
+      "cryptoLive": {
+        "artifact": "efc086b4",
+        "path": "data/backtests/efc086b47776235749e7013458360f8131cb3d3629b0a143f6c994d2bb16f240/",
+        "outerFoldReturnsPct": [
+          92.85,
+          196.81,
+          12.98
+        ],
+        "stitchedReturnPct": 546.66,
+        "sharpe": 1.33,
+        "maxDrawdownPct": 34.31,
+        "outerPsr": 0.998,
+        "dataHash": "77c87d51",
+        "gatesFailed": [
+          "maxDisplacementShare"
+        ],
+        "selected": "vt-35-corr92",
+        "recordedIn": "authoritativeArtifactRw3C1"
+      },
+      "usdc": {
+        "artifact": "d0f7fd6f",
+        "path": "data/backtests/d0f7fd6f6c524f4d3d0132301f918683d8de14762ab1dce477f07fe511928c95/",
+        "dataHash": "55da03c9",
+        "recordedIn": "rw3Controls.controls.usdc"
       }
     }
   }

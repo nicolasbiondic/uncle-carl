@@ -4,7 +4,9 @@ import { join } from "path";
 import {
   fmtCircuitBreakerAlert, fmtPauseResolvedAlert, fmtErrorBurstAlert, fmtCloseAlert,
   fmtPnlPair, TelegramReporter, circuitProfileId, fmtRedesignRecommendation,
+  bandEpisodeKey, sleeveOfBandEpisodeKey,
 } from "./telegram-reporter";
+import { bandEpisodeTransitions } from "../portfolio/scorecard";
 
 // `send()` is the one choke point all call sites (digest, commands,
 // OPEN/CLOSE, breakers, startup/shutdown) route through.
@@ -409,5 +411,28 @@ describe("owner rule: a failing strategy is redesigned, never switched off (2026
     const gov = readFileSync(join(import.meta.dir, "../governor/SleeveGovernor.ts"), "utf8");
     expect(gov).not.toContain("recommend_demote");
     expect(gov).not.toContain("RECOMMEND_DEMOTE");
+  });
+});
+
+describe("scorecard band episodes are per MODEL VERSION (RW2 cutover 2026-10-23)", () => {
+  test("the episode key is the version the band judges; the sleeve is recovered from it for the message", () => {
+    expect(bandEpisodeKey("momentum_stocks", "momentum_stocks@pe-vt15")).toBe("momentum_stocks@pe-vt15");
+    expect(bandEpisodeKey("momentum_stocks", null)).toBe("momentum_stocks");
+    expect(bandEpisodeKey("momentum_stocks", "other@v")).toBe("momentum_stocks"); // never another sleeve's version
+    expect(sleeveOfBandEpisodeKey("momentum_stocks@pe-vt15")).toBe("momentum_stocks");
+    expect(sleeveOfBandEpisodeKey("momentum_stocks")).toBe("momentum_stocks");
+  });
+  test("a 'below' episode left by the retired model does not become a false 'volvió DENTRO' for the new model", () => {
+    const prev = { momentum_stocks: "below" as const, "meanrev_stocks@slot12": "below" as const };
+    const current = {
+      [bandEpisodeKey("momentum_stocks", "momentum_stocks@pe-vt15")]: "within" as const,
+      [bandEpisodeKey("meanrev_stocks", "meanrev_stocks@pe-vt15")]: "within" as const,
+    };
+    const { transitions, next } = bandEpisodeTransitions(prev, current);
+    expect(transitions).toEqual([]);
+    expect(next).toEqual({ momentum_stocks: "below", "meanrev_stocks@slot12": "below", "momentum_stocks@pe-vt15": "ok", "meanrev_stocks@pe-vt15": "ok" });
+    // and the new model's own first 'below' pages once, as before
+    const r2 = bandEpisodeTransitions(next, { "momentum_stocks@pe-vt15": "below" });
+    expect(r2.transitions).toEqual([{ sleeve: "momentum_stocks@pe-vt15", kind: "entered_below" }]);
   });
 });

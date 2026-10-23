@@ -39,4 +39,17 @@ describe("index.ts: portfolio engine wiring", () => {
   test("the portfolio engines are stopped on shutdown", () => {
     expect(src).toContain("handles.stopPortfolioEngines?.();");
   });
+  test("a cut-over sleeve is registered with the governor under its MODEL VERSION as evidence version (watchdog never blind; evidence restarts at the cutover; judged against its own band)", () => {
+    const i = at("for (const sleeve of portfolioCutoverSleeves) {", at("const governor = new SleeveGovernor("));
+    const block = src.slice(i, src.indexOf("}", src.indexOf("governor.register(", i)));
+    expect(block).toContain('governor.register({ sleeve, kind: "live", evidenceVersion: currentModelVersionId(sleeve)');
+    // Registered right after the governor exists and BEFORE any incumbent branch (which the cutover gates off).
+    expect(i).toBeLessThan(at("cryptoEngine = new MomentumEngine("));
+  });
+  test("a boot that reads the registry marks its pending_restart rows active (the cutover script's definitions do not stay 'applies on the next restart' forever)", () => {
+    const db = src.slice(at('if (portfoliosSource === "db") {'), at("} else {", at('if (portfoliosSource === "db") {')));
+    expect(db).toContain("loadPlatformPortfolioDefinitions(getDB())");
+    expect(db).toContain("markPendingPortfoliosActive(getDB())");
+    expect(db.indexOf("loadPlatformPortfolioDefinitions")).toBeLessThan(db.indexOf("markPendingPortfoliosActive"));
+  });
 });

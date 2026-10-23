@@ -1,0 +1,99 @@
+{
+  "name": "momentum-crypto-rw3-control-vt35-pure-v1",
+  "sleeve": "crypto",
+  "description": "CONTROL for RW3 family (c1), NOT a trial (+0): byte-for-byte copy of momentum-crypto-2026w-control-pure-v1 (the live momentum_crypto kernel, vt-35) with asOf pinned to 2026-10-02T08:00:00Z (= asOfResolved of its authoritative artifact 06e1a160) so the folds and OOS days equal the candidates'. Needed because 06e1a160's data hash 50ad44f0 does not reproduce on the refreshed historical.db (verified 2026-10-22: 77c87d51); §8.4 rule: if the re-run control's Sharpe differs from the authoritative by more than 0.05, both are reported and the comparison uses the re-run. priorUniqueTrials stays at the RW3 base (402); this manifest adds no hypothesis.",
+  "trialAccounting": {
+    "priorUniqueTrials": 402,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-10-02T08:00:00Z",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt-35",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

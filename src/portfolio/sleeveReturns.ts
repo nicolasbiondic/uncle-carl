@@ -27,8 +27,7 @@
 //  • Grid: Alpaca sleeves observe on ET TRADING days (Sat/Sun dropped —
 //    equity is structurally frozen, a weekend 0% is not an observation of
 //    the strategy; ~252 obs/yr). Binance sleeves observe on CALENDAR days
-//    (perps trade 24/7; ~365 obs/yr). Market holidays on the Alpaca grid
-//    still yield structural 0% observations (rare; documented limitation).
+//    (perps trade 24/7; ~365 obs/yr). NYSE holidays are excluded too.
 //  • A day on the grid with no snapshots (or a non-adjacent pair) is a gap
 //    with cause "missing_snapshots" — never a multi-day return disguised
 //    as a daily one.
@@ -53,6 +52,7 @@
 
 import { getDB, getDisplayEquitySeries, getETDateKey } from "../db/database";
 import { RISK_PROFILES, LEDGER_SLEEVE_BROKERS, type RiskProfileId } from "../config/riskProfiles";
+import { isTradingDay } from "../utils/marketHours";
 
 export interface DailyReturnObservation {
   /** ET date (YYYY-MM-DD) of the day the return is FOR (the "t" in r_t). */
@@ -89,8 +89,7 @@ export interface SleeveReturnSeries {
   /** End-of-day equity marks found (each yields at most one return). */
   nDailyMarks: number;
   gaps: ReturnGap[];
-  /** Exact-0 observations (structurally flat days, e.g. market holidays on
-   *  the trading grid, or genuinely positionless days). */
+  /** Exact-0 observations on valid grid days (e.g. positionless days). */
   zeroReturnCount: number;
   /** Governor mode from sleeve_modes; null = no row / table (ungoverned). */
   mode: "live" | "shadow" | null;
@@ -117,20 +116,10 @@ function utcMsToKey(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
-/** 0=Sun … 6=Sat for a date key (day-of-week is time-of-day-independent). */
-function dowOfKey(key: string): number {
-  return new Date(keyToUtcMs(key)).getUTCDay();
-}
-
-function isWeekend(key: string): boolean {
-  const dow = dowOfKey(key);
-  return dow === 0 || dow === 6;
-}
-
-/** Next expected grid day after `key` (skips Sat/Sun on the trading grid). */
+/** Next expected grid day after `key` (NYSE sessions on the trading grid). */
 export function nextGridDay(key: string, tradingDays: boolean): string {
   let ms = keyToUtcMs(key);
-  do { ms += DAY_MS; } while (tradingDays && isWeekend(utcMsToKey(ms)));
+  do { ms += DAY_MS; } while (tradingDays && !isTradingDay(utcMsToKey(ms)));
   return utcMsToKey(ms);
 }
 
@@ -185,8 +174,8 @@ export function getDailySleeveReturns(profileId: string, opts: SleeveReturnOptio
   const marks = new Map<string, { equity: number; segment: number; snapshotTime: number }>();
   for (const row of series) {
     const dateKey = getETDateKey(row.snapshot_time);
-    if (dateKey === todayKey) continue;                 // current day: no close yet
-    if (tradingDays && isWeekend(dateKey)) continue;    // structurally frozen — not an observation
+    if (dateKey >= todayKey) continue;                 // current day: no close yet
+    if (tradingDays && !isTradingDay(dateKey)) continue; // structurally frozen — not an observation
     // rawEquity, NOT the splice-adjusted `equity`: within a segment the splice
     // offset is constant, and (raw+c)/(raw'+c) is not the return of any
     // balance that ever existed. The segment guard below already forbids

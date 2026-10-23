@@ -54,7 +54,8 @@ import { Database } from "bun:sqlite";
 import { existsSync, readFileSync } from "fs";
 import { getETDateKey } from "../db/database";
 import { nextGridDay } from "./sleeveReturns";
-import { MODEL_VERSIONS, currentModelStarts, currentModelVersionId, rowModelVersion } from "./modelVersions";
+import { isTradingDay } from "../utils/marketHours";
+import { MODEL_VERSIONS, currentModelStarts, currentModelVersionId, rowModelVersion, type ModelVersion } from "./modelVersions";
 import { computeTrackRecord, type TrackRecord } from "./trackRecord";
 
 // ── Windows & entities ────────────────────────────────────────────────────
@@ -65,40 +66,15 @@ export const V8_START = "2026-07-10";
 /**
  * First SESSION attributable to the currently-wired model of each live
  * sleeve (the window's daily returns start with this session's close vs the
- * prior session's close — the base mark is the last session BEFORE it):
- *  • momentum_stocks  2026-10-13 — k = 1.5 (line E, artifact cb516547…).
- *    The 10-12 pass re-underwrites the whole book at the new slot
- *    (MODEL_CUTOVER) and re-anchors the RiskState, so 10-13 is the first full
- *    session after inherited positions AND inherited risk state are gone (the
- *    rule below). If that cutover lands later, move this to the first full
- *    session after it. Was 2026-09-28 (blend-63/126/252 at k = 1, wired
- *    2026-09-25 after the close).
- *  • meanrev_stocks   2026-09-28 — 7 slots × 0.12 (artifact 624d50e9…) wired
- *    2026-09-28 before the open; the band is that chain, so the window starts
- *    with it (7 × 0.10 ran 2026-09-25 only).
- *  • momentum_crypto  2026-09-27 — vt-35 volTarget, wired 2026-09-23. The
- *    23rd–26th are NOT the model's: the sleeve still held the previous
- *    model's positions (SOL/ADA, stopped on the 23rd) and its RiskState
- *    carried the previous model's peak, so a soft-DD pause blocked every
- *    vt-35 entry until the one-shot re-anchor of 2026-09-26 19:00 UTC — the
- *    same instant fixed that day as the parity epoch (scripts/parity-check.ts
- *    PARITY_EPOCHS). The 27th is the first full UTC day of the model's own
- *    book. Moved 2026-10-04 after the corrected replay showed it (AUDITS):
- *    from the epoch, live −4.6% vs the corrected sim −5.4%. Rule for the
- *    next cutover: MODEL_START is the first full session after inherited
- *    positions AND inherited risk state are gone.
- *  • momentum_crypto_usdc 2026-09-29 — daily kernel d13-s5-blend-63-126-252
- *    (artifact 752767ae…, the band below). First daily decision 2026-09-27,
- *    but its MODEL_CUTOVER only fires at 00:00:15 UTC 09-29 (the 09-27 pass
- *    skipped it — BinanceMomentumAdapter carried no entryTime, fixed
- *    f385ab5): 09-29 is the first UTC day on the daily model's own book.
- *    (Was 2026-07-20, the hourly model's launch — a daily-kernel band over
- *    70 days of hourly returns.)
- *
- * The dates live in src/portfolio/modelVersions.ts (the version table: the
- * current version's `modelStart`) — one source for the stamp written on every
- * trade row and for this window anchor. Moving a sleeve to a new model = append
- * a version there.
+ * prior session's close — the base mark is the last session BEFORE it). The
+ * dates live in src/portfolio/modelVersions.ts (the current version's
+ * `modelStart`) — one source for the stamp written on every trade row, this
+ * window anchor and the expectation artifact. Moving a sleeve to a new model
+ * = append a version there. Rule for every cutover (learned on
+ * momentum_crypto 2026-09-27 and momentum_stocks 2026-10-13, AUDITS):
+ * MODEL_START is the first full session after inherited positions AND
+ * inherited risk state are gone — a MODEL_CUTOVER/adoption pass day is not
+ * the model's own session.
  */
 export const MODEL_START: Record<string, string> = currentModelStarts();
 
@@ -150,60 +126,29 @@ export interface ArtifactRef {
 }
 
 /**
- * Per-sleeve authoritative pure-chain artifact (ledger:
- * experiments/historical-hypothesis-ledger-v1.json). Overridable via env
- * (SCORECARD_ARTIFACT_<SLEEVE_ID_UPPERCASE>) — the meanrev artifact in
- * particular may be re-run and re-pointed without a code change.
- * momentum_crypto_usdc's artifact is AUTHORITATIVE but NOT gate-certified
- * (U1 2026-09-26 rounds 3-5: the daily kernel passes 15/17 gates — fails
- * maxDrawdown 52.4%>45 and excess vs BTC −24.4pp — and replaced the
- * refuted hourly control per the pre-registered wiring criterion; the
- * sleeve keeps trading per the owner rule) — the band is the honest
- * expectation, not a certification.
+ * Per-sleeve authoritative pure-chain artifact = the CURRENT model version's
+ * `artifact` + `manifest` in src/portfolio/modelVersions.ts (one source: the
+ * stamp on every trade row, the model window anchor and the expectation band
+ * all name the same version — RW2 cutover 2026-10-23: a sleeve on the
+ * portfolio engine is judged against ITS artifact, never the incumbent's).
+ * Overridable via env (SCORECARD_ARTIFACT_<SLEEVE_ID_UPPERCASE>) — an
+ * artifact may be re-run and re-pointed without a code change. Provenance
+ * and caveats (superseded chains, "authoritative but not gate-certified")
+ * live next to each version entry; the band is the honest expectation, not a
+ * certification. A sleeve whose current version names no artifact has no
+ * band ("sin artefacto autoritativo").
  */
-export function sleeveExpectationArtifacts(): Record<string, ArtifactRef> {
+export function sleeveExpectationArtifacts(
+  versions: Readonly<Record<string, readonly ModelVersion[]>> = MODEL_VERSIONS,
+): Record<string, ArtifactRef> {
   const env = (k: string) => process.env[`SCORECARD_ARTIFACT_${k}`];
-  return {
-    // The three momentum chains below were re-run 2026-10-03 on prod's
-    // 2026-10-02 base with the corrected replay, which counts every close in
-    // RiskGuard's realised-pnl window like live (AUDITS 2026-10-03). Each
-    // supersedes the pre-fix chain named in its comment; the pre-fix re-run on
-    // the same base is cited for comparison.
-    momentum_stocks: {
-      // k = 1.5 since 2026-10-10 (line E): cb516547… is the same chain as
-      // 5f03d68d… (k = 1, reproduced bit for bit by line E as d146f3b0…) with
-      // slot × 1.5, gross cap × 1.5 and 6.5% Reg-T interest: +563.2% / 1.12 /
-      // DD 31.2%. 5f03d68d… had superseded cc2f5d69… (pre-fix f418e295…).
-      dir: env("MOMENTUM_STOCKS") ?? "data/backtests/cb516547be365b7080cb56357a391ae73535aa3db3f83295fe9c935b7a7ed031",
-      shiftDays: -1,
-      manifest: "experiments/momentum-stocks-daily-blend3-k150-exposure-v1.json",
-    },
-    meanrev_stocks: {
-      // 624d50e9… = 7 × 0.12 pure chain on the adjustment=all research DB
-      // (wired 2026-09-28; supersedes 03382972…, 7 × 0.10 split-only).
-      dir: env("MEANREV_STOCKS") ?? "data/backtests/624d50e930d47ef55e42f16e6537e0e895dec847fb0b709c26b2ecd94ea37db7",
-      shiftDays: 0,
-      manifest: "experiments/meanrev-slot12-pure-v1.json",
-    },
-    momentum_crypto: {
-      // 06e1a160… supersedes a5101316… (vt-35 control pure chain). Same base
-      // pre-fix d6c0cdbe…: +363.6% / 1.16 / DD 35.6% → +509.8% / 1.31 / DD
-      // 32.6%, same failed gate (maxDisplacementShare). The pre-fix replay
-      // paused entries after every 5 hard stops; live never did.
-      dir: env("MOMENTUM_CRYPTO") ?? "data/backtests/06e1a160c3556102aa2fff769f9e4c2a3d27d09a6f3874841286426425faf6e4",
-      shiftDays: 0,
-      manifest: "experiments/momentum-crypto-2026w-control-pure-v1.json",
-    },
-    momentum_crypto_usdc: {
-      // The daily kernel d13-s5-blend-63-126-252 (U1 rounds 3-5). Daily-bar
-      // replay ⇒ session labeled by its END (next UTC midnight) ⇒ shiftDays
-      // −1, same as momentum_stocks. 413ffb90… supersedes 752767ae… (same
-      // base pre-fix 512439df…: +328.4% → +324.3%, same failed gates).
-      dir: env("MOMENTUM_CRYPTO_USDC") ?? "data/backtests/413ffb90cd968bfdfe51f1b1eebc87612f262ce9ecb7d2ca82fd59383a704625",
-      shiftDays: -1,
-      manifest: "experiments/momentum-crypto-usdc-daily-s5-pure-v1.json",
-    },
-  };
+  const out: Record<string, ArtifactRef> = {};
+  for (const [sleeve, list] of Object.entries(versions)) {
+    const v = list[list.length - 1];
+    if (!v?.artifact || !v.manifest) continue;
+    out[sleeve] = { dir: env(sleeve.toUpperCase()) ?? v.artifact.dir, shiftDays: v.artifact.shiftDays, manifest: v.manifest };
+  }
+  return out;
 }
 
 // ── Date-key helpers (grid-aware) ─────────────────────────────────────────
@@ -222,11 +167,6 @@ function keyToUtcMs(key: string): number {
   return Date.UTC(y, m - 1, d);
 }
 
-function isWeekendKey(key: string): boolean {
-  const dow = new Date(keyToUtcMs(key)).getUTCDay();
-  return dow === 0 || dow === 6;
-}
-
 // ── Readonly readers ──────────────────────────────────────────────────────
 
 export interface DailyMark { dateKey: string; equity: number; snapshotTime: number }
@@ -234,7 +174,7 @@ export interface DailyMark { dateKey: string; equity: number; snapshotTime: numb
 /**
  * One end-of-day equity mark per grid day: LAST equity_snapshots row of the
  * day with semantics=5 (the current v8 attribution era) and synthetic=0.
- * The current (incomplete) day is excluded; weekends are dropped on the
+ * The current (incomplete) day is excluded; non-sessions are dropped on the
  * trading grid (equity is structurally frozen — same rule as sleeveReturns).
  */
 export function readDailyMarks(db: Database, profileId: string, grid: ScorecardGrid, now = Date.now()): DailyMark[] {
@@ -248,7 +188,7 @@ export function readDailyMarks(db: Database, profileId: string, grid: ScorecardG
   for (const r of rows) {
     const dateKey = gridDateKey(r.snapshot_time, grid);
     if (dateKey >= todayKey) continue; // no close yet (>= also guards clock skew)
-    if (grid === "trading_days" && isWeekendKey(dateKey)) continue;
+    if (grid === "trading_days" && !isTradingDay(dateKey)) continue;
     marks.set(dateKey, { dateKey, equity: r.equity, snapshotTime: r.snapshot_time });
   }
   return [...marks.values()];
@@ -281,15 +221,18 @@ export interface VersionRecord {
   nClosed: number;
   realizedPnl: number;
   nWins: number;
+  /** Sleeve equity move over this version's SESSION window, not the lifetime
+   *  P&L of its rows. Actual mark dates expose partial historical coverage. */
+  markedToMarket: { pnl: number; fromDate: string; toDate: string } | null;
 }
 
 /** Pure: per-version records for a sleeve, oldest → newest (every version in
  *  the table appears, empty ones with zeros). [] for an unversioned entity. */
-export function computeVersionRecords(sleeveId: string, trades: TradeRow[]): VersionRecord[] {
+export function computeVersionRecords(sleeveId: string, trades: TradeRow[], marks: DailyMark[] = []): VersionRecord[] {
   const list = MODEL_VERSIONS[sleeveId];
   if (!list) return [];
   const byId = new Map<string, VersionRecord>(
-    list.map(v => [v.id, { versionId: v.id, nOpened: 0, nOpen: 0, nClosed: 0, realizedPnl: 0, nWins: 0 }]),
+    list.map(v => [v.id, { versionId: v.id, nOpened: 0, nOpen: 0, nClosed: 0, realizedPnl: 0, nWins: 0, markedToMarket: null }]),
   );
   for (const t of trades) {
     const rec = byId.get(rowModelVersion(sleeveId, t) ?? "");
@@ -301,7 +244,20 @@ export function computeVersionRecords(sleeveId: string, trades: TradeRow[]): Ver
       if ((t.pnl ?? 0) > 0) rec.nWins++;
     } else rec.nOpen++;
   }
-  return list.map(v => byId.get(v.id)!);
+  const grid = SCORECARD_ENTITIES.find(e => e.id === sleeveId)?.grid ?? "calendar_days";
+  return list.map((v, i) => {
+    const rec = byId.get(v.id)!;
+    const start = v.modelStart ?? gridDateKey(Date.parse(v.since), grid);
+    const next = list[i + 1];
+    const end = next ? next.modelStart ?? gridDateKey(Date.parse(next.since), grid) : null;
+    const inside = marks.filter(m => m.dateKey >= start && (end == null || m.dateKey < end));
+    const base = marks.filter(m => m.dateKey < start).at(-1) ?? inside[0];
+    const last = inside.at(-1);
+    if (base && last && base.dateKey < last.dateKey) {
+      rec.markedToMarket = { pnl: last.equity - base.equity, fromDate: base.dateKey, toDate: last.dateKey };
+    }
+    return rec;
+  });
 }
 
 /** Trades of the sleeve's CURRENT version only (other versions' rows — e.g. the
@@ -523,6 +479,10 @@ export interface ScorecardWindowMetrics {
   trackRecordStatus: TrackRecord["status"];
   capitalUtilizationPct: number | null;
   realizedPnl: number | null;
+  /** Equity_end − equity_base: the period's economic P&L, including carried
+   *  positions. Realizing an inherited gain does not create a new gain here. */
+  markedToMarketPnl: number | null;
+  /** Change in unrealized P&L, NOT the ending unrealized balance. */
   unrealizedPnl: number | null;
 }
 
@@ -533,7 +493,7 @@ function emptyWindow(window: ScorecardWindowId, benchSymbol: string): ScorecardW
     maxDrawdownPct: null, benchmark: { symbol: benchSymbol, totalReturnPct: null, nPaired: 0 },
     alphaAnnPct: null, beta: null, informationRatio: null, trackingErrorAnnPct: null,
     psr: null, trackRecordStatus: "no_data",
-    capitalUtilizationPct: null, realizedPnl: null, unrealizedPnl: null,
+    capitalUtilizationPct: null, realizedPnl: null, markedToMarketPnl: null, unrealizedPnl: null,
   };
 }
 
@@ -575,6 +535,7 @@ export function computeWindowMetrics(
   if (seq.length < 2 || base.equity <= 0) return out;
 
   out.totalReturnPct = (last.equity / base.equity - 1) * 100;
+  out.markedToMarketPnl = last.equity - base.equity;
   const spanDays = (keyToUtcMs(last.dateKey) - keyToUtcMs(base.dateKey)) / 86_400_000;
   if (spanDays >= 60) out.cagrPct = (Math.pow(last.equity / base.equity, 365 / spanDays) - 1) * 100;
   const mdd = maxDrawdown(seq.map(m => m.equity));
@@ -640,14 +601,15 @@ export function computeWindowMetrics(
   }
   if (utils.length > 0) out.capitalUtilizationPct = mean(utils) * 100;
 
-  // Realized (closed inside the window) vs unrealized (equity move − realized).
+   // Realized (closed inside the window) vs CHANGE in unrealized. A cutover
+   // realizes pre-window gains: only the equity move measures window P&L.
   let realized = 0;
   for (const t of wTrades) {
     if (t.status !== "closed" || t.exit_time == null) continue;
     if (t.exit_time > base.snapshotTime && t.exit_time <= last.snapshotTime) realized += t.pnl ?? 0;
   }
   out.realizedPnl = realized;
-  out.unrealizedPnl = (last.equity - base.equity) - realized;
+  out.unrealizedPnl = out.markedToMarketPnl - realized;
   return out;
 }
 
@@ -818,7 +780,7 @@ export function computeScorecard(opts: ScorecardOptions): Scorecard {
       benchmarkSymbol: def.benchmark.symbol, modelStart: MODEL_START[def.id] ?? null,
       modelVersion: def.kind === "sleeve" ? currentModelVersionId(def.id) : null,
       windows, band,
-      versionRecords: def.kind === "sleeve" ? computeVersionRecords(def.id, trades) : [],
+      versionRecords: def.kind === "sleeve" ? computeVersionRecords(def.id, trades, marks) : [],
     };
   });
 
@@ -830,6 +792,7 @@ export function computeScorecard(opts: ScorecardOptions): Scorecard {
       "Con pocas semanas de vivo NINGUNA métrica certifica edge (ver PSR/MinTRL: obsMissing).",
       "La banda detecta roturas frente a la distribución OOS validada; estar dentro NO prueba alpha.",
       "Benchmark calculado sobre las MISMAS fechas que las observaciones diarias válidas del sleeve.",
+      "Comparar ventanas/versiones por equity a mercado; el realizado puede haberse ganado antes de la ventana. No realizado = cambio, no saldo final. Los registros por versión muestran las fechas efectivamente cubiertas.",
       "Bandas de los sleeves de acciones ajustadas por el sesgo de selección de su universo (−0,18 de Sharpe, investigación S&P 500 PIT del 2026-10-02); las de cripto, sin medir, van sin ajuste.",
     ],
   };

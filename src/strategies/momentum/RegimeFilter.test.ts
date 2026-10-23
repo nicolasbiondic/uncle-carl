@@ -85,6 +85,25 @@ describe("RegimeFilter", () => {
     expect(r.details.avgCorrelation).toBeGreaterThan(0.85);
   });
 
+  test("RW3 (2026-10-23): correlationCeiling 1.01 turns the correlation brake OFF — a perfectly correlated universe trades — but the vol-spike check stays ON", () => {
+    const base = buildNoisy({ days: 35, dailyVol: 0.03, seed: 7 });
+    const same = new Map<string, OHLCV[]>();
+    for (let i = 0; i < 6; i++) same.set(`COPY${i}`, base.map(c => ({ ...c })));
+    // Control: the old 0.85 ceiling blocks it; the live ceiling does not.
+    expect(new RegimeFilter({ correlationCeiling: 0.85 }).assess(same).tradeable).toBe(false);
+    const off = new RegimeFilter({ correlationCeiling: 1.01 }).assess(same);
+    expect(off.tradeable).toBe(true);
+    expect(off.details.avgCorrelation).toBeGreaterThan(0.99);
+
+    // Vol spike on a perfectly correlated tape: still blocked, and by the vol rule.
+    const spiky = buildNoisy({ days: 35, dailyVol: 0.03, shockMultiplier: 4, seed: 7 });
+    const spike = new Map<string, OHLCV[]>();
+    for (let i = 0; i < 6; i++) spike.set(`COPY${i}`, spiky.map(c => ({ ...c })));
+    const r = new RegimeFilter({ correlationCeiling: 1.01 }).assess(spike);
+    expect(r.tradeable).toBe(false);
+    expect(r.reason).toContain("volatility spike");
+  });
+
   test("does not flag correlation when universe is too small", () => {
     const m = new Map<string, OHLCV[]>();
     const base = buildNoisy({ days: 35, dailyVol: 0.03, seed: 99 });

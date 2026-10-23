@@ -196,19 +196,42 @@ export function pruneOldData() {
   // Audit fix (2026-05-04): bump activity_log retention from 3d to 30d. The
   // dashboard activity card was permanently near-empty because the bot only
   // emits ~10-30 events/day in steady state and the prune was eating older ones.
-  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60_000;
+  // 2026-10-22: 30d → 90d (ACTIVITY_LOG_RETENTION_MS). The ops review of
+  // 22-sep→22-oct could not date the start of its window because activity_log
+  // (broker_error, system starts, circuit transitions) had already rotated;
+  // ~765 rows/30d ≈ 73 KB, so keeping 90d costs ~150 KB.
+  const activityCutoff = Date.now() - ACTIVITY_LOG_RETENTION_MS;
   try {
     // equity_snapshots: downsample (full-res 2d, 1/hour beyond) — the old
     // "delete > 5y" never fired and let the table grow to 542k rows / 80d.
     const eq = { changes: pruneEquitySnapshots() };
     const sg = db.prepare(`DELETE FROM signals WHERE timestamp < ?`).run(threeDaysAgo);
-    const al = db.prepare(`DELETE FROM activity_log WHERE created_at < ?`).run(thirtyDaysAgo);
+    const al = db.prepare(`DELETE FROM activity_log WHERE created_at < ?`).run(activityCutoff);
     const total = eq.changes + sg.changes + al.changes;
     if (total > 0) {
       log.info(`DB cleanup: pruned ${total} rows (equity=${eq.changes} signals=${sg.changes} activity=${al.changes})`);
       try { db.exec("PRAGMA incremental_vacuum(100)"); } catch {}
     }
   } catch (e: any) { log.debug(`Prune error: ${e.message}`); }
+}
+
+// Retention floors (2026-10-22 ops review: "keep orders, fills, decision passes
+// and the logs ≥ 90 days"). Pinned by src/db/retention.test.ts, which also
+// fails if anything starts deleting `fills` (nothing prunes that table today).
+export const ACTIVITY_LOG_RETENTION_MS = 90 * 24 * 60 * 60_000;
+// An order row that no trade points at (a rejected/cancelled/orphaned attempt)
+// is the only kind that is ever deleted; one linked from `trades.order_id`
+// stays forever. It used to go after 7 days, which is exactly the evidence an
+// incident review needs (the 22-sep→22-oct review found 3 orders in its window).
+export const ORPHAN_ORDER_RETENTION_MS = 90 * 24 * 60 * 60_000;
+
+/** Deletes order rows older than the retention that no trade references. Runs
+ *  at boot from migrateColumns (and is exported for the retention test). */
+export function pruneOrphanOrders(now = Date.now()): number {
+  const res = db.prepare(
+    `DELETE FROM orders WHERE created_at < ? AND id NOT IN (SELECT DISTINCT order_id FROM trades WHERE order_id IS NOT NULL)`,
+  ).run(now - ORPHAN_ORDER_RETENTION_MS);
+  return Number(res.changes);
 }
 
 function createIndexes() {
@@ -310,8 +333,8 @@ function migrateColumns() {
 
   // Cleanup orphan orders (one-time, safe to re-run)
   try {
-    const deleted = db.prepare(`DELETE FROM orders WHERE created_at < ? AND id NOT IN (SELECT DISTINCT order_id FROM trades WHERE order_id IS NOT NULL)`).run(Date.now() - 7 * 24 * 60 * 60_000);
-    if (deleted.changes > 0) log.info(`Cleaned up ${deleted.changes} orphan orders older than 7d`);
+    const deleted = pruneOrphanOrders();
+    if (deleted > 0) log.info(`Cleaned up ${deleted} orphan orders older than 90d`);
   } catch {}
 
   // v2.0: Seed default profile and broker_accounts
@@ -491,6 +514,15 @@ function migrateColumns() {
     const marked = Number(backfill.changes) + Number(badRead.changes) + Number(badTotal.changes) + Number(badSleeve.changes);
     if (marked > 0) log.info(`Marked ${marked} equity_snapshots rows synthetic=1 (backfill=${backfill.changes}, bad-read=${badRead.changes}, bad-total=${badTotal.changes}, bad-sleeve=${badSleeve.changes})`);
   } catch (e: any) { log.warn(`Could not mark synthetic equity_snapshots: ${e.message}`); }
+
+  // 2026-10-23: gate-binding + exposure telemetry on decision_passes (see
+  // DecisionPassSnapshot). Additive and nullable: rows written before this
+  // stay NULL, and so do passes of an engine that cannot measure them.
+  safeAddColumn("decision_passes", "signals_raw_long", "INTEGER", "NULL");
+  safeAddColumn("decision_passes", "signals_after_gates", "INTEGER", "NULL");
+  safeAddColumn("decision_passes", "gate_binding", "TEXT", "NULL");
+  safeAddColumn("decision_passes", "exposure_real", "REAL", "NULL");
+  safeAddColumn("decision_passes", "exposure_intended", "REAL", "NULL");
 }
 
 function createTables() {
@@ -938,9 +970,14 @@ export function pnlOf(side: string, entryPrice: number, exitPrice: number, quant
   return { pnl, pnlPct, raw };
 }
 
-export function closeTrade(id: string, exitPrice: number, exitTime: number, closeCommission = 0, overridePnl?: number) {
+export function closeTrade(id: string, exitPrice: number, exitTime: number, closeCommission = 0, overridePnl?: number, opts: { basisQuantity?: number } = {}) {
   // Atomic close via transaction — prevents race condition when two
   // processes (SL/TP checker + signal scanner) try to close the same trade.
+  // `opts.basisQuantity` (RW4a, 2026-10-23): pnl_pct denominator for a row the
+  // exposure control partially reduced before this close — the final pnl nets
+  // the partial legs (partial_realized_native), so the basis is the quantity
+  // ever held (remaining + partial_closed_contracts), not the remnant alone.
+  // Absent = the row's current quantity (every pre-existing caller).
   const txn = db.transaction(() => {
     const trade = db.prepare(`SELECT * FROM trades WHERE id = ? AND status = 'open'`).get(id) as any;
     if (!trade) return null; // already closed by another process
@@ -970,7 +1007,8 @@ export function closeTrade(id: string, exitPrice: number, exitTime: number, clos
     }
     // Guard quantity too: entry_price*quantity can be 0 (or entry_price can
     // be unset) which previously produced pnl/0 = ±Infinity.
-    const denom = trade.entry_price * trade.quantity;
+    const basisQty = opts.basisQuantity !== undefined && Number.isFinite(opts.basisQuantity) && opts.basisQuantity > 0 ? opts.basisQuantity : trade.quantity;
+    const denom = trade.entry_price * basisQty;
     const pnlPct = denom > 0 && Number.isFinite(pnl) ? (pnl / denom) * 100 : 0;
 
     db.prepare(`UPDATE trades SET exit_price = ?, exit_time = ?, pnl = ?, pnl_pct = ?, status = 'closed', close_commission = ?, close_reason = COALESCE(?, close_reason) WHERE id = ? AND status = 'open'`)
@@ -1073,6 +1111,36 @@ export function getPartialCloseLedger(id: string): { realizedNative: number; com
     commissionAsset: row?.partial_commission_asset ?? "",
     closedContracts: Number(row?.partial_closed_contracts) || 0,
   };
+}
+
+/**
+ * Atomic ADD to an open row (exposure control add-back, RW4a 2026-10-23 —
+ * BinanceMomentumAdapter.scalePosition with factor > 1): quantity grows by
+ * the confirmed fill, entry_price becomes the quantity-weighted average
+ * (what the broker's own avg entry does), open_commission accumulates the
+ * leg's fee. stop_loss is deliberately NOT touched: the stop stays at the
+ * ORIGINAL entry's price, exactly like SimBroker.scalePosition keeps its
+ * stopAnchorPrice. One transaction, only while the row is open; returns the
+ * new quantity/entry or null when the row is no longer open (the caller then
+ * has an untracked excess on the broker and must undo it).
+ */
+export function increaseOpenTradeQuantity(
+  id: string,
+  leg: { addQty: number; fillPrice: number; commission: number },
+): { quantity: number; entryPrice: number; openCommission: number } | null {
+  if (!(leg.addQty > 0) || !(leg.fillPrice > 0) || !Number.isFinite(leg.addQty) || !Number.isFinite(leg.fillPrice)) {
+    throw new Error(`increaseOpenTradeQuantity ${id}: invalid leg qty=${leg.addQty} price=${leg.fillPrice}`);
+  }
+  const txn = db.transaction(() => {
+    const trade = db.prepare(`SELECT quantity, entry_price, open_commission FROM trades WHERE id = ? AND status = 'open'`).get(id) as any;
+    if (!trade) return null;
+    const qty = Number(trade.quantity) + leg.addQty;
+    const entry = (Number(trade.entry_price) * Number(trade.quantity) + leg.fillPrice * leg.addQty) / qty;
+    const fee = (Number(trade.open_commission) || 0) + (Number.isFinite(leg.commission) ? leg.commission : 0);
+    db.prepare(`UPDATE trades SET quantity = ?, entry_price = ?, open_commission = ? WHERE id = ? AND status = 'open'`).run(qty, entry, fee, id);
+    return { quantity: qty, entryPrice: entry, openCommission: fee };
+  });
+  return txn();
 }
 
 export function getOpenTrades(accountId?: string): TradeRecord[] {
@@ -2650,19 +2718,42 @@ export interface DecisionPassSnapshot {
   blockNote?: string;
   slotsUsed?: number;
   slotsTotal?: number;
+  // ── 2026-10-23 gate-binding + exposure telemetry (all optional → NULL) ──
+  /** Long signals out of the ranking BEFORE any gate: the ranker's longs
+   *  (held stays included, as in signalsLong) + the fresh long entries it
+   *  dropped for lack of a slot. Not affected by regime/risk/Sharpe gates. */
+  signalsRawLong?: number;
+  /** Long signals that survived EVERY gate: kept held longs + new long
+   *  entries that reached the broker call (after Sharpe gate, stop cooldown,
+   *  slot limit, entry gates, gross cap, capacity guard). */
+  signalsAfterGates?: number;
+  /** Gates that removed >= 1 candidate this pass (not merely active). [] =
+   *  nothing was removed. Keys: sharpe_gate, protective_stop, no_slot,
+   *  trading_disabled, risk_gate, regime, market_trend, no_data, gross_cap,
+   *  capacity. */
+  gateBinding?: string[];
+  /** Gross notional of the sleeve's open book after this pass / sleeve equity. */
+  exposureReal?: number;
+  /** Gross the engine meant to hold after this pass / sleeve equity. */
+  exposureIntended?: number;
 }
 
-const DECISION_PASS_RETENTION_MS = 90 * 24 * 60 * 60_000;
+export const DECISION_PASS_RETENTION_MS = 90 * 24 * 60 * 60_000;
 
 export function insertDecisionPass(p: DecisionPassSnapshot): void {
+  const finiteOrNull = (v: number | undefined) => (typeof v === "number" && Number.isFinite(v) ? v : null);
   db.prepare(`
     INSERT INTO decision_passes (account_id, ts, universe, evaluated, signals_long,
-      signals_short, entries, exits, blocks, block_note, slots_used, slots_total)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      signals_short, entries, exits, blocks, block_note, slots_used, slots_total,
+      signals_raw_long, signals_after_gates, gate_binding, exposure_real, exposure_intended)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     p.accountId, p.ts, p.universe, p.evaluated, p.signalsLong, p.signalsShort,
     p.entries, p.exits, JSON.stringify(p.blocks ?? {}), p.blockNote ?? null,
     p.slotsUsed ?? null, p.slotsTotal ?? null,
+    p.signalsRawLong ?? null, p.signalsAfterGates ?? null,
+    p.gateBinding ? JSON.stringify([...p.gateBinding].sort()) : null,
+    finiteOrNull(p.exposureReal), finiteOrNull(p.exposureIntended),
   );
   // 90-day retention, pruned on insert — the table stays small by construction
   // (≤ ~30 passes/day across every sleeve).
@@ -2683,6 +2774,30 @@ export interface FunnelAccountSummary {
   slotsUsed: number | null;
   slotsTotal: number | null;
   lastTs: number;
+  /** Sums over the passes that recorded the field; null when none did (old
+   *  rows, or an engine that cannot measure it). */
+  signalsRawLong: number | null;
+  signalsAfterGates: number | null;
+  /** { gate: number of passes in which it removed >= 1 candidate } — only
+   *  passes that recorded gate_binding; {} when none did or none bound. */
+  gateBinding: Record<string, number>;
+  /** Passes that recorded gate_binding (denominator for gateBinding). */
+  gateBindingPasses: number;
+  /** Exposure of the sleeve's latest pass and of its last 5 passes with a
+   *  measurement (null = never measured). */
+  exposure: SleeveExposureSummary | null;
+}
+
+/** A pass is "under-deployed" when real/intended gross falls below this. */
+export const EXPOSURE_RATIO_MIN = 0.8;
+export const EXPOSURE_MEAN_PASSES = 5;
+
+export interface SleeveExposureSummary {
+  latest: { ts: number; real: number; intended: number; ratio: number | null };
+  mean5: { passes: number; real: number; intended: number; ratio: number | null };
+  threshold: number;
+  /** mean5 ratio < threshold (undefined ratio = nothing intended = not low). */
+  low: boolean;
 }
 
 /** Aggregate decision passes per account since `sinceMs` (GET /api/funnel). */
@@ -2691,14 +2806,27 @@ export function getDecisionPassSummary(sinceMs: number): FunnelAccountSummary[] 
     `SELECT * FROM decision_passes WHERE ts >= ? ORDER BY account_id ASC, ts ASC`,
   ).all(sinceMs) as any[];
   const byAccount = new Map<string, FunnelAccountSummary>();
+  const exposureRows = new Map<string, Array<{ ts: number; real: number; intended: number }>>();
   for (const r of rows) {
     let s = byAccount.get(r.account_id);
     if (!s) {
       s = {
         accountId: r.account_id, passes: 0, universe: 0, signalsLong: 0, signalsShort: 0,
         entries: 0, exits: 0, blocks: {}, lastBlockNote: null, slotsUsed: null, slotsTotal: null, lastTs: 0,
+        signalsRawLong: null, signalsAfterGates: null, gateBinding: {}, gateBindingPasses: 0, exposure: null,
       };
       byAccount.set(r.account_id, s);
+    }
+    if (typeof r.signals_raw_long === "number") s.signalsRawLong = (s.signalsRawLong ?? 0) + r.signals_raw_long;
+    if (typeof r.signals_after_gates === "number") s.signalsAfterGates = (s.signalsAfterGates ?? 0) + r.signals_after_gates;
+    if (typeof r.gate_binding === "string") {
+      try {
+        const gates = JSON.parse(r.gate_binding);
+        if (Array.isArray(gates)) {
+          s.gateBindingPasses++;
+          for (const g of gates) if (typeof g === "string") s.gateBinding[g] = (s.gateBinding[g] ?? 0) + 1;
+        }
+      } catch {}
     }
     s.passes++;
     s.universe = r.universe;
@@ -2715,6 +2843,27 @@ export function getDecisionPassSummary(sinceMs: number): FunnelAccountSummary[] 
     if (r.slots_used !== null) s.slotsUsed = r.slots_used;
     if (r.slots_total !== null) s.slotsTotal = r.slots_total;
     s.lastTs = r.ts;
+    if (typeof r.exposure_real === "number" && Number.isFinite(r.exposure_real)
+        && typeof r.exposure_intended === "number" && Number.isFinite(r.exposure_intended)) {
+      const list = exposureRows.get(r.account_id) ?? [];
+      list.push({ ts: r.ts, real: r.exposure_real, intended: r.exposure_intended });
+      exposureRows.set(r.account_id, list);
+    }
+  }
+  for (const [accountId, list] of exposureRows) {
+    const s = byAccount.get(accountId)!;
+    const last = list[list.length - 1];
+    const tail = list.slice(-EXPOSURE_MEAN_PASSES);
+    const meanReal = tail.reduce((a, x) => a + x.real, 0) / tail.length;
+    const meanIntended = tail.reduce((a, x) => a + x.intended, 0) / tail.length;
+    const ratio = (real: number, intended: number) => (intended > 0 ? real / intended : null);
+    const meanRatio = ratio(meanReal, meanIntended);
+    s.exposure = {
+      latest: { ts: last.ts, real: last.real, intended: last.intended, ratio: ratio(last.real, last.intended) },
+      mean5: { passes: tail.length, real: meanReal, intended: meanIntended, ratio: meanRatio },
+      threshold: EXPOSURE_RATIO_MIN,
+      low: meanRatio !== null && meanRatio < EXPOSURE_RATIO_MIN,
+    };
   }
   return [...byAccount.values()];
 }

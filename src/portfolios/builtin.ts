@@ -48,13 +48,16 @@ export function builtinPortfolios(): PortfolioDefinition[] {
         sharpeGate: { lookbackDays: 30, minSharpe: 0 },
         // vt-35 (owner-delegated 2026-09-23, artifact 8b673e8a…).
         volTarget: { annualizedPct: 35, lookbackBars: 720, minScale: 0.33, maxScale: 1.5 },
+        // RW3 (2026-10-23): correlation-collapse brake OFF (0.85 → 1.01); the vol-spike check stays ON.
+        // Artifact efc086b4… (experiments/momentum-crypto-rw3-vt-35-corroff-pure-v1.json).
+        regime: { correlationCeiling: 1.01 },
         capacityGuard: { maxAdvPct: 1, lookbackBars: 20, mode: "observe" },
         equitySemantics: EQUITY_SEMANTICS.BINANCE_TOTAL_MARGIN,
-        modelVersion: "vt35-2026-09-23",
+        modelVersion: "vt35-corroff-2026-10-23",
         heartbeatName: "momentum:crypto",
         loggerContext: "Momentum:crypto",
         state: { path: "data/momentum-state-crypto.json", currentBase: 5_000, legacyBase: 10_000 },
-        governor: { promotionEligible: false, evidenceVersion: "v8-crypto-no-hard-sl" },
+        governor: { promotionEligible: false, evidenceVersion: "v8.5-crypto-corroff" },
       },
     },
     {
@@ -77,8 +80,13 @@ export function builtinPortfolios(): PortfolioDefinition[] {
         tsmTrail: { kSigma: 8, lookbackBars: 20, minPct: 5, maxPct: 30 },
         volStop: { kSigma: 8, lookbackBars: 20, minPct: 5, maxPct: 30 },
         sharpeGate: { lookbackDays: 30, minSharpe: 0 },
+        // RW4a c2 (2026-10-23): drawdown exposure control on the OPEN book — λ 1 down to 10% dd, then the line to 0 at 40% floored at 0.25 (0.67 at 20%)
+        // drawdown, band 10 pp, min order 100 USD. Artifact 8892c1e9… (experiments/momentum-crypto-usdc-daily-s5-
+        // rw4a-xc-dd-pure-v1.json). Executed by BinanceMomentumAdapter.scalePosition. Soft-DD pause stays ON.
+        exposureControl: { drawdown: { startPct: 0.1, endPct: 0.4 }, minScale: 0.25, band: 0.1, minOrderUsd: 100 },
         capacityGuard: { maxAdvPct: 1, lookbackBars: 20, mode: "observe" },
         equitySemantics: EQUITY_SEMANTICS.BINANCE_USDC_MARGIN,
+        // Not re-anchored for RW4a: the same kernel built the live drawdown the control reads (index.ts docstring).
         modelVersion: "daily-s5-blend3-2026-09-26",
         // Expired one-shot (self-expiring window; kept for byte-parity with
         // MOMENTUM_USDC_CUTOVER_AT/_EXPIRES_AT until index.ts retires them).
@@ -87,7 +95,7 @@ export function builtinPortfolios(): PortfolioDefinition[] {
         heartbeatName: "momentum:crypto_usdc",
         loggerContext: "Momentum:usdc",
         state: { path: "data/momentum-state-usdc.json", currentBase: 5_000, legacyBase: 5_000 },
-        governor: { evidenceVersion: "v8.3-usdc-daily" },
+        governor: { evidenceVersion: "v8.6-usdc-xc-dd" },
       },
     },
     {

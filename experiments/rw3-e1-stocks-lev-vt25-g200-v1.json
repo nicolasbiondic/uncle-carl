@@ -1,0 +1,98 @@
+{
+  "name": "rw3-e1-stocks-lev-vt25-g200-v1",
+  "sleeve": "stocks",
+  "description": "PRE-REGISTERED (2026-10-22) BEFORE any run, docs/reports/RW-reescritura-rentable.md §10 (RW3 'más agresivo'). Family (a) E1-lev: momentum_stocks' own 11 names, the RW2 E1 volManaged construction byte for byte (1/sigma 63d, 21d covariance, cap 0.25, band 1%, 5 USD fractional) with ONE axis changed: portfolio vol target 25% and maxGross 2 (Reg-T margin at 6.5%/yr on the borrowed cash, base and stress). Pure chain of 1 candidate so the OOS frontier point (CAGR, maxDD) is read directly. Window, asOf, costs and capital = rw2-e1-stocks-volmanaged-v1 so the OOS sessions are the same as the control. CONTROL (R3, same days): the wired sleeve from 2026-10-23, momentum_stocks@pe-vt15 = rw2-e1 artifact b2324d4f (its data hash de245446 no longer reproduces on the refreshed historical.db — the 11-name universe hashed ee75275b on 2026-10-22 — so the director re-runs rw2-e1-stocks-volmanaged-v1 as-is, +0, and passes that artifact as --control). Binding criteria §8.5 R1-R7 unchanged (R2 maxDD <= 25% is the owner's budget; a candidate that fails only R2 is reported as a frontier point, not wired). Pre-registered pick among the family's passing chains: highest CAGR, ties to lower maxDD. CONFLICTS: momentum_stocks is frozen 90 days from 2026-10-23 (§2.6) — wiring needs an owner override or waits to 2027-01-21. Trials 404 -> 405.",
+  "trialAccounting": {
+    "priorUniqueTrials": 404,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-24",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000
+  },
+  "candidates": [
+    {
+      "name": "vt25-g200",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": {
+          "kind": "volManaged",
+          "universe": [
+            "SPY",
+            "QQQ",
+            "IWM",
+            "GLD",
+            "AAPL",
+            "MSFT",
+            "NVDA",
+            "META",
+            "GOOGL",
+            "AMZN",
+            "SMH"
+          ],
+          "inceptionGuardBars": 252,
+          "volLookback": 63,
+          "covLookback": 21,
+          "portfolioVolTarget": 0.25,
+          "annualization": 252,
+          "perAssetCap": 0.25,
+          "maxGross": 2
+        },
+        "venue": {
+          "venue": "alpaca",
+          "fractional": true,
+          "minOrderNotional": 5,
+          "rebalanceBand": 0.01
+        }
+      }
+    }
+  ],
+  "acceptance": {}
+}

@@ -323,7 +323,7 @@ describe("auto-deploy.sh source: no DEPLOYED without a passing health check", ()
 // real typecheck/tests/bot/broker is touched. HEALTH_URL (already supported
 // by health_check) controls the post-restart outcome.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync, appendFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 function git(cwd: string, ...args: string[]): string {
@@ -331,8 +331,9 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 /** origin (bare-ish plain repo) + work (clone, this is what REPO points to).
- *  `bFiles`: files commit B adds (path → content); empty commit when omitted. */
-function makeRepoPair(bFiles?: Record<string, string>) {
+ *  `bFiles`: files commit B adds/overwrites (path → content); empty commit when
+ *  omitted. `aFiles`: files already in commit A. */
+function makeRepoPair(bFiles?: Record<string, string>, aFiles?: Record<string, string>) {
   const root = mkdtempSync(join(tmpdir(), "auto-deploy-"));
   const origin = join(root, "origin");
   const work = join(root, "work");
@@ -344,6 +345,11 @@ function makeRepoPair(bFiles?: Record<string, string>) {
   // mirrored here so writing those markers doesn't dirty the working tree.
   writeFileSync(join(origin, ".gitignore"), "data/\n");
   git(origin, "add", ".gitignore");
+  for (const [path, content] of Object.entries(aFiles ?? {})) {
+    mkdirSync(join(origin, path, ".."), { recursive: true });
+    writeFileSync(join(origin, path), content);
+    git(origin, "add", path);
+  }
   git(origin, "commit", "-m", "commit A", "--quiet");
   const shaA = git(origin, "rev-parse", "HEAD");
   git(root, "clone", "--quiet", origin, work);
@@ -782,4 +788,434 @@ describe("auto-deploy.sh full run (temp repo, injected commands)", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 15_000);
+});
+
+// ── Deploy isolation (2026-10-22): the gate runs on a SEPARATE checkout and the
+// live checkout only moves after it passed. 2026-10-21: the old flow
+// fast-forwarded live first and gated after; the watchdog restarted the bot
+// mid-gate and it booted a commit that had not passed anything.
+describe("auto-deploy.sh deploy isolation: the gate never runs in, or changes, the live tree", () => {
+  const okServer = () => Bun.serve({ port: 0, fetch: () => Response.json({ status: "ok" }, { status: 200 }) });
+  const healthy = (server: { port: number }) => ({
+    HEALTH_URL: `http://127.0.0.1:${server.port}/healthz`,
+    HEALTH_CHECK_ATTEMPTS: "3",
+    HEALTH_CHECK_INTERVAL: "1",
+    HEALTH_CHECK_TIMEOUT: "2",
+  });
+  const read = (path: string) => readFileSync(path, "utf8").trim();
+  const VERSION_FILES = { A: { "version.txt": "A\n" }, B: { "version.txt": "B\n", "src/a.ts": "export const a = 1;\n" } };
+
+  test("the gate runs in a detached checkout at the NEW sha while the live tree stays on the last approved one", async () => {
+    const { root, work, shaA, shaB } = makeRepoPair(VERSION_FILES.B, VERSION_FILES.A);
+    writeFileSync(join(work, "data", ".deployed-sha"), `${shaA}\n`);
+    const server = okServer();
+    try {
+      const { code, out } = await runScript({
+        REPO: work,
+        GATE_TYPECHECK_CMD: `pwd -P > ${root}/gate.pwd; git rev-parse HEAD > ${root}/gate.sha; cat version.txt > ${root}/gate.version`,
+        GATE_TEST_CMD:
+          `git -C ${work} rev-parse HEAD > ${root}/live.sha; cat ${work}/version.txt > ${root}/live.version; ` +
+          `if [ -e ${work}/src/a.ts ]; then echo yes; else echo no; fi > ${root}/live.has-a`,
+        START_CMD: `cat ${work}/version.txt > ${root}/started.version`,
+        ...healthy(server),
+      });
+      expect(code).toBe(0);
+      // the gate ran in `<repo>-gate`, a sibling of the live checkout, at the new SHA…
+      expect(read(join(root, "gate.pwd"))).toBe(`${realpathSync(work)}-gate`);
+      expect(read(join(root, "gate.sha"))).toBe(shaB);
+      expect(read(join(root, "gate.version"))).toBe("B");
+      // …while the live checkout still held the approved commit for the WHOLE gate
+      expect(read(join(root, "live.sha"))).toBe(shaA);
+      expect(read(join(root, "live.version"))).toBe("A");
+      expect(read(join(root, "live.has-a"))).toBe("no");
+      // and it moved only afterwards, right before the restart booted it
+      expect(read(join(root, "started.version"))).toBe("B");
+      expect(git(work, "rev-parse", "HEAD")).toBe(shaB);
+      expect(out).toContain("DEPLOYED");
+      expect(read(join(work, "data", ".deployed-sha"))).toBe(shaB);
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  test("a restart while a commit is being gated boots the last approved SHA", async () => {
+    // What the watchdog / systemd / a reboot does at any moment of the gate:
+    // start the bot from whatever the live checkout holds right then.
+    const { root, work, shaA } = makeRepoPair(VERSION_FILES.B, VERSION_FILES.A);
+    writeFileSync(join(work, "data", ".deployed-sha"), `${shaA}\n`);
+    const sentinel = join(root, "started.marker");
+    try {
+      const { code } = await runScript({
+        REPO: work,
+        // typecheck is mid-flight and the tests are still pending: "boot" here
+        GATE_TYPECHECK_CMD: `git -C ${work} rev-parse HEAD > ${root}/boot-1.sha; cat ${work}/version.txt > ${root}/boot-1.version`,
+        GATE_TEST_CMD: `git -C ${work} rev-parse HEAD > ${root}/boot-2.sha; cat ${work}/version.txt > ${root}/boot-2.version; exit 1`,
+        START_CMD: `touch ${sentinel}`,
+        HEALTH_URL: "http://127.0.0.1:18999/healthz",
+      });
+      expect(code).not.toBe(0);
+      for (const n of ["1", "2"]) {
+        expect(read(join(root, `boot-${n}.sha`))).toBe(shaA);
+        expect(read(join(root, `boot-${n}.version`))).toBe("A");
+      }
+      // …and after the gate failed, a restart still boots it
+      expect(git(work, "rev-parse", "HEAD")).toBe(shaA);
+      expect(read(join(work, "version.txt"))).toBe("A");
+      expect(existsSync(sentinel)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  for (const [name, tc, test_] of [
+    ["typecheck", "exit 1", "true"],
+    ["test", "true", "exit 1"],
+  ] as const) {
+    test(`a failed ${name} gate leaves the live checkout untouched and pages once per SHA, retrying every poll`, async () => {
+      const { root, work, shaA, shaB } = makeRepoPair(VERSION_FILES.B, VERSION_FILES.A);
+      writeFileSync(join(work, "data", ".deployed-sha"), `${shaA}\n`);
+      const sentinel = join(root, "started.marker");
+      const ran = join(root, "gate-runs");
+      const env = {
+        REPO: work,
+        GATE_TYPECHECK_CMD: `echo x >> ${ran}; ${tc}`,
+        GATE_TEST_CMD: test_,
+        START_CMD: `touch ${sentinel}`,
+        HEALTH_URL: "http://127.0.0.1:18999/healthz",
+      };
+      try {
+        const first = await runScript(env);
+        expect(first.code).not.toBe(0);
+        expect(first.out).toContain("GATE FAIL");
+        expect(first.out).toContain("live checkout untouched");
+        expect(git(work, "rev-parse", "HEAD")).toBe(shaA);
+        expect(git(work, "status", "--porcelain")).toBe("");
+        expect(existsSync(join(work, "src", "a.ts"))).toBe(false);
+        expect(read(join(work, "version.txt"))).toBe("A");
+        expect(read(join(work, "data", ".deployed-sha"))).toBe(shaA);
+        expect(existsSync(sentinel)).toBe(false);
+        expect(read(join(work, "data", ".deploy-gatefail-paged"))).toBe(shaB); // one page per failing SHA
+        // retried every poll: the gate runs again, still nothing moves, still ONE page
+        const second = await runScript(env);
+        expect(second.code).not.toBe(0);
+        expect(readFileSync(ran, "utf8").trim().split("\n").length).toBe(2);
+        expect(git(work, "rev-parse", "HEAD")).toBe(shaA);
+        expect(read(join(work, "data", ".deploy-gatefail-paged"))).toBe(shaB);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }, 30_000);
+  }
+
+  test("a failed gate copies the tail of its output into the script's log (deploy.log is kept ≥ 90 days, /tmp is not)", async () => {
+    const { root, work } = makeRepoPair();
+    try {
+      const { code, out } = await runScript({
+        REPO: work,
+        GATE_TYPECHECK_CMD: "true",
+        GATE_TEST_CMD: "echo '(fail) some > failing test name'; exit 1",
+        START_CMD: "true",
+        HEALTH_URL: "http://127.0.0.1:18999/healthz",
+      });
+      expect(code).not.toBe(0);
+      expect(out).toContain("GATE FAIL: tests");
+      expect(out).toContain("(fail) some > failing test name");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  test("a gate killed mid-run (timeout/SIGKILL of the whole unit) leaves the live checkout untouched, and the next poll recovers", async () => {
+    const { root, work, shaA, shaB } = makeRepoPair(VERSION_FILES.B, VERSION_FILES.A);
+    writeFileSync(join(work, "data", ".deployed-sha"), `${shaA}\n`);
+    const sentinel = join(root, "started.marker");
+    const server = okServer();
+    try {
+      // `setsid` so the kill below takes the whole process tree, like the
+      // cgroup kill of systemd's TimeoutStartSec does.
+      const proc = Bun.spawn(["setsid", "bash", SCRIPT], {
+        env: {
+          ...process.env,
+          REPO: work,
+          GATE_TYPECHECK_CMD: "true",
+          GATE_TEST_CMD: `echo junk > leftover.txt; touch ${root}/gating.marker; sleep 30`,
+          START_CMD: `touch ${sentinel}`,
+          HEALTH_URL: "http://127.0.0.1:18999/healthz",
+        },
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      for (let i = 0; i < 200 && !existsSync(join(root, "gating.marker")); i++) await Bun.sleep(50);
+      expect(existsSync(join(root, "gating.marker"))).toBe(true);
+      // mid-gate: live is the approved commit and clean
+      expect(git(work, "rev-parse", "HEAD")).toBe(shaA);
+      process.kill(-proc.pid, "SIGKILL");
+      await proc.exited;
+      expect(git(work, "rev-parse", "HEAD")).toBe(shaA);
+      expect(git(work, "status", "--porcelain")).toBe("");
+      expect(read(join(work, "data", ".deployed-sha"))).toBe(shaA);
+      expect(existsSync(sentinel)).toBe(false);
+      expect(existsSync(join(work, "data", ".deploy-rejected-sha"))).toBe(false);
+
+      // next poll: the half-used gate checkout is reset (leftover gone) and the deploy completes
+      const { code, out } = await runScript({
+        REPO: work,
+        GATE_TYPECHECK_CMD: `if [ -e leftover.txt ]; then echo stale; else echo clean; fi > ${root}/leftover.state`,
+        GATE_TEST_CMD: "true",
+        START_CMD: `touch ${sentinel}`,
+        ...healthy(server),
+      });
+      expect(code).toBe(0);
+      expect(read(join(root, "leftover.state"))).toBe("clean");
+      expect(out).toContain("DEPLOYED");
+      expect(git(work, "rev-parse", "HEAD")).toBe(shaB);
+      expect(existsSync(sentinel)).toBe(true);
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("the gate checkout never leaks into the live tree, on success or failure", async () => {
+    const { root, work, shaA, shaB } = makeRepoPair(VERSION_FILES.B, VERSION_FILES.A);
+    writeFileSync(join(work, "data", ".deployed-sha"), `${shaA}\n`);
+    const server = okServer();
+    const litter = "echo x > leaked.txt; mkdir -p node_modules/zzz build; echo y > build/out.js; echo z > src/generated.ts";
+    const untracked = () => git(work, "ls-files", "--others", "--exclude-standard");
+    try {
+      const gate = `${realpathSync(work)}-gate`;
+      expect(gate.startsWith(`${realpathSync(work)}/`)).toBe(false); // a sibling, not a subdirectory
+
+      const failed = await runScript({
+        REPO: work, GATE_TYPECHECK_CMD: litter, GATE_TEST_CMD: "exit 1",
+        START_CMD: "true", HEALTH_URL: "http://127.0.0.1:18999/healthz",
+      });
+      expect(failed.code).not.toBe(0);
+      expect(existsSync(join(gate, "leaked.txt"))).toBe(true); // the litter did land in the gate checkout…
+      expect(untracked()).toBe("");                              // …and nowhere near the live tree
+      expect(git(work, "status", "--porcelain")).toBe("");
+      for (const f of ["leaked.txt", "build", "node_modules", "src/generated.ts"]) {
+        expect(existsSync(join(work, f))).toBe(false);
+      }
+
+      const passed = await runScript({
+        REPO: work, GATE_TYPECHECK_CMD: litter, GATE_TEST_CMD: "true",
+        START_CMD: "true", ...healthy(server),
+      });
+      expect(passed.code).toBe(0);
+      expect(git(work, "rev-parse", "HEAD")).toBe(shaB);
+      expect(git(work, "status", "--porcelain")).toBe("");  // deploy succeeded: live is still clean (and so deployable next time)
+      expect(untracked()).toBe("");
+      for (const f of ["leaked.txt", "build", "node_modules", "src/generated.ts"]) {
+        expect(existsSync(join(work, f))).toBe(false);
+      }
+      // the gate checkout is a registered worktree of the live repo, reused, not re-created
+      const wts = git(work, "worktree", "list", "--porcelain").split("\n").filter((l) => l.startsWith("worktree "));
+      expect(wts.length).toBe(2);
+      expect(wts.some((l) => realpathSync(l.slice("worktree ".length)) === gate)).toBe(true);
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("the live .env is linked into the gate checkout (same env as ever), never copied; data/ is not linked", async () => {
+    const { root, work } = makeRepoPair();
+    // .env is gitignored in the real repo (a dev box's global excludes hid that here; CI has none)
+    appendFileSync(join(work, ".git", "info", "exclude"), ".env\n");
+    writeFileSync(join(work, ".env"), "TELEGRAM_BOT_TOKEN=\n");
+    const server = okServer();
+    try {
+      const { code } = await runScript({
+        REPO: work,
+        GATE_TYPECHECK_CMD: `if [ -L .env ]; then echo link; else echo other; fi > ${root}/env.kind; if [ -e data ]; then echo has; else echo none; fi > ${root}/data.kind`,
+        GATE_TEST_CMD: "true", START_CMD: "true", ...healthy(server),
+      });
+      expect(code).toBe(0);
+      expect(read(join(root, "env.kind"))).toBe("link");
+      expect(read(join(root, "data.kind"))).toBe("none");
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  test("a live HEAD parked ahead of .deployed-sha (pre-fix script, or a crash) is pulled back before the gate: a restart boots approved code", async () => {
+    const { root, work, shaA, shaB } = makeRepoPair(VERSION_FILES.B, VERSION_FILES.A);
+    git(work, "fetch", "--quiet", "origin", "master");
+    git(work, "merge", "--ff-only", "--quiet", "origin/master"); // the old script's state: live = B, running = A
+    writeFileSync(join(work, "data", ".deployed-sha"), `${shaA}\n`);
+    expect(read(join(work, "version.txt"))).toBe("B");
+    try {
+      const { code, out } = await runScript({
+        REPO: work,
+        GATE_TYPECHECK_CMD: "true",
+        GATE_TEST_CMD: `git -C ${work} rev-parse HEAD > ${root}/during.sha; exit 1`,
+        START_CMD: `touch ${root}/started.marker`,
+        HEALTH_URL: "http://127.0.0.1:18999/healthz",
+      });
+      expect(code).not.toBe(0);
+      expect(out).toContain("resetting the live checkout");
+      expect(read(join(root, "during.sha"))).toBe(shaA);
+      expect(git(work, "rev-parse", "HEAD")).toBe(shaA);
+      expect(read(join(work, "version.txt"))).toBe("A");
+      expect(git(work, "status", "--porcelain")).toBe("");
+      expect(existsSync(join(root, "started.marker"))).toBe(false);
+      expect(read(join(work, "data", ".deploy-gatefail-paged"))).toBe(shaB);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  test("…and the same parked state still deploys once the gate passes", async () => {
+    const { root, work, shaA, shaB } = makeRepoPair(VERSION_FILES.B, VERSION_FILES.A);
+    git(work, "fetch", "--quiet", "origin", "master");
+    git(work, "merge", "--ff-only", "--quiet", "origin/master");
+    writeFileSync(join(work, "data", ".deployed-sha"), `${shaA}\n`);
+    const server = okServer();
+    try {
+      const { code, out } = await runScript({
+        REPO: work, GATE_TYPECHECK_CMD: "true", GATE_TEST_CMD: "true",
+        START_CMD: `cat ${work}/version.txt > ${root}/started.version`, ...healthy(server),
+      });
+      expect(code).toBe(0);
+      expect(out).toContain("DEPLOYED");
+      expect(read(join(root, "started.version"))).toBe("B");
+      expect(git(work, "rev-parse", "HEAD")).toBe(shaB);
+      expect(read(join(work, "data", ".deployed-sha"))).toBe(shaB);
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  test("a live tree that turns dirty or moves while the gate runs is NOT fast-forwarded (deferred to the next poll)", async () => {
+    const { root, work, shaA } = makeRepoPair(VERSION_FILES.B, VERSION_FILES.A);
+    writeFileSync(join(work, "data", ".deployed-sha"), `${shaA}\n`);
+    const sentinel = join(root, "started.marker");
+    try {
+      const { code, out } = await runScript({
+        REPO: work,
+        GATE_TYPECHECK_CMD: "true",
+        GATE_TEST_CMD: `echo "operator edit" > ${work}/version.txt`, // someone edits live mid-gate
+        START_CMD: `touch ${sentinel}`,
+        HEALTH_URL: "http://127.0.0.1:18999/healthz",
+      });
+      expect(code).toBe(0);
+      expect(out).toContain("live checkout changed while the gate ran");
+      expect(git(work, "rev-parse", "HEAD")).toBe(shaA);
+      expect(read(join(work, "version.txt"))).toBe("operator edit"); // never clobbered
+      expect(existsSync(sentinel)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  test("a diverged live history is refused BEFORE any gate run", async () => {
+    const { root, work, shaA } = makeRepoPair();
+    git(work, "commit", "--allow-empty", "-m", "local-only", "--quiet");
+    const localSha = git(work, "rev-parse", "HEAD");
+    writeFileSync(join(work, "data", ".deployed-sha"), `${localSha}\n`);
+    try {
+      const { code, out } = await runScript({
+        REPO: work,
+        GATE_TYPECHECK_CMD: `touch ${root}/gate.marker`,
+        GATE_TEST_CMD: "true",
+        START_CMD: `touch ${root}/started.marker`,
+        HEALTH_URL: "http://127.0.0.1:18999/healthz",
+      });
+      expect(code).toBe(1);
+      expect(out).toContain("history diverged");
+      expect(existsSync(join(root, "gate.marker"))).toBe(false);
+      expect(existsSync(join(root, "started.marker"))).toBe(false);
+      expect(git(work, "rev-parse", "HEAD")).toBe(localSha);
+      expect(localSha).not.toBe(shaA);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  test("a GATE_DIR inside (or equal to) the live checkout is refused, never wiped", async () => {
+    for (const rel of ["", "/.gate"]) {
+      const { root, work, shaA } = makeRepoPair();
+      writeFileSync(join(work, "data", ".deployed-sha"), `${shaA}\n`);
+      try {
+        const { code, out } = await runScript({
+          REPO: work, GATE_DIR: `${work}${rel}`,
+          GATE_TYPECHECK_CMD: "true", GATE_TEST_CMD: "true",
+          START_CMD: `touch ${root}/started.marker`, HEALTH_URL: "http://127.0.0.1:18999/healthz",
+        });
+        expect(code).not.toBe(0);
+        expect(out).toContain("refusing unsafe GATE_DIR");
+        expect(existsSync(join(root, "started.marker"))).toBe(false);
+        expect(git(work, "rev-parse", "HEAD")).toBe(shaA);
+        expect(existsSync(join(work, ".git"))).toBe(true);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  }, 20_000);
+
+  test("documentation-only push: the gate runs in the gate checkout, live is fast-forwarded only after it, the bot is not restarted", async () => {
+    const { root, work, shaA, shaB } = makeRepoPair({ "docs/x.md": "d\n", "README.md": "# r\n" });
+    writeFileSync(join(work, "data", ".deployed-sha"), `${shaA}\n`);
+    try {
+      const { code, out } = await runScript({
+        REPO: work,
+        GATE_TYPECHECK_CMD: `pwd -P > ${root}/gate.pwd`,
+        GATE_TEST_CMD: `git -C ${work} rev-parse HEAD > ${root}/live.during`,
+        START_CMD: `touch ${root}/started.marker`,
+        HEALTH_URL: "http://127.0.0.1:18999/healthz",
+      });
+      expect(code).toBe(0);
+      expect(read(join(root, "gate.pwd"))).toBe(`${realpathSync(work)}-gate`);
+      expect(read(join(root, "live.during"))).toBe(shaA);
+      expect(out).toContain("docs-only change");
+      expect(existsSync(join(root, "started.marker"))).toBe(false);
+      expect(git(work, "rev-parse", "HEAD")).toBe(shaB);
+      expect(read(join(work, "data", ".deployed-sha"))).toBe(shaB);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  test("source order: nothing moves the live tree before the gate; between the fast-forward and the restart there is only `bun install`", () => {
+    const src = readFileSync(SCRIPT, "utf8");
+    const exec = (t: string) => t.split("\n").filter((l) => l.trim() && !l.trim().startsWith("#"));
+    const testGate = src.indexOf('TMPDIR="$GATE_TMPDIR" bash -c "$GATE_TEST_CMD"');
+    expect(testGate).toBeGreaterThan(-1);
+    const beforeGate = src.slice(src.indexOf('cd "$REPO" || exit 1'), testGate);
+    // no call site of ff_live, no merge, before the gate has passed; the only `reset --hard` is the walk-back to .deployed-sha
+    expect(beforeGate).not.toMatch(/ff_live "\$/);
+    expect(beforeGate).not.toMatch(/git merge(?!-base)/);
+    expect(beforeGate.match(/git reset --hard/g)?.length).toBe(1);
+    expect(beforeGate).toContain('git reset --hard "$DEPLOYED"');
+    // the gate commands run inside the gate checkout
+    expect(src).toContain('(cd "$GATE_DIR" && bash -c "$GATE_TYPECHECK_CMD")');
+    expect(src).toContain('(cd "$GATE_DIR" && TMPDIR="$GATE_TMPDIR" bash -c "$GATE_TEST_CMD")');
+    // deploy block: ff → (only bun install + the planned-restart marker) → restart
+    const deploy = src.slice(src.indexOf("# 5. Deploy"));
+    const ff = deploy.indexOf('ff_live "$REMOTE" || exit 1');
+    const start = deploy.indexOf('if bash -c "$START_CMD"');
+    expect(ff).toBeGreaterThan(-1);
+    expect(start).toBeGreaterThan(ff);
+    const between = exec(deploy.slice(ff, start)).slice(1);
+    expect(between.length).toBe(2);
+    expect(between[0]).toMatch(/^bun install --frozen-lockfile/);
+    expect(between[1]).toMatch(/^touch .*\.deploy-restart/);
+  });
+
+  test("the live .env is never copied (a symlink only) and the unit is untouched by the migration", () => {
+    const src = readFileSync(SCRIPT, "utf8");
+    expect(src).not.toMatch(/\bcp\b[^\n]*\.env/);
+    expect(src).toContain('ln -sfn "$REPO/.env" "$GATE_DIR/.env"');
+    // the priority/RAM/ceiling that protect the bot from the gate are inherited by the gate checkout's children
+    const unit = readFileSync(join(import.meta.dir, "uncle-carl-deploy.service"), "utf8");
+    expect(unit).toMatch(/^Nice=19$/m);
+    expect(unit).toMatch(/^IOSchedulingClass=best-effort$/m);
+    expect(unit).toMatch(/^IOSchedulingPriority=7$/m);
+    expect(unit).toMatch(/^Environment=TMPDIR=\/dev\/shm$/m);
+    expect(unit).toMatch(/^TimeoutStartSec=1800$/m);
+  });
 });

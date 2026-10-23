@@ -20,6 +20,7 @@ import {
   normalizeLiveDecisions,
   normalizeSeedPositions,
   PARITY_EPOCHS,
+  portfolioEngineLiveSleeves,
   renderSummary,
   clampToFundingTail,
   splitAcknowledged,
@@ -29,6 +30,8 @@ import {
 } from "./parity-check";
 import type { ClosedTrade, SeedPosition } from "./backtest-momentum-wf";
 import { getETDayBounds } from "../src/db/database";
+import { liveSleeveConfig } from "../src/config/liveSleeveConfigs";
+import { currentModelVersion } from "../src/portfolio/modelVersions";
 
 // ── fixture helpers ───────────────────────────────────────────────────────
 const [EPOCH_START] = getETDayBounds("2026-09-25");
@@ -462,9 +465,33 @@ describe("utcDayCloses / heldSymbolsAt / compareDailyHoldings (momentum_crypto's
   });
 });
 
+describe("momentum_crypto parity epoch — RW3 (correlation brake OFF, 2026-10-23)", () => {
+  test("the epoch is an exact instant not before the current version's `since`: a pass before the deploy would run the brake live while the sim (ceiling 1.01) enters", () => {
+    const v = currentModelVersion("momentum_crypto")!;
+    expect(v.id).toBe("momentum_crypto@vt35-corroff");
+    expect(PARITY_EPOCHS.momentum_crypto).toBe("2026-10-23T09:00:00Z");
+    expect(Number.isNaN(Date.parse(PARITY_EPOCHS.momentum_crypto!))).toBe(false);
+    expect(Date.parse(PARITY_EPOCHS.momentum_crypto!)).toBeGreaterThanOrEqual(Date.parse(v.since));
+  });
+  test("the replay the monitor runs for momentum_crypto carries the brake-off regime (live = validated)", () => {
+    const cand = liveSleeveConfig("momentum_crypto").candidate;
+    expect(cand.regime).toEqual({ correlationCeiling: 1.01 });
+  });
+});
+
 describe("momentum_crypto_usdc parity — live BASE/USDC vs the replay's BASE/USD proxies", () => {
-  test("the sleeve is monitored from the owner's realign decision (10-08 00:00 UTC, UNI closed by its MODEL_CUTOVER)", () => {
-    expect(PARITY_EPOCHS.momentum_crypto_usdc).toBe("2026-10-08T00:00:00Z");
+  test("RW4a (2026-10-23): the epoch is the first DAILY pass of the exposure-control model — a 00:00:00Z instant equal to the current version's `since`", () => {
+    const v = currentModelVersion("momentum_crypto_usdc")!;
+    expect(v.id).toBe("momentum_crypto_usdc@daily-d13s5-xc-dd");
+    expect(PARITY_EPOCHS.momentum_crypto_usdc).toBe("2026-10-24T00:00:00Z");
+    expect(PARITY_EPOCHS.momentum_crypto_usdc).toBe(v.since);
+    expect(Date.parse(PARITY_EPOCHS.momentum_crypto_usdc!) % 86_400_000).toBe(0);
+    // (Before: 2026-10-08T00:00:00Z — the owner's UNI realign; AUDITS 2026-10-06.)
+  });
+
+  test("the replay the monitor runs for momentum_crypto_usdc carries the drawdown exposure control (live = validated)", () => {
+    const cand = liveSleeveConfig("momentum_crypto_usdc").candidate;
+    expect(cand.exposureControl).toEqual({ drawdown: { startPct: 0.1, endPct: 0.4 }, minScale: 0.25, band: 0.1, minOrderUsd: 100 });
   });
 
   test("live USDC symbols are normalized to the proxy universe, so identical decisions match", () => {
@@ -538,6 +565,58 @@ describe("acknowledged divergences (explained once, never re-paged)", () => {
       sim: { entries: [], exits: [], endHoldings: [] }, live: { entries: [], exits: [], endHoldings: [] }, divergences: [],
       acknowledged: [{ type: "exit_missing_live", symbol: "AVAX/USD", simDate: "2026-09-28T08:00:00.000Z" }] }] as any);
     expect(text).toContain("acknowledged (explained, not paged): exit_missing_live AVAX/USD");
+    expect(text).toContain("✅ PARITY — no divergences");
+  });
+});
+
+describe("portfolio-engine sleeves are skipped, never compared against the incumbent's replay (RW2 cutover 2026-10-23)", () => {
+  function registryDb(rows: Array<{ id: string; template?: string; enabled?: number; mode?: string; status?: string; params: any }>): Database {
+    const db = new Database(":memory:");
+    db.exec(`CREATE TABLE platform_portfolios (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, template TEXT NOT NULL, account TEXT NOT NULL, capital REAL NOT NULL,
+      mode TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, params_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active',
+      validation TEXT NOT NULL DEFAULT 'validated', source TEXT NOT NULL DEFAULT 'builtin', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
+    const ins = db.prepare(`INSERT INTO platform_portfolios (id, name, template, account, capital, mode, enabled, params_json, status, created_at, updated_at) VALUES (?, ?, ?, 'alpaca_main', 50000, ?, ?, ?, ?, 0, 0)`);
+    for (const r of rows) ins.run(r.id, r.id, r.template ?? "portfolio", r.mode ?? "live", r.enabled ?? 1, JSON.stringify(r.params), r.status ?? "pending_restart");
+    return db;
+  }
+  const live = (sleeve: string) => ({ engine: "portfolio", sleeve, runMode: "live", strategyVersion: `${sleeve}@pe-vt15` });
+
+  test("enabled + template portfolio + mode live + runMode live → the sleeve is listed with its definition and version", () => {
+    const db = registryDb([
+      { id: "momentum_stocks", template: "momentum_tsm", params: { engineConfig: {} } },
+      { id: "pe_momentum_stocks", params: live("momentum_stocks") },
+      { id: "pe_meanrev_stocks", params: live("meanrev_stocks") },
+    ]);
+    const m = portfolioEngineLiveSleeves(db);
+    expect([...m.keys()].sort()).toEqual(["meanrev_stocks", "momentum_stocks"]);
+    expect(m.get("momentum_stocks")).toEqual({ definitionId: "pe_momentum_stocks", strategyVersion: "momentum_stocks@pe-vt15" });
+  });
+  test("observer, disabled, archived, mode≠live or runMode≠live definitions do NOT count (the incumbent still trades)", () => {
+    const db = registryDb([
+      { id: "pe_a", params: { ...live("momentum_stocks"), runMode: "observer" }, mode: "shadow" },
+      { id: "pe_b", params: live("meanrev_stocks"), enabled: 0 },
+      { id: "pe_c", params: live("momentum_crypto"), status: "archived" },
+      { id: "pe_d", params: live("momentum_crypto_usdc"), mode: "shadow" },
+      { id: "pe_e", params: { ...live("momentum_crypto"), runMode: "live" }, template: "momentum_tsm" },
+    ]);
+    expect(portfolioEngineLiveSleeves(db).size).toBe(0);
+  });
+  test("a trading DB without platform_portfolios (fixtures, pre-F3b) means no cutover anywhere", () => {
+    const db = new Database(":memory:");
+    db.exec("CREATE TABLE trades (id TEXT)");
+    expect(portfolioEngineLiveSleeves(db).size).toBe(0);
+  });
+  test("renderSummary prints an explicit SKIPPED line, no divergence, and the other sleeves still render", () => {
+    const text = renderSummary([
+      { sleeve: "momentum_stocks", status: "skipped_portfolio_engine", epoch: "2026-10-12", skipped: { definitionId: "pe_momentum_stocks", strategyVersion: "momentum_stocks@pe-vt15" }, staleSymbols: [], divergences: [] },
+      { sleeve: "momentum_crypto", status: "compared", epoch: "2026-09-26T19:00:00Z", lastSession: "x", staleSymbols: [],
+        sim: { entries: [], exits: [], endHoldings: [] }, live: { entries: [], exits: [], endHoldings: [] }, divergences: [] },
+    ] as any);
+    expect(text).toContain("── momentum_stocks");
+    expect(text).toContain("SKIPPED — live manager is the portfolio engine (pe_momentum_stocks, momentum_stocks@pe-vt15)");
+    expect(text).not.toMatch(/momentum_stocks[^]*❌/);
+    expect(text).toContain("── momentum_crypto");
     expect(text).toContain("✅ PARITY — no divergences");
   });
 });

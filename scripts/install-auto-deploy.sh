@@ -3,9 +3,10 @@
 # scripts/install-auto-deploy.sh — idempotent installer for the poll-based
 # auto-deploy (uncle-carl-deploy.service + .timer). Re-running is safe.
 #
-# After install, every ~2 min this host fast-forwards origin/master, and if
-# typecheck + the test suite pass, restarts the bot. See scripts/auto-deploy.sh
-# for the safety guards.
+# After install, every ~2 min this host gates origin/master (typecheck + the
+# test suite) on a SEPARATE checkout (<repo>-gate, a git worktree it creates by
+# itself, nothing to install), and only if the gate passes fast-forwards this
+# checkout and restarts the bot. See scripts/auto-deploy.sh for the safety guards.
 #
 #   ./scripts/install-auto-deploy.sh            # install + enable + start
 #   ./scripts/install-auto-deploy.sh --uninstall
@@ -33,4 +34,5 @@ echo "✅ auto-deploy installed + enabled (polls origin/master every ~2 min)."
 echo "   Status:  systemctl --user list-timers uncle-carl-deploy.timer"
 echo "   Logs:    tail -f $REPO/logs/deploy.log"
 echo "   Run now: systemctl --user start uncle-carl-deploy.service"
+echo "   Gate checkout: $REPO-gate (created on the first gated commit; safe to delete: git worktree remove --force $REPO-gate)"
 echo "   Disable: ./scripts/install-auto-deploy.sh --uninstall"

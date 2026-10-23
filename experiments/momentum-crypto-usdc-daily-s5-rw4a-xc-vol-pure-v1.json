@@ -1,0 +1,128 @@
+{
+  "name": "momentum-crypto-usdc-daily-s5-rw4a-xc-vol-pure-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTERED (2026-10-23) BEFORE any run — docs/reports/RW-reescritura-rentable.md §13 (RW4a, quorum Q3 research priority (i): a portfolio-level exposure control that REDUCES OPEN POSITIONS, not only blocks entries, on the crypto sleeves). Mechanism (MomentumEngineConfig.exposureControl, default OFF; SimBroker.scalePosition executes the partial resizes): one sleeve-level scale λ ∈ [minScale, 1] per tick from realized BOOK vol (volCap: σ = max(σ_fast, σ_slow) of the exposure-weighted book return; λ_vol = min(1, target/σ)) and/or the RiskGuard drawdown (drawdown: linear ramp 1 → minScale between startPct and endPct of the decayed-peak dd); λ = max(minScale, min(λ_vol, λ_dd)). Each held position keeps a persisted fraction f of full size and is resized ×(λ/f) only when |λ − f| > band and the order ≥ minOrderUsd (hysteresis); reductions run even while entries are blocked, add-backs obey every entry gate and the gross cap, and never exceed full size. New entries are sized at λ. Family RW4a-c2, momentum_crypto_usdc (daily kernel d13-s5-blend-63-126-252 — the live config, artifact d0f7fd6f, data hash 55da03c9). Byte-for-byte copy of momentum-crypto-usdc-daily-s5-pure-v1 (asOf 2026-09-26T00:00:00Z as the control) plus the knob. ONE change vs the live kernel: exposureControl.volCap {80%/yr, fast 10 bars = 2 weeks, slow 42 bars = 2 months, floor 0.25}, band 10 pp, min order 100 USD. Why 80: 5 × 0.20 of 70–90%-vol names at ρ≈0.8 runs ≈ 73%/yr when full, so 80 binds only when the book runs hotter than its own steady state (a spike), never as a permanent de-leveraging — the plain lower-exposure variants were refuted (RW2 E3, RW3 c2). Trial 432 -> 433.CASE AGAINST (declared): (1) RW2 E3 (vol-managed USDC) and RW3 c2 (vt50/70 entry sizing with maxScale 2) both failed R3 — vol control of this universe has not beaten the plain kernel; this candidate never levers up (λ ≤ 1) but the prior is against; (2) stops here are 5–30% vol-scaled, so a reduction can crystallize part of a loss the position would have recovered (the 2026-07..09 rally cost +1,283 USD of whipsaw in this sleeve); (3) a 5,000 USD book hits the venue's minimum notional on small resizes — minOrderUsd 100 forces chunky orders and weakens the continuity of the control; (4) each resize pays 17+3 bps per side at the daily cadence. CRITERIA (fixed here): the control's acceptance gates (unchanged) PLUS, against the LIVE config on the same OOS days (control artifact d0f7fd6f = momentum-crypto-usdc-daily-s5-pure-v1, data hash 55da03c9): Sharpe ≥ control (R3), maxDD ≤ control's maxDD on common days (52.6%), PSR ≥ 0.95, ≥ 2/3 folds PSR > 0.5, worst LOO ≥ 0.6 × Sharpe, combined-book OOS maxDD ≤ 20% (50k/50k/5k/5k), and the extra orders (exposureStats.resizes) and extra turnover are REPORTED. Pick among passing chains: highest CAGR, ties to lower maxDD. If none passes, the sleeve stays as it is. Pure chain of 1 candidate. Trial accounting continues from the ledger's 424: priorUniqueTrials=428, +1.",
+  "trialAccounting": {
+    "priorUniqueTrials": 432,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1d",
+    "universe": [
+      "ADA/USD",
+      "AVAX/USD",
+      "BCH/USD",
+      "BNB/USD",
+      "BTC/USD",
+      "DOGE/USD",
+      "ETH/USD",
+      "LINK/USD",
+      "LTC/USD",
+      "NEAR/USD",
+      "SOL/USD",
+      "UNI/USD",
+      "XRP/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-26T00:00:00Z",
+  "window": {
+    "from": "2021-08-01",
+    "to": "2026-09-27",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 17,
+      "commissionBps": 3
+    },
+    "stress": {
+      "slippageBps": 60,
+      "commissionBps": 5
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "d13-s5-xc-vol",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.2,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 5,
+      "maxShorts": 0,
+      "lookbackDaysList": [
+        63,
+        126,
+        252
+      ],
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "exposureControl": {
+        "volCap": {
+          "annualizedPct": 80,
+          "fastBars": 10,
+          "slowBars": 42
+        },
+        "minScale": 0.25,
+        "band": 0.1,
+        "minOrderUsd": 100
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

@@ -1,7 +1,8 @@
 import type { DecideInput, SessionDate, TargetBook } from "./types";
-import { cappedInverseVolWeights, covarianceFromPrices, scaleToVolTarget, selectCoreMembers } from "./construction";
+import { cappedInverseVolWeights, covarianceFromPrices, drawdownBrakeScale, inverseVolWeights, portfolioVol, scaleToVolTarget, selectCoreMembers } from "./construction";
 import { compareSymbols, overlaySignal, priceHistory, trailingVol, trendSignal } from "./signals";
 import { updateStops, type StopMemory } from "./stops";
+import { decideCopySignal } from "./copySignal";
 
 /** Versioned, JSON-only state owned by this kernel; persist TargetBook.memory
  * unchanged. Separate strategy versions must not share this state. */
@@ -12,6 +13,21 @@ export interface CoreMemory {
   coreMembers?: string[];
   overlayOn?: boolean;
   stops: StopMemory;
+  /** volManaged with `drawdownBrake` only: peak of the sleeve's book equity at past decisions (RW4b). */
+  peakEquity?: number;
+}
+
+/** Research fold chaining: folds restart at the initial capital, so the brake's high-water mark is re-expressed in
+ *  the next fold's dollars. `markEquity` is the last mark of the finished fold (it may exceed the peak stored at the
+ *  last decision), `fromEquity` the fold's final equity after liquidation, `toEquity` the next fold's start. The
+ *  drawdown at the boundary is preserved. Memory without a peak is returned unchanged (same reference). */
+export function rebaseDrawdownMemory(
+  memory: Readonly<Record<string, unknown>>, markEquity: number, fromEquity: number, toEquity: number,
+): Readonly<Record<string, unknown>> {
+  const core = memory.portfolioCore as CoreMemory | undefined;
+  if (!core || typeof core.peakEquity !== "number" || !(fromEquity > 0) || !(toEquity > 0)) return memory;
+  const peak = Math.max(core.peakEquity, Number.isFinite(markEquity) ? markEquity : 0);
+  return { ...memory, portfolioCore: { ...core, peakEquity: peak * toEquity / fromEquity } };
 }
 
 /** The base contract exposes only the last completed session. To reconstitute
@@ -38,6 +54,8 @@ export function decide(input: CoreDecideInput): TargetBook {
   if (input.executionSession !== undefined && input.executionSession <= view.asOf) {
     throw new Error("executionSession must follow the last completed session");
   }
+  // copySignal keeps its own memory key and never touches the core's.
+  if (config.kind === "copySignal") return decideCopySignal({ ...input, config });
   const previous = readMemory(input);
   const memory: CoreMemory = { ...previous, signals: { ...previous.signals } };
   if (config.kind === "factorCore") {
@@ -78,11 +96,33 @@ export function decide(input: CoreDecideInput): TargetBook {
       if (vol !== null && vol > 0 && closes.length >= config.covLookback + 1) vols[s] = vol;
     }
     const covariance = covarianceFromPrices(view, Object.keys(vols), config.covLookback);
+    // RW4b (both knobs optional; absent = the exact RW2/RW3 path and outputs).
+    const fastCovariance = config.fastVolLookback !== undefined
+      ? covarianceFromPrices(view, Object.keys(vols), config.fastVolLookback) : undefined;
+    let target = config.portfolioVolTarget;
+    let brakeDiagnostics: Record<string, unknown> = {};
+    if (config.drawdownBrake) {
+      // The peak only sees book equities of past decisions (marked at each asOf close) and the current one.
+      const equity = book.equity;
+      const known = typeof previous.peakEquity === "number" && previous.peakEquity > 0 ? previous.peakEquity : 0;
+      const valid = Number.isFinite(equity);
+      const peak = valid && equity > 0 ? Math.max(known, equity) : known;
+      const drawdown = !valid ? 0 : equity <= 0 ? 1 : peak > 0 ? Math.max(0, 1 - equity / peak) : 0;
+      const brakeScale = drawdownBrakeScale(drawdown, config.drawdownBrake);
+      if (peak > 0) memory.peakEquity = peak;
+      target = config.portfolioVolTarget * brakeScale;
+      brakeDiagnostics = { drawdown, brakeScale, peakEquity: peak, effectiveVolTarget: target };
+    }
     const construction = scaleToVolTarget(vols, covariance, config.annualization,
-      config.portfolioVolTarget, config.perAssetCap, config.maxGross);
+      target, config.perAssetCap, config.maxGross, fastCovariance);
+    const fastDiagnostics = fastCovariance ? (() => {
+      const base = inverseVolWeights(vols);
+      return { slowVol: portfolioVol(base, covariance, config.annualization), fastVol: portfolioVol(base, fastCovariance, config.annualization) };
+    })() : {};
     return { asOf: view.asOf, weights: construction.weights, stops: [],
       memory: { ...book.memory, portfolioCore: { ...memory, signals: {}, stops: {} } },
-      diagnostics: { vols, covariance, scale: construction.scale, uncappedVol: construction.uncappedVol, finalVol: construction.finalVol } };
+      diagnostics: { vols, covariance, scale: construction.scale, uncappedVol: construction.uncappedVol, finalVol: construction.finalVol,
+        ...brakeDiagnostics, ...fastDiagnostics } };
   }
 
   const signals: Record<string, ReturnType<typeof trendSignal>> = {};

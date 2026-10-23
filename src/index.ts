@@ -26,7 +26,7 @@ import { DailyReporter } from "./reports/DailyReporter";
 import { createLogger } from "./utils/logger";
 import { isMarketOpen } from "./utils/marketHours";
 import { VERSION_INFO } from "./utils/version";
-import { MomentumEngine, nextAlignedTickDelayMs, EARLY_BOOT_TICK_MIN_LEAD_MS, type MomentumStatePersistence, type MomentumPersistedState, type TrailMark } from "./strategies/momentum/MomentumEngine";
+import { MomentumEngine, nextAlignedTickDelayMs, EARLY_BOOT_TICK_MIN_LEAD_MS, type ExposureControlConfig, type MomentumStatePersistence, type MomentumPersistedState, type TrailMark } from "./strategies/momentum/MomentumEngine";
 import { EQUITY_SEMANTICS, rebaseRiskState, RISK_STATE_VERSION, type EquitySemantics, type RiskState } from "./strategies/momentum/RiskGuard";
 import { BinanceMomentumAdapter } from "./strategies/momentum/BinanceMomentumAdapter";
 import { BinanceCoinMMomentumAdapter, COINM_INTERNAL_SYMBOL } from "./strategies/momentum/BinanceCoinMMomentumAdapter";
@@ -59,10 +59,11 @@ import { publishInstanceManifest } from "./ops/instanceManifest";
 import { buildPortfolioPlan } from "./portfolios/factory";
 import { resolvePortfolioWiring, restoreIncumbentRows, sleevesWithTwoManagers, PORTFOLIO_SLEEVES, type SleeveManager } from "./portfolio-engine/live/cutover";
 import { buildPortfolioEngines, startPortfolioEngines } from "./portfolio-engine/live/wiring";
+import { currentModelVersionId } from "./portfolio/modelVersions";
 import { stopPriceFromEntry } from "./account/BinanceSleeveReconciler";
 import { fapiClientOrderId } from "./executor/binance-executor";
 import { builtinPortfolio } from "./portfolios/builtin";
-import { initPlatformPortfolios, loadPlatformPortfolioDefinitions, resolvePortfoliosSource } from "./portfolios/store";
+import { initPlatformPortfolios, loadPlatformPortfolioDefinitions, markPendingPortfoliosActive, resolvePortfoliosSource } from "./portfolios/store";
 import type { MomentumPortfolioPlan, MeanRevPortfolioPlan, StatePersistenceSpec, PortfolioDefinition } from "./portfolios/types";
 
 const log = createLogger("Main");
@@ -454,9 +455,16 @@ export const MOMENTUM_STOCKS_EVIDENCE_VERSION = "v8.4-stocks-k150";
 export const MOMENTUM_CRYPTO_MAX_LONGS = DEFAULT_TSM_CONFIG.maxLongs;
 export const MOMENTUM_CRYPTO_NOTIONAL_PCT_PER_SLOT = 0.375;
 /** Model identity for momentum_crypto's persisted RiskState (one-shot peak
- *  re-anchor on change — MomentumEngineConfig.modelVersion). Bump it only
- *  when the wired model itself changes. */
-export const MOMENTUM_CRYPTO_MODEL_VERSION = "vt35-2026-09-23";
+ *  and loss-streak re-anchor on change — MomentumEngineConfig.modelVersion).
+ *  Bump it only when the wired model itself changes. Bumped 2026-10-23 for
+ *  RW3's correlation brake OFF: the sleeve is flat, and the validated replay
+ *  starts a fold with peak = equity and streak 0 (the live state carried a
+ *  5,229 peak, a 6.5% drawdown the new model never produced, and 3 losses). */
+export const MOMENTUM_CRYPTO_MODEL_VERSION = "vt35-corroff-2026-10-23";
+/** SleeveGovernor evidence version: changing it restarts the evidence epoch.
+ *  "v8-crypto-no-hard-sl" until 2026-10-23; closes taken with the 0.85
+ *  correlation brake on are not evidence against the brake-off band. */
+export const MOMENTUM_CRYPTO_EVIDENCE_VERSION = "v8.5-crypto-corroff";
 export const MOMENTUM_CRYPTO_MAX_GROSS_EXPOSURE_MULT = MOMENTUM_CRYPTO_NOTIONAL_PCT_PER_SLOT * MOMENTUM_CRYPTO_MAX_LONGS * GROSS_CAP_HEADROOM; // 1.725× (1.5× hasta 2026-10-07 — G gross-cap)
 
 // ══════════════════════════════════════════════
@@ -502,8 +510,33 @@ export const MOMENTUM_USDC_DAILY_HORIZON: MomentumStocksDailyHorizon = { lookbac
 export const MOMENTUM_USDC_DAILY_VOL_STOP = { kSigma: 8, lookbackBars: 20, minPct: 5, maxPct: 30 } as const;
 /** Model identity for momentum_crypto_usdc's persisted RiskState: the daily
  *  kernel must not inherit the hourly model's drawdown peak (one-shot
- *  re-anchor on change — MomentumEngineConfig.modelVersion). */
+ *  re-anchor on change — MomentumEngineConfig.modelVersion).
+ *  DELIBERATELY NOT bumped for RW4a (2026-10-23, the drawdown exposure
+ *  control): the kernel that built the live peak/drawdown is the one that
+ *  keeps running, and the control's input IS that RiskGuard drawdown — the
+ *  validated replay at the live 13.8% dd scales the book to λ≈0.87 and keeps
+ *  the soft-DD pause bound; a re-anchor would blind the control (dd → 0) and
+ *  release the pause, which is the refuted no-soft-DD candidate's behaviour
+ *  (RW §13.6). Bump only when the kernel itself changes. */
 export const MOMENTUM_USDC_MODEL_VERSION = "daily-s5-blend3-2026-09-26";
+/** Portfolio exposure control (RW4a c2, 2026-10-23 — MomentumEngineConfig
+ *  .exposureControl; executed by BinanceMomentumAdapter.scalePosition):
+ *  λ = 1 down to a 10% drawdown of the RiskGuard's decayed peak, then the
+ *  line from 1 at 10% to 0 at 40%, floored at 0.25 (0.67 at 20%; the floor is
+ *  reached at 32.5% — RW §13.6 erratum: this is what ran, replicated and is
+ *  wired); each held position keeps a fraction f and is
+ *  resized ×(λ/f) only when |λ − f| > 0.10 and the order ≥ 100 USD; new
+ *  entries are sized at λ; add-backs obey every entry gate and the gross cap.
+ *  Artifact 8892c1e9… (experiments/momentum-crypto-usdc-daily-s5-rw4a-xc-dd-
+ *  pure-v1.json): Sharpe 1.038 vs 1.028 for the control on 1,410 common
+ *  days, DD 51.9% vs 52.6%, PSR 0.978, 104 resizes (69 cuts, 35 add-backs),
+ *  combined-book DD 13.8% — every §13.4 criterion, by a hair. Locked against
+ *  the manifest by scripts/liveSleeveConfigs.test.ts. */
+export const MOMENTUM_USDC_EXPOSURE_CONTROL: ExposureControlConfig = { drawdown: { startPct: 0.1, endPct: 0.4 }, minScale: 0.25, band: 0.1, minOrderUsd: 100 };
+/** SleeveGovernor evidence version: changing it restarts the evidence epoch.
+ *  "v8.3-usdc-daily" until 2026-10-23; closes taken without the exposure
+ *  control are not evidence against the xc-dd band. */
+export const MOMENTUM_USDC_EVIDENCE_VERSION = "v8.6-usdc-xc-dd";
 /** One-shot MODEL_CUTOVER. History: 2026-09-27 re-underwrote the hourly
  *  model's UNI/NEAR/BCH under the daily kernel. ACTIVE 2026-10-06 (owner:
  *  "alinéalo"): UNI/USDC only — that cutover's simultaneous re-rank bought
@@ -584,7 +617,7 @@ export function momentumCryptoPortfolioPlan(): MomentumPortfolioPlan {
   return {
     template: "momentum_tsm",
     portfolioId: "momentum_crypto",
-    governorRegistration: { sleeve: "momentum_crypto", kind: "live", promotionEligible: false, evidenceVersion: "v8-crypto-no-hard-sl" },
+    governorRegistration: { sleeve: "momentum_crypto", kind: "live", promotionEligible: false, evidenceVersion: MOMENTUM_CRYPTO_EVIDENCE_VERSION },
     adapter: { kind: "binance_usdm", options: {} },
     shadow: { strategy: "MOMENTUM", closeReason: "MOMENTUM_REBALANCE", timeframe: "1Hour", market: "crypto" },
     loggerContext: "Momentum:crypto",
@@ -610,7 +643,18 @@ export function momentumCryptoPortfolioPlan(): MomentumPortfolioPlan {
       // this sleeve's gross-exposure cap is declared contiguously, not emergent
       // — see the MOMENTUM_CRYPTO_MAX_GROSS_EXPOSURE_MULT block above.
       tsm: { barMinutes: 60, maxLongs: MOMENTUM_CRYPTO_MAX_LONGS },
-      regime: { barMinutes: 60 },
+      // RW3 (2026-10-23): the correlation-collapse entry brake is OFF —
+      // correlationCeiling 0.85 → 1.01 (an average pairwise correlation never
+      // exceeds 1). The vol-spike check of the regime filter stays ON. In
+      // live the brake was active on 188 of 349 passes since ~2026-10-12 (avg
+      // corr 0.86-0.92) but never bound: no raw long signal coincided with it,
+      // so the sleeve sat flat for lack of signal. Evidence: pure chain
+      // efc086b4… (experiments/momentum-crypto-rw3-vt-35-corroff-pure-v1.json,
+      // docs/reports/RW-reescritura-rentable.md §10.4 c1): Sharpe 1.331 vs
+      // 1.313 for the control on the same days, DD 34.3%, PSR 0.998, passes
+      // every pre-registered criterion. The literal below is locked against
+      // MOMENTUM_CRYPTO_REGIME (liveSleeveConfigs.ts) by liveSleeveConfigs.test.ts.
+      regime: { barMinutes: 60, correlationCeiling: 1.01 },
       scorer: { barMinutes: 60 },
       // tsmTrail intentionally ABSENT on crypto — the 2026-07-12 sweep found it
       // amputates fat-tail trend rides. (That sweep's "+148→+178%/yr" claim for
@@ -676,7 +720,7 @@ export function momentumUsdcPortfolioPlan(): MomentumPortfolioPlan {
   return {
     template: "momentum_tsm",
     portfolioId: "momentum_crypto_usdc",
-    governorRegistration: { sleeve: "momentum_crypto_usdc", kind: "live", evidenceVersion: "v8.3-usdc-daily" },
+    governorRegistration: { sleeve: "momentum_crypto_usdc", kind: "live", evidenceVersion: MOMENTUM_USDC_EVIDENCE_VERSION },
     adapter: { kind: "binance_usdm", options: { accountId: "momentum_crypto_usdc", quoteAsset: "USDC", candleTimeframe: "1Day" } },
     shadow: { strategy: "MOMENTUM", closeReason: "MOMENTUM_REBALANCE", timeframe: "1Day", market: "crypto" },
     loggerContext: "Momentum:usdc",
@@ -709,10 +753,15 @@ export function momentumUsdcPortfolioPlan(): MomentumPortfolioPlan {
       sharpeGate: { lookbackDays: 30, minSharpe: 0 },
       risk: { equitySemantics: EQUITY_SEMANTICS.BINANCE_USDC_MARGIN },
       maxGrossExposureMult: MOMENTUM_USDC_MAX_GROSS_EXPOSURE_MULT,
+      // RW4a c2 (2026-10-23): the drawdown exposure control resizes the OPEN
+      // book — see MOMENTUM_USDC_EXPOSURE_CONTROL. The 24h soft-DD pause
+      // stays ON (its removal failed every criterion, RW §13.6).
+      exposureControl: { ...MOMENTUM_USDC_EXPOSURE_CONTROL, drawdown: { ...MOMENTUM_USDC_EXPOSURE_CONTROL.drawdown! } },
       // %ADV capacity check, observe-only — see the momentum_crypto block.
       capacityGuard: { maxAdvPct: 1, lookbackBars: 20, mode: "observe" },
       // New model → own risk state, and the hourly model's positions are
       // re-underwritten at the daily kernel's slot size (see constants).
+      // NOT re-anchored for RW4a — see the constant's docstring.
       modelVersion: MOMENTUM_USDC_MODEL_VERSION,
       ...(momentumUsdcCutoverFor(Date.now()) !== undefined
         ? { reunderwriteBefore: momentumUsdcCutoverFor(Date.now()), ...(MOMENTUM_USDC_CUTOVER_SYMBOLS ? { reunderwriteSymbols: [...MOMENTUM_USDC_CUTOVER_SYMBOLS] } : {}) }
@@ -1090,7 +1139,10 @@ async function main() {
   if (portfoliosSource === "db") {
     const defs = loadPlatformPortfolioDefinitions(getDB());
     dbPortfolioDefs = new Map(defs.map((d) => [d.id, d]));
-    log.info(`📁 Portfolio source: db (${defs.length} platform_portfolios definitions)`);
+    // The rows just read ARE what this boot runs: their `pending_restart`
+    // label (owner edit, cutover script, un-archive) is applied now.
+    const applied = markPendingPortfoliosActive(getDB());
+    log.info(`📁 Portfolio source: db (${defs.length} platform_portfolios definitions${applied.length > 0 ? `; applied pending edits: ${applied.join(", ")}` : ""})`);
   } else {
     log.info("📁 Portfolio source: code (built-in definitions)");
   }
@@ -1486,6 +1538,14 @@ async function main() {
   // page use, read-only, once per daily pass.
   const governor = new SleeveGovernor({ bandReadings: governorBandReadings });
   handles.governor = governor;
+  // RW2: a sleeve managed by the LIVE portfolio engine has no incumbent branch below to register it,
+  // so it is registered here — the watchdog is never blind to a live book. Its evidence version is the
+  // model version the engine stamps on its rows: the epoch restarts at the cutover (closes of the
+  // retired model are not evidence against the new band), and the band it is judged against is the
+  // version's own artifact (scorecard ← modelVersions). Mode stays whatever sleeve_modes says (live).
+  for (const sleeve of portfolioCutoverSleeves) {
+    governor.register({ sleeve, kind: "live", evidenceVersion: currentModelVersionId(sleeve) ?? `portfolio:${sleeve}` });
+  }
   const shadowFor = (sleeve: string, opts: { strategy: string; closeReason: string; timeframe: string; market: "stock" | "crypto" }) =>
     new ShadowAdapter(accountManager.executor.alpaca, {
       accountId: `shadow_${sleeve}`,
@@ -1642,7 +1702,7 @@ async function main() {
       sleeve: "momentum_crypto",
       kind: "live",
       promotionEligible: false,
-      evidenceVersion: "v8-crypto-no-hard-sl",
+      evidenceVersion: MOMENTUM_CRYPTO_EVIDENCE_VERSION,
     });
     const cryptoPlan = momentumPlanFor("momentum_crypto");
     if (cryptoPlan.adapter.kind !== "binance_usdm") throw new Error("momentum_crypto plan: expected a binance_usdm adapter");
@@ -1689,7 +1749,7 @@ async function main() {
     governor.register({
       sleeve: "momentum_crypto_usdc",
       kind: "live",
-      evidenceVersion: "v8.3-usdc-daily",
+      evidenceVersion: MOMENTUM_USDC_EVIDENCE_VERSION,
     });
     const usdcPlan = momentumPlanFor("momentum_crypto_usdc");
     if (usdcPlan.adapter.kind !== "binance_usdm") throw new Error("momentum_crypto_usdc plan: expected a binance_usdm adapter");

@@ -1226,7 +1226,13 @@ export class BinanceExecutor {
    *  A failed enumeration cancels NOTHING — unknown is never "no open
    *  orders"; it logs and leaves state for a later pass (same fail-open
    *  contract as before, but never destructive on unknown state). */
-  async cancelAllOrders(alpacaSymbol: string, opts: { aggregateFlat?: boolean } = {}): Promise<void> {
+  async cancelAllOrders(alpacaSymbol: string, opts: { aggregateFlat?: boolean; exceptClientOrderIds?: readonly string[] } = {}): Promise<void> {
+    // `exceptClientOrderIds` (RW4a, 2026-10-23): client ids (regular
+    // clientOrderId / algo clientAlgoId) that survive the sweep — the
+    // exposure control's re-sized stop is placed FIRST and then the previous
+    // stops are cleared around it, so the position is never without a native
+    // stop (BinanceMomentumAdapter.resizeNativeStop). Only ever narrows what
+    // gets canceled.
     // Locked wrapper over the UNLOCKED core: closePosition (which already
     // holds this symbol's lock) calls the core directly — the lock is NOT
     // reentrant, by design (symbolLock.ts). External callers (adapters,
@@ -1239,15 +1245,17 @@ export class BinanceExecutor {
       });
   }
 
-  private async cancelAllOrdersCore(alpacaSymbol: string, opts: { aggregateFlat?: boolean } = {}): Promise<void> {
+  private async cancelAllOrdersCore(alpacaSymbol: string, opts: { aggregateFlat?: boolean; exceptClientOrderIds?: readonly string[] } = {}): Promise<void> {
     if (!this.connected) return;
     const binanceSymbol = this.symbolMap[alpacaSymbol];
     if (!binanceSymbol) return;
 
+    const keep = new Set((opts.exceptClientOrderIds ?? []).filter(id => typeof id === "string" && id.length > 0));
     const isReduceOnlyStop = (type: unknown, reduceOnly: unknown) =>
       String(type ?? "").toUpperCase().includes("STOP") &&
       (reduceOnly === true || String(reduceOnly).toLowerCase() === "true");
     const shouldCancel = (clientId: unknown, type: unknown, reduceOnly: unknown): boolean => {
+      if (typeof clientId === "string" && keep.has(clientId)) return false; // the caller's just-placed stop
       if (isBotFapiClientId(clientId as any)) return true; // ours, by stamp
       if (!isReduceOnlyStop(type, reduceOnly)) return false; // never touch a possible entry order
       return opts.aggregateFlat === true;

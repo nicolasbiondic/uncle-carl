@@ -26,7 +26,7 @@
 
 import type { AlpacaExecutor } from "../../../executor/alpaca-executor";
 import { createLogger } from "../../../utils/logger";
-import type { OrderIntent, OrderResult, Position, VenueAdapter, VenueRules } from "../../types";
+import type { LegacyStopRelease, OrderIntent, OrderResult, Position, VenueAdapter, VenueRules } from "../../types";
 
 const log = createLogger("PortfolioVenue:alpaca");
 
@@ -59,6 +59,9 @@ export interface AlpacaVenueOptions {
   pollIntervalMs?: number;
   /** Settle wait after a cancel before the final read. */
   settleMs?: number;
+  /** releaseLegacyStops: total bounded wait for the cancels to be confirmed terminal (default 20 s). */
+  releaseConfirmTimeoutMs?: number;
+  releasePollMs?: number;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
 }
@@ -142,22 +145,57 @@ export class AlpacaVenue implements VenueAdapter {
 
   /** Cancel the incumbent's resting protective stops on `symbols` (targeted, by exact order id,
    *  only orders stamped uc8- by getOpenStopOrders). Throws when the stop book cannot be read:
-   *  unknown is never "no stops". */
-  async releaseLegacyStops(symbols: readonly string[]): Promise<string[]> {
-    if (!this.executor.getOpenStopOrders || !this.executor.cancelOrderById) return [];
+   *  unknown is never "no stops".
+   *
+   *  Alpaca's cancel is ASYNCHRONOUS: DELETE answers 204 while the order is still `pending_cancel`
+   *  and its shares stay held, so a sell sent right after is rejected "insufficient qty available"
+   *  (2026-10-23, 5 of 6 sells). Each accepted cancel is therefore polled (GET /orders/{id}) until
+   *  the order is terminal, for at most `releaseConfirmTimeoutMs` (default 20 s) in total; the ones
+   *  still not terminal are reported as `unconfirmed`. */
+  async releaseLegacyStops(symbols: readonly string[]): Promise<LegacyStopRelease> {
+    const out: LegacyStopRelease = { released: [], unconfirmed: [] };
+    if (!this.executor.getOpenStopOrders || !this.executor.cancelOrderById) return out;
     const want = new Set(symbols);
-    if (want.size === 0) return [];
-    const released: string[] = [];
+    if (want.size === 0) return out;
+    const accepted: Array<{ id: string; symbol: string }> = [];
+    const failed: string[] = [];
     for (const stop of await this.executor.getOpenStopOrders()) {
       if (!want.has(stop.symbol) || stop.side !== "sell") continue;
       if (await this.executor.cancelOrderById(stop.id)) {
-        released.push(stop.id);
-        log.warn(`${stop.symbol}: incumbent stop ${stop.id} (${stop.clientOrderId}) cancelled — the row left the stop machinery`);
+        accepted.push({ id: stop.id, symbol: stop.symbol });
+        log.warn(`${stop.symbol}: incumbent stop ${stop.id} (${stop.clientOrderId}) cancel accepted — the row left the stop machinery`);
       } else {
-        throw new Error(`could not cancel incumbent stop ${stop.id} on ${stop.symbol}`);
+        failed.push(`${stop.id} on ${stop.symbol}`);
       }
     }
-    return released;
+    const now = this.opts.now ?? Date.now;
+    const deadline = now() + (this.opts.releaseConfirmTimeoutMs ?? 20_000);
+    const pollMs = this.opts.releasePollMs ?? 1_000;
+    let pending = accepted;
+    while (pending.length > 0) {
+      const states = await Promise.all(pending.map(async (s) => ({ s, done: await this.isOrderTerminal(s.id) })));
+      for (const { s, done } of states) if (done) out.released.push(s.id);
+      pending = states.filter(x => !x.done).map(x => x.s);
+      if (pending.length === 0 || now() >= deadline) break;
+      await this.sleep(pollMs);
+    }
+    out.unconfirmed = pending.map(s => s.id);
+    for (const s of pending) log.warn(`${s.symbol}: incumbent stop ${s.id} cancel NOT confirmed within the wait — its shares may still be held`);
+    if (failed.length > 0) throw new Error(`could not cancel incumbent stop ${failed.join(", ")}`);
+    return out;
+  }
+
+  /** True when the order is terminal at the venue (404 = gone). A failed read is "not yet". */
+  private async isOrderTerminal(orderId: string): Promise<boolean> {
+    try {
+      const o = await this.client.getOrder(orderId);
+      return ALPACA_TERMINAL_STATUSES.has(String(o?.status ?? ""));
+    } catch (e: any) {
+      const code = e?.response?.status || e?.status || null;
+      if (code === 404) return true;
+      log.debug(`confirm cancel ${orderId}: ${e?.message ?? e}`);
+      return false;
+    }
   }
 
   async submit(order: OrderIntent, clientOrderId: string): Promise<OrderResult> {

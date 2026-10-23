@@ -71,6 +71,18 @@ export interface MomentumBrokerAdapter {
    *  adapter maps onto trades.close_reason; absent (plan-driven signal-flip
    *  closes) the adapter keeps its default rebalance label. */
   closePosition(action: { symbol: string; side: "buy" | "sell"; closeReason?: string }): Promise<{ ok: boolean; reason?: string }>;
+  /**
+   * OPTIONAL — partial resize of a HELD position for the portfolio exposure
+   * control (MomentumEngineConfig.exposureControl, RW4a 2026-10-23):
+   * multiply the position's quantity by `factor` (< 1 = reduce-only partial
+   * close, > 1 = add at market). Quantity-relative on purpose: the sim and
+   * every live adapter derive the SAME order size from their own recorded
+   * quantity, with no price in the contract. Adapters that don't implement
+   * it leave the control INERT on that sleeve (the engine logs a warn per
+   * tick and reports `exposureControl.unsupported`) — never an emulated
+   * close+reopen.
+   */
+  scalePosition?(action: { symbol: string; side: "buy" | "sell"; factor: number; reason?: string }): Promise<{ ok: boolean; reason?: string }>;
   /** Fetch the candle history for one symbol at the engine's bar timeframe. */
   fetchCandles(symbol: string, bars: number): Promise<OHLCV[]>;
   /**
@@ -363,6 +375,163 @@ export function rollingSharpe(closes: number[], lookbackDays: number, barsPerDay
   return (mean / sd) * Math.sqrt(365);
 }
 
+/**
+ * Portfolio-level EXPOSURE CONTROL (RW4a, pre-registered 2026-10-23 —
+ * docs/reports/RW-reescritura-rentable.md §13; quorum Q3 priority (i)).
+ *
+ * What it does: every tick computes ONE scale λ ∈ [minScale, 1] for the
+ * whole sleeve and resizes the OPEN book toward it — down when realized
+ * portfolio volatility or the drawdown from the sleeve's (decayed) peak
+ * rise, back up (never above full size) when they ease. New entries are
+ * sized at λ too, so entries and held positions obey the same target.
+ * Unlike every existing gate (RiskGuard pauses, RegimeFilter, marketTrend,
+ * ddScale) it acts on positions already held, not only on entries — the
+ * class of control the 2026-10-23 profitability review found missing
+ * (fallos-2026-10-23/rentabilidad.md D4: "soft-DD blocks entries but does
+ * not reduce exposure").
+ *
+ * Axes (either or both; absent axis = scale 1 on that axis):
+ *  - volCap: σ = max(σ_fast, σ_slow) of the exposure-weighted BOOK return
+ *    (held positions at mark weight + this tick's planned entries at their
+ *    planned weight, each symbol's CLOSED-bar log returns), annualized;
+ *    λ_vol = min(1, annualizedPct/100 ÷ σ). The fast window is what makes
+ *    it react to a crash (the per-position vt-35 uses 720 bars and lags).
+ *  - drawdown: λ_dd = linear from 1 at startPct to minScale at endPct of
+ *    the RiskGuard drawdown (same decayed-peak dd the breakers use).
+ *  λ = max(minScale, min(1, λ_vol, λ_dd)).
+ *
+ * Hysteresis: each held position carries the FRACTION f of full size it
+ * currently keeps (persisted, `exposureFracs`; 1 for a position opened at
+ * full size). A resize is issued only when |λ − f| > band AND the order
+ * (|λ/f − 1| × mark notional) is ≥ minOrderUsd; the position then records
+ * f := λ. A slowly drifting λ therefore produces one order per band
+ * crossing, never a churn of 1% trims. Reductions run even while entries
+ * are blocked (they de-risk, like exits); add-backs obey every entry gate
+ * and the gross-exposure cap. Undefined = OFF — byte-identical legacy
+ * behavior, enforced by MomentumEngine.exposureControl.test.ts.
+ */
+export interface ExposureControlConfig {
+  volCap?: {
+    /** Target annualized vol of the BOOK in percent (35 = 35%/yr). */
+    annualizedPct: number;
+    /** Fast realized-vol window in bars (e.g. 120 on 1h = 5 days). */
+    fastBars: number;
+    /** Slow realized-vol window in bars (e.g. 504 on 1h = 21 days). ≥ fastBars. */
+    slowBars: number;
+  };
+  drawdown?: {
+    /** Drawdown FRACTION where the ramp starts (0.05 = 5%): dd ≤ start → 1. */
+    startPct: number;
+    /** Drawdown FRACTION where the ramp reaches minScale. Must be > startPct. */
+    endPct: number;
+  };
+  /** Floor of λ in (0, 1]. The book is never cut below this fraction. */
+  minScale: number;
+  /** Hysteresis band on the kept fraction, in fraction units (0.10 = 10 pp). */
+  band: number;
+  /** Smallest resize order in USD; smaller moves wait for the band to widen. */
+  minOrderUsd: number;
+}
+
+/**
+ * Annualized realized vol of an exposure-weighted book over its last `bars`
+ * closed bars: r_t = Σ_i w_i · ln(c_{i,t}/c_{i,t−1}), aligned by position
+ * from the END of each series (all sleeves tick on one bar grid). A series
+ * shorter than bars+1 closes is skipped (that symbol contributes nothing);
+ * returns null when no series qualifies or the result is degenerate — the
+ * caller then fails OPEN to scale 1 on the vol axis.
+ */
+export function bookRealizedVol(book: Array<{ closes: number[]; weight: number }>, bars: number, barsPerYear: number): number | null {
+  if (!(bars >= 2) || !(barsPerYear > 0)) return null;
+  const rets = new Array<number>(bars).fill(0);
+  let used = 0;
+  for (const { closes, weight } of book) {
+    if (!(Number.isFinite(weight)) || weight === 0 || closes.length < bars + 1) continue;
+    const off = closes.length - bars - 1;
+    let ok = true;
+    const r = new Array<number>(bars);
+    for (let k = 0; k < bars; k++) {
+      const a = closes[off + k], b = closes[off + k + 1];
+      if (!(a > 0) || !(b > 0)) { ok = false; break; }
+      r[k] = weight * Math.log(b / a);
+    }
+    if (!ok) continue;
+    for (let k = 0; k < bars; k++) rets[k] += r[k];
+    used++;
+  }
+  if (used === 0) return null;
+  const mean = rets.reduce((s, x) => s + x, 0) / bars;
+  const variance = rets.reduce((s, x) => s + (x - mean) ** 2, 0) / (bars - 1);
+  const sigma = Math.sqrt(variance) * Math.sqrt(barsPerYear);
+  return Number.isFinite(sigma) && sigma > 0 ? sigma : null;
+}
+
+export interface ExposureScaleInput {
+  cfg: ExposureControlConfig;
+  /** Exposure-weighted book this tick (weights = notional ÷ equity). */
+  book: Array<{ closes: number[]; weight: number }>;
+  barsPerYear: number;
+  /** RiskGuard drawdown fraction (decayed peak) at this tick. */
+  drawdown: number;
+}
+
+export interface ExposureScaleVerdict {
+  /** Combined λ in [minScale, 1]. */
+  scale: number;
+  volScale: number;
+  ddScale: number;
+  sigmaFast?: number;
+  sigmaSlow?: number;
+}
+
+/**
+ * Pure exposure-scale decision (shared by the live engine and the replay —
+ * same inputs, same λ). Degenerate/unavailable inputs fail OPEN to 1 on
+ * that axis; the floor minScale always applies to the combination.
+ */
+export function exposureScale(input: ExposureScaleInput): ExposureScaleVerdict {
+  const { cfg } = input;
+  const floor = Math.min(1, Math.max(0, cfg.minScale));
+  let volScale = 1;
+  let sigmaFast: number | undefined;
+  let sigmaSlow: number | undefined;
+  if (cfg.volCap) {
+    const sf = bookRealizedVol(input.book, cfg.volCap.fastBars, input.barsPerYear);
+    const ss = bookRealizedVol(input.book, cfg.volCap.slowBars, input.barsPerYear);
+    if (sf !== null) sigmaFast = sf;
+    if (ss !== null) sigmaSlow = ss;
+    const sigma = Math.max(sf ?? 0, ss ?? 0);
+    if (sigma > 0) volScale = Math.min(1, (cfg.volCap.annualizedPct / 100) / sigma);
+  }
+  let ddScale = 1;
+  if (cfg.drawdown) {
+    const span = cfg.drawdown.endPct - cfg.drawdown.startPct;
+    if (span > 0 && Number.isFinite(input.drawdown)) {
+      ddScale = Math.min(1, Math.max(floor, 1 - (input.drawdown - cfg.drawdown.startPct) / span));
+    }
+  }
+  const scale = Math.max(floor, Math.min(1, volScale, ddScale));
+  return {
+    scale, volScale, ddScale,
+    ...(sigmaFast !== undefined ? { sigmaFast } : {}),
+    ...(sigmaSlow !== undefined ? { sigmaSlow } : {}),
+  };
+}
+
+/**
+ * Should a held position at kept fraction `frac` be resized to `scale`?
+ * Hysteresis band on the fraction plus a minimum order size in USD (the
+ * resize notional is |scale/frac − 1| × current mark notional). Returns the
+ * quantity factor to apply, or null to leave the position alone.
+ */
+export function exposureResizeFactor(frac: number, scale: number, notionalUsd: number, cfg: Pick<ExposureControlConfig, "band" | "minOrderUsd">): number | null {
+  if (!(frac > 0) || !(scale > 0) || !(notionalUsd > 0)) return null;
+  if (Math.abs(scale - frac) <= cfg.band) return null;
+  const factor = scale / frac;
+  if (Math.abs(factor - 1) * notionalUsd < cfg.minOrderUsd) return null;
+  return factor;
+}
+
 export interface MomentumEngineConfig {
   /** Strategy mode. Only "time-series" exists (see MomentumMode). Kept as a
    *  field so existing config literals don't need editing. */
@@ -477,6 +646,13 @@ export interface MomentumEngineConfig {
   /** Optional time barrier. Undefined = OFF (current behavior: holds are
    *  unlimited — signal flip/trail/hard stop only). See TimeStopConfig. */
   timeStop?: TimeStopConfig;
+  /**
+   * Optional portfolio-level exposure control that RESIZES open positions
+   * (see ExposureControlConfig). Undefined = OFF — byte-identical legacy
+   * behavior; no live sleeve sets it (research knob until a RW4a candidate
+   * passes its pre-registered criteria).
+   */
+  exposureControl?: ExposureControlConfig;
   scorer: Partial<MomentumScorerConfig>;
   tsm: Partial<TSMConfig>;
   regime: Partial<RegimeFilterConfig>;
@@ -671,6 +847,12 @@ export interface MomentumPersistedState {
    *  Absent (older files) = the legacy first-tick behavior. Shared by
    *  MomentumEngine and MeanRevEngine. */
   riskAnchorAt?: number;
+  /** Exposure-control kept FRACTION per held position, keyed
+   *  `${symbol}|${side}` (ExposureControlConfig hysteresis anchor). Written
+   *  only while the control is ON and the map is non-empty, so every legacy
+   *  envelope keeps its exact shape; pruned against live positions on every
+   *  tick like trailMarks. Absent/invalid entry = 1 (full size). */
+  exposureFracs?: Record<string, number>;
 }
 
 export interface MomentumStatePersistence {
@@ -743,6 +925,22 @@ export interface RebalanceReport {
    *  keep the exact pre-existing shape. Telemetry: mean scale and ticks
    *  at scale < 1 aggregate from this field. */
   entryScale?: number;
+  /** Exposure-control verdict and resize activity this tick
+   *  (cfg.exposureControl). Present ONLY when the opt-in is configured AND
+   *  equity was valid — legacy reports keep the exact pre-existing shape. */
+  exposureControl?: ExposureControlReport;
+}
+
+/** Per-tick telemetry of the exposure control (RebalanceReport.exposureControl). */
+export interface ExposureControlReport extends ExposureScaleVerdict {
+  /** Resize orders EXECUTED this tick (ok from the adapter). */
+  resizes: number;
+  /** Σ|Δnotional| of those resizes in USD (mark-based estimate). */
+  resizeNotionalUsd: number;
+  /** Reductions skipped only because the adapter has no scalePosition. */
+  unsupported: number;
+  /** Add-backs deferred because entries were blocked / gross cap bound. */
+  deferredUp: number;
 }
 
 export class MomentumEngine {
@@ -769,6 +967,10 @@ export class MomentumEngine {
   /** Entry timestamps (epoch ms) keyed by `${symbol}|${side}` — the time-stop's
    *  clock anchors (see MomentumPersistedState.entryMarks). */
   private entryMarks = new Map<string, number>();
+  /** Exposure-control kept fraction per held position, keyed
+   *  `${symbol}|${side}` (see MomentumPersistedState.exposureFracs). Only
+   *  ever populated while cfg.exposureControl is set. */
+  private exposureFracs = new Map<string, number>();
   /** Shadow-equity resume (cfg.risk.shadowResume): symbols the VIRTUAL long
    *  book held at the previous tick, and their last decision closes.
    *  Deliberately EPHEMERAL (not persisted): the monetary anchors live on
@@ -827,6 +1029,7 @@ export class MomentumEngine {
         this.riskState = loaded.risk;
         this.restoreTrailMarks(loaded.trailMarks);
         this.restoreEntryMarks(loaded.entryMarks);
+        if (this.cfg.exposureControl) this.restoreExposureFracs(loaded.exposureFracs);
         this.lastRebalanceAt = validRiskAnchor(loaded.riskAnchorAt, this.clock.now());
       }
     }
@@ -914,6 +1117,20 @@ export class MomentumEngine {
     for (const [key, t] of Object.entries(marks)) {
       if (!Number.isFinite(t) || !(t > 0)) continue;
       this.entryMarks.set(key, t);
+    }
+  }
+
+  /**
+   * Restore persisted exposure-control fractions. Only values in (0, 1]
+   * survive (a poisoned file must never make the engine "add back" above
+   * full size or divide by zero); liveness is validated by the per-tick
+   * prune against live positions, like trailMarks/entryMarks.
+   */
+  private restoreExposureFracs(fracs?: Record<string, number>): void {
+    if (!fracs || typeof fracs !== "object") return;
+    for (const [key, f] of Object.entries(fracs)) {
+      if (!Number.isFinite(f) || !(f > 0) || f > 1) continue;
+      this.exposureFracs.set(key, f);
     }
   }
 
@@ -1206,6 +1423,7 @@ export class MomentumEngine {
             const key = `${p.symbol}|${p.side}`;
             this.trailMarks.delete(key);
             this.entryMarks.delete(key); // hold ended — a same-tick re-open re-anchors both
+            this.exposureFracs.delete(key);
             cutoverActions.push({ type: "close", symbol: p.symbol, side: p.side, reason });
             this.log.info(`MomentumEngine ${p.symbol} ${reason}`);
           } else {
@@ -1249,6 +1467,9 @@ export class MomentumEngine {
       heldShorts,
       shortRegimeCfg ? { shortRegimeBearish } : undefined,
     );
+    // Telemetry snapshot (never read by a trading branch): the ranker's output
+    // BEFORE the Sharpe gate / stop cooldown rewrite `decisions` below.
+    const rawDecisions = decisions;
 
     // Rolling-Sharpe entry gate (flag-gated): NEW entries only — held
     // positions keep their normal stay/exit logic. Fails open (null) on
@@ -1267,6 +1488,8 @@ export class MomentumEngine {
         return d;
       });
     }
+
+    const postSharpeDecisions = decisions; // telemetry snapshot (see rawDecisions)
 
     // A symbol trail- or time-stopped THIS tick sits out one tick — otherwise
     // the rebalance below would re-open it at the same price (fee churn only;
@@ -1321,6 +1544,45 @@ export class MomentumEngine {
         }
       }
     }
+    // Portfolio exposure control (cfg.exposureControl, opt-in — see
+    // ExposureControlConfig): ONE scale λ for the sleeve this tick, from the
+    // exposure-weighted book (held at mark weight + this tick's PLANNED
+    // entries at their planned weight — so an entry into a hot book is
+    // sized at λ immediately instead of being trimmed one tick later) and
+    // the RiskGuard drawdown. NEW entries are sized at λ here; held
+    // positions are resized toward λ after the closes below. Skipped
+    // entirely when equity is invalid (no weights, no dd) — the knob then
+    // changes nothing this tick, exactly like the risk gate.
+    let exposure: ExposureControlReport | undefined;
+    let entryNotionalScale = 1;
+    if (this.cfg.exposureControl && equityValid) {
+      const xc = this.cfg.exposureControl;
+      const heldNotional = new Map(universePositions.map(p => [p.symbol, Math.abs(p.notional)]));
+      const book: Array<{ closes: number[]; weight: number }> = [];
+      for (const d of decisions) {
+        if (d.action === "flat") continue;
+        const planned = notionalBySymbol?.get(d.symbol) ?? baseNotional;
+        const notional = heldNotional.get(d.symbol) ?? planned;
+        const closes = (candles.get(d.symbol) ?? []).map(c => c.close);
+        if (closes.length > 0 && notional > 0) book.push({ closes, weight: notional / equity });
+      }
+      const st = this.riskState;
+      const drawdown = st.peakEquity > 0 ? Math.max(0, (st.peakEquity - equity) / st.peakEquity) : 0;
+      const verdict = exposureScale({ cfg: xc, book, barsPerYear: this.barsPerDay() * 365, drawdown });
+      exposure = { ...verdict, resizes: 0, resizeNotionalUsd: 0, unsupported: 0, deferredUp: 0 };
+      entryNotionalScale = verdict.scale;
+      if (verdict.scale < 1) {
+        this.log.info(`exposure control: λ=${verdict.scale.toFixed(3)} (vol ${verdict.volScale.toFixed(3)}${verdict.sigmaFast !== undefined ? ` σf ${(verdict.sigmaFast * 100).toFixed(0)}%` : ""}${verdict.sigmaSlow !== undefined ? ` σs ${(verdict.sigmaSlow * 100).toFixed(0)}%` : ""}, dd ${verdict.ddScale.toFixed(3)} at ${(drawdown * 100).toFixed(1)}%)`);
+      }
+    }
+    // Scale the plan's entry notionals by λ (1 when the knob is off: the
+    // product is bit-identical, x * 1 === x in IEEE754, and the branch below
+    // is skipped so legacy sizing never even multiplies).
+    const entryNotionalPerSlot = entryNotionalScale !== 1 ? baseNotional * entryNotionalScale : baseNotional;
+    if (entryNotionalScale !== 1 && notionalBySymbol) {
+      for (const [sym, n] of notionalBySymbol) notionalBySymbol.set(sym, n * entryNotionalScale);
+    }
+
     // Rankers omit symbols whose history is unusable. A held omission means
     // "no decision", not "flat"; keep it until usable candles return.
     const decidedSymbols = new Set(decisions.map(d => d.symbol));
@@ -1328,7 +1590,7 @@ export class MomentumEngine {
     const plan = planRebalance({
       decisions,
       currentPositions: universePositions.filter(p => decidedSymbols.has(p.symbol)),
-      notionalPerSlot: baseNotional,
+      notionalPerSlot: entryNotionalPerSlot,
       notionalBySymbol,
     });
     plan.unchanged.push(...heldWithoutDecision.map(p => p.symbol));
@@ -1377,8 +1639,81 @@ export class MomentumEngine {
     const noSlotCount = decisions.filter(d => d.noSlot === true).length;
     if (noSlotCount > 0) blockCounts.no_slot = noSlotCount;
     let planOpensOk = 0, planClosesOk = 0;
+    // Gate-binding / exposure telemetry (output-only, never read by a branch):
+    // opens that cleared EVERY entry gate and reached the broker call.
+    let survivingLongOpens = 0;
+    let intendedOpenUsd = 0;
+    // Signed Σ Δnotional of the resizes the exposure control DECIDED this
+    // pass (past the band + minimum-order checks, not deferred by a gate or
+    // the gross cap) — whether or not the adapter executed them, so a failed
+    // or unsupported resize shows as exposureReal ≠ exposureIntended instead
+    // of a deliberate trim reading as an execution shortfall.
+    let intendedResizeUsd = 0;
+    // Exposure-control resize phase: runs ONCE, after every close of this
+    // tick (trail/time/cutover above, plan closes below) and BEFORE the first
+    // open — reductions free margin for entries, add-backs compete with
+    // entries under the same gross cap. No-op (and never called into) when
+    // the knob is off or equity was invalid.
+    const closedKeys = new Set<string>([...trailActions, ...timeStopActions, ...cutoverActions].map(a => `${a.symbol}|${a.side}`));
+    let resizePhaseDone = false;
+    const runResizePhase = async (): Promise<void> => {
+      if (resizePhaseDone || !exposure) return;
+      resizePhaseDone = true;
+      const xc = this.cfg.exposureControl!;
+      // Prune fractions of positions that no longer exist (closed elsewhere
+      // or this tick) — restored entries only ever apply to a LIVE position.
+      const liveKeys = new Set(universePositions.map(p => `${p.symbol}|${p.side}`).filter(k => !closedKeys.has(k)));
+      for (const key of this.exposureFracs.keys()) if (!liveKeys.has(key)) this.exposureFracs.delete(key);
+      for (const p of universePositions) {
+        const key = `${p.symbol}|${p.side}`;
+        if (closedKeys.has(key)) continue;
+        const frac = this.exposureFracs.get(key) ?? 1;
+        const notional = Math.abs(p.notional);
+        const factor = exposureResizeFactor(frac, exposure.scale, notional, xc);
+        if (factor === null) continue;
+        if (factor > 1 && (blocked || hasUndecidableHold)) {
+          // Add-backs are ENTRIES in every sense: no new risk while a gate
+          // blocks opens or a held symbol has no usable data.
+          exposure.deferredUp++;
+          continue;
+        }
+        const deltaUsd = (factor - 1) * notional;
+        if (factor > 1 && this.cfg.maxGrossExposureMult !== undefined) {
+          const cap = equity * this.cfg.maxGrossExposureMult;
+          if (liveGrossNotional + deltaUsd > cap) {
+            exposure.deferredUp++;
+            this.log.warn(`exposure control: add-back ${p.symbol} ×${factor.toFixed(3)} deferred by gross exposure cap (live $${liveGrossNotional.toFixed(0)} + $${deltaUsd.toFixed(0)} > ${this.cfg.maxGrossExposureMult}× equity)`);
+            continue;
+          }
+        }
+        intendedResizeUsd += deltaUsd;
+        if (!this.broker.scalePosition) {
+          exposure.unsupported++;
+          this.log.warn(`exposure control: adapter has no scalePosition — ${p.symbol} stays at ${(frac * 100).toFixed(0)}% (target ${(exposure.scale * 100).toFixed(0)}%); control inert on this sleeve`);
+          continue;
+        }
+        const reason = `exposure control: λ ${exposure.scale.toFixed(3)} vs kept ${frac.toFixed(3)} (vol ${exposure.volScale.toFixed(3)}, dd ${exposure.ddScale.toFixed(3)})`;
+        try {
+          const res = await this.broker.scalePosition({ symbol: p.symbol, side: p.side, factor, reason });
+          if (res.ok) {
+            this.exposureFracs.set(key, exposure.scale);
+            liveGrossNotional += deltaUsd;
+            exposure.resizes++;
+            exposure.resizeNotionalUsd += Math.abs(deltaUsd);
+            this.log.info(`MomentumEngine ${p.symbol} resized ×${factor.toFixed(3)} (${deltaUsd >= 0 ? "+" : ""}$${deltaUsd.toFixed(0)}) — ${reason}`);
+            if (sleeve) sleeveOutput.recordClose(sleeve); // an executed order is output for the liveness monitor
+          } else {
+            this.log.warn(`exposure control: resize ${p.symbol} ×${factor.toFixed(3)} failed: ${res.reason}`);
+          }
+        } catch (e: any) {
+          this.log.error(`exposure control: resize ${p.symbol} threw: ${e.message}`);
+        }
+      }
+      if (exposure.resizes > 0 || exposure.deferredUp > 0 || exposure.unsupported > 0) this.persistState();
+    };
     for (const a of ordered) {
       try {
+        if (a.type === "open") await runResizePhase();
         if (a.type === "close") {
           // Plan-computed canonical label (today only SLOT_DISPLACED, from the
           // Rebalancer) rides along exactly like the TRAIL_STOP/TIME_STOP
@@ -1389,6 +1724,8 @@ export class MomentumEngine {
             planClosesOk++;
             liveGrossNotional -= notionalBySymbolSide.get(`${a.symbol}|${a.side}`) ?? 0;
             this.entryMarks.delete(`${a.symbol}|${a.side}`); // hold ended — drop the clock anchor
+            this.exposureFracs.delete(`${a.symbol}|${a.side}`);
+            closedKeys.add(`${a.symbol}|${a.side}`);
             if (sleeve) sleeveOutput.recordClose(sleeve);
           }
           else this.log.warn(`close ${a.symbol} failed: ${res.reason}`);
@@ -1439,6 +1776,8 @@ export class MomentumEngine {
             : this.cfg.volStop
             ? trailPctFromVol((candles.get(a.symbol) ?? []).map(c => c.close), this.cfg.volStop, this.barsPerDay())
             : undefined;
+          if (a.side === "buy") survivingLongOpens++;
+          intendedOpenUsd += notionalUsd;
           const res = await this.broker.openPosition({ symbol: a.symbol, side: a.side, notionalUsd, ...(stopLossPct !== undefined ? { stopLossPct } : {}) });
           if (res.ok) {
             executed.push(a);
@@ -1447,6 +1786,9 @@ export class MomentumEngine {
             // Record the TRUE entry time even with the time stop OFF, so a
             // later activation measures real holds instead of first-sightings.
             this.entryMarks.set(`${a.symbol}|${a.side}`, now);
+            // Opened at λ of full size (exposure control on): the kept
+            // fraction is λ, so a later add-back knows how far below full it sits.
+            if (exposure) this.exposureFracs.set(`${a.symbol}|${a.side}`, exposure.scale);
             if (sleeve) sleeveOutput.recordOpenSuccess(sleeve);
           }
           else {
@@ -1466,6 +1808,13 @@ export class MomentumEngine {
         if (a.type === "open" && sleeve) sleeveOutput.recordOpenFailure(sleeve, e.message);
       }
     }
+    // No open this tick (or every open was gated away): the resize phase
+    // still runs — reductions must never wait for an entry to happen.
+    await runResizePhase();
+    // Fractions recorded by this tick's opens (λ < 1) must reach disk this
+    // tick — a restart before the next persist would otherwise read them as
+    // full-size positions and never add back.
+    if (exposure && planOpensOk > 0) this.persistState();
     // Tick recorded AFTER outputs so a pass that finally produces something
     // resets the silence counter before the check runs (no page on recovery).
     if (sleeve) sleeveOutput.recordTick(sleeve);
@@ -1485,8 +1834,61 @@ export class MomentumEngine {
       `Rebalance done: equity=$${equity.toFixed(2)}, ${executed.filter(a => a.type === "close").length} close, ${executed.filter(a => a.type === "open").length} open, ${plan.unchanged.length} hold. Realised since last: ${realisedValid ? `$${realised.toFixed(2)}` : "unknown (read failed)"}`
     );
 
+    // Gate-binding + exposure telemetry (2026-10-23). Definitions live on
+    // DecisionPassSnapshot. Read-only over values computed above; any failure
+    // here drops these fields, never the pass record and never a trade.
+    let gateTelemetry: Partial<DecisionPassSnapshot> = {};
+    if (this.decisionRecorder) {
+      try {
+        const entryMin = this.tsm.getConfig().entryThresholdPct / 100;
+        const sideLongRaw = (d: (typeof rawDecisions)[number]) =>
+          d.action === "long" || (d.noSlot === true && d.score >= entryMin);
+        const rawLong = rawDecisions.filter(sideLongRaw).length;
+        const noSlotLong = rawDecisions.filter(d => d.action !== "long" && sideLongRaw(d)).length;
+        const sharpeFlat = new Set(postSharpeDecisions.filter(d => d.action === "flat").map(d => d.symbol));
+        const sharpeRemoved = rawDecisions.filter(d => d.action === "long" && sharpeFlat.has(d.symbol)).length;
+        const stopRemoved = postSharpeDecisions.filter(d => d.action === "long" && trailClosedSymbols.has(d.symbol)).length;
+        const plannedOpens = plan.actions.filter(a => a.type === "open").length;
+        const entriesGated = blocked || hasUndecidableHold;
+        const binding: string[] = [];
+        if (sharpeRemoved > 0) binding.push("sharpe_gate");
+        if (stopRemoved > 0) binding.push("protective_stop");
+        if (noSlotLong > 0) binding.push("no_slot");
+        if (entriesGated && plannedOpens > 0) {
+          if (tradingDisabled) binding.push("trading_disabled");
+          if (!canOpen) binding.push("risk_gate");
+          if (!regimeCheck.tradeable) binding.push("regime");
+          if (trendCheck.blocked) binding.push("market_trend");
+          if (hasUndecidableHold) binding.push("no_data");
+        }
+        if ((blockCounts.gross_cap ?? 0) > 0) binding.push("gross_cap");
+        if ((blockCounts.capacity ?? 0) > 0) binding.push("capacity");
+        const heldLongStays = decisions.filter(d => d.action === "long" && heldSymbols.has(d.symbol)).length;
+        gateTelemetry = {
+          signalsRawLong: rawLong,
+          signalsAfterGates: heldLongStays + survivingLongOpens,
+          gateBinding: binding,
+        };
+        if (equityValid && equity > 0) {
+          const planCloseKeys = new Set(plan.actions.filter(a => a.type === "close").map(a => `${a.symbol}|${a.side}`));
+          const keptGross = universePositions
+            .filter(p => !planCloseKeys.has(`${p.symbol}|${p.side}`))
+            .reduce((s, p) => s + Math.abs(p.notional), 0);
+          gateTelemetry.exposureReal = Math.max(0, liveGrossNotional) / equity;
+          // Intended = kept book at its read notional, resized by what the
+          // exposure control decided this pass (runResizePhase has completed
+          // above — the final `await runResizePhase()` precedes this block),
+          // plus the opens that reached the broker.
+          gateTelemetry.exposureIntended = Math.max(0, keptGross + intendedResizeUsd + intendedOpenUsd) / equity;
+        }
+      } catch (e: any) {
+        this.log.warn(`decision-pass gate telemetry skipped: ${e?.message ?? e}`);
+      }
+    }
+
     // P0 funnel telemetry — recorded after every completed pass, fail-soft.
     this.recordDecisionPass({
+      ...gateTelemetry,
       ts: now,
       universe: this.cfg.universe.length,
       evaluated: candles.size,
@@ -1514,6 +1916,8 @@ export class MomentumEngine {
       realisedPnlSinceLastRebalance: realised,
       // Key present ONLY under ddScale — legacy reports stay byte-identical.
       ...(entryScale !== undefined ? { entryScale } : {}),
+      // Key present ONLY under exposureControl (and valid equity).
+      ...(exposure !== undefined ? { exposureControl: exposure } : {}),
     };
   }
 
@@ -1652,6 +2056,7 @@ export class MomentumEngine {
         if (res.ok) {
           this.trailMarks.delete(key);
           this.entryMarks.delete(key); // hold ended — drop the time-stop anchor
+          this.exposureFracs.delete(key);
           actions.push({ type: "close", symbol: p.symbol, side: p.side, reason });
           this.log.info(`MomentumEngine ${p.symbol} ${reason}`);
         } else {
@@ -1712,6 +2117,7 @@ export class MomentumEngine {
         if (res.ok) {
           this.entryMarks.delete(key);
           this.trailMarks.delete(key); // position gone — its watermark with it
+          this.exposureFracs.delete(key);
           actions.push({ type: "close", symbol: p.symbol, side: p.side, reason });
           this.log.info(`MomentumEngine ${p.symbol} ${reason}`);
         } else {
@@ -1738,6 +2144,9 @@ export class MomentumEngine {
         trailMarks: Object.fromEntries(this.trailMarks),
         entryMarks: Object.fromEntries(this.entryMarks),
         ...(this.lastRebalanceAt > 0 ? { riskAnchorAt: this.lastRebalanceAt } : {}),
+        // Key written ONLY under the exposure control with a non-empty map:
+        // every legacy envelope keeps its exact shape (and its tests).
+        ...(this.cfg.exposureControl && this.exposureFracs.size > 0 ? { exposureFracs: Object.fromEntries(this.exposureFracs) } : {}),
       });
     }
   }
