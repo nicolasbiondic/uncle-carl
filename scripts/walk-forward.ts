@@ -384,8 +384,11 @@ function validateExposureControl(x: unknown): void {
   if (obj.drawdown !== undefined) {
     const d = obj.drawdown as Record<string, unknown>;
     if (!d || typeof d !== "object" || Array.isArray(d)) throw new Error("exposureControl.drawdown must be an object");
-    const dUnknown = Object.keys(d).filter(k => !["startPct", "endPct"].includes(k));
+    const dUnknown = Object.keys(d).filter(k => !["startPct", "endPct", "reference"].includes(k));
     if (dUnknown.length > 0) throw new Error(`exposureControl.drawdown has unknown keys: ${dUnknown.join(", ")}`);
+    if (d.reference !== undefined && d.reference !== "decayedPeak" && d.reference !== "highWaterMark") {
+      throw new Error('exposureControl.drawdown.reference must be "decayedPeak" or "highWaterMark"');
+    }
     const start = d.startPct as number, end = d.endPct as number;
     if (!Number.isFinite(start) || start < 0 || start >= 1) {
       throw new Error("exposureControl.drawdown.startPct must be a drawdown FRACTION in [0, 1), e.g. 0.05 = 5%");
@@ -2090,6 +2093,7 @@ export function continueRiskState(result: ReplayResult): RiskState {
   return {
     ...state,
     peakEquity: state.peakEquity * scale,
+    ...(state.highWaterMark !== undefined ? { highWaterMark: state.highWaterMark * scale } : {}),
     dayStartEquity: state.dayStartEquity * scale,
     ...(state.equityBase !== undefined ? { equityBase: state.equityBase * scale } : {}),
     // Shadow-equity resume anchors (risk.shadowResume axis) are monetary —

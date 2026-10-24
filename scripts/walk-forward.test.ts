@@ -1105,7 +1105,7 @@ describe("continueRiskState — outer-fold I/F scaling", () => {
 
   test("scales peakEquity/dayStartEquity/equityBase by I/F, preserves pauses/timestamps/streaks", () => {
     const result = fold(12_000, {
-      peakEquity: 12_000, dayStartEquity: 11_000, equityBase: 12_000,
+      peakEquity: 12_000, highWaterMark: 15_000, dayStartEquity: 11_000, equityBase: 12_000,
       consecutiveLosses: 2, pausedUntil: 123_456, pauseReason: "x",
       dayStartedAt: 999, lastEvalAt: 1_000,
     });
@@ -1114,6 +1114,8 @@ describe("continueRiskState — outer-fold I/F scaling", () => {
 
     // I/F = 10_000/12_000
     expect(next.peakEquity).toBeCloseTo(10_000, 6);
+    expect(next.highWaterMark).toBeCloseTo(12_500, 6);
+    expect(1 - 10_000 / next.highWaterMark!).toBeCloseTo(1 - 12_000 / 15_000, 12);
     expect(next.dayStartEquity).toBeCloseTo(11_000 * (10_000 / 12_000), 6);
     expect(next.equityBase).toBeCloseTo(10_000, 6);
     // Everything else passes through untouched.
@@ -1128,6 +1130,7 @@ describe("continueRiskState — outer-fold I/F scaling", () => {
     const result = fold(11_000, { peakEquity: 11_000, dayStartEquity: 10_500 });
     const next = continueRiskState(result);
     expect(next.equityBase).toBeUndefined();
+    expect(next).not.toHaveProperty("highWaterMark");
   });
 
   test("F <= 0 fails closed: state passes through unscaled, cannot resurrect later folds", () => {

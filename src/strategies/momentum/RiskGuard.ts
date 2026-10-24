@@ -165,8 +165,13 @@ export interface RiskState {
   stateVersion?: number;
   /** Capital basis used when this state was persisted. Enables safe allocation migrations. */
   equityBase?: number;
-  /** All-time equity peak observed. */
+  /** Decayed equity peak used by the risk breakers. */
   peakEquity: number;
+  /** Non-decaying running maximum of the SAME equity observations. Legacy
+   * states initialize at max(peakEquity, currentEquity), before peak decay;
+   * earlier, already-forgotten highs cannot be reconstructed. Rebased like
+   * peakEquity, reset only on semantic/model re-anchor (not soft resume). */
+  highWaterMark?: number;
   /** Equity at the start of the current UTC day. */
   dayStartEquity: number;
   /** Timestamp (ms) of the dayStartEquity capture. */
@@ -252,6 +257,7 @@ export function rebaseRiskState(
     stateVersion: RISK_STATE_VERSION,
     equityBase: currentBase,
     peakEquity: prev.peakEquity * scale,
+    ...(prev.highWaterMark !== undefined ? { highWaterMark: prev.highWaterMark * scale } : {}),
     dayStartEquity: prev.dayStartEquity * scale,
     pausedUntil: clearPause ? 0 : prev.pausedUntil,
     pauseReason: clearPause ? "" : prev.pauseReason,
@@ -317,6 +323,7 @@ export function evaluateRisk(
   // other risk fact (especially an active pause and loss streak) intact.
   if (state.pendingSemanticReanchor && Number.isFinite(currentEquity) && currentEquity > 0) {
     state.peakEquity = currentEquity;
+    state.highWaterMark = currentEquity;
     state.dayStartEquity = currentEquity;
     state.dayStartedAt = now;
     state.pendingSemanticReanchor = false;
@@ -329,6 +336,7 @@ export function evaluateRisk(
   // untouched. Legacy states never carry the flag — byte-identical behavior.
   if (state.pendingModelReanchor && Number.isFinite(currentEquity) && currentEquity > 0) {
     state.peakEquity = currentEquity;
+    state.highWaterMark = currentEquity;
     state.consecutiveLosses = 0;
     if (isSoftDrawdownPauseReason(state.pauseReason) || isLossStreakPauseReason(state.pauseReason)) {
       state.pausedUntil = 0;
@@ -346,6 +354,10 @@ export function evaluateRisk(
 
   // Initialise on first call
   if (state.peakEquity === 0) state.peakEquity = currentEquity;
+  // Observe before decay and before every early return (including pauses).
+  // This anchor is telemetry/input for exposure control only: no breaker
+  // below reads it, so tracking it never changes a legacy risk verdict.
+  state.highWaterMark = Math.max(state.highWaterMark ?? state.peakEquity, currentEquity);
   if (state.dayStartEquity === 0 || isNewUtcDay(state.dayStartedAt, now)) {
     state.dayStartEquity = currentEquity;
     state.dayStartedAt = now;

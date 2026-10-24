@@ -1393,6 +1393,38 @@
       "resultsComplete": false,
       "executionReported": true,
       "evidence": "RW5d SS16.7-16.8: +2, 448->450. Copias de #444 y #445 con vol objetivo 30% y bruto 2.5x, mantienen SMA200 SPY/banda 1%, fastvol5, costes y margen 6.5%. #448 2a92b1fb: 1755 sesiones, CAGR 30.1542% vs E1 21.4495% (+8.7047pp), Sharpe 1.1587, DD sleeve 25.9412%, cuenta con E2 23.7690%, Calmar 1.1624. PASA K1-K6; K3/K4 contra 49a1160c, referencia a 2x SIN contingencia declarada ANTES de correr: no existe control sin contingencia a 2.5x por limite del validador. DD de esa referencia 35.5604%, Calmar 0.9599; cada crash 2020/2022/2025 mejora (25.8888/22.5522/17.0462% vs 26.7263/33.5000/25.5073%). #449 83fff6de, gemelo PIT propio: CAGR 29.4116% vs #441 19.9647% (+9.4469pp), DD sleeve/cuenta 27.0345/24.2804%, PASA K1/K2 y por tanto K7 de SS16.7. K3/K4 del gemelo no aplican, no se certifican. #448 PASA K1-K7 y es ELEGIDO por SS16.1, mayor CAGR entre los que cumplen todo; esto NO reescribe el K7 fallado de RW5/b/c. wired=false: el dueno debe confirmar presupuesto de caida >=30% y romper la congelacion de momentum_stocks antes de 2027-01-21; antes de encender, defensa viva efectivo/BOXX sin BIL y comprobar Reg-T compartido. authoritativeArtifactRw5d y authoritativeArtifactRw5dPit. Seleccion de investigacion, no approved=true: inventario historico incompleto."
+    },
+    {
+      "id": "rw5-hwm-2026-10-24",
+      "sourceCommit": "ae52daf (pre-registro SS16.9 antes de correr); dec3b13 (resultado SS16.10)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-usdc-daily-s5-rw5-xc-hwm-pure-v1.json",
+        "scripts/rw5-crypto-evaluate.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 1,
+      "priorUniqueTrials": 450,
+      "resultingUniqueTrials": 451,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW5 HWM SS16.9-16.10: +1, 450->451. #450 copia el manifest vivo USDC con UN cambio: exposureControl.drawdown.reference=highWaterMark, maximo historico de la misma equity de RiskGuard en lugar del pico decaido. Rampa 10%-40%, suelo 0.25, banda 0.10, orden minima 100 USD, pausas y volatilidad intactas. Control +0: 8892c1e9; E1/E2 33b0ac05/0b088ca3 y otro cripto efc086b4. Artefacto b45c3408, mismos datos 55da03c9 y folds que el control; 1410 dias comunes. FALLA T1, T2 (Calmar), T4_psr, T4_loo y T6 (minOuterPsr nueva); PASA T3 (FTX empata, las otras tres ventanas mejoran), T4_folds y T5 (libro DD 14.9725%). CAGR 17.5329% vs 45.0829%, Sharpe 0.6206 vs 1.0383, DD 37.8156% vs 51.9465%, Calmar 0.4636 vs 0.8679. Baja de la linea del 40% del dueno, pero pierde 27.55pp de CAGR: no equivale a cumplir T1-T6. Lambda media por fold 0.8226/0.4314/0.2777, alcanza el suelo 0.25 en los dos ultimos: bloqueo en efectivo, no recupera el maximo. Sesgo declarado: hipotesis elegida tras observar 2024 en estos mismos datos, cota optimista aunque no se tocaron parametros. NO SE CABLEA; USDC sigue operando con su version viva, no se pausa. authoritativeArtifactRw5Hwm conserva criterios y cifras; inventario historico incompleto, sin approved=true."
+    },
+    {
+      "id": "rw5-trail-2026-10-24",
+      "sourceCommit": "8297f89 (pre-registro SS16.11 antes de correr); 6add7ba (resultado y cierre SS16.12)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-usdc-daily-s5-rw5-trail-chandelier-pure-v1.json",
+        "scripts/rw5-crypto-evaluate.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 1,
+      "priorUniqueTrials": 451,
+      "resultingUniqueTrials": 452,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW5 trail SS16.11-16.12: +1, 451->452. #451 copia el manifest vivo USDC con UN cambio: tsmTrail pasa de 8 sigma de 20 sesiones a 4 sigma de 22, mismo suelo 5% y tope 30%; aproximacion del chandelier de LeBeau (3 ATR22, ATR aproximadamente 1.3 sigma), no un ATR exacto. Stop duro, senales, slots, tamano, RiskGuard y control de exposicion intactos. Control +0: 8892c1e9; E1/E2 33b0ac05/0b088ca3 y otro cripto efc086b4. Artefacto 57cf6c19, mismos datos y folds que el control, 1410 dias comunes. FALLA T1, T2 (Calmar), T3 (empeora el bajista 2025-26), T4_psr y T6 (stressMaxDrawdown, looMaxDrawdown, minOuterPsr nuevas); PASA T4_folds, T4_loo y T5. CAGR 25.5110% vs 45.0829%, Sharpe 0.7388 vs 1.0383, DD 50.6408% vs 51.9465%, Calmar 0.5038 vs 0.8679; 148 operaciones vs 107. No baja de la linea del 40%. Sale antes, vuelve a entrar y a perder: 2024 apenas mejora (44.8416% vs 48.8525%) y pierde casi 20pp de CAGR. Sesgo declarado: hipotesis elegida tras observar 2024 en estos mismos datos; parametro tomado de literatura, no ajustado a nuestros datos. Balance SS16.12: los cuatro disenos de contingencia cripto fallan (tendencia propia en horario y USDC, HWM y trail corto en USDC). La caida de USDC cercana al 50% es estructural en este backtest: cinco slots del 20% en altcoins muy correlacionadas, siempre largos e igual tamano nominal. Ninguna salida ni freno ensayado la reduce sin destruir retorno; la unica palanca restante es el tamano, decision de riesgo del dueno, no un nuevo sizing validado. NO SE CABLEA; los sleeves siguen operando con sus versiones vivas, sin pausa ni reasignacion de capital. authoritativeArtifactRw5Trail conserva criterios y cifras; inventario historico incompleto, sin approved=true."
     }
   ],
   "authoritativeArtifactRw5Crypto": {
@@ -1459,6 +1491,84 @@
         },
         "criteriaFailed": ["T1_sharpe", "T2_drawdownAndCalmar", "T3_everyCrash", "T4_loo", "T6_protocolGates"],
         "criteriaVerdict": "FALLA: T1_sharpe, T2_drawdownAndCalmar, T3_everyCrash, T4_loo, T6_protocolGates"
+      }
+    ]
+  },
+  "authoritativeArtifactRw5Hwm": {
+    "wired": false,
+    "verdict": "FALLA el control desde el maximo historico; NO SE CABLEA. DD bajo el 40% no compensa el bloqueo en efectivo; USDC sigue operando con su version viva.",
+    "figuresNote": "SS16.9-16.10. Mismo evaluador T1-T6 y esquema de cifras que authoritativeArtifactRw5Crypto: dias OOS comunes, anualizacion 365, 4 decimales, porcentajes en Pct y fracciones en combinedBook. exposureStats guarda medias y minimos de lambda por fold (candidato/control); no son criterios adicionales. FTX empata, no mejora estrictamente. Hipotesis elegida tras observar 2024 en los mismos datos: cota optimista. Inventario historico incompleto, no approved=true.",
+    "candidates": [
+      {
+        "trial": 450,
+        "manifest": "experiments/momentum-crypto-usdc-daily-s5-rw5-xc-hwm-pure-v1.json",
+        "path": "data/backtests/b45c3408a2f66775b80192b4acb024a63924670459076725310eb9a9356b1c53/",
+        "control": "8892c1e9", "e1": "33b0ac05", "e2": "0b088ca3", "otherCrypto": "efc086b4",
+        "wired": false,
+        "figures": {
+          "commonDays": 1410, "from": "2022-11-15", "to": "2026-09-25",
+          "cagrPct": 17.5329, "controlCagrPct": 45.0829, "totalReturnPct": 86.5699, "controlTotalReturnPct": 320.6286,
+          "sharpe": 0.6206, "controlSharpe": 1.0383, "maxDrawdownPct": 37.8156, "controlMaxDrawdownPct": 51.9465, "calmar": 0.4636, "controlCalmar": 0.8679,
+          "crashDrawdownsPct": [10.5974, 35.4174, 24.2738, 14.9606], "controlCrashDrawdownsPct": [10.5974, 48.8525, 28.7347, 29.0137], "crashDays": [78, 202, 131, 330],
+          "combinedBook": { "days": 1360, "from": "2022-11-15", "to": "2026-08-05", "totalReturn": 1.1679, "maxDrawdown": 0.1497 },
+          "reported": {
+            "ownerLine40": true, "trendExitStats": { "exits": 0, "reentries": 0, "orders": 0 }, "trades": [122, 107], "fees": [55.7077, 75.4419],
+            "turnoverAnnual": [[12.5586, 11.2334, 3.5141], [11.6056, 15.0849, 7.546]]
+          }
+        },
+        "exposureStats": {
+          "meanScale": [0.8226, 0.4314, 0.2777], "controlMeanScale": [0.9792, 0.9172, 0.9888],
+          "minScale": [0.4932, 0.25, 0.25], "controlMinScale": [0.6533, 0.476, 0.7455]
+        },
+        "criteria": {
+          "T1_sharpe": { "pass": false, "value": [0.6206, 1.0383], "threshold": "Sharpe ≥ control's, common days" },
+          "T2_drawdownAndCalmar": { "pass": false, "value": { "dd": [0.3782, 0.5195], "calmar": [0.464, 0.868] }, "threshold": "lower DD and Calmar ≥ control's" },
+          "T3_everyCrash": { "pass": true, "value": ["2022_ftx: 10.6% vs 10.6% (78 d)", "2024_correction: 35.4% vs 48.9% (202 d)", "2025_q1: 24.3% vs 28.7% (131 d)", "2025_26_bear: 15.0% vs 29.0% (330 d)"], "threshold": "window DD ≤ control's in every window, ≥ 20 days each" },
+          "T4_psr": { "pass": false, "value": 0.8788, "threshold": 0.95 },
+          "T4_folds": { "pass": true, "value": [0.869, 0.613, 0.722], "threshold": "≥ 2/3 folds with PSR > 0.5" },
+          "T4_loo": { "pass": false, "value": 0.568, "threshold": "worst LOO ≥ 0.6 × stitched Sharpe" },
+          "T5_combinedBook": { "pass": true, "value": 0.1497, "threshold": 0.2 },
+          "T6_protocolGates": { "pass": false, "value": { "failed": ["minExcessReturnVsBench", "minOuterPsr"], "failedOnlyHere": ["minOuterPsr"] }, "threshold": "no gate fails that the control passes" }
+        },
+        "criteriaFailed": ["T1_sharpe", "T2_drawdownAndCalmar", "T4_psr", "T4_loo", "T6_protocolGates"],
+        "criteriaVerdict": "FALLA: T1_sharpe, T2_drawdownAndCalmar, T4_psr, T4_loo, T6_protocolGates"
+      }
+    ]
+  },
+  "authoritativeArtifactRw5Trail": {
+    "wired": false,
+    "verdict": "FALLA el trail corto; NO SE CABLEA. La ronda cierra con cuatro disenos cripto fallidos; USDC sigue operando con su version viva.",
+    "figuresNote": "SS16.11-16.12. Mismo evaluador T1-T6 y esquema que authoritativeArtifactRw5Crypto: dias OOS comunes, anualizacion 365, 4 decimales, porcentajes en Pct y fracciones en combinedBook. La linea del 40%, CAGR, operaciones, comisiones y rotacion se reportan, no son criterios adicionales. trendExitStats es cero porque no se usa trendExit, no porque el trail no cierre posiciones. Hipotesis elegida tras observar 2024; chandelier aproximado por sigma, no ATR exacto. El cierre de ronda es una lectura de estos ensayos, no una prueba universal ni validacion de otro tamano. Inventario historico incompleto, no approved=true.",
+    "candidates": [
+      {
+        "trial": 451,
+        "manifest": "experiments/momentum-crypto-usdc-daily-s5-rw5-trail-chandelier-pure-v1.json",
+        "path": "data/backtests/57cf6c19e2590c9a92472fc592095a34cc6ca7198bd06881409da4a21f56e148/",
+        "control": "8892c1e9", "e1": "33b0ac05", "e2": "0b088ca3", "otherCrypto": "efc086b4",
+        "wired": false,
+        "figures": {
+          "commonDays": 1410, "from": "2022-11-15", "to": "2026-09-25",
+          "cagrPct": 25.511, "controlCagrPct": 45.0829, "totalReturnPct": 140.4076, "controlTotalReturnPct": 320.6286,
+          "sharpe": 0.7388, "controlSharpe": 1.0383, "maxDrawdownPct": 50.6408, "controlMaxDrawdownPct": 51.9465, "calmar": 0.5038, "controlCalmar": 0.8679,
+          "crashDrawdownsPct": [8.2582, 44.8416, 27.3997, 31.0331], "controlCrashDrawdownsPct": [10.5974, 48.8525, 28.7347, 29.0137], "crashDays": [78, 202, 131, 330],
+          "combinedBook": { "days": 1360, "from": "2022-11-15", "to": "2026-08-05", "totalReturn": 1.1628, "maxDrawdown": 0.1568 },
+          "reported": {
+            "ownerLine40": false, "trendExitStats": { "exits": 0, "reentries": 0, "orders": 0 }, "trades": [148, 107], "fees": [96.9459, 75.4419],
+            "turnoverAnnual": [[16.5456, 18.7491, 12.5107], [11.6056, 15.0849, 7.546]]
+          }
+        },
+        "criteria": {
+          "T1_sharpe": { "pass": false, "value": [0.7388, 1.0383], "threshold": "Sharpe ≥ control's, common days" },
+          "T2_drawdownAndCalmar": { "pass": false, "value": { "dd": [0.5064, 0.5195], "calmar": [0.504, 0.868] }, "threshold": "lower DD and Calmar ≥ control's" },
+          "T3_everyCrash": { "pass": false, "value": ["2022_ftx: 8.3% vs 10.6% (78 d)", "2024_correction: 44.8% vs 48.9% (202 d)", "2025_q1: 27.4% vs 28.7% (131 d)", "2025_26_bear: 31.0% vs 29.0% (330 d)"], "threshold": "window DD ≤ control's in every window, ≥ 20 days each" },
+          "T4_psr": { "pass": false, "value": 0.9172, "threshold": 0.95 },
+          "T4_folds": { "pass": true, "value": [0.842, 0.672, 0.814], "threshold": "≥ 2/3 folds with PSR > 0.5" },
+          "T4_loo": { "pass": true, "value": 0.769, "threshold": "worst LOO ≥ 0.6 × stitched Sharpe" },
+          "T5_combinedBook": { "pass": true, "value": 0.1568, "threshold": 0.2 },
+          "T6_protocolGates": { "pass": false, "value": { "failed": ["maxDrawdown", "minExcessReturnVsBench", "stressMaxDrawdown", "looMaxDrawdown", "minOuterPsr"], "failedOnlyHere": ["stressMaxDrawdown", "looMaxDrawdown", "minOuterPsr"] }, "threshold": "no gate fails that the control passes" }
+        },
+        "criteriaFailed": ["T1_sharpe", "T2_drawdownAndCalmar", "T3_everyCrash", "T4_psr", "T6_protocolGates"],
+        "criteriaVerdict": "FALLA: T1_sharpe, T2_drawdownAndCalmar, T3_everyCrash, T4_psr, T6_protocolGates"
       }
     ]
   },

@@ -402,7 +402,8 @@ export function rollingSharpe(closes: number[], lookbackDays: number, barsPerDay
  *    λ_vol = min(1, annualizedPct/100 ÷ σ). The fast window is what makes
  *    it react to a crash (the per-position vt-35 uses 720 bars and lags).
  *  - drawdown: λ_dd = linear from 1 at startPct to minScale at endPct of
- *    the RiskGuard drawdown (same decayed-peak dd the breakers use).
+ *    the RiskGuard drawdown (decayed peak by default, optionally the
+ *    non-decaying high-water mark; breakers always keep the decayed peak).
  *  λ = max(minScale, min(1, λ_vol, λ_dd)).
  *
  * Hysteresis: each held position carries the FRACTION f of full size it
@@ -425,6 +426,9 @@ export interface ExposureControlConfig {
     slowBars: number;
   };
   drawdown?: {
+    /** Absent = decayedPeak (legacy). highWaterMark uses RiskState's running
+     * maximum of the same equity, independent of the risk breakers. */
+    reference?: "decayedPeak" | "highWaterMark";
     /** Drawdown FRACTION where the ramp starts (0.05 = 5%): dd ≤ start → 1. */
     startPct: number;
     /** Drawdown FRACTION where the ramp reaches minScale. Must be > startPct. */
@@ -476,7 +480,7 @@ export interface ExposureScaleInput {
   /** Exposure-weighted book this tick (weights = notional ÷ equity). */
   book: Array<{ closes: number[]; weight: number }>;
   barsPerYear: number;
-  /** RiskGuard drawdown fraction (decayed peak) at this tick. */
+  /** Drawdown fraction from the configured reference at this tick. */
   drawdown: number;
 }
 
@@ -1029,6 +1033,10 @@ export class MomentumEngine {
      *  Date object as the walk-forward script used to. */
     private clock: Clock = systemClock,
   ) {
+    const ddReference = cfg.exposureControl?.drawdown?.reference;
+    if (ddReference !== undefined && ddReference !== "decayedPeak" && ddReference !== "highWaterMark") {
+      throw new Error('exposureControl.drawdown.reference must be "decayedPeak" or "highWaterMark"');
+    }
     if (cfg.trendExit && (!Number.isInteger(cfg.trendExit.smaDays) || cfg.trendExit.smaDays < 2 || cfg.trendExit.basis !== "dailyClose")) {
       throw new Error('trendExit requires integer smaDays >= 2 and basis "dailyClose"');
     }
@@ -1616,12 +1624,13 @@ export class MomentumEngine {
         if (closes.length > 0 && notional > 0) book.push({ closes, weight: notional / equity });
       }
       const st = this.riskState;
-      const drawdown = st.peakEquity > 0 ? Math.max(0, (st.peakEquity - equity) / st.peakEquity) : 0;
+      const peak = xc.drawdown?.reference === "highWaterMark" ? st.highWaterMark! : st.peakEquity;
+      const drawdown = peak > 0 ? Math.max(0, (peak - equity) / peak) : 0;
       const verdict = exposureScale({ cfg: xc, book, barsPerYear: this.barsPerDay() * 365, drawdown });
       exposure = { ...verdict, resizes: 0, resizeNotionalUsd: 0, unsupported: 0, deferredUp: 0 };
       entryNotionalScale = verdict.scale;
       if (verdict.scale < 1) {
-        this.log.info(`exposure control: λ=${verdict.scale.toFixed(3)} (vol ${verdict.volScale.toFixed(3)}${verdict.sigmaFast !== undefined ? ` σf ${(verdict.sigmaFast * 100).toFixed(0)}%` : ""}${verdict.sigmaSlow !== undefined ? ` σs ${(verdict.sigmaSlow * 100).toFixed(0)}%` : ""}, dd ${verdict.ddScale.toFixed(3)} at ${(drawdown * 100).toFixed(1)}%)`);
+        this.log.info(`exposure control: λ=${verdict.scale.toFixed(3)} (vol ${verdict.volScale.toFixed(3)}${verdict.sigmaFast !== undefined ? ` σf ${(verdict.sigmaFast * 100).toFixed(0)}%` : ""}${verdict.sigmaSlow !== undefined ? ` σs ${(verdict.sigmaSlow * 100).toFixed(0)}%` : ""}, dd${xc.drawdown?.reference === "highWaterMark" ? " HWM" : ""} ${verdict.ddScale.toFixed(3)} at ${(drawdown * 100).toFixed(1)}%)`);
       }
     }
     // Scale the plan's entry notionals by λ (1 when the knob is off: the

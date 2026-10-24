@@ -24,11 +24,12 @@ import {
   type ExposureControlConfig, type MomentumEngineLogger,
 } from "./MomentumEngine";
 import { INITIAL_RISK_STATE } from "./RiskGuard";
-import { ramp, FakeBroker, silentLogger, MemoryPersistence } from "../../test-support/momentum";
+import { ramp, rampTo, FakeBroker, silentLogger, MemoryPersistence } from "../../test-support/momentum";
 import type { OHLCV } from "../../utils/types";
 import { makeTestDb } from "../../test-support/db";
 import { getDB } from "../../db/database";
 import { createDecisionRecorder } from "../../telemetry/decisionRecorder";
+import { TestClock } from "../../utils/clock";
 
 /** FakeBroker that implements the optional scalePosition (quantity-relative). */
 class ScalingFakeBroker extends FakeBroker {
@@ -56,12 +57,14 @@ function seeded(peak: number, dayStart: number, extra: Partial<{ exposureFracs: 
 const DD_ONLY: ExposureControlConfig = { drawdown: { startPct: 0.05, endPct: 0.25 }, minScale: 0.25, band: 0.10, minOrderUsd: 100 };
 
 function engineWith(broker: FakeBroker, xc: ExposureControlConfig | undefined, persistence: MemoryPersistence, log: MomentumEngineLogger = silentLogger) {
+  // Freeze the seed instant: DB setup before tick must not introduce a tiny
+  // peak decay into exact exposure-telemetry assertions under load.
   return new MomentumEngine({
     universe: ["UP1"],
     notionalPctPerSlot: 0.30,
     scorer: { topLongs: 2, minLongScore: 0.01 },
     ...(xc ? { exposureControl: xc } : {}),
-  }, broker, log, persistence);
+  }, broker, log, persistence, new TestClock(persistence.store!.risk.lastEvalAt));
 }
 
 describe("exposure control — pure decision", () => {
@@ -119,6 +122,44 @@ describe("exposure control — pure decision", () => {
 });
 
 describe("MomentumEngine exposureControl", () => {
+  test("HWM reference alone changes λ; absent and explicit decayedPeak decide byte-identically", async () => {
+    const now = Date.parse("2024-01-31T12:00:00Z");
+    const run = async (reference?: "decayedPeak" | "highWaterMark") => {
+      const broker = new ScalingFakeBroker();
+      broker.equity = 6_000;
+      broker.setCandles("UP1", rampTo(now, 100, 130));
+      broker.positions.push({ symbol: "UP1", side: "buy", quantity: 30, notional: 3000 });
+      const persistence = seeded(10_000, 6_000);
+      persistence.store!.risk.lastEvalAt = now - 30 * 86_400_000;
+      persistence.store!.risk.dayStartedAt = now;
+      // Active pause: HWM tracking/reductions must still run; the pause is unchanged.
+      persistence.store!.risk.pausedUntil = now + 86_400_000;
+      persistence.store!.risk.pauseReason = "existing pause";
+      const logs: string[] = [];
+      const engine = new MomentumEngine({
+        universe: ["UP1"], notionalPctPerSlot: 0.30,
+        exposureControl: { ...DD_ONLY, drawdown: { startPct: 0.1, endPct: 0.4, ...(reference ? { reference } : {}) } },
+      }, broker, { ...silentLogger, info: m => logs.push(m) }, persistence, new TestClock(now));
+      const report = await engine.tick();
+      return { report, scaled: broker.scaled, state: persistence.store, logs };
+    };
+    const absent = await run();
+    const decayed = await run("decayedPeak");
+    expect(JSON.stringify(decayed)).toBe(JSON.stringify(absent));
+    expect(absent.report.exposureControl!.scale).toBeCloseTo(0.5, 12); // decayed peak 8000, dd 25%
+    const hwm = await run("highWaterMark");
+    expect(hwm.state!.risk.highWaterMark).toBe(10_000);
+    expect(hwm.state!.risk.peakEquity).toBe(8_000);
+    expect(hwm.report.exposureControl!.scale).toBe(0.25); // HWM dd 40%
+    expect(hwm.scaled[0].factor).toBe(0.25);
+    expect(hwm.report.blockedReason).toBe(absent.report.blockedReason);
+    expect(hwm.logs.some(m => m.includes("λ=0.250") && m.includes("dd HWM") && m.includes("40.0%"))).toBe(true);
+  });
+
+  test("live config rejects an unknown drawdown reference", () => {
+    expect(() => engineWith(new FakeBroker(), { ...DD_ONLY, drawdown: { ...DD_ONLY.drawdown!, reference: "unknown" as any } }, seeded(10_000, 10_000))).toThrow("drawdown.reference");
+  });
+
   test("OFF by default: no report key, no resize, legacy envelope shape", async () => {
     const broker = new ScalingFakeBroker();
     broker.equity = 9_200;

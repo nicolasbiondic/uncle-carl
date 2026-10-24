@@ -12,6 +12,63 @@ import {
 const HOUR = 60 * 60 * 1000;
 const DAY  = 24 * HOUR;
 
+describe("non-decaying exposure-control high-water mark", () => {
+  test("ratchets at every evaluation, including active pauses, while the breaker peak decays", () => {
+    const start = DAY;
+    let s = evaluateRisk(INITIAL_RISK_STATE, 10_000, start).state;
+    const paused = { ...s, pausedUntil: start + 90 * DAY, pauseReason: "existing pause" };
+    s = evaluateRisk(paused, 6_000, start + 30 * DAY).state;
+    expect(s.peakEquity).toBe(8_000);
+    expect(s.highWaterMark).toBe(10_000);
+    s = evaluateRisk(s, 6_000, start + 60 * DAY).state;
+    expect(s.peakEquity).toBe(7_000);
+    expect(s.highWaterMark).toBe(10_000);
+    s = evaluateRisk(s, 11_000, start + 61 * DAY).state;
+    expect(s.highWaterMark).toBe(11_000);
+    expect(s.peakEquity).toBe(11_000);
+    expect(s.pauseReason).toBe("existing pause");
+  });
+
+  test("legacy initialization uses max(pre-decay peak, equity); never mutates the input", () => {
+    const old = { ...INITIAL_RISK_STATE, peakEquity: 10_000, lastEvalAt: DAY };
+    const s = evaluateRisk(old, 6_000, 31 * DAY).state;
+    expect(s.highWaterMark).toBe(10_000);
+    expect(s.peakEquity).toBe(8_000);
+    expect(evaluateRisk(old, 12_000, 31 * DAY).state.highWaterMark).toBe(12_000);
+    expect(old).not.toHaveProperty("highWaterMark");
+  });
+
+  test("semantic/model re-anchors reset HWM; streak-only upgrades do not", () => {
+    const old = { ...INITIAL_RISK_STATE, peakEquity: 10_000, highWaterMark: 15_000 };
+    for (const flag of ["pendingSemanticReanchor", "pendingModelReanchor"] as const) {
+      const s = evaluateRisk({ ...old, [flag]: true }, 5_000, DAY).state;
+      expect(s.peakEquity).toBe(5_000);
+      expect(s.highWaterMark).toBe(5_000);
+    }
+    expect(evaluateRisk({ ...old, pendingStreakReanchor: true }, 5_000, DAY).state.highWaterMark).toBe(15_000);
+  });
+
+  test("rebase scales HWM with the same monetary basis, preserving absence", () => {
+    const old = { ...INITIAL_RISK_STATE, peakEquity: 8_000, highWaterMark: 12_000, equityBase: 10_000 };
+    const next = rebaseRiskState(old, 1, 5_000);
+    expect(next.peakEquity).toBe(4_000);
+    expect(next.highWaterMark).toBe(6_000);
+    expect(rebaseRiskState(next, 1, 5_000).highWaterMark).toBe(6_000);
+    expect(rebaseRiskState(INITIAL_RISK_STATE, 10_000, 5_000)).not.toHaveProperty("highWaterMark");
+  });
+
+  test("tracking HWM does not change any legacy risk decision bytes", () => {
+    const cfg = { ...DEFAULT_RISK_CONFIG, peakHalfLifeDays: 0 };
+    const state = { ...INITIAL_RISK_STATE, peakEquity: 10_000, dayStartEquity: 9_500, dayStartedAt: DAY, lastEvalAt: DAY };
+    const a = evaluateRisk(state, 9_500, DAY + HOUR, cfg);
+    const b = evaluateRisk({ ...state, highWaterMark: 100_000 }, 9_500, DAY + HOUR, cfg);
+    const { state: _a, ...decisionA } = a;
+    const { state: _b, ...decisionB } = b;
+    expect(JSON.stringify(decisionA)).toBe(JSON.stringify(decisionB));
+    expect(JSON.stringify(decisionA)).toBe(JSON.stringify({ canOpen: true, reason: "equity 9500.00, peak 10000.00, dd 5.00%", breach: null }));
+  });
+});
+
 describe("evaluateRisk", () => {
   test("first call initialises peak and day-start", () => {
     const r = evaluateRisk(INITIAL_RISK_STATE, 10_000, 1000);
@@ -457,6 +514,7 @@ describe("fileStatePersistence envelope — trailMarks round-trip + legacy flat 
     const risk: RiskState = {
       ...INITIAL_RISK_STATE,
       peakEquity: 51_200.5,
+      highWaterMark: 60_000,
       dayStartEquity: 50_406.6,
       dayStartedAt: 1785418551568,
       lastEvalAt: 1785422431071,
@@ -472,11 +530,15 @@ describe("fileStatePersistence envelope — trailMarks round-trip + legacy flat 
     const onDisk = JSON.parse(readFileSync(path, "utf8"));
     expect(onDisk.v).toBe(1);
     expect(onDisk.risk.peakEquity).toBe(51_200.5);
+    expect(onDisk.risk.highWaterMark).toBe(60_000);
     expect(onDisk.trailMarks).toEqual(marks);
 
     const reloaded = persistence.load()!;
     expect(reloaded.trailMarks).toEqual(marks);
     expect(reloaded.risk.peakEquity).toBe(51_200.5);
+    expect(reloaded.risk.highWaterMark).toBe(60_000);
+    const rebased = fileStatePersistence(path, 25_000, 50_000, EQUITY_SEMANTICS.SLEEVE_LEDGER).load()!;
+    expect(rebased.risk.highWaterMark).toBe(30_000);
     expect(reloaded.risk.dayStartEquity).toBe(50_406.6);
     unlinkSync(path);
     rmdirSync(dir);

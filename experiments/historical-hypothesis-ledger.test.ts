@@ -2251,6 +2251,10 @@ describe("historical hypothesis ledger", () => {
   const rw5Round = (n: number) => +n.toFixed(4);
   const rw5Crypto = ledger.authoritativeArtifactRw5Crypto;
   const rw5CryptoRows: any[] = rw5Crypto.candidates;
+  const rw5Hwm = ledger.authoritativeArtifactRw5Hwm;
+  const rw5HwmRows: any[] = rw5Hwm.candidates;
+  const rw5Trail = ledger.authoritativeArtifactRw5Trail;
+  const rw5TrailRows: any[] = rw5Trail.candidates;
   const rw5d = ledger.authoritativeArtifactRw5d;
   const rw5dRows: any[] = rw5d.candidates;
   const rw5CryptoPath = (prefix: string): string => prefix === "efc086b4" ? ledger.authoritativeArtifactRw3C1.path
@@ -2407,7 +2411,7 @@ describe("historical hypothesis ledger", () => {
     expect(batches.map((b: any) => [b.id, b.priorUniqueTrials, b.hypothesisCount, b.resultingUniqueTrials]))
       .toEqual([["rw5-crypto-2026-10-24", 446, 2, 448], ["rw5d-2026-10-24", 448, 2, 450]]);
     expect(ledger.batches.find((b: any) => b.id === "rw5c-2026-10-23").resultingUniqueTrials).toBe(446);
-    expect(ledger.batches.at(-1).resultingUniqueTrials).toBe(450);
+    expect(ledger.batches.find((b: any) => b.id === "rw5d-2026-10-24").resultingUniqueTrials).toBe(450);
     expect(batches.map((b: any) => b.sourceCommit.split(" ")[0])).toEqual(["48cc50b", "5e08e97"]);
     for (const b of batches) {
       expect(b.inventoryComplete).toBe(false);
@@ -2464,7 +2468,7 @@ describe("historical hypothesis ledger", () => {
       ["T1_sharpe", "T2_drawdownAndCalmar", "T3_everyCrash"],
       ["T1_sharpe", "T2_drawdownAndCalmar", "T3_everyCrash", "T4_loo", "T6_protocolGates"],
     ]);
-    for (const r of rw5CryptoRows) {
+    for (const r of [...rw5CryptoRows, ...rw5HwmRows, ...rw5TrailRows]) {
       const f = r.figures, k = r.criteria;
       const pass = {
         T1_sharpe: f.sharpe >= f.controlSharpe,
@@ -2520,9 +2524,96 @@ describe("historical hypothesis ledger", () => {
     expect(rw5.k7.pass).toBe(false); // RW5d's declared K7 does not rewrite the earlier pre-registration
   });
 
-  testWithDb("RW5 crypto artifacts reproduce every T1–T6 value, figure and verdict through rw5-crypto-evaluate.ts --json", () => {
+  test("RW5 HWM pins 450→451, the single live-manifest knob and the honest unwired failure", () => {
+    const batch = ledger.batches.find((b: any) => b.id === "rw5-hwm-2026-10-24");
+    expect(batch).toMatchObject({ priorUniqueTrials: 450, hypothesisCount: 1, resultingUniqueTrials: 451,
+      inventoryComplete: false, resultsComplete: false, executionReported: true });
+    expect(batch.sourceCommit).toBe("ae52daf (pre-registro SS16.9 antes de correr); dec3b13 (resultado SS16.10)");
+    expect(ledger.batches.find((b: any) => b.id === "rw5d-2026-10-24").resultingUniqueTrials).toBe(batch.priorUniqueTrials);
+    for (const p of batch.sourcePaths) expect(sourcePathPresent(p)).toBe(true);
+    expect(rw5HwmRows).toHaveLength(1);
+    const r = rw5HwmRows[0];
+    expect(r.trial).toBe(batch.priorUniqueTrials);
+    expect(r.manifest).toBe("experiments/momentum-crypto-usdc-daily-s5-rw5-xc-hwm-pure-v1.json");
+    expect(batch.sourcePaths.filter((p: string) => p.startsWith("experiments/"))).toEqual([r.manifest]);
+    expect(r.path).toBe("data/backtests/b45c3408a2f66775b80192b4acb024a63924670459076725310eb9a9356b1c53/");
+    expect([r.control, r.e1, r.e2, r.otherCrypto]).toEqual(["8892c1e9", "33b0ac05", "0b088ca3", "efc086b4"]);
+    const m = JSON.parse(readFileSync(join(root, r.manifest), "utf8"));
+    const base = JSON.parse(readFileSync(join(root, "experiments/momentum-crypto-usdc-daily-s5-rw4a-xc-dd-pure-v1.json"), "utf8"));
+    expect(m.name).toBe("momentum-crypto-usdc-daily-s5-rw5-xc-hwm-pure-v1");
+    expect(m.trialAccounting).toEqual({ priorUniqueTrials: 450, complete: false });
+    expect(m.candidates).toHaveLength(1);
+    expect(m.candidates[0].name).toBe("d13-s5-xc-dd");
+    expect(m.candidates[0].exposureControl.drawdown.reference).toBe("highWaterMark");
+    expect(base.candidates[0].exposureControl.drawdown.reference).toBeUndefined();
+    delete m.candidates[0].exposureControl.drawdown.reference;
+    // Every other candidate knob, data, cost, window, pause and acceptance rule is unchanged.
+    expect({ ...m, name: base.name, description: base.description, trialAccounting: base.trialAccounting }).toEqual(base);
+    expect(r.criteriaFailed).toEqual(["T1_sharpe", "T2_drawdownAndCalmar", "T4_psr", "T4_loo", "T6_protocolGates"]);
+    expect(r.criteria.T6_protocolGates.value.failedOnlyHere).toEqual(["minOuterPsr"]);
+    expect(r.figures.reported.ownerLine40).toBe(true);
+    expect(r.figures.maxDrawdownPct).toBeLessThan(40);
+    expect(r.figures.controlMaxDrawdownPct).toBeGreaterThan(40);
+    expect(r.exposureStats.meanScale).toEqual([0.8226, 0.4314, 0.2777]);
+    expect(r.exposureStats.minScale.slice(1)).toEqual([0.25, 0.25]);
+    expect(r.wired).toBe(false);
+    expect(rw5Hwm.wired).toBe(false);
+    expect(rw5Hwm.verdict).toContain("FALLA");
+    expect(rw5Hwm.verdict).toContain("NO SE CABLEA");
+    expect(batch.evidence).toContain("hipotesis elegida tras observar 2024");
+  });
+
+  test("RW5 trail pins 451→452, only tsmTrail changes from live and all four crypto designs fail unwired", () => {
+    const batch = ledger.batches.find((b: any) => b.id === "rw5-trail-2026-10-24");
+    expect(batch).toMatchObject({ priorUniqueTrials: 451, hypothesisCount: 1, resultingUniqueTrials: 452,
+      inventoryComplete: false, resultsComplete: false, executionReported: true });
+    expect(batch.sourceCommit).toBe("8297f89 (pre-registro SS16.11 antes de correr); 6add7ba (resultado y cierre SS16.12)");
+    expect(ledger.batches.find((b: any) => b.id === "rw5-hwm-2026-10-24").resultingUniqueTrials).toBe(batch.priorUniqueTrials);
+    for (const p of batch.sourcePaths) expect(sourcePathPresent(p)).toBe(true);
+    expect(rw5TrailRows).toHaveLength(1);
+    const r = rw5TrailRows[0];
+    expect(r.trial).toBe(batch.priorUniqueTrials);
+    expect(r.manifest).toBe("experiments/momentum-crypto-usdc-daily-s5-rw5-trail-chandelier-pure-v1.json");
+    expect(batch.sourcePaths.filter((p: string) => p.startsWith("experiments/"))).toEqual([r.manifest]);
+    expect(r.path).toBe("data/backtests/57cf6c19e2590c9a92472fc592095a34cc6ca7198bd06881409da4a21f56e148/");
+    expect([r.control, r.e1, r.e2, r.otherCrypto]).toEqual(["8892c1e9", "33b0ac05", "0b088ca3", "efc086b4"]);
+    const m = JSON.parse(readFileSync(join(root, r.manifest), "utf8"));
+    const base = JSON.parse(readFileSync(join(root, "experiments/momentum-crypto-usdc-daily-s5-rw4a-xc-dd-pure-v1.json"), "utf8"));
+    expect(m.name).toBe("momentum-crypto-usdc-daily-s5-rw5-trail-chandelier-pure-v1");
+    expect(m.trialAccounting).toEqual({ priorUniqueTrials: 451, complete: false });
+    expect(m.candidates).toHaveLength(1);
+    expect(m.candidates[0].name).toBe("d13-s5-xc-dd-trail4s22");
+    expect(m.candidates[0].tsmTrail).toEqual({ kSigma: 4, lookbackBars: 22, minPct: 5, maxPct: 30 });
+    expect(base.candidates[0].tsmTrail).toEqual({ kSigma: 8, lookbackBars: 20, minPct: 5, maxPct: 30 });
+    m.candidates[0].name = base.candidates[0].name;
+    m.candidates[0].tsmTrail = base.candidates[0].tsmTrail;
+    // Every other knob, including the hard stop, exposure control, costs and gates, is live's.
+    expect({ ...m, name: base.name, description: base.description, trialAccounting: base.trialAccounting }).toEqual(base);
+    expect(r.criteriaFailed).toEqual(["T1_sharpe", "T2_drawdownAndCalmar", "T3_everyCrash", "T4_psr", "T6_protocolGates"]);
+    expect(r.criteria.T6_protocolGates.value.failedOnlyHere).toEqual(["stressMaxDrawdown", "looMaxDrawdown", "minOuterPsr"]);
+    expect(r.figures.reported.ownerLine40).toBe(false);
+    expect(r.figures.maxDrawdownPct).toBeGreaterThan(50);
+    expect(r.figures.reported.trades).toEqual([148, 107]);
+    expect(r.figures.crashDrawdownsPct[3]).toBeGreaterThan(r.figures.controlCrashDrawdownsPct[3]);
+    const round = [...rw5CryptoRows, ...rw5HwmRows, ...rw5TrailRows];
+    expect(round.map(r => r.trial)).toEqual([446, 447, 450, 451]);
+    for (const r of round) {
+      expect(r.criteriaFailed.length).toBeGreaterThan(0);
+      expect(r.criteriaVerdict).toBe(`FALLA: ${r.criteriaFailed.join(", ")}`);
+      expect(r.wired).toBe(false);
+    }
+    expect(rw5Trail.wired).toBe(false);
+    expect(rw5Trail.verdict).toContain("FALLA");
+    expect(rw5Trail.verdict).toContain("NO SE CABLEA");
+    expect(batch.evidence).toContain("hipotesis elegida tras observar 2024");
+    expect(batch.evidence).toContain("los cuatro disenos de contingencia cripto fallan");
+    expect(batch.evidence).toContain("estructural en este backtest");
+    expect(batch.evidence).toContain("tamano, decision de riesgo del dueno, no un nuevo sizing validado");
+  });
+
+  testWithDb("RW5 crypto/HWM/trail artifacts reproduce every T1–T6 value, figure and verdict through rw5-crypto-evaluate.ts --json", () => {
     const r4 = rw5Round;
-    for (const r of rw5CryptoRows) {
+    for (const r of [...rw5CryptoRows, ...rw5HwmRows, ...rw5TrailRows]) {
       const proc = Bun.spawnSync([process.execPath, "scripts/rw5-crypto-evaluate.ts", r.path, "--control", rw5CryptoPath(r.control), "--e1", rw5Path(r.e1), "--e2", rw5Path(r.e2), "--other-crypto", rw5CryptoPath(r.otherCrypto), "--json"], { cwd: root });
       expect({ trial: r.trial, exit: proc.exitCode, stderr: proc.stderr.toString() }).toEqual({ trial: r.trial, exit: 0, stderr: "" });
       const e = JSON.parse(proc.stdout.toString()), s = e.candidateStats, a = e.controlStats;
@@ -2550,6 +2641,23 @@ describe("historical hypothesis ledger", () => {
       const folds = (s: any) => s.outerTests.map((t: any) => [t.foldPath, t.result.fromMs, t.result.toMs]);
       expect(summary.outerTests).toHaveLength(3);
       expect(folds(summary)).toEqual(folds(control));
+      if (r.trial === 451) {
+        expect(summary.dataHash).toBe(control.dataHash);
+        expect(e.verdict.startsWith("FALLA:")).toBe(true);
+        expect(rw5Trail.verdict).toContain("FALLA");
+        expect(rw5Trail.wired).toBe(false);
+      }
+      if (r.trial === 450) {
+        expect(summary.dataHash).toBe(control.dataHash);
+        const scales = (s: any, key: string) => s.outerTests.map((t: any) => r4(t.result.exposureStats[key]));
+        expect(r.exposureStats).toEqual({
+          meanScale: scales(summary, "meanScale"), controlMeanScale: scales(control, "meanScale"),
+          minScale: scales(summary, "minScale"), controlMinScale: scales(control, "minScale"),
+        });
+        expect(e.verdict.startsWith("FALLA:")).toBe(true);
+        expect(rw5Hwm.verdict).toContain("FALLA");
+        expect(rw5Hwm.wired).toBe(false);
+      }
     }
   }, 120_000);
 });

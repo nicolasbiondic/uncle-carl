@@ -20,6 +20,10 @@ import { tmpdir } from "node:os";
 import { SimBroker, canonicalJson, hashReplayConfig, runWithConfig, type ReplayConfig } from "./backtest-momentum-wf";
 import { candidateToReplayConfig, validateCandidate, validateManifest, type CandidateConfig, type ExperimentManifest } from "./walk-forward";
 import type { OHLCV } from "../src/utils/types";
+import { INITIAL_RISK_STATE } from "../src/strategies/momentum/RiskGuard";
+import { MomentumEngine, exposureScale, type MomentumEngineConfig } from "../src/strategies/momentum/MomentumEngine";
+import { FakeBroker, MemoryPersistence, silentLogger } from "../src/test-support/momentum";
+import { TestClock } from "../src/utils/clock";
 
 setDefaultTimeout(120_000);
 
@@ -67,6 +71,26 @@ describe("hash identity — exposureControl", () => {
     expect(hashReplayConfig({ ...baseCfg, exposureControl: { ...XC, band: 0.05 } })).not.toBe(withXc);
     expect(hashReplayConfig({ ...baseCfg, exposureControl: XC_VOL })).not.toBe(withXc);
     expect(canonicalJson(JSON.parse(JSON.stringify(baseCfg)))).not.toContain('"exposureControl"');
+    const dd = { ...XC.drawdown, reference: undefined };
+    expect(hashReplayConfig({ ...baseCfg, exposureControl: { ...XC, drawdown: dd } })).toBe(withXc);
+    expect(hashReplayConfig({ ...baseCfg, exposureControl: { ...XC, drawdown: { ...dd, reference: "highWaterMark" } } })).not.toBe(withXc);
+  });
+
+  test("RW5 HWM candidate is the live manifest with only the pre-registration metadata and reference changed", () => {
+    const live = loadManifest("momentum-crypto-usdc-daily-s5-rw4a-xc-dd-pure-v1.json");
+    const m = validateManifest(loadManifest("momentum-crypto-usdc-daily-s5-rw5-xc-hwm-pure-v1.json"));
+    expect(m.name).toBe("momentum-crypto-usdc-daily-s5-rw5-xc-hwm-pure-v1");
+    expect(m.description).toContain("PRE-REGISTERED (2026-10-24) BEFORE any run");
+    expect(m.description).toContain("§16.9");
+    expect(m.trialAccounting).toEqual({ priorUniqueTrials: 450, complete: false });
+    const cfg = candidateToReplayConfig(m, m.candidates[0], "base");
+    expect(cfg.exposureControl!.drawdown!.reference).toBe("highWaterMark");
+    const restored = structuredClone(m);
+    restored.name = live.name;
+    restored.description = live.description;
+    restored.trialAccounting = live.trialAccounting;
+    delete restored.candidates[0].exposureControl!.drawdown!.reference;
+    expect(JSON.stringify(restored)).toBe(JSON.stringify(live));
   });
 
   test("the two LIVE crypto manifests keep their candidate hashes (RW3 c1 live config; USDC d13-s5) and the RW4a copies differ only by the knob", () => {
@@ -116,6 +140,9 @@ describe("validateCandidate — exposureControl axis", () => {
     expect(() => validateCandidate({ ...cand, exposureControl: XC })).not.toThrow();
     expect(() => validateCandidate({ ...cand, exposureControl: XC_VOL })).not.toThrow();
     expect(() => validateCandidate({ ...cand, exposureControl: { ...XC, ...XC_VOL } })).not.toThrow();
+    for (const reference of ["decayedPeak", "highWaterMark"]) {
+      expect(() => validateCandidate({ ...cand, exposureControl: { ...XC, drawdown: { ...XC.drawdown, reference } } })).not.toThrow();
+    }
   });
 
   test("rejects malformed shapes", () => {
@@ -131,6 +158,9 @@ describe("validateCandidate — exposureControl axis", () => {
     expect(() => validateCandidate({ ...cand, exposureControl: { ...XC_VOL, volCap: { annualizedPct: 50, fastBars: 504, slowBars: 120 } } })).toThrow("slowBars");
     expect(() => validateCandidate({ ...cand, exposureControl: { ...XC_VOL, volCap: { annualizedPct: 50, fastBars: 120, slowBars: 504, lookbackBars: 1 } } })).toThrow("unknown keys");
     expect(() => validateCandidate({ ...cand, exposureControl: "on" as any })).toThrow("exposureControl");
+    for (const reference of ["unknown", null, 1]) {
+      expect(() => validateCandidate({ ...cand, exposureControl: { ...XC, drawdown: { ...XC.drawdown, reference } } })).toThrow("drawdown.reference");
+    }
   });
 
   test("forbidden on meanrev candidates", () => {
@@ -164,6 +194,36 @@ describe("SimBroker.scalePosition", () => {
     const b = new SimBroker(10_000, candles, 10, 10, H, { leverage: 2, maintRate: 0.05 }, 0.04, undefined, isStock);
     return b;
   }
+
+  test("live-adapter seam and SimBroker give identical HWM λ and entry size on the same synthetic equity/bars/state", async () => {
+    const closes = Array.from({ length: 100 }, (_, i) => 100 + i);
+    const bars = hourly("AAA", closes, T0);
+    const now = T0 + (bars.length - 1) * H; // last bar is the next-open fill, not yet a decision bar
+    const sim = broker(closes);
+    sim.now = now;
+    const live = new FakeBroker();
+    live.setCandles("AAA", bars.slice(0, -1));
+    const cfg: Partial<MomentumEngineConfig> = {
+      mode: "time-series", universe: ["AAA"], historyBars: 100,
+      notionalPctPerSlot: 0.2,
+      tsm: { barMinutes: 60, lookbackDays: 1, maLengthDays: 1, entryThresholdPct: 5, maxLongs: 1, maxShorts: 0 },
+      regime: { enabled: false },
+      exposureControl: { ...XC, drawdown: { startPct: 0.1, endPct: 0.4, reference: "highWaterMark" } },
+    };
+    const make = (adapter: FakeBroker | SimBroker) => {
+      const persistence = new MemoryPersistence();
+      persistence.store = { v: 1, risk: { ...INITIAL_RISK_STATE, peakEquity: 10_000, highWaterMark: 12_500, dayStartEquity: 10_000, dayStartedAt: now, lastEvalAt: now } };
+      return new MomentumEngine(cfg, adapter, silentLogger, persistence, new TestClock(now));
+    };
+    const liveEngine = make(live), simEngine = make(sim);
+    const liveReport = await liveEngine.tick(), simReport = await simEngine.tick();
+    expect(liveReport.exposureControl).toEqual(simReport.exposureControl);
+    expect(liveReport.exposureControl!.scale).toBeCloseTo(2 / 3, 12);
+    expect(liveEngine.getRiskState()).toEqual(simEngine.getRiskState());
+    expect(live.opened).toHaveLength(1);
+    const simPosition = sim.positions[0];
+    expect(simPosition.qty * simPosition.entryPrice).toBeCloseTo(live.opened[0].notionalUsd, 9);
+  });
 
   test("reduce: pro-rata gross − fee to cash and partialRealized; qty/margin shrink; ONE ClosedTrade at the end nets it", async () => {
     // Decision at the close of bar 0 (now = T0+1h), execution at bar 1's open.
@@ -330,6 +390,24 @@ function makeDb(dir: string): string {
 }
 
 describe("momentum replay — exposure control end to end", () => {
+  test("synthetic replay chains the HWM input and matches the live engine's pure λ, leaving breakers decayed", () => withTmp(async dir => {
+    const dbPath = makeDb(dir);
+    const xc = { ...XC, drawdown: { startPct: 0.1, endPct: 0.4, reference: "highWaterMark" as const } };
+    const seed = { ...INITIAL_RISK_STATE, peakEquity: 5_000, highWaterMark: 20_000 };
+    const cfg = e2eCfg(dbPath, { exposureControl: xc, risk: { ...e2eCfg(dbPath).risk, peakHalfLifeDays: 30 } });
+    const result = (await runWithConfig(cfg, WIN, seed))!;
+    expect(result).not.toBeNull();
+    // Synthetic path never recovers this inherited high. HWM survives every
+    // engine evaluation in the replay, independently of the decaying peak.
+    expect(result.finalRiskState.highWaterMark).toBe(20_000);
+    expect(result.finalRiskState.peakEquity).toBeLessThan(20_000);
+    const pure = exposureScale({ cfg: xc, book: [], barsPerYear: 24 * 365, drawdown: 1 - 5_000 / 20_000 });
+    expect(result.exposureStats!.minScale).toBe(pure.scale);
+    expect(result.exposureStats!.minScale).toBe(0.25);
+    expect(result.exposureStats!.ticksBelowOne).toBe(result.exposureStats!.ticks);
+    expect(seed.highWaterMark).toBe(20_000);
+  }));
+
   test("drawdown axis reduces the HELD book on the drop and adds back on recovery; legacy run has no exposureStats; one ClosedTrade per position", () => withTmp(async dir => {
     const dbPath = makeDb(dir);
     const xc = { drawdown: { startPct: 0.02, endPct: 0.20 }, minScale: 0.25, band: 0.05, minOrderUsd: 1 };

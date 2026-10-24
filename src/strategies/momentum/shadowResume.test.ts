@@ -113,6 +113,7 @@ describe("shadow-equity resume", () => {
     expect(st.pausedUntil).toBe(0);
     expect(st.pauseReason).toBe("");
     expect(st.peakEquity).toBe(8_500); // re-anchored to REAL equity, not the old 10k peak
+    expect(st.highWaterMark).toBe(10_000); // soft resume is not a semantic/model cutover
     expect(st.shadowResume).toBeUndefined();
 
     // Next tick at the same real equity: dd from the new anchor is 0 — no re-arm.
