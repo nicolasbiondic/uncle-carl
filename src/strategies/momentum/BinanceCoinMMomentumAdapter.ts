@@ -19,7 +19,7 @@
 // explicit pnl AND pnl_pct (never derives pnl_pct from the linear formula).
 
 import type { MomentumBrokerAdapter } from "./MomentumEngine";
-import { MODEL_CUTOVER_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, TIME_STOP_CLOSE_REASON, TRAIL_STOP_CLOSE_REASON } from "./MomentumEngine";
+import { MODEL_CUTOVER_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, TIME_STOP_CLOSE_REASON, TRAIL_STOP_CLOSE_REASON, TREND_EXIT_CLOSE_REASON } from "./MomentumEngine";
 import type { CurrentPosition } from "./Rebalancer";
 import type { OHLCV } from "../../utils/types";
 import {
@@ -41,7 +41,7 @@ export const COINM_INTERNAL_SYMBOL = "BTC/COIN-M";
 // momentum_btc sleeve does NOT configure tsmTrail today (index.ts), so the
 // engine never actually sends TRAIL_STOP here; the mapping exists so
 // enabling the trail later needs no adapter change.
-const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON]);
+const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, TREND_EXIT_CLOSE_REASON]);
 
 export interface BinanceCoinMMomentumAdapterConfig {
   accountId: string;

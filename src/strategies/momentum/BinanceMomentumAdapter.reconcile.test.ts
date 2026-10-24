@@ -156,17 +156,18 @@ describe("BinanceMomentumAdapter close_reason telemetry — TRAIL_STOP vs signal
     cancelAllOrders: async () => {},
   } as any);
 
-  test("engine trail close persists close_reason=TRAIL_STOP", async () => {
-    seedOpenTrade("trail-close-binance", "momentum_crypto_trailreason", {
+  test.each(["TRAIL_STOP", "TREND_EXIT"])("engine close persists close_reason=%s", async closeReason => {
+    const id = `trail-close-binance-${closeReason}`;
+    seedOpenTrade(id, "momentum_crypto_trailreason", {
       symbol: "BTC/USD", market: "crypto", quantity: 0.2, entryTime: Date.now(),
     });
 
     const res = await new BinanceMomentumAdapter({} as any, mkBin("BTCUSDT"), { accountId: "momentum_crypto_trailreason" })
-      .closePosition({ symbol: "BTC/USD", side: "buy", closeReason: "TRAIL_STOP" });
+      .closePosition({ symbol: "BTC/USD", side: "buy", closeReason });
 
     expect(res.ok).toBe(true);
-    const row = getDB().prepare(`SELECT status, close_reason FROM trades WHERE id = 'trail-close-binance'`).get() as any;
-    expect(row).toEqual({ status: "closed", close_reason: "TRAIL_STOP" });
+    const row = getDB().prepare(`SELECT status, close_reason FROM trades WHERE id = ?`).get(id) as any;
+    expect(row).toEqual({ status: "closed", close_reason: closeReason });
   });
 
   test("signal-flip close (no closeReason) still persists MOMENTUM_REBALANCE; free text falls back too", async () => {

@@ -45,6 +45,7 @@ import {
   stitchEquityHistory,
   stitchedMetrics,
   type ExperimentManifest,
+  type PortfolioReplayConfig,
   type ReplayRunner,
   type WalkForwardSummary,
 } from "./walk-forward";
@@ -98,8 +99,8 @@ export const RW2_CRITERIA = {
  *  leveraged volManaged families, so the `rw3-e?-` prefix maps the same way;
  *  RW4b (§14) maps `rw4b-e1-` to E1 and adds its own criteria on top. */
 export function rw2DesignOf(name: string): RW2DesignId {
-  const match = /^(?:rw[23]|rw4b)-(e[123])-/.exec(name);
-  if (!match) throw new Error("volManaged manifest name must start with rw2-e1-, rw2-e2-, rw2-e3- (or the rw3- / rw4b- equivalents)");
+  const match = /^(?:rw[235]|rw4b)-(e[123])-/.exec(name);
+  if (!match) throw new Error("volManaged manifest name must start with rw2-e1-, rw2-e2-, rw2-e3- (or the rw3- / rw4b- / rw5- equivalents)");
   return match[1].toUpperCase() as RW2DesignId;
 }
 
@@ -804,6 +805,24 @@ export async function evaluatePortfolioCriteria(
         if (strategy.kind === "factorCore" || strategy.kind === "copySignal") {
           const p = (cfg as typeof cfg & { portfolio: NonNullable<ExperimentManifest["candidates"][0]["portfolio"]> }).portfolio;
           p.strategy = { ...p.strategy, exclude: [...new Set([...(p.strategy as { exclude: string[] }).exclude, ...excluded])] } as PortfolioStrategyConfig;
+        } else if (strategy.kind === "volManaged" && (strategy.pitUniverse || strategy.regimeOverlay)) {
+          // Keep signal data (even for excluded traded symbols). Exclude PIT names from selection,
+          // not just cfg.universe: that list contains only the fixed names and signal/action data.
+          const replay = cfg as PortfolioReplayConfig;
+          const p = replay.portfolio;
+          const s = p.strategy as Extract<PortfolioStrategyConfig, { kind: "volManaged" }>;
+          // Removing a mandatory fallback/hedge would change the hypothesis. Refuse rather than
+          // silently count a rerun that still trades an excluded action instrument.
+          if (s.regimeOverlay && excluded.some(sym => s.regimeOverlay!.hedge?.symbol === sym || s.regimeOverlay!.defensive?.cashProxy === sym)) {
+            throw new Error("RW5 ex-top-decile removes a mandatory hedge/cash proxy; pre-register a replacement before evaluating R6");
+          }
+          // candidateToReplayConfig shares the candidate block. Replace, never mutate that block.
+          replay.portfolio = { ...p, strategy: { ...s, universe: s.universe.filter(sym => !excluded.includes(sym)),
+            ...(s.pitUniverse ? { pitUniverse: { ...s.pitUniverse, exclude: [...new Set([...(s.pitUniverse.exclude ?? []), ...excluded])] } } : {}),
+            ...(s.regimeOverlay ? { regimeOverlay: { ...s.regimeOverlay, ...(s.regimeOverlay.defensive ? {
+              defensive: { ...s.regimeOverlay.defensive, assets: s.regimeOverlay.defensive.assets.filter(sym => !excluded.includes(sym)) },
+            } : {}) } } : {}),
+          } };
         } else {
           cfg.universe = cfg.universe.filter(s => !excluded.includes(s));
           if (!cfg.universe.includes(cfg.refSymbol)) cfg.refSymbol = cfg.universe[0];

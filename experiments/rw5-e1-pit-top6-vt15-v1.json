@@ -1,0 +1,94 @@
+{
+  "name": "rw5-e1-pit-top6-vt15-v1",
+  "sleeve": "stocks",
+  "description": "PRE-REGISTERED (2026-10-23) BEFORE any run, docs/reports/RW-reescritura-rentable.md §16.1 (RW5, owner: more risk with a contingency). E1 construction unlevered (vt15, 1x) on a rule-based universe: SPY QQQ IWM GLD SMH + the top 6 point-in-time S&P 500 members by 63-day dollar volume (hindsight-bias measurement). Window, costs (margin interest 6.5% in base and stress) and capital of its base manifest rw5-e1-stocks-pit-top6-v1.json. Trial 441 -> 442.",
+  "trialAccounting": {
+    "priorUniqueTrials": 441,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "$UC_RESEARCH_DATA_DIR/hist-sp500.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "SMH"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440,
+    "membership": {
+      "index": "sp500"
+    }
+  },
+  "asOf": "2026-09-24",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000
+  },
+  "candidates": [
+    {
+      "name": "e1-pit-top6-vt15",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": {
+          "kind": "volManaged",
+          "universe": [
+            "SPY",
+            "QQQ",
+            "IWM",
+            "GLD",
+            "SMH"
+          ],
+          "inceptionGuardBars": 252,
+          "volLookback": 63,
+          "covLookback": 21,
+          "portfolioVolTarget": 0.15,
+          "annualization": 252,
+          "perAssetCap": 0.25,
+          "maxGross": 1,
+          "pitUniverse": {
+            "topN": 6,
+            "liquidityLookback": 63,
+            "minHoldingRebalances": 21
+          }
+        },
+        "venue": {
+          "venue": "alpaca",
+          "fractional": true,
+          "minOrderNotional": 5,
+          "rebalanceBand": 0.01
+        }
+      }
+    }
+  ],
+  "acceptance": {}
+}

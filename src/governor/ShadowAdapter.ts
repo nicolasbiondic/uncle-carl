@@ -23,7 +23,7 @@
 // (same bug class as shadow_pairs 2026-07-16, price path instead of candles).
 
 import type { MomentumBrokerAdapter } from "../strategies/momentum/MomentumEngine";
-import { MODEL_CUTOVER_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, TIME_STOP_CLOSE_REASON, TRAIL_STOP_CLOSE_REASON } from "../strategies/momentum/MomentumEngine";
+import { MODEL_CUTOVER_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, TIME_STOP_CLOSE_REASON, TRAIL_STOP_CLOSE_REASON, TREND_EXIT_CLOSE_REASON } from "../strategies/momentum/MomentumEngine";
 import type { CurrentPosition } from "../strategies/momentum/Rebalancer";
 import type { OHLCV } from "../utils/types";
 import { getDB, insertTrade, closeTrade, updateTradeCloseReason, getOpenTrades, RECONCILE_CLOSE_SQL, accumulatePartialCloseLedger, getPartialCloseLedger, increaseOpenTradeQuantity, pnlOf } from "../db/database";
@@ -41,7 +41,7 @@ export const SHADOW_SLIPPAGE = 0.0002;
 // distinguish TRAIL_STOP/TIME_STOP/SLOT_DISPLACED from a signal-flip close.
 // Anything else (or absent) falls back to cfg.closeReason, so free-text can
 // never land in the enum-ish column.
-const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON]);
+const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, TREND_EXIT_CLOSE_REASON]);
 
 /** Minimal slice of AlpacaExecutor the shadow adapter needs (test-injectable). */
 export interface ShadowPriceSource {

@@ -136,7 +136,7 @@ export class TimeSeriesMomentum {
     /** Caller-evaluated verdicts for opt-in gates whose data lives outside
      *  the candle window (see TSMConfig.shortRegime). Omitted by every
      *  legacy caller — with shortRegime unset the output is byte-identical. */
-    opts?: { shortRegimeBearish?: boolean },
+    opts?: { shortRegimeBearish?: boolean; longBlocked?: ReadonlySet<string> },
   ): TSMDecision[] {
     const lookbackBars = Math.floor(this.cfg.lookbackDays * 24 * 60 / this.cfg.barMinutes);
     // Multi-horizon (opt-in): bar counts per horizon, longest first for the
@@ -199,7 +199,8 @@ export class TimeSeriesMomentum {
     cands.sort((a, b) => b.r - a.r);
 
     const longs = new Set<string>();
-    const longStayOk = (c: Candidate) => c.held && c.r >= this.cfg.exitThresholdPct / 100 && c.px > c.ma;
+    const longAllowed = (c: Candidate) => !opts?.longBlocked?.has(c.symbol);
+    const longStayOk = (c: Candidate) => longAllowed(c) && c.held && c.r >= this.cfg.exitThresholdPct / 100 && c.px > c.ma;
     if (this.cfg.slotHysteresis) {
       // Opt-in two-pass assignment (see TSMConfig.slotHysteresis): held longs
       // with a valid stay signal keep their slots first (r desc when maxLongs
@@ -211,13 +212,14 @@ export class TimeSeriesMomentum {
       for (const c of cands) {
         if (longs.size >= this.cfg.maxLongs) break;
         if (longs.has(c.symbol)) continue;
-        if (c.r >= this.cfg.entryThresholdPct / 100 && c.px > c.ma) longs.add(c.symbol);
+        if (longAllowed(c) && c.r >= this.cfg.entryThresholdPct / 100 && c.px > c.ma) longs.add(c.symbol);
       }
     } else {
       // Legacy path — MUST stay byte-identical (same loop, same order, same
       // tie handling): pinned by scripts/regression-fingerprint.test.ts.
       for (const c of cands) {
         if (longs.size >= this.cfg.maxLongs) break;
+        if (!longAllowed(c)) continue;
         const aboveMa = c.px > c.ma;
         const enterOk = c.r >= this.cfg.entryThresholdPct / 100 && aboveMa;
         const stayOk  = c.held && c.r >= this.cfg.exitThresholdPct / 100 && aboveMa;
@@ -255,7 +257,7 @@ export class TimeSeriesMomentum {
     const noSlot = new Set<string>();
     for (const c of cands) {
       if (longs.has(c.symbol) || shorts.has(c.symbol)) continue;
-      const longEnterOk = !c.held && c.r >= this.cfg.entryThresholdPct / 100 && c.px > c.ma;
+      const longEnterOk = longAllowed(c) && !c.held && c.r >= this.cfg.entryThresholdPct / 100 && c.px > c.ma;
       const shortEnterOk = this.cfg.maxShorts > 0 && shortsAllowed && (!shortUniv || shortUniv.has(c.symbol))
         && !c.heldShort && c.r <= this.cfg.shortEntryThresholdPct / 100 && c.px < c.ma;
       if (longEnterOk || shortEnterOk) noSlot.add(c.symbol);

@@ -128,10 +128,11 @@ export function resolvePortfolioWiring(input: ResolveInput): PortfolioWiring {
     if (!(def.capital > 0)) errors.push("capital must be > 0");
     if (p?.strategy?.kind === "factorCore") errors.push("factorCore needs a point-in-time membership source that no live wiring provides yet");
     else if (p?.strategy?.kind === "copySignal") errors.push("copySignal needs a live signal source (and membership) that no wiring provides yet: research only");
+    else if (p?.strategy?.kind === "volManaged" && p.strategy.pitUniverse) errors.push("pitUniverse needs a point-in-time membership source that no live wiring provides yet");
     else if (p?.strategy) {
       if (isCryptoDesign(p.strategy) !== (p.venue !== "alpaca")) errors.push(`design ${p.strategy.kind} does not belong on venue ${p.venue}`);
       if (target) {
-        const bad = p.strategy.universe.filter(s => !target.symbolOk(s));
+        const bad = portfolioUniverse("portfolio", p).filter(s => !target.symbolOk(s));
         if (bad.length > 0) errors.push(`universe symbols outside the symbol space of ${sleeve}'s rows: ${bad.join(", ")} (an adopted row and the design would be two positions)`);
       }
     }
@@ -205,7 +206,7 @@ function liveRefusals(
     errors.push(`strategyVersion '${p.strategyVersion}' is not the LAST entry of MODEL_VERSIONS['${e.sleeve}'] (${last ?? "none"}): append the version in src/portfolio/modelVersions.ts and deploy before going live`);
   }
   if (p.venue === "alpaca" && p.strategy.kind !== "factorCore" && p.strategy.kind !== "copySignal") {
-    const mine = p.strategy.universe;
+    const mine = portfolioUniverse("portfolio", p);
     const treasury = mine.filter(isTreasurySymbol);
     if (treasury.length > 0) errors.push(`universe holds the treasury sweep's ETF (${treasury.join(", ")})`);
   }

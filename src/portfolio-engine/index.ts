@@ -6,3 +6,4 @@ export * from "./orders";
 export * from "./costs";
 export * from "./decide";
 export * from "./copySignal";
+export * from "./contingency";

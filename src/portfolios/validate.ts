@@ -22,6 +22,7 @@ import { DEFAULT_MEANREV_CONFIG } from "../strategies/meanrev/MeanRevEngine";
 import { EQUITY_SEMANTICS, type EquitySemantics } from "../strategies/momentum/RiskGuard";
 import { currentModelVersion } from "../portfolio/modelVersions";
 import { builtinPortfolio } from "./builtin";
+import { overlaySymbols } from "../portfolio-engine/contingency";
 import type { PlatformPortfolioRow } from "./store";
 import type {
   MeanRevConnorsParams,
@@ -133,6 +134,7 @@ export function portfolioUniverse(template: PortfolioTemplate, params: Portfolio
     // RW portfolio engine: the trend designs carry their universe; the
     // point-in-time core (factorCore) has none to declare here.
     const s = (params as PortfolioEngineParams).strategy;
+    if (s?.kind === "volManaged" && s.regimeOverlay) return [...new Set([...s.universe, ...overlaySymbols(s.regimeOverlay, false)])];
     return s && s.kind !== "factorCore" && s.kind !== "copySignal" && Array.isArray(s.universe) ? [...s.universe] : [];
   }
   const u = (params as MomentumTsmParams).universe;

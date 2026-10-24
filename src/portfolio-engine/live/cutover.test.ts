@@ -11,7 +11,7 @@ import {
   PORTFOLIO_SLEEVES, countOpenPortfolioRows, designHash, handBackPortfolioRows, isCryptoDesign, resolvePortfolioWiring,
   restoreIncumbentRows, sleevesWithTwoManagers, type ResolveInput,
 } from "./cutover";
-import type { PortfolioStrategyConfig } from "../types";
+import type { PortfolioStrategyConfig, VolManagedConfig } from "../types";
 
 describe("isCryptoDesign — which venue family a design belongs to", () => {
   const vm = (annualization: 252 | 365): PortfolioStrategyConfig => ({
@@ -118,6 +118,28 @@ describe("misconfiguration fails closed (live refused, incumbent keeps managing)
     const w = refused(peDefinition("momentum_stocks", { runMode: "live", params: { strategy: { kind: "factorCore" } as any } }));
     expect(w.live).toEqual([]);
     expect(msgs(w)).toContain("membership");
+  });
+  test("RW5 PIT remains refused by production wiring; regime action assets obey shared-wallet/treasury guards", () => {
+    const meanrev = incumbents().find(d => d.id === "meanrev_stocks")!;
+    const otherSymbol = portfolioUniverse(meanrev.template, meanrev.params)[0];
+    const strategy: VolManagedConfig = { kind: "volManaged", universe: ["SPY"], inceptionGuardBars: 252,
+      volLookback: 63, covLookback: 21, portfolioVolTarget: 0.25, annualization: 252, perAssetCap: 0.25, maxGross: 2,
+      regimeOverlay: { signals: [{ kind: "maTrend", symbol: otherSymbol, period: 10, sampling: "monthEnd" }],
+        combine: "any", coreScale: 0, defensive: { assets: ["GLD"], momentumLookback: 63, volLookback: 63, cashProxy: "GLD" } },
+    };
+    const definition = (s: VolManagedConfig) => peDefinition("momentum_stocks", { runMode: "live", params: { strategy: s } });
+    // A reference-only symbol doesn't claim another sleeve's shares.
+    expect(resolve([definition(strategy)]).live).toHaveLength(1);
+    const withCash = definition({ ...strategy, regimeOverlay: { ...strategy.regimeOverlay!,
+      defensive: { ...strategy.regimeOverlay!.defensive!, cashProxy: "BIL" } } });
+    expect(resolve([withCash]).live).toEqual([]);
+    expect(msgs(resolve([withCash]))).toContain("treasury");
+    const withHedge = definition({ ...strategy, regimeOverlay: { ...strategy.regimeOverlay!, hedge: { symbol: otherSymbol, fraction: 0.1 } } });
+    expect(resolve([withHedge]).live).toEqual([]);
+    expect(msgs(resolve([withHedge]))).toContain("overlaps 'meanrev_stocks'");
+    const pit = resolve([definition({ ...strategy, pitUniverse: { topN: 6, liquidityLookback: 63, minHoldingRebalances: 21 } })]);
+    expect(pit.live).toEqual([]);
+    expect(msgs(pit)).toContain("membership source");
   });
   test("copySignal is research-only: no live signal source", () => {
     const w = refused(peDefinition("momentum_stocks", { runMode: "live", params: { strategy: { kind: "copySignal" } as any } }));

@@ -1303,8 +1303,220 @@
       "resultsComplete": false,
       "executionReported": true,
       "evidence": "RW4a (c2) momentum_crypto_usdc (kernel diario d13-s5, la config viva): el mismo control de exposicion que reduce posiciones abiertas, copia byte a byte del control con asOf 2026-09-26T00:00:00Z. Control (+0): d0f7fd6f (hash de datos 55da03c9 reproducido), +324.34% / Sharpe 1.028 / DD 52.58% / PSR 0.978; falla maxDrawdown y minExcessReturnVsBench. Candidatos: drawdown 10%->40% con la pausa soft-DD binaria encendida (xc-dd), vol 80%/ano con ventanas 10 y 42 barras (xc-vol), ambos (xc-both), y drawdown con la pausa soft-DD APAGADA (risk.softDrawdownPct 1.0; xc-dd-nosoftdd). +4: 431->435. Criterios RW SS13.4 (c2) como en c1, con la puerta del sleeve = DD no peor que el control (52.58%) y 1410 dias comunes. RESULTADO: UNO CUMPLE TODO, POR LA MINIMA: d13-s5-xc-dd (8892c1e9) +320.63% / Sharpe cosido 1.038; en 1410 dias comunes Sharpe 1.0383 frente a 1.0282 del control (+0.010), CAGR 45.08% frente a 45.41%, DD 51.95% frente a 52.58%; PSR 0.978, folds [0.925, 0.722, 0.909], peor LOO 0.741 x Sharpe, DD del libro combinado 13.84% (<= 20%); falla las mismas dos puertas acceptance que el control. Coste: 104 redimensionados (69 recortes y 35 re-aumentos; 36/55/13 por fold, ~27 al ano), 166 re-aumentos aplazados por gate o tope, lambda media por fold 0.979/0.917/0.989 y minima 0.476, comisiones 75 USD frente a 68 del control. Los otros 3 FALLAN: xc-vol (c52fdaf6) +257.71% / 0.951 / DD 53.33% (R3, DD en dias comunes y tope de DD del sleeve); xc-both (ea8d5341) +267.39% / 0.977 / DD 51.56% (solo R3); xc-dd-nosoftdd (27198e07) +198.26% / 0.832 / DD 54.76% / PSR 0.946 (R3, DD, PSR y las puertas looMaxDrawdown, minOuterPsr y stressMaxDrawdown: quitar la pausa binaria empeora todo, alli la pausa ayuda). HONESTIDAD: el margen es minimo (+0.010 de Sharpe, -0.63 pp de DD, retorno ligeramente MENOR que el control) y es el mejor de 4 con 435 ensayos previos y trialAccounting incompleto (approved sigue false); en dinero es neutro y no arregla que USDC este bajo su banda. ESTADO: pasa; REPLICADO y CABLEADO. La replica independiente (Python, sin codigo del proyecto, 2026-10-23) reproduce los tres folds con |dSharpe| < 1e-14 (limite 0.10) y los mismos 104 redimensionados (69/35; cero en el control). Los tres requisitos de SS13.4 estan cumplidos en la rama feat/rw4a-usdc-xc: scalePosition en BinanceMomentumAdapter (+ SwitchingAdapter y ShadowAdapter) con tests, version momentum_crypto_usdc@daily-d13s5-xc-dd en src/portfolio/modelVersions.ts y exposureControl en el plan y en la fila builtin. El RiskState NO se re-ancla (el mismo kernel construyo el drawdown vivo que lee el control). authoritativeArtifactRw4aC2.wiring y RW SS13.6."
+    },
+    {
+      "id": "rw5-2026-10-23",
+      "sourceCommit": "33caa5d (pre-registro SS16.1 antes de correr; re-ejecucion de #442 tras c9691c6 y 417ef26 sin hipotesis nueva)",
+      "sourcePaths": [
+        "experiments/rw5-e1-lev-vt20-g150-sma200-v1.json",
+        "experiments/rw5-e1-lev-vt25-g200-sma200-v1.json",
+        "experiments/rw5-e1-lev-vt20-g150-absmom12-v1.json",
+        "experiments/rw5-e1-lev-vt20-g150-canary-v1.json",
+        "experiments/rw5-e2-lev-vt20-g150-sma200-v1.json",
+        "experiments/rw5-e2-lev-vt25-g200-sma200-v1.json",
+        "experiments/rw5-e1-pit-top6-vt15-v1.json",
+        "experiments/rw5-e1-pit-top6-lev-vt20-g150-sma200-v1.json",
+        "scripts/rw5-evaluate.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 8,
+      "priorUniqueTrials": 435,
+      "resultingUniqueTrials": 443,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW5, mandato del dueno: mas riesgo CON contingencia de mercado, no el freno de P&L de RW4b. Pre-registro SS16.1: 8 cadenas puras, 435->443; E1/E2 vol20 x1.5 o vol25 x2 con SPY/SMA200 y banda 1%, E1 vol20 x1.5 con impulso absoluto SPY/BIL a 252 sesiones o canarios SPY/VWO/VEA/BND 13612W, mas control PIT top6 vol15 x1 y su gemelo vol20 x1.5/SMA200. Defensa BIL limitada al 25% por activo, resto efectivo sin interes; margen 6.5% base y stress. Referencias +0: E1 33b0ac05, E2 0b088ca3 y misma palanca sin contingencia c512c100/49a1160c/006f1e03/3c181ce9 (rw5Controls). K1 CAGR >= actual+3pp, K2 DD sleeve y cuenta E1+E2 de 50k/50k <=30%, K3 menor DD y Calmar no menor que la misma palanca, K4 cada crash 2020/2022/2025 por separado, K5 robustez R1/R4-R7, K6 Sharpe >=0.8 del actual, K7 el gemelo #442 debe pasar K1/K2 contra #441. RESULTADO: #435 falla K1/K4; #436 solo K4 (2020: 27.3% vs 26.7% redondeados, +0.5387pp sin redondear); #437 K1; #438 K1/K3/K6; #439 K1/K3; #440 K2/K3/K4. #441 es CONTROL de sesgo a posteriori, no candidato refutado: CAGR 19.9647% vs E1 21.4495%, Sharpe 1.2648 vs 1.2905. #442 primero se rompio en leave-one-out (rw5-e1-pit-top6-lev-vt20-g150-sma200-v1.crash-before-fix.log), sin resultado economico; tras corregir el motor c9691c6/417ef26 se re-corrio LA MISMA hipotesis: bcb7c254, CAGR 22.4444% vs #441 19.9647%, +2.4797pp (SS16.4 dice +2.4), K1 falla y K2 pasa. K7 FALLA tal como se escribio, por lo que NO SE CABLEA ningun E1. El crash y su re-ejecucion no suman ensayo. authoritativeArtifactRw5, authoritativeArtifactRw5Pit y authoritativeArtifactRw5Frontier."
+    },
+    {
+      "id": "rw5b-2026-10-23",
+      "sourceCommit": "6280eb4 (pre-registro SS16.3 antes de correr)",
+      "sourcePaths": [
+        "experiments/rw5-e1-lev-vt20-g150-sma200-fastvol5-v1.json",
+        "experiments/rw5-e1-lev-vt25-g200-sma200-fastvol5-v1.json",
+        "scripts/rw5-evaluate.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 2,
+      "priorUniqueTrials": 443,
+      "resultingUniqueTrials": 445,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW5b SS16.3: copias de #435 y #436 con fastVolLookback=5 (maximo de covarianzas de 5 y 21 sesiones), SIN freno de drawdown; mismas referencias y K1-K7, +2: 443->445. #443 (39868114) CAGR 21.2450%, Sharpe 1.2202, DD 17.7087%, cuenta 19.1079%: falla K1. #444 (db188948) CAGR 26.0156% vs E1 21.4495% (+4.5661pp), Sharpe 1.1812, DD 22.3463%, cuenta 21.6789%, Calmar 1.1642 vs misma palanca 0.9599: PASA K1-K6. La vol rapida arregla K4/2020 (22.3463% vs 26.7263%); el interruptor solo no lo hacia (#436). NO SE CABLEA: K7 tal como se escribio sigue fallado por #442, tambien para #444. Hace falta decision explicita del dueno sobre K7, confirmar presupuesto de caida y romper la congelacion hasta 2027-01-21; BIL reservado a tesoreria exige otra defensa viva probada. authoritativeArtifactRw5.wired=false."
+    },
+    {
+      "id": "rw5c-2026-10-23",
+      "sourceCommit": "c116698 (pre-registro SS16.4 antes de correr)",
+      "sourcePaths": [
+        "experiments/rw5-e1-pit-top6-lev-vt25-g200-sma200-fastvol5-v1.json",
+        "scripts/rw5-evaluate.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 1,
+      "priorUniqueTrials": 445,
+      "resultingUniqueTrials": 446,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW5c SS16.4: gemelo PIT PROPIO de #444, vol25 x2/SMA200/fastvol5 sobre 5 ETFs fijos mas los 6 miembros PIT del S&P500 por volumen dolar 63d; +1: 445->446. Criterios K1/K2 contra #441, K5/K6 reportados; K3/K4 no aplican sin referencia de misma palanca PIT. RESULTADO SS16.5: b7857555, CAGR 25.6632% vs #441 19.9647% (+5.6985pp), Sharpe 1.1686, DD 23.2124%, cuenta 22.0513%; PASA K1/K2 y K5/K6. Muy cerca del CAGR 26.0156% de #444: la ventaja no depende de elegir los valores a posteriori. Esto NO sustituye retroactivamente K7: el gemelo que SS16.1 pre-registro fue #442, que falla. #444 sigue SIN CABLEAR, decision explicita del dueno pendiente, ademas presupuesto, congelacion, defensa viva sin BIL y comprobacion Reg-T. El inventario historico sigue incompleto; no se afirma approved=true."
+    },
+    {
+      "id": "rw5-crypto-2026-10-24",
+      "sourceCommit": "48cc50b (pre-registro SS16.6 antes de correr; resultados SS16.7)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-rw5-trendexit65-pure-v1.json",
+        "experiments/momentum-crypto-usdc-daily-s5-rw5-trendexit65-pure-v1.json",
+        "scripts/rw5-crypto-evaluate.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 2,
+      "priorUniqueTrials": 446,
+      "resultingUniqueTrials": 448,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW5 cripto SS16.6-16.7: +2, 446->448. Copias de las versiones vivas con UN cambio: trendExit SMA65 sobre el ultimo cierre diario UTC completo de la propia moneda; cierra largos y bloquea entradas/re-aumentos hasta recuperar la media. Controles +0: efc086b4 (USDT horario) y 8892c1e9 (USDC diario). T1 Sharpe no menor, T2 menor DD y Calmar no menor, T3 cada crash FTX/2024/T1 2025/2025-26, T4 PSR/folds/LOO, T5 DD libro 50k/50k/5k/5k <=20% contando todos los dias del solape y ceros cuando falta retorno, T6 ninguna puerta acceptance nueva fallida. RESULTADO: AMBOS FALLAN, NO SE CABLEAN. #446 eb8e45d4: 1575 dias, CAGR 33.0977% vs 55.1556%, Sharpe 0.9931 vs 1.3313, DD 37.3584% vs 33.5689%; falla T1/T2/T3 (2024 empeora), 29 salidas/28 reentradas. #447 c958c6a9: 1410 dias, CAGR 33.8474% vs 45.0829%, Sharpe 0.8791 vs 1.0383, DD 49.3883% vs 51.9465%; falla T1/T2/T3/T4_loo (0.512x)/T6 (looMaxDrawdown nueva), 96 salidas/82 reentradas. T5 pasa con 14.4494% y 14.7786%; USDC sigue por encima de la linea del 40%. Folds OOS identicos al control; hash de datos horario distinto por historia adicional para SMA65, USDC igual. Los sleeves siguen con sus versiones vivas, no se pausan. authoritativeArtifactRw5Crypto conserva T1-T6 completos. Inventario historico incompleto, sin approved=true."
+    },
+    {
+      "id": "rw5d-2026-10-24",
+      "sourceCommit": "5e08e97 (pre-registro SS16.7 antes de correr; resultado SS16.8)",
+      "sourcePaths": [
+        "experiments/rw5-e1-lev-vt30-g250-sma200-fastvol5-v1.json",
+        "experiments/rw5-e1-pit-top6-lev-vt30-g250-sma200-fastvol5-v1.json",
+        "scripts/rw5-evaluate.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 2,
+      "priorUniqueTrials": 448,
+      "resultingUniqueTrials": 450,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW5d SS16.7-16.8: +2, 448->450. Copias de #444 y #445 con vol objetivo 30% y bruto 2.5x, mantienen SMA200 SPY/banda 1%, fastvol5, costes y margen 6.5%. #448 2a92b1fb: 1755 sesiones, CAGR 30.1542% vs E1 21.4495% (+8.7047pp), Sharpe 1.1587, DD sleeve 25.9412%, cuenta con E2 23.7690%, Calmar 1.1624. PASA K1-K6; K3/K4 contra 49a1160c, referencia a 2x SIN contingencia declarada ANTES de correr: no existe control sin contingencia a 2.5x por limite del validador. DD de esa referencia 35.5604%, Calmar 0.9599; cada crash 2020/2022/2025 mejora (25.8888/22.5522/17.0462% vs 26.7263/33.5000/25.5073%). #449 83fff6de, gemelo PIT propio: CAGR 29.4116% vs #441 19.9647% (+9.4469pp), DD sleeve/cuenta 27.0345/24.2804%, PASA K1/K2 y por tanto K7 de SS16.7. K3/K4 del gemelo no aplican, no se certifican. #448 PASA K1-K7 y es ELEGIDO por SS16.1, mayor CAGR entre los que cumplen todo; esto NO reescribe el K7 fallado de RW5/b/c. wired=false: el dueno debe confirmar presupuesto de caida >=30% y romper la congelacion de momentum_stocks antes de 2027-01-21; antes de encender, defensa viva efectivo/BOXX sin BIL y comprobar Reg-T compartido. authoritativeArtifactRw5d y authoritativeArtifactRw5dPit. Seleccion de investigacion, no approved=true: inventario historico incompleto."
     }
   ],
+  "authoritativeArtifactRw5Crypto": {
+    "wired": false,
+    "verdict": "FALLAN ambos disenos de salida por tendencia propia; no se cablean y los sleeves siguen con sus versiones vivas.",
+    "figuresNote": "SS16.6-16.7. Cifras OOS en dias comunes, anualizacion 365, redondeadas a 4 decimales. Porcentajes en claves Pct; combinedBook conserva fracciones. Ventanas FTX/2024/T1 2025/2025-26 en ese orden. T1-T6 guardan los valores y umbrales JSON del evaluador. CAGR, retorno, linea del 40%, salidas/reentradas, operaciones, comisiones y rotacion se REPORTAN, no son criterios adicionales. El libro usa 50k E1 + 50k E2 + 5k candidato + 5k otro cripto vivo; dias sin retorno aportan cero. El inventario historico sigue incompleto; no se afirma approved=true.",
+    "candidates": [
+      {
+        "trial": 446,
+        "manifest": "experiments/momentum-crypto-rw5-trendexit65-pure-v1.json",
+        "path": "data/backtests/eb8e45d41c6594bda7351211ffeeb55056e85d4cfa0dff381264a2ce16bfe67e/",
+        "control": "efc086b4", "e1": "33b0ac05", "e2": "0b088ca3", "otherCrypto": "8892c1e9",
+        "wired": false,
+        "figures": {
+          "commonDays": 1575, "from": "2022-06-11", "to": "2026-10-02",
+          "cagrPct": 33.0977, "controlCagrPct": 55.1556, "totalReturnPct": 242.8449, "controlTotalReturnPct": 563.8799,
+          "sharpe": 0.9931, "controlSharpe": 1.3313, "maxDrawdownPct": 37.3584, "controlMaxDrawdownPct": 33.5689, "calmar": 0.886, "controlCalmar": 1.6431,
+          "crashDrawdownsPct": [18.9573, 21.3335, 13.4166, 26.2695], "controlCrashDrawdownsPct": [19.2074, 16.047, 16.9512, 28.6745], "crashDays": [92, 202, 131, 330],
+          "combinedBook": { "days": 1360, "from": "2022-11-15", "to": "2026-08-05", "totalReturn": 1.1184, "maxDrawdown": 0.1445 },
+          "reported": {
+            "ownerLine40": true, "trendExitStats": { "exits": 29, "reentries": 28, "orders": 57 }, "trades": [1054, 1312], "fees": [977.3819, 1328.0894],
+            "turnoverAnnual": [[110.5997, 89.5573, 88.8645], [135.9103, 99.3266, 115.1933]]
+          }
+        },
+        "criteria": {
+          "T1_sharpe": { "pass": false, "value": [0.9931, 1.3313], "threshold": "Sharpe ≥ control's, common days" },
+          "T2_drawdownAndCalmar": { "pass": false, "value": { "dd": [0.3736, 0.3357], "calmar": [0.886, 1.643] }, "threshold": "lower DD and Calmar ≥ control's" },
+          "T3_everyCrash": { "pass": false, "value": ["2022_ftx: 19.0% vs 19.2% (92 d)", "2024_correction: 21.3% vs 16.0% (202 d)", "2025_q1: 13.4% vs 17.0% (131 d)", "2025_26_bear: 26.3% vs 28.7% (330 d)"], "threshold": "window DD ≤ control's in every window, ≥ 20 days each" },
+          "T4_psr": { "pass": true, "value": 0.9819, "threshold": 0.95 },
+          "T4_folds": { "pass": true, "value": [0.855, 0.974, 0.648], "threshold": "≥ 2/3 folds with PSR > 0.5" },
+          "T4_loo": { "pass": true, "value": 0.868, "threshold": "worst LOO ≥ 0.6 × stitched Sharpe" },
+          "T5_combinedBook": { "pass": true, "value": 0.1445, "threshold": 0.2 },
+          "T6_protocolGates": { "pass": true, "value": { "failed": ["maxDisplacementShare"], "failedOnlyHere": [] }, "threshold": "no gate fails that the control passes" }
+        },
+        "criteriaFailed": ["T1_sharpe", "T2_drawdownAndCalmar", "T3_everyCrash"],
+        "criteriaVerdict": "FALLA: T1_sharpe, T2_drawdownAndCalmar, T3_everyCrash"
+      },
+      {
+        "trial": 447,
+        "manifest": "experiments/momentum-crypto-usdc-daily-s5-rw5-trendexit65-pure-v1.json",
+        "path": "data/backtests/c958c6a92a44e2a875637d7fd6c5cce76ad0447f8bc29b2c671087bfa515eb0f/",
+        "control": "8892c1e9", "e1": "33b0ac05", "e2": "0b088ca3", "otherCrypto": "efc086b4",
+        "wired": false,
+        "figures": {
+          "commonDays": 1410, "from": "2022-11-15", "to": "2026-09-25",
+          "cagrPct": 33.8474, "controlCagrPct": 45.0829, "totalReturnPct": 208.1491, "controlTotalReturnPct": 320.6286,
+          "sharpe": 0.8791, "controlSharpe": 1.0383, "maxDrawdownPct": 49.3883, "controlMaxDrawdownPct": 51.9465, "calmar": 0.6853, "controlCalmar": 0.8679,
+          "crashDrawdownsPct": [8.9245, 45.3056, 20.3891, 31.0637], "controlCrashDrawdownsPct": [10.5974, 48.8525, 28.7347, 29.0137], "crashDays": [78, 202, 131, 330],
+          "combinedBook": { "days": 1360, "from": "2022-11-15", "to": "2026-08-05", "totalReturn": 1.1833, "maxDrawdown": 0.1478 },
+          "reported": {
+            "ownerLine40": false, "trendExitStats": { "exits": 96, "reentries": 82, "orders": 178 }, "trades": [160, 107], "fees": [106.9036, 75.4419],
+            "turnoverAnnual": [[18.8119, 20.0043, 11.6247], [11.6056, 15.0849, 7.546]]
+          }
+        },
+        "criteria": {
+          "T1_sharpe": { "pass": false, "value": [0.8791, 1.0383], "threshold": "Sharpe ≥ control's, common days" },
+          "T2_drawdownAndCalmar": { "pass": false, "value": { "dd": [0.4939, 0.5195], "calmar": [0.685, 0.868] }, "threshold": "lower DD and Calmar ≥ control's" },
+          "T3_everyCrash": { "pass": false, "value": ["2022_ftx: 8.9% vs 10.6% (78 d)", "2024_correction: 45.3% vs 48.9% (202 d)", "2025_q1: 20.4% vs 28.7% (131 d)", "2025_26_bear: 31.1% vs 29.0% (330 d)"], "threshold": "window DD ≤ control's in every window, ≥ 20 days each" },
+          "T4_psr": { "pass": true, "value": 0.9544, "threshold": 0.95 },
+          "T4_folds": { "pass": true, "value": [0.863, 0.755, 0.844], "threshold": "≥ 2/3 folds with PSR > 0.5" },
+          "T4_loo": { "pass": false, "value": 0.512, "threshold": "worst LOO ≥ 0.6 × stitched Sharpe" },
+          "T5_combinedBook": { "pass": true, "value": 0.1478, "threshold": 0.2 },
+          "T6_protocolGates": { "pass": false, "value": { "failed": ["maxDrawdown", "minExcessReturnVsBench", "looMaxDrawdown"], "failedOnlyHere": ["looMaxDrawdown"] }, "threshold": "no gate fails that the control passes" }
+        },
+        "criteriaFailed": ["T1_sharpe", "T2_drawdownAndCalmar", "T3_everyCrash", "T4_loo", "T6_protocolGates"],
+        "criteriaVerdict": "FALLA: T1_sharpe, T2_drawdownAndCalmar, T3_everyCrash, T4_loo, T6_protocolGates"
+      }
+    ]
+  },
+  "authoritativeArtifactRw5d": {
+    "trial": 448,
+    "manifest": "experiments/rw5-e1-lev-vt30-g250-sma200-fastvol5-v1.json",
+    "path": "data/backtests/2a92b1fb8a087fdc1a1025dd75d05c552462724f101ed1a0326e4176084dfc7c/",
+    "selected": true,
+    "wired": false,
+    "verdict": "PASA K1-K7; ELEGIDO por la regla de SS16.1 (mayor CAGR entre quienes cumplen todo), NO SE CABLEA sin decision del dueno.",
+    "wiring": {
+      "reason": "El dueno debe confirmar el presupuesto de caida (>=30%) y romper la congelacion de momentum_stocks antes de 2027-01-21",
+      "requiredBeforeWiring": [
+        "Confirmacion explicita del dueno del presupuesto de caida >=30% y ruptura de la congelacion",
+        "Defensa viva a efectivo/BOXX, porque BIL esta reservado a tesoreria",
+        "Comprobar que el motor respeta el poder de compra Reg-T compartido: E1 a 2.5x mas E2 a 1x; la proporcion cambia con sus patrimonios"
+      ]
+    },
+    "referenceNote": "SS16.7 pre-registro K3/K4 contra 49a1160c, referencia a 2x SIN contingencia, no a la misma palanca 2.5x: el validador no admite ese control. No se inventa un control ni se cuenta uno nuevo.",
+    "k7": { "trial": 449, "controlTrial": 441, "pass": true, "criteriaFailed": [], "deltaCagrPp": 9.4469 },
+    "figuresNote": "SS16.7-16.8. Mismo esquema que authoritativeArtifactRw5: OOS comun, anualizacion 252, cifras a 4 decimales, porcentajes/puntos en claves Pct/Pp. El CLI calcula K1-K6; K7 se deriva aparte de K1/K2 del gemelo #449 contra #441. K3/K4 null en el gemelo significa no aplicable, no aprobado. R7 null es el valor JSON con pass=true, no un coste finito. Seleccion de investigacion no equivale a approved=true: trialAccounting sigue incompleto.",
+    "candidates": [
+      {
+        "trial": 448,
+        "manifest": "experiments/rw5-e1-lev-vt30-g250-sma200-fastvol5-v1.json",
+        "path": "data/backtests/2a92b1fb8a087fdc1a1025dd75d05c552462724f101ed1a0326e4176084dfc7c/",
+        "current": "33b0ac05", "partner": "0b088ca3", "sameLeverage": "49a1160c",
+        "figures": {
+          "commonSessions": 1755, "cagrPct": 30.1542, "deltaCagrPp": 8.7047, "sharpe": 1.1587, "maxDrawdownPct": 25.9412, "accountMaxDrawdownPct": 23.769, "calmar": 1.1624,
+          "currentCagrPct": 21.4495, "currentSharpe": 1.2905, "sameLeverageMaxDrawdownPct": 35.5604, "sameLeverageCalmar": 0.9599,
+          "crashDrawdownsPct": [25.8888, 22.5522, 17.0462], "sameLeverageCrashDrawdownsPct": [26.7263, 33.5, 25.5073], "crashSessions": [93, 251, 91],
+          "robustness": { "K5_R1_psr": 0.9979, "K5_R4_stressSharpe": 1.113, "K5_R5_yearShare": 0.2832, "K5_R6_exTopDecile": 0.9883, "K5_R7_breakEven": null }
+        },
+        "criteriaFailed": [], "criteriaNotApplicable": [], "criteriaVerdict": "CUMPLE"
+      },
+      {
+        "trial": 449,
+        "manifest": "experiments/rw5-e1-pit-top6-lev-vt30-g250-sma200-fastvol5-v1.json",
+        "path": "data/backtests/83fff6de78a8264473afd89f5c3c827dc4ac05eacc9452b4a8e3eb1db3fcdb47/",
+        "current": "ad0cf3a2", "partner": "0b088ca3", "sameLeverage": null,
+        "figures": {
+          "commonSessions": 1755, "cagrPct": 29.4116, "deltaCagrPp": 9.4469, "sharpe": 1.1381, "maxDrawdownPct": 27.0345, "accountMaxDrawdownPct": 24.2804, "calmar": 1.0879,
+          "currentCagrPct": 19.9647, "currentSharpe": 1.2648, "sameLeverageMaxDrawdownPct": null, "sameLeverageCalmar": null,
+          "crashDrawdownsPct": [27.0345, 20.1081, 17.9703], "sameLeverageCrashDrawdownsPct": null, "crashSessions": [93, 251, 91],
+          "robustness": { "K5_R1_psr": 0.9978, "K5_R4_stressSharpe": 1.0925, "K5_R5_yearShare": 0.2547, "K5_R6_exTopDecile": 0.9518, "K5_R7_breakEven": null }
+        },
+        "criteriaFailed": [], "criteriaNotApplicable": ["K3_beatsSameLeverage", "K4_everyCrash"], "criteriaVerdict": "CUMPLE"
+      }
+    ]
+  },
+  "authoritativeArtifactRw5dPit": {
+    "trial": 449,
+    "manifest": "experiments/rw5-e1-pit-top6-lev-vt30-g250-sma200-fastvol5-v1.json",
+    "path": "data/backtests/83fff6de78a8264473afd89f5c3c827dc4ac05eacc9452b4a8e3eb1db3fcdb47/",
+    "wired": false,
+    "verdict": "GEMELO K7 de #448: PASA K1/K2 contra #441, +9.4469pp CAGR. No es el candidato elegido ni una autorizacion de cableado. K3/K4 no aplican sin referencia PIT de palanca.",
+    "measurement": { "cagrPct": 29.4116, "currentCagrPct": 19.9647, "deltaCagrPp": 9.4469, "sharpe": 1.1381, "currentSharpe": 1.2648 }
+  },
   "trialSensitivityFinding": {
     "date": "2026-09-04",
     "problem": "trialAccounting.complete no puede volverse true honestamente para nada aguas abajo de la era pre-protocolo: los barridos de 2026-07 se lanzaban por CLI (--voltarget, --exposure, --shorts) y las invocaciones nunca entraron a git. No es una tarea pendiente, es una propiedad permanente de esa era. Con la regla actual, NINGÚN candidato puede aprobarse jamás — el protocolo se vuelve decorativo justo cuando por fin produce un ganador.",
@@ -4879,6 +5091,221 @@
       "riskStateReanchor": false,
       "riskStateReanchorReason": "el mismo kernel construyo el drawdown vivo que lee el control; re-anclar lo dejaria ciego y soltaria la pausa soft-DD (el candidato sin soft-DD fallo todo)",
       "source": "docs/reports/RW-reescritura-rentable.md SS13.4 y SS13.6"
+    }
+  },
+  "authoritativeArtifactRw5": {
+    "path": "data/backtests/db188948feec63b984628d103085db6527c4c779ac26653cac53b45e57aa3736/",
+    "manifest": "experiments/rw5-e1-lev-vt25-g200-sma200-fastvol5-v1.json",
+    "trial": 444,
+    "wired": false,
+    "verdict": "PASA K1-K6; NO SE CABLEA. K7 tal como se escribio FALLA (#442 vs #441); decision explicita del dueno pendiente aunque el gemelo propio #445 pase K1/K2.",
+    "wiring": {
+      "reason": "K7 tal como se escribio fallo; decision explicita del dueno pendiente",
+      "requiredBeforeWiring": [
+        "Decision explicita del dueno que acepte #444 por encima de K7 tal como se escribio",
+        "Confirmar presupuesto de caida y romper congelacion de momentum_stocks antes de 2027-01-21",
+        "Defensa viva probada sin BIL, reservado a tesoreria (efectivo/BOXX u otro ETF propio)",
+        "Comprobar margen Reg-T de E1 2x mas E2 en la cuenta compartida"
+      ]
+    },
+    "k7": { "trial": 442, "controlTrial": 441, "pass": false, "criteriaFailed": ["K1_moreReturn"], "deltaCagrPp": 2.4797 },
+    "ownPitTwin": { "trial": 445, "controlTrial": 441, "passesK1K2": true, "deltaCagrPp": 5.6985, "replacesK7": false },
+    "figuresNote": "Cifras OOS en dias comunes, redondeadas a 4 decimales; porcentajes y puntos porcentuales explicitados en las claves. Ventanas en orden RW5_CRASH_WINDOWS (2020, 2022, 2025). scripts/rw5-evaluate.ts calcula K1-K6, NO K7: K7 se deriva aparte de K1/K2 de #442 contra #441. null en K3/K4 significa no aplicable, no aprobado; null en K5_R7_breakEven es el valor JSON del artefacto (pass=true), no un coste finito medido. #441 es control, no una propuesta de cableado. trials identificados por priorUniqueTrials, no por el ordinal 1-11 de SS16.",
+    "candidates": [
+      {
+        "trial": 435,
+        "manifest": "experiments/rw5-e1-lev-vt20-g150-sma200-v1.json",
+        "path": "data/backtests/52c4055985e06dc8f9f3e7bca6b40bb2e107bcc68e612452578e1801ecb52a8b/",
+        "current": "33b0ac05", "partner": "0b088ca3", "sameLeverage": "c512c100",
+        "figures": {
+          "commonSessions": 1755, "cagrPct": 23.2222, "deltaCagrPp": 1.7727, "sharpe": 1.227,
+          "maxDrawdownPct": 22.1164, "accountMaxDrawdownPct": 21.5487, "calmar": 1.05,
+          "currentCagrPct": 21.4495, "currentSharpe": 1.2905, "sameLeverageMaxDrawdownPct": 28.888, "sameLeverageCalmar": 0.9378,
+          "crashDrawdownsPct": [22.1164, 14.8327, 13.66], "sameLeverageCrashDrawdownsPct": [21.8534, 27.4566, 21.3751], "crashSessions": [93, 251, 91],
+          "robustness": { "K5_R1_psr": 0.999, "K5_R4_stressSharpe": 1.2019, "K5_R5_yearShare": 0.2685, "K5_R6_exTopDecile": 1.0826, "K5_R7_breakEven": null }
+        },
+        "criteriaFailed": ["K1_moreReturn", "K4_everyCrash"], "criteriaNotApplicable": [],
+        "criteriaVerdict": "FALLA: K1_moreReturn, K4_everyCrash"
+      },
+      {
+        "trial": 436,
+        "manifest": "experiments/rw5-e1-lev-vt25-g200-sma200-v1.json",
+        "path": "data/backtests/2ddb07a5f779decb00bc6613a382cc0e903e118ef1db71da4d805148fcea15ed/",
+        "current": "33b0ac05", "partner": "0b088ca3", "sameLeverage": "49a1160c",
+        "figures": {
+          "commonSessions": 1755, "cagrPct": 28.9951, "deltaCagrPp": 7.5456, "sharpe": 1.204,
+          "maxDrawdownPct": 27.265, "accountMaxDrawdownPct": 24.5464, "calmar": 1.0635,
+          "currentCagrPct": 21.4495, "currentSharpe": 1.2905, "sameLeverageMaxDrawdownPct": 35.5604, "sameLeverageCalmar": 0.9599,
+          "crashDrawdownsPct": [27.265, 18.6312, 16.6661], "sameLeverageCrashDrawdownsPct": [26.7263, 33.5, 25.5073], "crashSessions": [93, 251, 91],
+          "robustness": { "K5_R1_psr": 0.9987, "K5_R4_stressSharpe": 1.1777, "K5_R5_yearShare": 0.261, "K5_R6_exTopDecile": 1.0592, "K5_R7_breakEven": null }
+        },
+        "criteriaFailed": ["K4_everyCrash"], "criteriaNotApplicable": [],
+        "criteriaVerdict": "FALLA: K4_everyCrash"
+      },
+      {
+        "trial": 437,
+        "manifest": "experiments/rw5-e1-lev-vt20-g150-absmom12-v1.json",
+        "path": "data/backtests/bc6734c8f3cd1ce9620c9ae332bdccebb43fc2db77778c8d1849b8e856e65273/",
+        "current": "33b0ac05", "partner": "0b088ca3", "sameLeverage": "c512c100",
+        "figures": {
+          "commonSessions": 1755, "cagrPct": 20.8938, "deltaCagrPp": -0.5557, "sharpe": 1.0977,
+          "maxDrawdownPct": 21.6333, "accountMaxDrawdownPct": 20.019, "calmar": 0.9658,
+          "currentCagrPct": 21.4495, "currentSharpe": 1.2905, "sameLeverageMaxDrawdownPct": 28.888, "sameLeverageCalmar": 0.9378,
+          "crashDrawdownsPct": [21.6333, 19.164, 21.2491], "sameLeverageCrashDrawdownsPct": [21.8534, 27.4566, 21.3751], "crashSessions": [93, 251, 91],
+          "robustness": { "K5_R1_psr": 0.9971, "K5_R4_stressSharpe": 1.0714, "K5_R5_yearShare": 0.2875, "K5_R6_exTopDecile": 0.9555, "K5_R7_breakEven": null }
+        },
+        "criteriaFailed": ["K1_moreReturn"], "criteriaNotApplicable": [],
+        "criteriaVerdict": "FALLA: K1_moreReturn"
+      },
+      {
+        "trial": 438,
+        "manifest": "experiments/rw5-e1-lev-vt20-g150-canary-v1.json",
+        "path": "data/backtests/8bbb886c9feee7234e073a5415e8c60aa3f6cba591d581459991b3b2d73e250a/",
+        "current": "33b0ac05", "partner": "0b088ca3", "sameLeverage": "c512c100",
+        "figures": {
+          "commonSessions": 1755, "cagrPct": 13.4576, "deltaCagrPp": -7.9919, "sharpe": 0.9849,
+          "maxDrawdownPct": 20.6179, "accountMaxDrawdownPct": 13.928, "calmar": 0.6527,
+          "currentCagrPct": 21.4495, "currentSharpe": 1.2905, "sameLeverageMaxDrawdownPct": 28.888, "sameLeverageCalmar": 0.9378,
+          "crashDrawdownsPct": [9.4664, 5.8761, 12.6989], "sameLeverageCrashDrawdownsPct": [21.8534, 27.4566, 21.3751], "crashSessions": [93, 251, 91],
+          "robustness": { "K5_R1_psr": 0.9923, "K5_R4_stressSharpe": 0.86, "K5_R5_yearShare": 0.2462, "K5_R6_exTopDecile": 0.8302, "K5_R7_breakEven": null }
+        },
+        "criteriaFailed": ["K1_moreReturn", "K3_beatsSameLeverage", "K6_sharpeFloor"], "criteriaNotApplicable": [],
+        "criteriaVerdict": "FALLA: K1_moreReturn, K3_beatsSameLeverage, K6_sharpeFloor"
+      },
+      {
+        "trial": 439,
+        "manifest": "experiments/rw5-e2-lev-vt20-g150-sma200-v1.json",
+        "path": "data/backtests/24738ecc5c06dd1d0fbf7e3ccf1333e68282377df0b54f95dcf3675c56b3606d/",
+        "current": "0b088ca3", "partner": "33b0ac05", "sameLeverage": "006f1e03",
+        "figures": {
+          "commonSessions": 1851, "cagrPct": 13.899, "deltaCagrPp": 0.6316, "sharpe": 0.9629,
+          "maxDrawdownPct": 26.7225, "accountMaxDrawdownPct": 21.1642, "calmar": 0.5201,
+          "currentCagrPct": 13.2674, "currentSharpe": 1.1088, "sameLeverageMaxDrawdownPct": 26.8382, "sameLeverageCalmar": 0.6382,
+          "crashDrawdownsPct": [26.6842, 9.8949, 8.6509], "sameLeverageCrashDrawdownsPct": [26.8004, 19.2732, 19.7791], "crashSessions": [93, 251, 91],
+          "robustness": { "K5_R1_psr": 0.9938, "K5_R4_stressSharpe": 0.9357, "K5_R5_yearShare": 0.2537, "K5_R6_exTopDecile": 0.7996, "K5_R7_breakEven": null }
+        },
+        "criteriaFailed": ["K1_moreReturn", "K3_beatsSameLeverage"], "criteriaNotApplicable": [],
+        "criteriaVerdict": "FALLA: K1_moreReturn, K3_beatsSameLeverage"
+      },
+      {
+        "trial": 440,
+        "manifest": "experiments/rw5-e2-lev-vt25-g200-sma200-v1.json",
+        "path": "data/backtests/985446a7b79bb5c6a0bf8469e361d5d68c4d5317869fef014d77a58fe3bd3528/",
+        "current": "0b088ca3", "partner": "33b0ac05", "sameLeverage": "3c181ce9",
+        "figures": {
+          "commonSessions": 1851, "cagrPct": 16.9069, "deltaCagrPp": 3.6396, "sharpe": 0.9079,
+          "maxDrawdownPct": 32.1503, "accountMaxDrawdownPct": 23.5837, "calmar": 0.5259,
+          "currentCagrPct": 13.2674, "currentSharpe": 1.1088, "sameLeverageMaxDrawdownPct": 31.8223, "sameLeverageCalmar": 0.6571,
+          "crashDrawdownsPct": [32.0244, 13.7246, 11.2245], "sameLeverageCrashDrawdownsPct": [31.6956, 25.9474, 24.6806], "crashSessions": [93, 251, 91],
+          "robustness": { "K5_R1_psr": 0.9914, "K5_R4_stressSharpe": 0.8764, "K5_R5_yearShare": 0.2721, "K5_R6_exTopDecile": 0.7294, "K5_R7_breakEven": null }
+        },
+        "criteriaFailed": ["K2_sleeveDrawdown", "K3_beatsSameLeverage", "K4_everyCrash"], "criteriaNotApplicable": [],
+        "criteriaVerdict": "FALLA: K2_sleeveDrawdown, K3_beatsSameLeverage, K4_everyCrash"
+      },
+      {
+        "trial": 441,
+        "role": "control de sesgo a posteriori",
+        "manifest": "experiments/rw5-e1-pit-top6-vt15-v1.json",
+        "path": "data/backtests/ad0cf3a2732a7e422461cd595a281c2f98904871582edf8055948f43b67a4bce/",
+        "current": "33b0ac05", "partner": "0b088ca3", "sameLeverage": null,
+        "figures": {
+          "commonSessions": 1755, "cagrPct": 19.9647, "deltaCagrPp": -1.4848, "sharpe": 1.2648,
+          "maxDrawdownPct": 20.4597, "accountMaxDrawdownPct": 18.3576, "calmar": 0.9758,
+          "currentCagrPct": 21.4495, "currentSharpe": 1.2905, "sameLeverageMaxDrawdownPct": null, "sameLeverageCalmar": null,
+          "crashDrawdownsPct": [16.5438, 20.2746, 15.3818], "sameLeverageCrashDrawdownsPct": null, "crashSessions": [93, 251, 91],
+          "robustness": { "K5_R1_psr": 0.9992, "K5_R4_stressSharpe": 1.2513, "K5_R5_yearShare": 0.2517, "K5_R6_exTopDecile": 1.2113, "K5_R7_breakEven": null }
+        },
+        "criteriaFailed": ["K1_moreReturn"], "criteriaNotApplicable": ["K3_beatsSameLeverage", "K4_everyCrash"],
+        "criteriaVerdict": "FALLA: K1_moreReturn"
+      },
+      {
+        "trial": 442,
+        "manifest": "experiments/rw5-e1-pit-top6-lev-vt20-g150-sma200-v1.json",
+        "path": "data/backtests/bcb7c254f2bb5dc502e8d1cbd541cf51b7404d8b109aa0abf9c00e91e0a1adb5/",
+        "current": "ad0cf3a2", "partner": "0b088ca3", "sameLeverage": null,
+        "rerun": { "fixCommits": ["c9691c6", "417ef26"], "crashLog": "rw5-e1-pit-top6-lev-vt20-g150-sma200-v1.crash-before-fix.log", "extraTrials": 0 },
+        "figures": {
+          "commonSessions": 1755, "cagrPct": 22.4444, "deltaCagrPp": 2.4797, "sharpe": 1.1872,
+          "maxDrawdownPct": 22.4807, "accountMaxDrawdownPct": 21.6567, "calmar": 0.9984,
+          "currentCagrPct": 19.9647, "currentSharpe": 1.2648, "sameLeverageMaxDrawdownPct": null, "sameLeverageCalmar": null,
+          "crashDrawdownsPct": [22.4807, 13.8003, 14.6568], "sameLeverageCrashDrawdownsPct": null, "crashSessions": [93, 251, 91],
+          "robustness": { "K5_R1_psr": 0.9987, "K5_R4_stressSharpe": 1.1599, "K5_R5_yearShare": 0.249, "K5_R6_exTopDecile": 1.0352, "K5_R7_breakEven": null }
+        },
+        "criteriaFailed": ["K1_moreReturn"], "criteriaNotApplicable": ["K3_beatsSameLeverage", "K4_everyCrash"],
+        "criteriaVerdict": "FALLA: K1_moreReturn"
+      },
+      {
+        "trial": 443,
+        "manifest": "experiments/rw5-e1-lev-vt20-g150-sma200-fastvol5-v1.json",
+        "path": "data/backtests/398681144d879a6d70d543e2af4b508064b52cdc33fb24dc66d67627a83a113b/",
+        "current": "33b0ac05", "partner": "0b088ca3", "sameLeverage": "c512c100",
+        "figures": {
+          "commonSessions": 1755, "cagrPct": 21.245, "deltaCagrPp": -0.2045, "sharpe": 1.2202,
+          "maxDrawdownPct": 17.7087, "accountMaxDrawdownPct": 19.1079, "calmar": 1.1997,
+          "currentCagrPct": 21.4495, "currentSharpe": 1.2905, "sameLeverageMaxDrawdownPct": 28.888, "sameLeverageCalmar": 0.9378,
+          "crashDrawdownsPct": [17.7087, 14.8443, 11.6665], "sameLeverageCrashDrawdownsPct": [21.8534, 27.4566, 21.3751], "crashSessions": [93, 251, 91],
+          "robustness": { "K5_R1_psr": 0.9987, "K5_R4_stressSharpe": 1.1743, "K5_R5_yearShare": 0.2492, "K5_R6_exTopDecile": 1.0739, "K5_R7_breakEven": null }
+        },
+        "criteriaFailed": ["K1_moreReturn"], "criteriaNotApplicable": [],
+        "criteriaVerdict": "FALLA: K1_moreReturn"
+      },
+      {
+        "trial": 444,
+        "manifest": "experiments/rw5-e1-lev-vt25-g200-sma200-fastvol5-v1.json",
+        "path": "data/backtests/db188948feec63b984628d103085db6527c4c779ac26653cac53b45e57aa3736/",
+        "current": "33b0ac05", "partner": "0b088ca3", "sameLeverage": "49a1160c",
+        "figures": {
+          "commonSessions": 1755, "cagrPct": 26.0156, "deltaCagrPp": 4.5661, "sharpe": 1.1812,
+          "maxDrawdownPct": 22.3463, "accountMaxDrawdownPct": 21.6789, "calmar": 1.1642,
+          "currentCagrPct": 21.4495, "currentSharpe": 1.2905, "sameLeverageMaxDrawdownPct": 35.5604, "sameLeverageCalmar": 0.9599,
+          "crashDrawdownsPct": [22.3463, 18.8069, 14.4468], "sameLeverageCrashDrawdownsPct": [26.7263, 33.5, 25.5073], "crashSessions": [93, 251, 91],
+          "robustness": { "K5_R1_psr": 0.9983, "K5_R4_stressSharpe": 1.1324, "K5_R5_yearShare": 0.2653, "K5_R6_exTopDecile": 1.0233, "K5_R7_breakEven": null }
+        },
+        "criteriaFailed": [], "criteriaNotApplicable": [],
+        "criteriaVerdict": "CUMPLE"
+      },
+      {
+        "trial": 445,
+        "manifest": "experiments/rw5-e1-pit-top6-lev-vt25-g200-sma200-fastvol5-v1.json",
+        "path": "data/backtests/b7857555d3de31efb3ae9e44bb1a0d10530fb37413a41ce184ba9c92da1c5351/",
+        "current": "ad0cf3a2", "partner": "0b088ca3", "sameLeverage": null,
+        "figures": {
+          "commonSessions": 1755, "cagrPct": 25.6632, "deltaCagrPp": 5.6985, "sharpe": 1.1686,
+          "maxDrawdownPct": 23.2124, "accountMaxDrawdownPct": 22.0513, "calmar": 1.1056,
+          "currentCagrPct": 19.9647, "currentSharpe": 1.2648, "sameLeverageMaxDrawdownPct": null, "sameLeverageCalmar": null,
+          "crashDrawdownsPct": [23.2124, 16.5216, 15.1873], "sameLeverageCrashDrawdownsPct": null, "crashSessions": [93, 251, 91],
+          "robustness": { "K5_R1_psr": 0.9983, "K5_R4_stressSharpe": 1.1188, "K5_R5_yearShare": 0.251, "K5_R6_exTopDecile": 0.995, "K5_R7_breakEven": null }
+        },
+        "criteriaFailed": [], "criteriaNotApplicable": ["K3_beatsSameLeverage", "K4_everyCrash"],
+        "criteriaVerdict": "CUMPLE"
+      }
+    ]
+  },
+  "authoritativeArtifactRw5Pit": {
+    "path": "data/backtests/ad0cf3a2732a7e422461cd595a281c2f98904871582edf8055948f43b67a4bce/",
+    "manifest": "experiments/rw5-e1-pit-top6-vt15-v1.json",
+    "trial": 441,
+    "verdict": "CONTROL: medicion del sesgo a posteriori de E1, no candidato de cableado. Universo PIT por regla: CAGR 19.9647% vs E1 21.4495%, -1.4848pp; Sharpe 1.2648 vs 1.2905. Sesgo medido pequeno; no prueba que sea cero.",
+    "measurement": { "cagrPct": 19.9647, "currentCagrPct": 21.4495, "deltaCagrPp": -1.4848, "sharpe": 1.2648, "currentSharpe": 1.2905 }
+  },
+  "authoritativeArtifactRw5Frontier": {
+    "path": "data/backtests/2ddb07a5f779decb00bc6613a382cc0e903e118ef1db71da4d805148fcea15ed/",
+    "manifest": "experiments/rw5-e1-lev-vt25-g200-sma200-v1.json",
+    "trial": 436,
+    "wired": false,
+    "verdict": "REFERENCIA DE FRONTERA sin componente de crash rapido: CAGR 28.9951%, Sharpe 1.2040, DD 27.2650%, cuenta 24.5464%; falla SOLO K4 (2020: 27.2650% vs 26.7263%). NO SE CABLEA; #444 anade fastvol5 para arreglar ese crash a cambio de CAGR.",
+    "criteriaFailed": ["K4_everyCrash"]
+  },
+  "rw5Controls": {
+    "trialsAdded": 0,
+    "note": "Referencias ya corridas, NO son candidatos ni ensayos nuevos: actuales E1/E2 y misma palanca sin contingencia de RW3. #441, que SI cuenta en RW5, es referencia adicional de #442 y #445.",
+    "paths": {
+      "33b0ac05": "data/backtests/33b0ac05db80fb9c9c60b961f9b85dd899622d9da7e2420bf81903551cf849bc/",
+      "0b088ca3": "data/backtests/0b088ca320e3521d8bff05b10c1ad7eed2816bc2a1b0b927eb3134e2a3dca4c2/",
+      "c512c100": "data/backtests/c512c10011461a8f4521aa6d4cc03718f2367e5b2cbb4813f549855a544351c9/",
+      "49a1160c": "data/backtests/49a1160c1427828cd3d4eb33d0c3d0e9c979fa56df7fc2789ece9f6eda2c5f45/",
+      "006f1e03": "data/backtests/006f1e0366d1e6961d3e353cadb2395b4d54c3e5e1ce8f4b5316edaf6cff174c/",
+      "3c181ce9": "data/backtests/3c181ce9505b738c83979089148e4d65fa71b82f1725bb8ed8c12af061795479/"
     }
   },
   "rw4Controls": {

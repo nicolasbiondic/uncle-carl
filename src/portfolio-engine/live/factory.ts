@@ -15,7 +15,8 @@ import { heartbeats as defaultHeartbeats } from "../../ops/heartbeat";
 import type { PortfolioEnginePlan } from "../../portfolios/types";
 import type { MembershipView, VenueAdapter, VenueId } from "../types";
 import { PortfolioEngine, type PortfolioEngineOptions } from "./PortfolioEngine";
-import { HistoricalPriceView } from "./priceView";
+import { HistoricalPriceView, DEFAULT_MAX_BARS } from "./priceView";
+import { contingencyHistoryBars } from "../contingency";
 import type { Market } from "./schedule";
 import { AlpacaVenue } from "./venues/alpaca";
 
@@ -53,8 +54,8 @@ export function buildPortfolioEngine(plan: PortfolioEnginePlan, deps: BuildDeps)
   if (p.venue !== deps.venue.venue) {
     throw new Error(`portfolio '${plan.portfolioId}': params.venue ${p.venue} ≠ venue adapter ${deps.venue.venue}`);
   }
-  if (p.strategy.kind === "factorCore" && !deps.membership) {
-    throw new Error(`portfolio '${plan.portfolioId}': factorCore needs a MembershipView (point-in-time S&P 500 members)`);
+  if ((p.strategy.kind === "factorCore" || (p.strategy.kind === "volManaged" && p.strategy.pitUniverse)) && !deps.membership) {
+    throw new Error(`portfolio '${plan.portfolioId}': ${p.strategy.kind} needs a MembershipView (point-in-time S&P 500 members)`);
   }
   const profile = venueProfile(p.venue);
   const dataSymbols = p.dataSymbols ?? {};
@@ -69,7 +70,10 @@ export function buildPortfolioEngine(plan: PortfolioEnginePlan, deps: BuildDeps)
     quoteAsset: profile.quoteAsset,
     venue: deps.venue,
     mode: p.runMode,
-    openPriceView: (asOf, symbols) => new HistoricalPriceView({ db: deps.historicalDb, asOf, symbols, dataSymbol }),
+    openPriceView: (asOf, symbols) => new HistoricalPriceView({ db: deps.historicalDb, asOf, symbols, dataSymbol,
+      ...(p.strategy.kind === "volManaged" && (p.strategy.regimeOverlay || p.strategy.pitUniverse)
+        ? { maxBars: Math.max(DEFAULT_MAX_BARS, contingencyHistoryBars(p.strategy)) } : {}),
+    }),
     membership: deps.membership,
     maxStaleSymbols: p.maxStaleSymbols ?? 0,
     heartbeatName: plan.heartbeat.name,

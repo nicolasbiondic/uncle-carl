@@ -41,7 +41,7 @@
 
 import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
-import { MomentumEngine, shortStopDistancePct, trailPctFromVol, type ExposureControlConfig, type MarketTrendGateConfig, type MomentumBrokerAdapter, type MomentumStatePersistence, type ShortStopSpec, type TimeStopConfig, type TrailMark, type TrailStopConfig, type VolSizingConfig, type VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
+import { MomentumEngine, TREND_EXIT_CLOSE_REASON, shortStopDistancePct, trailPctFromVol, type ExposureControlConfig, type MarketTrendGateConfig, type MomentumBrokerAdapter, type MomentumStatePersistence, type ShortStopSpec, type TimeStopConfig, type TrailMark, type TrailStopConfig, type TrendExitConfig, type VolSizingConfig, type VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
 import type { CurrentPosition } from "../src/strategies/momentum/Rebalancer";
 import { DEFAULT_TSM_CONFIG, type TSMConfig } from "../src/strategies/momentum/TimeSeriesMomentum";
 import type { OHLCV } from "../src/utils/types";
@@ -875,6 +875,9 @@ export class SimBroker implements MomentumBrokerAdapter {
    *  Empty on every run without cfg.exposureControl — the engine never calls
    *  scalePosition then. Output only (ReplayResult.exposureResizes). */
   resizes: SimResize[] = [];
+  /** Attributed trend-exit orders, NOT a counterfactual delta vs baseline. */
+  trendExitOrders = { exits: 0, reentries: 0, orders: 0 };
+  private awaitingTrendReentry = new Set<string>();
   /** symbol → decisionTicks value at which entries unblock (B2 axis). Empty
    *  unless cooldownBarsAfterStop > 0 AND a hard stop actually fired. */
   private cooldownUntilTick = new Map<string, number>();
@@ -1017,6 +1020,10 @@ export class SimBroker implements MomentumBrokerAdapter {
       stopFrac = entryStopFraction(this.hardStopSpec, closes, this.barsPerDay);
     }
     this.positions.push({ symbol: a.symbol, side: a.side, qty, entryPrice: slip, entryAt: this.now, entryMargin: need, entryCommission: fee, fundingCashDelta: 0, stopFrac, peakPrice: slip, lockLevel: null });
+    if (a.side === "buy" && this.awaitingTrendReentry.delete(a.symbol)) {
+      this.trendExitOrders.reentries++;
+      this.trendExitOrders.orders++;
+    }
     return { ok: true };
   }
 
@@ -1128,7 +1135,13 @@ export class SimBroker implements MomentumBrokerAdapter {
     // after 5 consecutive losing periods (momentum_crypto parity, 2026-10-02
     // 19:00). Hard stops stay at `now`: they fill inside the bar that just
     // closed and are read by THIS tick.
-    return this.closeAt(a.symbol, a.side, this.executionPrice(a.symbol), "rebalance", a.closeReason, this.now + 1);
+    const result = this.closeAt(a.symbol, a.side, this.executionPrice(a.symbol), "rebalance", a.closeReason, this.now + 1);
+    if (result.ok && a.side === "buy" && a.closeReason === TREND_EXIT_CLOSE_REASON) {
+      this.awaitingTrendReentry.add(a.symbol);
+      this.trendExitOrders.exits++;
+      this.trendExitOrders.orders++;
+    }
+    return result;
   }
 
   private executionPrice(symbol: string): number {
@@ -1369,6 +1382,7 @@ export class SimBroker implements MomentumBrokerAdapter {
    *  configured) — same shape and causality as marketTrendDaily, for the
    *  short-side reference symbol. */
   shortRegimeDaily?: { symbol: string; dayEndMs: number[]; closes: number[] };
+  trendExitDaily?: Map<string, { dayEndMs: number[]; closes: number[] }>;
 
   /**
    * MomentumBrokerAdapter.fetchDailyCloses (optional interface method):
@@ -1380,11 +1394,19 @@ export class SimBroker implements MomentumBrokerAdapter {
     // Registry lookup: marketTrend's series first (legacy), then the
     // short-regime series (line S). A miss returns [] — the long gate then
     // fails OPEN and the short gate fails CLOSED, each per its contract.
-    const d = this.marketTrendDaily?.symbol === symbol
+    let d: { dayEndMs: number[]; closes: number[] } | undefined = this.marketTrendDaily?.symbol === symbol
       ? this.marketTrendDaily
       : this.shortRegimeDaily?.symbol === symbol
         ? this.shortRegimeDaily
         : undefined;
+    const own = this.trendExitDaily?.get(symbol);
+    if (own) {
+      // These series share the same tape/end. Use the deepest when knobs
+      // coexist: a short marketTrend window must not starve SMA65, nor may
+      // SMA65 starve a longer shortRegime window. OFF keeps legacy lookup.
+      const sources = [d, own, this.shortRegimeDaily?.symbol === symbol ? this.shortRegimeDaily : undefined];
+      d = sources.filter((x): x is NonNullable<typeof x> => !!x).reduce((a, b) => a.closes.length >= b.closes.length ? a : b);
+    }
     if (!d || days <= 0) return [];
     // Binary search: last index whose day END is <= now.
     let lo = 0, hi = d.dayEndMs.length - 1, ans = -1;
@@ -1587,6 +1609,7 @@ export interface ReplayConfig {
    *  implements scalePosition for the partial resizes. Absent = OFF AND the
    *  legacy hash (canonicalJson drops undefined). */
   exposureControl?: ExposureControlConfig;
+  trendExit?: TrendExitConfig;
   /** Present iff sleeve === "meanrev": routes the trial to runMeanRevReplay. */
   meanrev?: MeanRevSimParams;
   /**
@@ -1716,6 +1739,9 @@ export interface ReplayResult {
    *  keep the exact pre-existing result shape. Not part of candidate
    *  identity (that's config-hash territory: risk.ddScale itself). */
   ddScaleStats?: { ticks: number; ticksBelowOne: number; meanScale: number; minScale: number };
+  /** Actual TREND_EXIT closes and first successful long reentries after them.
+   * Fees/turnover already include both. Absent when the knob is OFF. */
+  trendExitStats?: { exits: number; reentries: number; orders: number };
   /** Exposure-control telemetry (cfg.exposureControl only; legacy runs keep
    *  the exact result shape): resize ORDERS executed (the extra orders the
    *  protocol counts), their Σ|Δnotional| in USD (already inside
@@ -2138,6 +2164,16 @@ export async function runWithConfig(
     // from tick 0. Absent/empty seedPositions = byte-identical legacy
     // empty-book behavior.
     if (seedPositions && seedPositions.length > 0) broker.seedPositions(seedPositions);
+    if (cfg.trendExit) {
+      broker.trendExitDaily = new Map();
+      // Separate daily history: an hourly sleeve's normal warmup (45d) is
+      // shorter than SMA65. Load before the fold, reveal only dayEnd <= now.
+      const trendFrom = fromMs - (cfg.trendExit.smaDays * 2 + 15) * 86_400_000;
+      for (const symbol of replayUniverse) {
+        const bars = loadBars(symbol, cfg.timeframe, cfg.source, cfg.rthOnly, trendFrom, toMs, db);
+        broker.trendExitDaily.set(symbol, dailyClosesFromBars(bars));
+      }
+    }
     // Market-trend gate data: the gate symbol's own bars, loaded with
     // maDays(+slack) of EXTRA history before the fold start so the very
     // first decision tick already sees a full SMA window — never lookahead
@@ -2281,6 +2317,7 @@ export async function runWithConfig(
         // exposureControl (RW4a): engine-level knob; SimBroker.scalePosition
         // executes the resizes. undefined = OFF, byte-identical engine config.
         exposureControl: cfg.exposureControl,
+        trendExit: cfg.trendExit,
         // maxGrossExposureMult: already a MomentumEngineConfig field (prod
         // parity — the sim instantiates the real engine). undefined = OFF,
         // matching the engine's own default.
@@ -2547,6 +2584,7 @@ export async function runWithConfig(
       ...(ddScaleStats ? { ddScaleStats } : {}),
       // Key absent on legacy candidates (RW4a exposure control only).
       ...(exposureStats ? { exposureStats } : {}),
+      ...(cfg.trendExit ? { trendExitStats: { ...broker.trendExitOrders } } : {}),
       // Line-S output-only telemetry: absent unless the run actually charged
       // borrow / vetoed a short on the gross cap (legacy shape preserved).
       ...(broker.shortBorrowPaid > 0 ? { shortBorrow: broker.shortBorrowPaid } : {}),

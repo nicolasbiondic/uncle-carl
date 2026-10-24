@@ -178,6 +178,109 @@ unlinked) pages every boot ("orphaned").
    engine's). `PORTFOLIOS_SOURCE=code` is also a full rollback: definitions are
    not read, the rows are handed back.
 
+## RW5 optional volManaged contingencies
+
+Both keys are absent by default: no new memory/diagnostics and byte-identical
+decisions, config hashes and candidate hashes for existing manifests. They
+currently require stocks (`annualization: 252`). With either knob, manifest
+validation permits `maxGross <= 2.5`; without them the existing limit is 2.
+This is research capacity, not a statement that Reg-T will fill 2.5x.
+
+### regimeOverlay
+
+```json
+{
+  "signals": [{ "kind": "maTrend", "symbol": "SPY", "sampling": "monthEnd", "period": 10, "bandPct": 0 }],
+  "combine": "any",
+  "confirmationDecisions": 1,
+  "coreScale": 0,
+  "defensive": { "assets": ["IEF", "GLD", "BIL"], "momentumLookback": 63, "volLookback": 63, "cashProxy": "BIL" },
+  "hedge": { "symbol": "SH", "fraction": 0.1 }
+}
+```
+
+- `maTrend`: risk-off below SMA minus `bandPct` percent, risk-on above SMA
+  plus the band; equality/in-band retains that signal's state. `daily`
+  periods are sessions. `monthEnd` uses the last close of each completed
+  calendar month (including the latest in the average), not today's partial
+  month. The execution calendar tells the core when `asOf` completed a month;
+  without `executionSession`, `asOf`'s month is excluded. Missing months do
+  not compress the horizon.
+- `absMomentum`: `{kind, symbol, cashProxy, lookback}` compares trailing
+  adjusted-close returns on identical session dates. The data provider must
+  supply total-return-adjusted closes (stock downloaders use `adjustment=all`);
+  the kernel neither invents nor separately adds dividends.
+- `canary`: `{kind, assets, horizons, coefficients, negativeCount?}`. A score
+  is the sum of coefficient times trailing session return. Keller 13612W is
+  `[21,63,126,252]` with `[12,4,2,1]` (21-session month approximation). Risk-off
+  when at least `negativeCount` assets score below zero; default 1.
+- `combine` is `any`, `all`, or an integer vote threshold. All signals start
+  risk-off, as does the aggregate state. A different aggregate request needs
+  `confirmationDecisions` consecutive decisions, default 1. Missing/stale
+  signal history retains the state and resets confirmation. Same-session
+  post-fill calls/retries do not age confirmations or PIT tenure. Memory is
+  JSON under `portfolioCore.regime` / `.pit` and crosses research folds.
+- On risk-off, core weights are multiplied by `coreScale` in [0,1]. If
+  `defensive` is present, freed weight goes inverse-vol to its assets with
+  strictly positive trailing momentum and sufficient risk history; if none
+  qualifies, all freed weight goes to `cashProxy`. Without `defensive`, it
+  remains uninvested cash. Overlapping core/defensive weights add. Optional
+  `hedge` is a long inverse-ETF position, `fraction` times the pre-overlay
+  core gross, added on top of the defensive allocation. It cannot duplicate
+  a fixed core/defensive symbol. Caps can leave some allocation as cash.
+- Order: eligible core → inverse-vol normalization → core target-vol scale
+  (including existing drawdown/fast-vol knobs) → regime actions → whole-book
+  vol ceiling → per-asset clipping → proportional gross cap → whole-book vol
+  ceiling again. The final recheck matters when clipping an inverse hedge
+  increases risk. **Never relever after the overlay**: that would undo a
+  scale-only contingency. Whole-book risk uses slow covariance or the larger
+  slow/fast estimate; allocated symbols require fresh aligned covariance
+  history, otherwise the decision throws. Constant cash stays allocated,
+  not zeroed or infinitely leveraged.
+- Every reference/action symbol must be in `data.universe`; replay and live
+  load signal-only symbols too. Live does not adopt signal-only positions.
+  Shared-wallet/treasury conflict checks include all possible action assets.
+  Thus the BIL example is NOT eligible for current production cutover.
+- Replay adds `portfolioDiagnostics.regimeOverlay`: `riskOffDays`,
+  `switches`, `timeInState`, `weightsByState` (mean final target weights,
+  zero included on sessions where absent, not executed weights). Days/time
+  are execution-session counts, not calendar days. Cold-start state is
+  risk-off, so its first confirmed risk-on transition counts as a switch.
+
+### pitUniverse
+
+```json
+{ "topN": 6, "liquidityLookback": 63, "minHoldingRebalances": 21, "exclude": [] }
+```
+
+`strategy.universe` becomes the fixed list (the five E1 ETFs in the example).
+At each daily decision, add `topN` members effective at execution open,
+ranked by mean trailing `close * volume`; prices/volume stop at `asOf`.
+Fixed names and optional exclusions do not compete for stock slots. Ties
+break lexically. Inception/vol/covariance history and a fresh last bar are
+required. Invalid/zero dollar volume is ineligible. A selected name stays
+for at least M decisions including selection day, unless membership or data
+eligibility is lost; this is selection tenure, not a guarantee of fills.
+Unexpired picks occupy slots before fresh top-ranked names. Remaining
+construction is unchanged, and both knobs compose.
+
+Research requires `data.membership.index = "sp500"`, loading membership and
+all overlapping members' bars from the same `hist-sp500.db` snapshot as
+factorCore; the existing data hash covers both. The pure/live runner accepts
+an injected `MembershipView`. Production wiring still refuses PIT: no live
+membership provider or dynamic shared-wallet collision plan exists yet.
+
+Examples: `experiments/rw5-e1-stocks-regime-ma10-v1.json` and
+`rw5-e1-stocks-pit-top6-v1.json`, drafts only. Trial reservations 435→436→437
+do not consume trials until the director pre-registers and runs. RW5 names
+use existing E1/E2/E3 reporting criteria; new approval thresholds are not
+defined by this implementation.
+R6 keeps signal data while excluding traded contributors from the core,
+PIT selection and defensive set. If it removes the mandatory cash proxy or
+hedge, it refuses rather than silently retaining that contributor; a
+replacement hypothesis must be pre-registered first. Sensitivity replays
+must never mutate the registered candidate block.
+
 ## copySignal (research only)
 
 A generic copy-trading kind (`CopySignalConfig` in `types.ts`, kernel `copySignal.ts`): events of a

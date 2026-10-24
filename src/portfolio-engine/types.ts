@@ -189,6 +189,35 @@ export interface VolManagedConfig {
    *  estimate: the portfolio vol used for the scale is max(fast, covLookback) estimate, so leverage drops quickly
    *  in a crash. Weights still use `volLookback`. */
   fastVolLookback?: number;
+  /** RW5, absent = unchanged construction. Price signals, never sleeve P&L. */
+  regimeOverlay?: RegimeOverlayConfig;
+  /** With this knob, `universe` is the FIXED sleeve (e.g. ETFs), plus these PIT stock slots. */
+  pitUniverse?: PitUniverseConfig;
+}
+
+export type RegimeSignal =
+  | { kind: "maTrend"; symbol: string; period: number; sampling: "daily" | "monthEnd"; bandPct?: number }
+  | { kind: "absMomentum"; symbol: string; cashProxy: string; lookback: number }
+  | { kind: "canary"; assets: string[]; horizons: number[]; coefficients: number[]; negativeCount?: number };
+
+export interface RegimeOverlayConfig {
+  signals: RegimeSignal[];
+  /** Number means at least that many signals request risk-off. */
+  combine: "any" | "all" | number;
+  confirmationDecisions?: number;
+  coreScale: number;
+  /** Freed core weight, inverse-vol across positive-momentum assets, otherwise cashProxy. */
+  defensive?: { assets: string[]; momentumLookback: number; volLookback: number; cashProxy: string };
+  /** Additional LONG inverse-ETF position, fraction of the pre-overlay core gross. */
+  hedge?: { symbol: string; fraction: number };
+}
+
+export interface PitUniverseConfig {
+  topN: number;
+  liquidityLookback: number;
+  /** Selection tenure, not a promise of fills. Membership removal/data ineligibility wins over tenure. */
+  minHoldingRebalances: number;
+  exclude?: string[];
 }
 
 /** Drawdown brake: multiplier on the vol target = 1 while drawdown ≤ startDrawdown, then linear down to

@@ -323,6 +323,11 @@ export interface MarketTrendGateConfig {
   maDays: number;
 }
 
+export interface TrendExitConfig {
+  smaDays: number;
+  basis: "dailyClose";
+}
+
 /**
  * Market-trend gate verdict from a series of CLOSED daily closes
  * (oldest→newest): blocked (true) when the LAST closed daily close sits
@@ -653,6 +658,15 @@ export interface MomentumEngineConfig {
    * passes its pre-registered criteria).
    */
   exposureControl?: ExposureControlConfig;
+  /** Own-coin long exit AND entry restriction, evaluated every decision from
+   * the last smaDays COMPLETED UTC daily closes (last close included in SMA).
+   * Strictly below exits; equality permits the original signal. Runs after
+   * trail/time/cutover, before slot assignment and exposure-control resizes;
+   * risk/regime never veto exits. Shorts are untouched. Missing/invalid daily
+   * data leaves held positions to their original exits, but forbids new longs
+   * and add-backs (never invent a trend exit or new risk). Absent = OFF.
+   * Uses fetchDailyCloses, not the often shorter hourly ranking window. */
+  trendExit?: TrendExitConfig;
   scorer: Partial<MomentumScorerConfig>;
   tsm: Partial<TSMConfig>;
   regime: Partial<RegimeFilterConfig>;
@@ -783,6 +797,8 @@ export const SLOT_DISPLACED_CLOSE_REASON = "SLOT_DISPLACED";
  * separate a one-shot re-underwrite from a signal exit.
  */
 export const MODEL_CUTOVER_CLOSE_REASON = "MODEL_CUTOVER";
+
+export const TREND_EXIT_CLOSE_REASON = "TREND_EXIT";
 
 /**
  * Optional time barrier (López de Prado's third barrier; Hummingbot
@@ -1013,6 +1029,9 @@ export class MomentumEngine {
      *  Date object as the walk-forward script used to. */
     private clock: Clock = systemClock,
   ) {
+    if (cfg.trendExit && (!Number.isInteger(cfg.trendExit.smaDays) || cfg.trendExit.smaDays < 2 || cfg.trendExit.basis !== "dailyClose")) {
+      throw new Error('trendExit requires integer smaDays >= 2 and basis "dailyClose"');
+    }
     this.cfg = {
       ...DEFAULT_ENGINE_CONFIG,
       ...cfg,
@@ -1441,6 +1460,29 @@ export class MomentumEngine {
 
     const heldSymbols = new Set(universePositions.filter(p => p.side === "buy").map(p => p.symbol));
     const heldShorts = new Set(universePositions.filter(p => p.side === "sell").map(p => p.symbol));
+    const trendExits = new Set<string>();
+    const trendUnverified = new Set<string>();
+    const longBlocked = new Set<string>();
+    if (this.cfg.trendExit) {
+      const { smaDays } = this.cfg.trendExit;
+      await Promise.all(this.cfg.universe.map(async symbol => {
+        let verdict: boolean | null = null;
+        try {
+          const closes = await this.broker.fetchDailyCloses?.(symbol, smaDays);
+          verdict = marketTrendBlocked(closes ?? [], smaDays);
+        } catch (e: any) {
+          this.log.warn(`trend exit ${symbol}: daily fetch failed: ${e.message}`);
+        }
+        if (verdict === true) {
+          trendExits.add(symbol);
+          longBlocked.add(symbol);
+        } else if (verdict === null) {
+          trendUnverified.add(symbol);
+          if (!heldSymbols.has(symbol)) longBlocked.add(symbol);
+          this.log.warn(`trend exit ${symbol}: SMA${smaDays} unavailable — no new long/add-back; original held exits retained`);
+        }
+      }));
+    }
     // PIT entry-eligibility (cfg.entryEligibility, opt-in — see docstring):
     // ineligible symbols leave the ranking candidate set unless held, so a
     // NEW entry can never take a slot; held ones keep normal stay/exit
@@ -1465,8 +1507,15 @@ export class MomentumEngine {
       rankCandles,
       heldSymbols,
       heldShorts,
-      shortRegimeCfg ? { shortRegimeBearish } : undefined,
+      this.cfg.trendExit || shortRegimeCfg ? { shortRegimeBearish, ...(this.cfg.trendExit ? { longBlocked } : {}) } : undefined,
     );
+    // A daily verdict can exit inventory even if the shorter-horizon ranker
+    // has no usable signal history. It must not become an undecidable hold.
+    for (const p of universePositions) {
+      if (p.side === "buy" && trendExits.has(p.symbol) && !decisions.some(d => d.symbol === p.symbol)) {
+        decisions.push({ symbol: p.symbol, action: "flat", score: 0, rank: 0, reason: "own daily close below trend SMA" });
+      }
+    }
     // Telemetry snapshot (never read by a trading branch): the ranker's output
     // BEFORE the Sharpe gate / stop cooldown rewrite `decisions` below.
     const rawDecisions = decisions;
@@ -1593,6 +1642,12 @@ export class MomentumEngine {
       notionalPerSlot: entryNotionalPerSlot,
       notionalBySymbol,
     });
+    for (const a of plan.actions) {
+      if (a.type === "close" && a.side === "buy" && trendExits.has(a.symbol)) {
+        a.closeReason = TREND_EXIT_CLOSE_REASON;
+        a.reason = "own completed daily close below trend SMA";
+      }
+    }
     plan.unchanged.push(...heldWithoutDecision.map(p => p.symbol));
 
     // If any held symbol is undecidable, it still occupies capital/slot. Exits
@@ -1667,11 +1722,14 @@ export class MomentumEngine {
       for (const p of universePositions) {
         const key = `${p.symbol}|${p.side}`;
         if (closedKeys.has(key)) continue;
+        // A rejected trend close retries next tick; never resize that position
+        // instead (especially never add risk after the exit failed).
+        if (p.side === "buy" && trendExits.has(p.symbol)) continue;
         const frac = this.exposureFracs.get(key) ?? 1;
         const notional = Math.abs(p.notional);
         const factor = exposureResizeFactor(frac, exposure.scale, notional, xc);
         if (factor === null) continue;
-        if (factor > 1 && (blocked || hasUndecidableHold)) {
+        if (factor > 1 && (blocked || hasUndecidableHold || (p.side === "buy" && trendUnverified.has(p.symbol)))) {
           // Add-backs are ENTRIES in every sense: no new risk while a gate
           // blocks opens or a held symbol has no usable data.
           exposure.deferredUp++;

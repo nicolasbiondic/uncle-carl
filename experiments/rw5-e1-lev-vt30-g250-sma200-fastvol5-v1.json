@@ -1,0 +1,121 @@
+{
+  "name": "rw5-e1-lev-vt30-g250-sma200-fastvol5-v1",
+  "sleeve": "stocks",
+  "description": "PRE-REGISTERED (2026-10-24) BEFORE any run, docs/reports/RW-reescritura-rentable.md §16.7 (RW5 d, the owner: more risk with a contingency). Candidate #10 (rw5-e1-lev-vt25-g200-sma200-fastvol5-v1) at more leverage: E1 vt30 2.5x with the SPY 200-day trend switch (band 1%) to T-bills (BIL) and the 5-session fast volatility estimate. Window, costs (margin interest 6.5% in base and stress) and capital of rw5-e1-lev-vt25-g200-sma200-fastvol5-v1. Trial 448 -> 449.",
+  "trialAccounting": {
+    "priorUniqueTrials": 448,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH",
+      "BIL"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-24",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000
+  },
+  "candidates": [
+    {
+      "name": "e1-lev-vt30-g250-sma200-fastvol5",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": {
+          "kind": "volManaged",
+          "universe": [
+            "SPY",
+            "QQQ",
+            "IWM",
+            "GLD",
+            "AAPL",
+            "MSFT",
+            "NVDA",
+            "META",
+            "GOOGL",
+            "AMZN",
+            "SMH"
+          ],
+          "inceptionGuardBars": 252,
+          "volLookback": 63,
+          "covLookback": 21,
+          "portfolioVolTarget": 0.3,
+          "annualization": 252,
+          "perAssetCap": 0.25,
+          "maxGross": 2.5,
+          "regimeOverlay": {
+            "signals": [
+              {
+                "kind": "maTrend",
+                "symbol": "SPY",
+                "period": 200,
+                "sampling": "daily",
+                "bandPct": 1
+              }
+            ],
+            "combine": "any",
+            "coreScale": 0,
+            "defensive": {
+              "assets": [
+                "BIL"
+              ],
+              "momentumLookback": 63,
+              "volLookback": 63,
+              "cashProxy": "BIL"
+            }
+          },
+          "fastVolLookback": 5
+        },
+        "venue": {
+          "venue": "alpaca",
+          "fractional": true,
+          "minOrderNotional": 5,
+          "rebalanceBand": 0.01
+        }
+      }
+    }
+  ],
+  "acceptance": {}
+}

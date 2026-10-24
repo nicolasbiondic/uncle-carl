@@ -59,6 +59,7 @@ import {
   type SessionSeries,
 } from "./lib/portfolioData";
 import { SignalBook, assertSignalCoverage, loadSignalEvents, signalCoverage } from "./lib/signalData";
+import { overlaySymbols, type RegimeMemory } from "../src/portfolio-engine/contingency";
 
 // ── kernel injection ──────────────────────────────────────────────────────
 
@@ -100,6 +101,13 @@ export interface PortfolioDiagnostics {
   pnlByAssetClass: Record<string, number>;
   pnlBySymbol: Record<string, number>;
   marginInterest: number;
+  /** Only emitted with regimeOverlay. Days = execution sessions, weights = final targets (not fills). */
+  regimeOverlay?: {
+    riskOffDays: number;
+    switches: number;
+    timeInState: { riskOn: number; riskOff: number };
+    weightsByState: { riskOn: Record<string, number>; riskOff: Record<string, number> };
+  };
 }
 
 export type PortfolioReplayResult = ReplayResult & { portfolioDiagnostics: PortfolioDiagnostics };
@@ -132,7 +140,7 @@ export const runPortfolioReplay: ReplayRunner = makePortfolioRunner();
 export function effectiveStrategy(strategy: PortfolioStrategyConfig, domain: ReadonlySet<string>): PortfolioStrategyConfig {
   if (strategy.kind === "factorCore" || strategy.kind === "copySignal") return strategy;
   const universe = strategy.universe.filter(s => domain.has(s));
-  if (universe.length === 0) throw new Error("portfolio runner: strategy.universe ∩ cfg.universe is empty");
+  if (universe.length === 0 && !(strategy.kind === "volManaged" && strategy.pitUniverse)) throw new Error("portfolio runner: strategy.universe ∩ cfg.universe is empty");
   return universe.length === strategy.universe.length ? strategy : { ...strategy, universe };
 }
 
@@ -189,10 +197,13 @@ export function simulatePortfolioWindow(
   let fundingBySession: Map<string, Map<SessionDate, number>> | undefined;
   try {
     let symbols: string[];
-    if (strategy.kind === "factorCore" || strategy.kind === "copySignal") {
+    if (strategy.kind === "factorCore" || strategy.kind === "copySignal" || (strategy.kind === "volManaged" && strategy.pitUniverse)) {
       if (!cfg.membership) throw new Error(`portfolio runner: ${strategy.kind} requires cfg.membership (data.membership in the manifest)`);
       membership = IndexMembershipView.load(db, cfg.membership.index, cfg.membership.exclude ?? []);
-      symbols = [...new Set([...cfg.universe, cfg.refSymbol, ...membership.overlapping(loadFrom, toMs)])];
+      // The overlay's signal and action symbols load like on the non-membership path: a leave-one-out
+      // chain that drops one of them from cfg.universe must not remove the contingency's own data.
+      symbols = [...new Set([...cfg.universe, cfg.refSymbol, ...membership.overlapping(loadFrom, toMs),
+        ...(strategy.kind === "volManaged" && strategy.regimeOverlay ? overlaySymbols(strategy.regimeOverlay) : [])])];
       if (strategy.kind === "copySignal") {
         if (!cfg.signalsDbPath) throw new Error("portfolio runner: copySignal requires cfg.signalsDbPath (data.signals in the manifest)");
         // Events known before the fold ends, from the first lookback window that can touch the first session.
@@ -205,7 +216,7 @@ export function simulatePortfolioWindow(
         }
       }
     } else {
-      symbols = [...new Set([...strategy.universe, cfg.refSymbol])];
+      symbols = [...new Set([...strategy.universe, cfg.refSymbol, ...(strategy.kind === "volManaged" && strategy.regimeOverlay ? overlaySymbols(strategy.regimeOverlay) : [])])];
     }
     series = loadSessionSeries(db, symbols, cfg.source, cfg.timeframe, loadFrom, toMs, calendar);
     if (costModel.funding === "real") {
@@ -248,6 +259,8 @@ export function simulatePortfolioWindow(
   let fees = 0, fundingTotal = 0, marginInterestTotal = 0, turnover = 0;
   let sessions = 0, grossSum = 0, maxGross = 0;
   const diag = { opening: 0, closing: 0, adjustment: 0, stop: 0, foldEnd: 0, skippedNoBar: 0, fundingMissing: 0 };
+  const regime: NonNullable<PortfolioDiagnostics["regimeOverlay"]> | undefined = strategy.kind === "volManaged" && strategy.regimeOverlay
+    ? { riskOffDays: 0, switches: 0, timeInState: { riskOn: 0, riskOff: 0 }, weightsByState: { riskOn: {}, riskOff: {} } } : undefined;
   let ruined = false;
   let lastT = equityHistory[0].t;
 
@@ -331,6 +344,15 @@ export function simulatePortfolioWindow(
     const book: BookState = { equity: equityRef, positions: bookPositions, memory };
     // `signals` (copySignal only): the view clips at asOf's day end, like `view` clips bars.
     const target = decideFn({ view, membership, ...(signalBook ? { signals: signalBook.at(asOf) } : {}), book, config: strategy, executionSession: d });
+    if (regime) {
+      const state = target.diagnostics.regimeOverlay as RegimeMemory | undefined;
+      if (!state) throw new Error("regimeOverlay replay kernel must report its state");
+      const key = state.riskOff ? "riskOff" : "riskOn";
+      regime.timeInState[key]++;
+      if (state.riskOff) regime.riskOffDays++;
+      if (state.switched) regime.switches++;
+      for (const [s, w] of Object.entries(target.weights)) regime.weightsByState[key][s] = (regime.weightsByState[key][s] ?? 0) + w;
+    }
     for (const s of Object.keys(target.weights)) {
       if (refPrices[s] === undefined) {
         const px = view.lastClose(s);
@@ -448,6 +470,10 @@ export function simulatePortfolioWindow(
     portfolioMemory: ruined ? memory : rebaseDrawdownMemory(memory, prevEquity, finalEquity, cfg.initialEquity) as Record<string, unknown>,
   };
 
+  if (regime) for (const key of ["riskOn", "riskOff"] as const) {
+    for (const s of Object.keys(regime.weightsByState[key])) regime.weightsByState[key][s] /= regime.timeInState[key];
+  }
+
   return {
     sleeve: cfg.sleeve,
     window: win,
@@ -497,6 +523,7 @@ export function simulatePortfolioWindow(
       pnlByAssetClass,
       pnlBySymbol,
       marginInterest: marginInterestTotal,
+      ...(regime ? { regimeOverlay: regime } : {}),
     },
   };
 }

@@ -153,7 +153,12 @@ export function fileStatePersistence(path: string, currentBase: number, legacyBa
         // restart its clock). The engines validate what they restore.
         const entryMarks = isEnvelope && parsed.entryMarks && typeof parsed.entryMarks === "object" ? parsed.entryMarks as Record<string, number> : undefined;
         const riskAnchorAt = isEnvelope && typeof parsed.riskAnchorAt === "number" ? parsed.riskAnchorAt : undefined;
-        return { v: 1, risk, trailMarks, ...(entryMarks ? { entryMarks } : {}), ...(riskAnchorAt !== undefined ? { riskAnchorAt } : {}) };
+        // exposureFracs (RW4a exposure control) ride the same envelope: before
+        // 2026-10-24 they were dropped here and in save(), so a restart made the
+        // engine treat trimmed positions as full size and trim them again.
+        const exposureFracs = isEnvelope && parsed.exposureFracs && typeof parsed.exposureFracs === "object" ? parsed.exposureFracs as Record<string, number> : undefined;
+        return { v: 1, risk, trailMarks, ...(entryMarks ? { entryMarks } : {}), ...(riskAnchorAt !== undefined ? { riskAnchorAt } : {}),
+          ...(exposureFracs ? { exposureFracs } : {}) };
       } catch (e: any) {
         if (e?.code === "ENOENT") {
           // File vanished between existsSync and the read — same contract as
@@ -187,6 +192,7 @@ export function fileStatePersistence(path: string, currentBase: number, legacyBa
           trailMarks: state.trailMarks ?? {},
           entryMarks: state.entryMarks ?? {},
           ...(state.riskAnchorAt !== undefined ? { riskAnchorAt: state.riskAnchorAt } : {}),
+          ...(state.exposureFracs && Object.keys(state.exposureFracs).length > 0 ? { exposureFracs: state.exposureFracs } : {}),
         }));
         renameSync(tmp, path);
       } catch (e: any) {

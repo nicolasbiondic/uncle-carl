@@ -25,6 +25,7 @@ import { designHash, isCryptoDesign, PORTFOLIO_SLEEVES, resolvePortfolioWiring }
 import { insertPlatformPortfolio, loadPlatformPortfolioDefinitions, loadPlatformPortfolioRows, type PlatformPortfolioRow } from "../src/portfolios/store";
 import type { PortfolioEngineParams } from "../src/portfolios/types";
 import type { PortfolioStrategyConfig, VenueId } from "../src/portfolio-engine/types";
+import { overlaySymbols } from "../src/portfolio-engine/contingency";
 import { isTreasurySymbol } from "../src/treasury/treasurySymbols";
 import { USDC_SYMBOL_MAP } from "../src/executor/binance/quoteAsset";
 import { SYMBOL_MAP } from "../src/executor/binance-executor";
@@ -76,7 +77,10 @@ function readCandidate(path: string, name: string): { block: ManifestBlock; erro
 function sleeveSymbols(block: ManifestBlock, sleeve: string, errors: string[]): { strategy: PortfolioStrategyConfig; dataSymbols?: Record<string, string> } {
   const target = PORTFOLIO_SLEEVES[sleeve];
   if (block.strategy.kind === "factorCore") { errors.push("factorCore: no live membership source is wired (src/portfolio-engine/live/cutover.ts)"); return { strategy: block.strategy }; }
-  const universe = block.strategy.universe;
+  if (block.strategy.kind === "volManaged" && block.strategy.pitUniverse) errors.push("pitUniverse: no live membership source is wired");
+  if (block.strategy.kind === "volManaged" && block.strategy.regimeOverlay && target.venue !== "alpaca") errors.push("regimeOverlay: stock instruments require Alpaca");
+  const universe = block.strategy.kind === "volManaged" && block.strategy.regimeOverlay
+    ? [...new Set([...block.strategy.universe, ...overlaySymbols(block.strategy.regimeOverlay, false)])] : block.strategy.universe;
   if (target.venue === "binance_usdc") {
     const mapped = universe.map(s => s.replace(/\/USD$/, "/USDC"));
     for (const s of mapped) if (!USDC_SYMBOL_MAP[s]) errors.push(`${s} has no USDC perpetual in USDC_SYMBOL_MAP`);

@@ -243,7 +243,7 @@ describe("AlpacaMomentumAdapter.closePosition — DB persistence failure", () =>
     expect(row.close_reason).toBe("MOMENTUM_REBALANCE");
   });
 
-  test("engine trail close persists close_reason=TRAIL_STOP; a signal-flip close stays MOMENTUM_REBALANCE (telemetry P2)", async () => {
+  test.each(["TRAIL_STOP", "TREND_EXIT"])("engine close persists %s; a signal-flip close stays MOMENTUM_REBALANCE", async closeReason => {
     const alpaca = {
       isConnected: () => true,
       closePosition: async () => ({ success: true, filledPrice: 205 }),
@@ -252,10 +252,10 @@ describe("AlpacaMomentumAdapter.closePosition — DB persistence failure", () =>
 
     // Trail-stop close: the engine passes the canonical TRAIL_STOP label.
     seedOpenTrade("trail-row", "momentum_stocks", { symbol: "SMH", entryPrice: 220, quantity: 4, entryTime: Date.now() });
-    const trail = await adapter.closePosition({ symbol: "SMH", side: "buy", closeReason: "TRAIL_STOP" });
+    const trail = await adapter.closePosition({ symbol: "SMH", side: "buy", closeReason });
     expect(trail).toEqual({ ok: true });
     expect((getDB().prepare(`SELECT close_reason FROM trades WHERE id = 'trail-row'`).get() as any).close_reason)
-      .toBe("TRAIL_STOP");
+      .toBe(closeReason);
 
     // Signal flip: no closeReason → default rebalance label.
     seedOpenTrade("flip-row", "momentum_stocks", { symbol: "QQQ", entryPrice: 400, quantity: 2, entryTime: Date.now() });

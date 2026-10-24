@@ -13,7 +13,7 @@
 // engine's vol-scaled stopLossPct (profile fixed pct as fallback).
 
 import type { MomentumBrokerAdapter } from "./MomentumEngine";
-import { MODEL_CUTOVER_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, TIME_STOP_CLOSE_REASON, TRAIL_STOP_CLOSE_REASON } from "./MomentumEngine";
+import { MODEL_CUTOVER_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, TIME_STOP_CLOSE_REASON, TRAIL_STOP_CLOSE_REASON, TREND_EXIT_CLOSE_REASON } from "./MomentumEngine";
 import type { CurrentPosition } from "./Rebalancer";
 import type { OHLCV } from "../../utils/types";
 import type { AlpacaExecutor } from "../../executor/alpaca-executor";
@@ -39,7 +39,7 @@ const log = createLogger("BinanceMomentumAdapter");
 // MOMENTUM_REBALANCE — both were previously recorded as the latter). Any
 // other/absent value falls back to MOMENTUM_REBALANCE, so free-text can
 // never land in the enum-ish column. Mirrors AlpacaMomentumAdapter.
-const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON]);
+const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, TREND_EXIT_CLOSE_REASON]);
 
 export interface BinanceMomentumAdapterConfig {
   /** Profile id to associate trades with. */

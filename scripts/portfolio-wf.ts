@@ -36,6 +36,7 @@ export const PORTFOLIO_CODE_FILES = [
   "scripts/lib/combinedPortfolioReturns.ts",
   "src/portfolio-engine/types.ts",
   "src/portfolio-engine/copySignal.ts",
+  "src/portfolio-engine/contingency.ts",
   "src/portfolio-engine/index.ts",
   "src/portfolio-engine/signals.ts",
   "src/portfolio-engine/construction.ts",

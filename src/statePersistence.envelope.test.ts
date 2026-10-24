@@ -28,6 +28,15 @@ describe("fileStatePersistence envelope round-trip", () => {
     expect(loaded.entryMarks).toEqual({ "LINK/USD|buy": 1_790_960_400_000 });
   });
 
+  test("exposureFracs survive a write and a fresh read; a file without them loads without them (lost before 2026-10-24)", () => {
+    const path = join(dir, "fracs.json");
+    const fracs = { "SOL/USDC|buy": 0.794, "NEAR/USDC|buy": 0.794 };
+    store(path).save({ v: 1, risk: INITIAL_RISK_STATE, trailMarks: {}, exposureFracs: fracs });
+    expect(store(path).load()!.exposureFracs).toEqual(fracs);
+    store(path).save({ v: 1, risk: INITIAL_RISK_STATE, trailMarks: {} });
+    expect(store(path).load()!.exposureFracs).toBeUndefined();
+  });
+
   test("files written before the anchor existed load without one (legacy first tick)", () => {
     const envelope = join(dir, "momentum-state-old-envelope.json");
     writeFileSync(envelope, JSON.stringify({ v: 1, risk: { ...INITIAL_RISK_STATE }, trailMarks: {} }));

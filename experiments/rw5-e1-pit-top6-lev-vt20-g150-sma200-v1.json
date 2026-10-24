@@ -1,0 +1,116 @@
+{
+  "name": "rw5-e1-pit-top6-lev-vt20-g150-sma200-v1",
+  "sleeve": "stocks",
+  "description": "PRE-REGISTERED (2026-10-23) BEFORE any run, docs/reports/RW-reescritura-rentable.md §16.1 (RW5, owner: more risk with a contingency). the same rule-based universe at vt20 1.5x + the SPY 200-day trend switch -> T-bills (hindsight-robustness twin of rw5-e1-lev-vt20-g150-sma200). Window, costs (margin interest 6.5% in base and stress) and capital of its base manifest rw5-e1-stocks-pit-top6-v1.json. Trial 442 -> 443.",
+  "trialAccounting": {
+    "priorUniqueTrials": 442,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "$UC_RESEARCH_DATA_DIR/hist-sp500.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "SMH",
+      "BIL"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440,
+    "membership": {
+      "index": "sp500"
+    }
+  },
+  "asOf": "2026-09-24",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000
+  },
+  "candidates": [
+    {
+      "name": "e1-pit-top6-lev-vt20-g150-sma200",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": {
+          "kind": "volManaged",
+          "universe": [
+            "SPY",
+            "QQQ",
+            "IWM",
+            "GLD",
+            "SMH"
+          ],
+          "inceptionGuardBars": 252,
+          "volLookback": 63,
+          "covLookback": 21,
+          "portfolioVolTarget": 0.2,
+          "annualization": 252,
+          "perAssetCap": 0.25,
+          "maxGross": 1.5,
+          "pitUniverse": {
+            "topN": 6,
+            "liquidityLookback": 63,
+            "minHoldingRebalances": 21
+          },
+          "regimeOverlay": {
+            "signals": [
+              {
+                "kind": "maTrend",
+                "symbol": "SPY",
+                "period": 200,
+                "sampling": "daily",
+                "bandPct": 1
+              }
+            ],
+            "combine": "any",
+            "coreScale": 0,
+            "defensive": {
+              "assets": [
+                "BIL"
+              ],
+              "momentumLookback": 63,
+              "volLookback": 63,
+              "cashProxy": "BIL"
+            }
+          }
+        },
+        "venue": {
+          "venue": "alpaca",
+          "fractional": true,
+          "minOrderNotional": 5,
+          "rebalanceBand": 0.01
+        }
+      }
+    }
+  ],
+  "acceptance": {}
+}

@@ -34,6 +34,7 @@
 
 import { decide as coreDecide, type CoreDecideInput } from "../decide";
 import { planOrders as corePlanOrders } from "../orders";
+import { overlaySymbols } from "../contingency";
 import type {
   BookState, MembershipView, OrderIntent, OrderResult, PlanOrders, PortfolioStrategyConfig, Position, PriceView, SessionDate,
   StopLevel, TargetBook, VenueAdapter, VenueRules,
@@ -244,7 +245,7 @@ export class PortfolioEngine {
     }
   }
 
-  private decisionSymbols(asOf: SessionDate, memory: Readonly<Record<string, unknown>>): { all: string[]; required: string[] } {
+  private decisionSymbols(asOf: SessionDate, memory: Readonly<Record<string, unknown>>, session?: SessionDate): { all: string[]; required: string[] } {
     const cfg = this.opts.config;
     if (cfg.kind === "factorCore") {
       if (!this.opts.membership) throw new Error("factorCore needs a MembershipView (point-in-time index members)");
@@ -256,6 +257,16 @@ export class PortfolioEngine {
       return { all: [...required], required: [...required] };
     }
     if (cfg.kind === "copySignal") throw new Error("copySignal is research-only: no live signal source is wired");
+    if (cfg.kind === "volManaged" && (cfg.regimeOverlay || cfg.pitUniverse)) {
+      const members = cfg.pitUniverse ? (() => {
+        if (!this.opts.membership) throw new Error("pitUniverse needs a MembershipView (point-in-time index members)");
+        return this.opts.membership.members(session ?? asOf).filter(s => !cfg.pitUniverse!.exclude?.includes(s));
+      })() : [];
+      const all = [...new Set([...cfg.universe, ...members, ...(cfg.regimeOverlay ? overlaySymbols(cfg.regimeOverlay, false) : [])])];
+      // Candidates with unavailable history are ineligible, not a reason to block the entire PIT book.
+      const required = [...new Set([...cfg.universe, ...(cfg.regimeOverlay ? overlaySymbols(cfg.regimeOverlay) : [])])];
+      return { all, required };
+    }
     return { all: [...cfg.universe], required: [...cfg.universe] };
   }
 
@@ -269,12 +280,12 @@ export class PortfolioEngine {
     const live = this.opts.mode === "live";
     const key = { accountId: this.opts.accountId, strategyVersion: this.opts.strategyVersion, session };
     const memory = latestPortfolioMemory(key.accountId, key.strategyVersion);
-    const symbols = this.decisionSymbols(asOf, memory);
+    const symbols = this.decisionSymbols(asOf, memory, session);
 
     // 2. data freshness
     const rowsBefore = loadSleeveRows(this.opts.accountId);
     const heldSymbols = rowsBefore.map(r => r.symbol);
-    const view = this.opts.openPriceView(asOf, [...new Set([...symbols.all, ...heldSymbols])]);
+    const view = this.opts.openPriceView(asOf, [...new Set([...symbols.all, ...symbols.required, ...heldSymbols])]);
     if (view.asOf !== asOf) throw new Error(`price view asOf ${view.asOf} ≠ expected ${asOf}`);
     const fresh = view.freshness(symbols.required);
     const staleCount = fresh.stale.length + fresh.missing.length;
@@ -413,6 +424,10 @@ export class PortfolioEngine {
     const key = { accountId: existing.accountId, strategyVersion: existing.strategyVersion, session: existing.session };
     this.log.warn(`resuming ${existing.session}: ${existing.orders.filter(o => !o.applied && !o.skipped).length} order(s) not yet applied`);
     const symbols = [...new Set([...existing.orders.map(o => o.intent.symbol), ...loadSleeveRows(this.opts.accountId).map(r => r.symbol)])];
+    if (this.opts.config.kind === "volManaged" && (this.opts.config.regimeOverlay || this.opts.config.pitUniverse)) {
+      const needed = this.decisionSymbols(existing.asOf, existing.memory, existing.session);
+      symbols.push(...needed.all, ...needed.required);
+    }
     const view = this.opts.openPriceView(existing.asOf, symbols);
     // A sell already refused for held shares: look for the incumbent's stops again (idempotent; a cancel that
     // failed or never confirmed last tick is the usual cause).

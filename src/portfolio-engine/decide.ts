@@ -3,6 +3,7 @@ import { cappedInverseVolWeights, covarianceFromPrices, drawdownBrakeScale, inve
 import { compareSymbols, overlaySignal, priceHistory, trailingVol, trendSignal } from "./signals";
 import { updateStops, type StopMemory } from "./stops";
 import { decideCopySignal } from "./copySignal";
+import { applyRegimeOverlay, decideRegime, selectPitUniverse, type RegimeMemory, type PitMemory } from "./contingency";
 
 /** Versioned, JSON-only state owned by this kernel; persist TargetBook.memory
  * unchanged. Separate strategy versions must not share this state. */
@@ -15,6 +16,8 @@ export interface CoreMemory {
   stops: StopMemory;
   /** volManaged with `drawdownBrake` only: peak of the sleeve's book equity at past decisions (RW4b). */
   peakEquity?: number;
+  regime?: RegimeMemory;
+  pit?: PitMemory;
 }
 
 /** Research fold chaining: folds restart at the initial capital, so the brake's high-water mark is re-expressed in
@@ -89,7 +92,9 @@ export function decide(input: CoreDecideInput): TargetBook {
     // designs with the signal always on; no memory, no stops.
     const vols: Record<string, number> = {};
     const needed = Math.max(config.volLookback, config.covLookback) + 1;
-    for (const s of [...new Set(config.universe)].sort(compareSymbols)) {
+    if (config.pitUniverse) memory.pit = selectPitUniverse(view, input.membership, config, previous.pit, input.executionSession);
+    const universe = config.pitUniverse ? [...config.universe, ...Object.keys(memory.pit!.ages)] : config.universe;
+    for (const s of [...new Set(universe)].sort(compareSymbols)) {
       if (view.barCount(s) < config.inceptionGuardBars) continue;
       const closes = priceHistory(view, s, needed).map(b => b.close);
       const vol = trailingVol(closes, config.volLookback);
@@ -113,8 +118,16 @@ export function decide(input: CoreDecideInput): TargetBook {
       target = config.portfolioVolTarget * brakeScale;
       brakeDiagnostics = { drawdown, brakeScale, peakEquity: peak, effectiveVolTarget: target };
     }
-    const construction = scaleToVolTarget(vols, covariance, config.annualization,
-      target, config.perAssetCap, config.maxGross, fastCovariance);
+    let construction = scaleToVolTarget(vols, covariance, config.annualization,
+      target, config.regimeOverlay ? Infinity : config.perAssetCap, config.regimeOverlay ? Infinity : config.maxGross, fastCovariance);
+    let contingencyDiagnostics: Record<string, unknown> = {};
+    if (config.pitUniverse) contingencyDiagnostics.pitUniverse = memory.pit;
+    if (config.regimeOverlay) {
+      memory.regime = decideRegime(view, config.regimeOverlay, previous.regime, input.executionSession);
+      const overlaid = applyRegimeOverlay(view, config, construction.weights, memory.regime.riskOff, target);
+      construction = overlaid;
+      contingencyDiagnostics = { ...contingencyDiagnostics, regimeOverlay: memory.regime, overlayCovariance: overlaid.covariance, coreGross: overlaid.coreGross };
+    }
     const fastDiagnostics = fastCovariance ? (() => {
       const base = inverseVolWeights(vols);
       return { slowVol: portfolioVol(base, covariance, config.annualization), fastVol: portfolioVol(base, fastCovariance, config.annualization) };
@@ -122,7 +135,7 @@ export function decide(input: CoreDecideInput): TargetBook {
     return { asOf: view.asOf, weights: construction.weights, stops: [],
       memory: { ...book.memory, portfolioCore: { ...memory, signals: {}, stops: {} } },
       diagnostics: { vols, covariance, scale: construction.scale, uncappedVol: construction.uncappedVol, finalVol: construction.finalVol,
-        ...brakeDiagnostics, ...fastDiagnostics } };
+        ...brakeDiagnostics, ...fastDiagnostics, ...contingencyDiagnostics } };
   }
 
   const signals: Record<string, ReturnType<typeof trendSignal>> = {};

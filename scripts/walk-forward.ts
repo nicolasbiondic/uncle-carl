@@ -55,10 +55,11 @@ import { expandDataPath } from "./lib/researchData";
 import { hashCloseSlices } from "./lib/closeSlices";
 import { hashSignalEvents } from "./lib/signalData";
 import { missingLiveExcludes } from "./lib/liveStockExcludes";
-import type { ExposureControlConfig, MarketTrendGateConfig, ShortStopSpec, TimeStopConfig, TrailStopConfig, VolSizingConfig, VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
+import type { ExposureControlConfig, MarketTrendGateConfig, ShortStopSpec, TimeStopConfig, TrailStopConfig, TrendExitConfig, VolSizingConfig, VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
 import type { RiskGuardConfig, RiskState } from "../src/strategies/momentum/RiskGuard";
 import { getETDateKey } from "../src/db/database";
 import type { PortfolioStrategyConfig, VenueRules } from "../src/portfolio-engine/types";
+import { overlaySymbols } from "../src/portfolio-engine/contingency";
 
 // ── CLI ───────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -158,6 +159,8 @@ export interface CandidateConfig {
    *  and a minimum order size. Momentum sleeves only (the meanrev runner
    *  would silently ignore it). Absent = OFF AND the legacy candidate hash. */
   exposureControl?: ExposureControlConfig;
+  /** Own-coin completed daily SMA exit + long entry restriction; absent = OFF. */
+  trendExit?: TrendExitConfig;
   /** Present iff the manifest sleeve is "meanrev" (enforced in validateManifest). */
   meanrev?: MeanRevSimParams;
   /** Hard-stop axis (stop-sizing sweep) — valid on EVERY sleeve, including
@@ -252,6 +255,7 @@ const VALID_CANDIDATE_KEYS = new Set<keyof CandidateConfig>([
   "marketTrend",
   "risk",
   "exposureControl",
+  "trendExit",
   "meanrev",
   "hardStop",
   "profitLock",
@@ -592,12 +596,74 @@ function validateStopConfig(st: unknown, where: string): void {
   throw new Error(`${where}.mode must be "none", "fixed" or "volScaled"`);
 }
 
+function configObject(v: unknown, where: string): Record<string, unknown> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error(`${where} must be an object`);
+  return v as Record<string, unknown>;
+}
+
+function validateContingency(s: Record<string, unknown>, where: string): void {
+  if (s.regimeOverlay === undefined && s.pitUniverse === undefined) return;
+  if (s.annualization !== 252) throw new Error(`${where}: RW5 contingency knobs require stocks (annualization=252)`);
+  if (!posInt(s.volLookback, 2) || !posInt(s.covLookback, 2)) throw new Error(`${where}: contingency requires volLookback/covLookback >= 2`);
+  const symbol = (v: unknown, key: string) => {
+    if (typeof v !== "string" || !v.trim()) throw new Error(`${key} must be a non-empty symbol`);
+  };
+  if (s.pitUniverse !== undefined) {
+    const key = `${where}.pitUniverse`, p = configObject(s.pitUniverse, key);
+    assertKeys(p, ["topN", "liquidityLookback", "minHoldingRebalances", "exclude"], key);
+    for (const k of ["topN", "liquidityLookback", "minHoldingRebalances"]) if (!posInt(p[k])) throw new Error(`${key}.${k} must be a positive integer`);
+    if (p.exclude !== undefined) assertSymbolList(p.exclude, `${key}.exclude`, true);
+  }
+  if (s.regimeOverlay === undefined) return;
+  const key = `${where}.regimeOverlay`, r = configObject(s.regimeOverlay, key);
+  assertKeys(r, ["signals", "combine", "confirmationDecisions", "coreScale", "defensive", "hedge"], key);
+  if (!Array.isArray(r.signals) || !r.signals.length) throw new Error(`${key}.signals must be a non-empty array`);
+  if (r.combine !== "any" && r.combine !== "all" && !(posInt(r.combine) && (r.combine as number) <= r.signals.length)) throw new Error(`${key}.combine must be any, all or a count in [1, signals.length]`);
+  if (r.confirmationDecisions !== undefined && !posInt(r.confirmationDecisions)) throw new Error(`${key}.confirmationDecisions must be a positive integer`);
+  if (!finiteIn(r.coreScale, 0, 1)) throw new Error(`${key}.coreScale must be in [0, 1]`);
+  for (const [i, raw] of r.signals.entries()) {
+    const path = `${key}.signals[${i}]`, sig = configObject(raw, path);
+    if (sig.kind === "maTrend") {
+      assertKeys(sig, ["kind", "symbol", "period", "sampling", "bandPct"], path);
+      symbol(sig.symbol, `${path}.symbol`);
+      if (!posInt(sig.period, 2)) throw new Error(`${path}.period must be an integer >= 2`);
+      if (sig.sampling !== "daily" && sig.sampling !== "monthEnd") throw new Error(`${path}.sampling must be daily or monthEnd`);
+      if (sig.bandPct !== undefined && !finiteIn(sig.bandPct, 0, 100, false, true)) throw new Error(`${path}.bandPct must be in [0, 100)`);
+    } else if (sig.kind === "absMomentum") {
+      assertKeys(sig, ["kind", "symbol", "cashProxy", "lookback"], path);
+      symbol(sig.symbol, `${path}.symbol`); symbol(sig.cashProxy, `${path}.cashProxy`);
+      if (sig.symbol === sig.cashProxy) throw new Error(`${path}: symbol and cashProxy must differ`);
+      if (!posInt(sig.lookback)) throw new Error(`${path}.lookback must be a positive integer`);
+    } else if (sig.kind === "canary") {
+      assertKeys(sig, ["kind", "assets", "horizons", "coefficients", "negativeCount"], path);
+      assertSymbolList(sig.assets, `${path}.assets`);
+      if (!Array.isArray(sig.horizons) || !sig.horizons.length || sig.horizons.some(n => !posInt(n)) || new Set(sig.horizons).size !== sig.horizons.length) throw new Error(`${path}.horizons must be distinct positive integers`);
+      if (!Array.isArray(sig.coefficients) || sig.coefficients.length !== sig.horizons.length || sig.coefficients.some(n => !Number.isFinite(n) || n <= 0)) throw new Error(`${path}.coefficients must be positive and match horizons`);
+      if (sig.negativeCount !== undefined && !(posInt(sig.negativeCount) && (sig.negativeCount as number) <= (sig.assets as string[]).length)) throw new Error(`${path}.negativeCount must be in [1, assets.length]`);
+    } else throw new Error(`${path}.kind must be maTrend, absMomentum or canary`);
+  }
+  if (r.defensive !== undefined) {
+    const d = configObject(r.defensive, `${key}.defensive`);
+    assertKeys(d, ["assets", "momentumLookback", "volLookback", "cashProxy"], `${key}.defensive`);
+    assertSymbolList(d.assets, `${key}.defensive.assets`);
+    symbol(d.cashProxy, `${key}.defensive.cashProxy`);
+    if (!posInt(d.momentumLookback) || !posInt(d.volLookback, 2)) throw new Error(`${key}.defensive requires momentumLookback >= 1 and volLookback >= 2`);
+  }
+  if (r.hedge !== undefined) {
+    const h = configObject(r.hedge, `${key}.hedge`);
+    assertKeys(h, ["symbol", "fraction"], `${key}.hedge`);
+    symbol(h.symbol, `${key}.hedge.symbol`);
+    if (!finiteIn(h.fraction, 0, 1, true)) throw new Error(`${key}.hedge.fraction must be in (0, 1]`);
+    if ((s.universe as string[]).includes(h.symbol as string) || (r.defensive && [...((r.defensive as any).assets as string[]), (r.defensive as any).cashProxy].includes(h.symbol as string))) throw new Error(`${key}.hedge.symbol must not overlap the core or defensive set`);
+  }
+}
+
 function validatePortfolioStrategy(st: unknown, where: string): void {
   if (!st || typeof st !== "object" || Array.isArray(st)) throw new Error(`${where} must be an object`);
   const s = st as Record<string, unknown>;
   const trendKeys = ["kind", "universe", "inceptionGuardBars", "volLookback", "covLookback", "portfolioVolTarget", "perAssetCap", "maxGross", "blendHorizons", "maLong", "signalBandPct"];
   if (s.kind === "volManaged") {
-    assertKeys(s, ["kind", "universe", "inceptionGuardBars", "volLookback", "covLookback", "portfolioVolTarget", "annualization", "perAssetCap", "maxGross", "drawdownBrake", "fastVolLookback"], where);
+    assertKeys(s, ["kind", "universe", "inceptionGuardBars", "volLookback", "covLookback", "portfolioVolTarget", "annualization", "perAssetCap", "maxGross", "drawdownBrake", "fastVolLookback", "regimeOverlay", "pitUniverse"], where);
     assertSymbolList(s.universe, `${where}.universe`);
     for (const key of ["inceptionGuardBars", "volLookback", "covLookback"]) {
       if (!posInt(s[key])) throw new Error(`${where}.${key} must be a positive integer`);
@@ -605,7 +671,9 @@ function validatePortfolioStrategy(st: unknown, where: string): void {
     if (!finiteIn(s.portfolioVolTarget, 0, 2, true)) throw new Error(`${where}.portfolioVolTarget must be an annualized FRACTION in (0, 2]`);
     if (s.annualization !== 252 && s.annualization !== 365) throw new Error(`${where}.annualization must be 252 or 365`);
     if (!finiteIn(s.perAssetCap, 0, 1, true)) throw new Error(`${where}.perAssetCap must be a weight FRACTION in (0, 1]`);
-    if (!finiteIn(s.maxGross, 0, 2, true)) throw new Error(`${where}.maxGross must be a gross FRACTION in (0, 2]`);
+    const grossLimit = s.regimeOverlay !== undefined || s.pitUniverse !== undefined ? 2.5 : 2;
+    if (!finiteIn(s.maxGross, 0, grossLimit, true)) throw new Error(`${where}.maxGross must be a gross FRACTION in (0, ${grossLimit}]`);
+    validateContingency(s, where);
     // RW4b (optional knobs): absent = RW2/RW3 behavior and hashes.
     if (s.fastVolLookback !== undefined) {
       if (!posInt(s.fastVolLookback, 2) || (s.fastVolLookback as number) >= (s.covLookback as number)) {
@@ -764,6 +832,13 @@ export function validateCandidate(c: unknown): CandidateConfig {
   if (obj.volSizing !== undefined) validateVolSizing(obj.volSizing);
   // `exposureControl` (RW4a) is momentum-only (forbidden below), shape-validated up front.
   if (obj.exposureControl !== undefined) validateExposureControl(obj.exposureControl);
+  if (obj.trendExit !== undefined) {
+    const t = obj.trendExit as Record<string, unknown>;
+    if (!t || typeof t !== "object" || Array.isArray(t)) throw new Error("trendExit must be an object");
+    if (Object.keys(t).some(k => !["smaDays", "basis"].includes(k))) throw new Error("trendExit has unknown keys");
+    if (!Number.isInteger(t.smaDays) || (t.smaDays as number) < 2) throw new Error("trendExit.smaDays must be an integer >= 2");
+    if (t.basis !== "dailyClose") throw new Error('trendExit.basis must be "dailyClose"');
+  }
 
   // New sweepable axes (2026-09): typed strictly here; sleeve ownership is
   // enforced below (momentum-only vs meanrev-only lists).
@@ -796,7 +871,7 @@ export function validateCandidate(c: unknown): CandidateConfig {
     // maxGrossExposureMult left this list 2026-10-05: runMeanRevReplay now
     // forwards it to MeanRevEngine (it is no longer config that changes
     // nothing on meanrev) — see the G gross-cap diagnostic.
-    const forbidden = ["entryPct", "exitPct", "maxLongs", "maxShorts", "shortEntryPct", "shortExitPct", "shortRegime", "shortUniverse", "shortStop", "notionalPctPerSlot", "volTarget", "volSizing", "tsmTrail", "sharpeGate", "timeStop", "marketTrend", "risk", "exposureControl", "cooldownBarsAfterStop", "slotHysteresis", "regime", "profitLock", "lookbackDays", "maLengthDays", "lookbackDaysList"]
+    const forbidden = ["entryPct", "exitPct", "maxLongs", "maxShorts", "shortEntryPct", "shortExitPct", "shortRegime", "shortUniverse", "shortStop", "notionalPctPerSlot", "volTarget", "volSizing", "tsmTrail", "sharpeGate", "timeStop", "marketTrend", "risk", "exposureControl", "trendExit", "cooldownBarsAfterStop", "slotHysteresis", "regime", "profitLock", "lookbackDays", "maLengthDays", "lookbackDaysList"]
       .filter(k => obj[k] !== undefined);
     if (forbidden.length > 0) {
       throw new Error(`meanrev CandidateConfig must not set momentum-only keys: ${forbidden.join(", ")}`);
@@ -1628,8 +1703,11 @@ export function validatePortfolioManifest(m: ExperimentManifest): void {
   if (m.data.perpsMembership !== undefined || m.data.liquidityRank !== undefined) {
     throw new Error("portfolio manifests do not use data.perpsMembership / data.liquidityRank (momentum-kernel axes; config that changes nothing here)");
   }
-  if (kind === "factorCore" || kind === "copySignal") {
+  const pit = blocks.some(b => b!.strategy.kind === "volManaged" && b!.strategy.pitUniverse !== undefined);
+  if (pit && !blocks.every(b => b!.strategy.kind === "volManaged" && b!.strategy.pitUniverse !== undefined)) throw new Error("pitUniverse requires all candidates to use the membership data domain");
+  if (kind === "factorCore" || kind === "copySignal" || pit) {
     if (m.data.membership === undefined) throw new Error(`${kind} requires data.membership (point-in-time index universe)`);
+    if (pit && m.data.membership.index !== "sp500") throw new Error("pitUniverse requires data.membership.index=sp500");
   } else if (m.data.membership !== undefined) {
     throw new Error(`${kind} must not set data.membership (its universe is the explicit strategy.universe)`);
   }
@@ -1653,7 +1731,8 @@ export function validatePortfolioManifest(m: ExperimentManifest): void {
     } else if (s.kind === "factorCore") {
       if (s.overlay && !declared.has(s.overlay.ref)) throw new Error(`${where}: overlay.ref ${s.overlay.ref} must be in data.universe`);
     } else {
-      const missing = s.universe.filter(sym => !declared.has(sym));
+      const symbols = s.kind === "volManaged" && s.regimeOverlay ? [...s.universe, ...overlaySymbols(s.regimeOverlay)] : s.universe;
+      const missing = symbols.filter(sym => !declared.has(sym));
       if (missing.length > 0) throw new Error(`${where}: strategy.universe symbols missing from data.universe: ${missing.join(", ")}`);
     }
     const venue = c.portfolio!.venue.venue;
@@ -1811,6 +1890,7 @@ export function candidateToReplayConfig(
     risk: c.risk,
     // RW4a exposure control: absent = OFF AND the legacy hash.
     exposureControl: c.exposureControl,
+    trendExit: c.trendExit,
     // 2026-09 axes (simulator stream): undefined values are dropped by
     // canonicalJson, so every legacy candidate keeps its legacy hash.
     // `regime: "off"` is manifest sugar for `{ enabled: false }`.
@@ -2696,7 +2776,9 @@ export async function runWalkForward(
       sleeve,
       Date.parse(m.window.from),
       replayToMs,
-      m.window.warmupDays,
+      // Trend exits can read farther back than the ranking warmup. Include
+      // every consumed daily-source bar in the immutable data identity.
+      Math.max(m.window.warmupDays, ...m.candidates.map(c => c.trendExit ? c.trendExit.smaDays * 2 + 15 : 0)),
       m.data.membership,
     );
     // §12-septies G0: the 15:45-slice rows are consumed data, so they are
