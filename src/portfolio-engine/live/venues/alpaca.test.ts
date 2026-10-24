@@ -3,7 +3,7 @@
 // and prices through the executor. Fake client + fake executor; no network.
 
 import { describe, test, expect } from "bun:test";
-import { AlpacaVenue, formatFractionalQty, type AlpacaVenueClient, type AlpacaVenueExecutor } from "./alpaca";
+import { ALPACA_ACCOUNT_MAX_GROSS, AlpacaVenue, formatFractionalQty, type AlpacaVenueClient, type AlpacaVenueExecutor } from "./alpaca";
 import type { OrderIntent } from "../../types";
 
 const intent = (over: Partial<OrderIntent> = {}): OrderIntent => ({
@@ -116,6 +116,72 @@ describe("submit", () => {
     const res = await venue.submit(intent(), "id");
     expect(res.ok).toBe(false);
     expect(client.calls).toHaveLength(0);
+  });
+});
+
+describe("Q5 shared-account gross cap (live only)", () => {
+  const absent = () => { throw http(404, "order not found"); };
+  test("clips to 1.9x equity INCLUDING treasury/other sleeves; floors fractional quantity, keeps the intent unchanged", async () => {
+    expect(ALPACA_ACCOUNT_MAX_GROSS).toBe(1.9);
+    const client = fakeClient({ getOrderByClientId: absent });
+    const executor = fakeExecutor({ getAccount: async () => ({ equity: "10000", long_market_value: "18000" }), getRegTBuyingPower: async () => 1000 });
+    const order = intent({ qty: 30, notional: 3000 });
+    const res = await new AlpacaVenue(executor, client).submit(order, "clip");
+    expect(client.calls.find(c => c.method === "createOrder")!.args[0].qty).toBe("10");
+    expect(res).toMatchObject({ ok: true, filledQty: 10 });
+    expect(order.qty).toBe(30); expect(order.notional).toBe(3000);
+    const fractional = fakeClient({ getOrderByClientId: absent });
+    await new AlpacaVenue(executor, fractional).submit(intent({ qty: 7, notional: 3000 }), "floor");
+    expect(Number(fractional.calls.find(c => c.method === "createOrder")!.args[0].qty) * 3000 / 7).toBeLessThanOrEqual(1000);
+  });
+  test("at/above cap, nonpositive equity or sub-minimum headroom → no BUY; equal/under allowed, sells never read the account", async () => {
+    for (const [equity, gross] of [[10000, 19000], [10000, 20000], [0, 0], [-100, 0], [10000, 18996]]) {
+      const client = fakeClient({ getOrderByClientId: absent });
+      const venue = new AlpacaVenue(fakeExecutor({ getAccount: async () => ({ equity, long_market_value: gross }) }), client);
+      expect((await venue.submit(intent(), "blocked")).status).toBe("account_gross_cap");
+      expect(client.calls.some(c => c.method === "createOrder")).toBe(false);
+    }
+    const client = fakeClient();
+    const venue = new AlpacaVenue(fakeExecutor({ getAccount: async () => ({ equity: 10000, long_market_value: 16000 }) }), client);
+    expect((await venue.submit(intent(), "equal")).ok).toBe(true);
+    expect((await venue.submit(intent({ notional: 2000 }), "under")).ok).toBe(true);
+    let reads = 0;
+    const sell = new AlpacaVenue(fakeExecutor({ getAccount: async () => { reads++; throw new Error("unreachable"); } }), client);
+    expect((await sell.submit(intent({ side: "sell" }), "sell")).ok).toBe(true);
+    expect(reads).toBe(0);
+  });
+  test("null, missing, malformed, nonfinite or throwing account fails OPEN, like Reg-T", async () => {
+    for (const account of [null, {}, { equity: "bad", long_market_value: 0 }, { equity: "", long_market_value: 0 }, { equity: 100, long_market_value: "" }, { equity: Infinity, long_market_value: 0 }, { equity: 100, long_market_value: -1 }, "throw"]) {
+      const client = fakeClient();
+      const venue = new AlpacaVenue(fakeExecutor({ getAccount: async () => { if (account === "throw") throw new Error("offline"); return account as any; } }), client);
+      expect((await venue.submit(intent(), "open")).ok).toBe(true);
+      expect(client.calls.find(c => c.method === "createOrder")!.args[0].qty).toBe("33.333333333");
+    }
+  });
+  test("Reg-T still blocks the clipped order; a consumed cap never hides an existing fill or an unknown lookup", async () => {
+    const executor = fakeExecutor({ getAccount: async () => ({ equity: 10000, long_market_value: 18000 }), getRegTBuyingPower: async () => 999 });
+    const client = fakeClient({ getOrderByClientId: absent });
+    expect((await new AlpacaVenue(executor, client).submit(intent(), "bp")).status).toBe("insufficient_buying_power");
+    expect(client.calls.some(c => c.method === "createOrder")).toBe(false);
+    const filled = fakeClient();
+    expect((await new AlpacaVenue(executor, filled).submit(intent(), "retry")).filledQty).toBe(33.333333333);
+    expect(filled.calls.map(c => c.method)).toEqual(["getOrderByClientId"]);
+    const unknown = fakeClient({ getOrderByClientId: () => { throw http(503, "unknown"); } });
+    await expect(new AlpacaVenue(executor, unknown).submit(intent(), "unknown")).rejects.toThrow("unknown");
+    expect(unknown.calls.some(c => c.method === "createOrder")).toBe(false);
+  });
+  test("two venue instances sharing an executor cannot spend the same headroom concurrently", async () => {
+    let gross = 18000;
+    const executor = fakeExecutor({ getAccount: async () => ({ equity: 10000, long_market_value: gross }) });
+    const client = fakeClient({ getOrderByClientId: absent, createOrder: async (p) => {
+      await Promise.resolve();
+      gross += Number(p.qty) * 100;
+      return { id: "filled", status: "filled", filled_qty: p.qty, filled_avg_price: "100" };
+    } });
+    const a = new AlpacaVenue(executor, client), b = new AlpacaVenue(executor, client);
+    const results = await Promise.all([a.submit(intent({ qty: 10, notional: 1000 }), "a"), b.submit(intent({ qty: 10, notional: 1000 }), "b")]);
+    expect(results.map(r => r.status)).toEqual(["filled", "account_gross_cap"]);
+    expect(gross).toBe(19000);
   });
 });
 

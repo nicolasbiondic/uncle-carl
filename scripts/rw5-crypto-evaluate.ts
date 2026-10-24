@@ -3,7 +3,10 @@
  * own-coin trend exit (`trendExit`) against its live control on their common out-of-sample days.
  *
  *   bun scripts/rw5-crypto-evaluate.ts <candidateDir> --control <dir> --e1 <dir> --e2 <dir>
- *       --other-crypto <dir> [--json]
+ *       --other-crypto <dir> [--sizing] [--json]
+ *
+ * --sizing (§16.13, a pure size change): T1–T3 become S1 drawdown ≤ 40 % (the owner's line),
+ * S2 Calmar ≥ the control's and S3 Sharpe ≥ the control's − 0.05; T4–T6 stay.
  *
  * T1–T3 on the common days of candidate and control (365 days a year, the RW4a arithmetic of
  * rw3-compare-artifacts.ts). T4 and T6 from the summary.json files. T5 on the four-sleeve book
@@ -48,7 +51,7 @@ export function combinedBookDrawdown(series: readonly DailySeries[], capitals: r
   return { days: dates.length, from, to, totalReturn: eq.reduce((a, b) => a + b, 0) / start - 1, maxDrawdown };
 }
 
-export function evaluateCrypto(dirs: { candidate: string; control: string; e1: string; e2: string; otherCrypto: string }) {
+export function evaluateCrypto(dirs: { candidate: string; control: string; e1: string; e2: string; otherCrypto: string }, opts: { sizing?: boolean } = {}) {
   const load = (d: string) => seriesOf(loadArtifactOuterDailyReturns(d));
   const C = load(dirs.candidate), A = load(dirs.control);
   const cmp = compareOnCommonDays(C, A, PPY);
@@ -71,7 +74,7 @@ export function evaluateCrypto(dirs: { candidate: string; control: string; e1: s
   const newlyFailed = failedGates.filter(g => sc.acceptance?.[g]?.pass !== false);
   const book = combinedBookDrawdown([load(dirs.e1), load(dirs.e2), C, load(dirs.otherCrypto)]);
   const c = cmp.candidate, a = cmp.control;
-  const K: Record<string, Criterion> = {
+  const T: Record<string, Criterion> = {
     T1_sharpe: { pass: c.sharpe >= a.sharpe, value: [+c.sharpe.toFixed(4), +a.sharpe.toFixed(4)], threshold: "Sharpe ≥ control's, common days" },
     T2_drawdownAndCalmar: { pass: c.maxDrawdown < a.maxDrawdown && calmar(c) >= calmar(a),
       value: { dd: [+c.maxDrawdown.toFixed(4), +a.maxDrawdown.toFixed(4)], calmar: [+calmar(c).toFixed(3), +calmar(a).toFixed(3)] },
@@ -85,6 +88,12 @@ export function evaluateCrypto(dirs: { candidate: string; control: string; e1: s
     T5_combinedBook: { pass: book.maxDrawdown <= 0.20, value: +book.maxDrawdown.toFixed(4), threshold: 0.20 },
     T6_protocolGates: { pass: newlyFailed.length === 0, value: { failed: failedGates, failedOnlyHere: newlyFailed }, threshold: "no gate fails that the control passes" },
   };
+  const K: Record<string, Criterion> = opts.sizing ? {
+    S1_ownerLine: { pass: c.maxDrawdown <= 0.40, value: +c.maxDrawdown.toFixed(4), threshold: 0.40 },
+    S2_calmar: { pass: calmar(c) >= calmar(a), value: [+calmar(c).toFixed(3), +calmar(a).toFixed(3)], threshold: "Calmar ≥ control's" },
+    S3_sharpe: { pass: c.sharpe >= a.sharpe - 0.05, value: [+c.sharpe.toFixed(4), +a.sharpe.toFixed(4)], threshold: "Sharpe ≥ control's − 0.05" },
+    ...Object.fromEntries(Object.entries(T).filter(([id]) => !/^T[123]_/.test(id))),
+  } : T;
   const sumStats = (sm: any) => (sm.outerTests ?? []).reduce((acc: any, t: any) => {
     const x = t.result.trendExitStats;
     return x ? { exits: acc.exits + x.exits, reentries: acc.reentries + x.reentries, orders: acc.orders + x.orders } : acc;
@@ -111,9 +120,9 @@ if (import.meta.main) {
   const [candidate] = args;
   const control = flag("--control"), e1 = flag("--e1"), e2 = flag("--e2"), otherCrypto = flag("--other-crypto");
   if (!candidate || !control || !e1 || !e2 || !otherCrypto) {
-    throw new Error("usage: rw5-crypto-evaluate.ts <candidateDir> --control <dir> --e1 <dir> --e2 <dir> --other-crypto <dir> [--json]");
+    throw new Error("usage: rw5-crypto-evaluate.ts <candidateDir> --control <dir> --e1 <dir> --e2 <dir> --other-crypto <dir> [--sizing] [--json]");
   }
-  const out = evaluateCrypto({ candidate, control, e1, e2, otherCrypto });
+  const out = evaluateCrypto({ candidate, control, e1, e2, otherCrypto }, { sizing: args.includes("--sizing") });
   if (args.includes("--json")) console.log(JSON.stringify(out, null, 2));
   else {
     const c = out.candidateStats, a = out.controlStats;

@@ -207,11 +207,11 @@ describe("portfolio-engine sleeves — the version table names manifest, candida
       expect(VALIDATED_PRESETS[id].manifestPath).toBe(current[id]);
     }
   });
-  test("momentum_stocks and meanrev_stocks run on the portfolio engine since 2026-10-23: RW2 manifest + vt15 candidate + E1/E2 artifact", () => {
+  test("Q5 RW5d stock wiring reads the cash candidate and its parity artifact; meanrev stays RW2 vt15", () => {
     expect(currentModelVersion("momentum_stocks")).toMatchObject({
-      id: "momentum_stocks@pe-vt15", engine: "portfolio", candidate: "vt15",
-      manifest: "experiments/rw2-e1-stocks-volmanaged-v1.json",
-      artifact: { dir: "data/backtests/b2324d4f74f15042af8bfba4170df8b41f05e8ec033e324bebe8e284e24e5236", shiftDays: 0 },
+      id: "momentum_stocks@pe-vt30-g250-sma200-fv5", engine: "portfolio", candidate: "e1-lev-vt30-g250-sma200-fastvol5",
+      manifest: "experiments/rw5-e1-lev-vt30-g250-sma200-fastvol5-cash-v1.json",
+      artifact: { dir: "data/backtests/fb410729eaf8cbe6efd32c0193f2e23b0313af4ceae0514aebdff1109a66e74b", shiftDays: 0 },
     });
     expect(currentModelVersion("meanrev_stocks")).toMatchObject({
       id: "meanrev_stocks@pe-vt15", engine: "portfolio", candidate: "vt15",

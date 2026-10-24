@@ -342,7 +342,7 @@ describe("calibrateSleeveCosts / computeCostCalibration", () => {
       const c = calibrateSleeveCosts(db, null, cfgOf("momentum_stocks"), null);
       expect(c.measured).toBeNull();
       expect(c.verdict).toContain("sin fills comparables");
-      expect(c.verdict).toContain("2026-10-26"); // MODEL_START.momentum_stocks (RW2 E1 on the portfolio engine)
+      expect(c.verdict).toContain("2026-10-27"); // MODEL_START.momentum_stocks (projected first full RW5d session)
     } finally { db.close(); }
   });
 });

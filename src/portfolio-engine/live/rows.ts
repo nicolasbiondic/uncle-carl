@@ -190,8 +190,10 @@ export function applyBuyFill(cfg: RowsConfig, symbol: string, filledQty: number,
     }
     const qtyAfter = row.quantity + filledQty;
     const avgAfter = (row.quantity * row.entry_price + filledQty * avgPrice) / qtyAfter;
-    db.prepare(`UPDATE trades SET quantity = ?, entry_price = ?, strategy = ?, strategy_version = ? WHERE id = ? AND status = 'open'`)
-      .run(qtyAfter, avgAfter, PORTFOLIO_ENGINE_STRATEGY, cfg.strategyVersion, row.id);
+    // A portfolio→portfolio cutover may add to an older version's row. The episode still
+    // belongs to the version that OPENED it, just as on partial sells and final closes.
+    db.prepare(`UPDATE trades SET quantity = ?, entry_price = ?, strategy = ? WHERE id = ? AND status = 'open'`)
+      .run(qtyAfter, avgAfter, PORTFOLIO_ENGINE_STRATEGY, row.id);
     return { rowId: row.id, kind: "increased", qtyAfter, avgEntryAfter: avgAfter, realized: 0 };
   });
   return txn();

@@ -2257,6 +2257,10 @@ describe("historical hypothesis ledger", () => {
   const rw5TrailRows: any[] = rw5Trail.candidates;
   const rw5d = ledger.authoritativeArtifactRw5d;
   const rw5dRows: any[] = rw5d.candidates;
+  const rw5Q5Size = ledger.authoritativeArtifactRw5Q5Size;
+  const rw5Q5SizeRows: any[] = rw5Q5Size.candidates;
+  const rw5dCash = ledger.authoritativeArtifactRw5dCash;
+  const rw5dCashRows: any[] = rw5dCash.candidates;
   const rw5CryptoPath = (prefix: string): string => prefix === "efc086b4" ? ledger.authoritativeArtifactRw3C1.path
     : prefix === "8892c1e9" ? ledger.authoritativeArtifactRw4aC2.path : rw5Path(prefix);
 
@@ -2363,9 +2367,9 @@ describe("historical hypothesis ledger", () => {
     expect(ledger.authoritativeArtifactRw5Frontier.verdict).toContain("REFERENCIA DE FRONTERA");
   });
 
-  testWithDb("RW5/b/c/d artifacts reproduce every ledger figure and verdict through rw5-evaluate.ts --json (K7 derived separately)", () => {
+  testWithDb("RW5/b/c/d/cash artifacts reproduce every ledger figure and verdict through rw5-evaluate.ts --json (K7 derived separately)", () => {
     const r4 = rw5Round;
-    for (const r of [...rw5Rows, ...rw5dRows]) {
+    for (const r of [...rw5Rows, ...rw5dRows, ...rw5dCashRows]) {
       const args = [process.execPath, "scripts/rw5-evaluate.ts", r.path, "--current", rw5Path(r.current), "--partner", rw5Path(r.partner), "--dd", "0.30", "--json"];
       if (r.sameLeverage) args.push("--same-leverage", rw5Path(r.sameLeverage));
       const proc = Bun.spawnSync(args, { cwd: root });
@@ -2403,10 +2407,10 @@ describe("historical hypothesis ledger", () => {
     expect(rw5.wired).toBe(false);
     expect(rw5d.k7.pass).toBe(rw5dRows[1].criteriaFailed.every((k: string) => !/^K[12]_/.test(k)));
     expect(rw5d.k7.deltaCagrPp).toBe(rw5dRows[1].figures.deltaCagrPp);
-    expect(rw5d.wired).toBe(false);
+    expect(rw5d.wired).toBe(true); // family wired through #453, not the original BIL artifact
   }, 120_000);
 
-  test("RW5 crypto/d pin 446→450, all four designs, T1–T6 failures and selected but unwired K1–K7 winner", () => {
+  test("RW5 crypto/d pin 446→450, all four designs, T1–T6 failures and K1–K7 winner later wired through cash", () => {
     const batches = ["rw5-crypto-2026-10-24", "rw5d-2026-10-24"].map(id => ledger.batches.find((b: any) => b.id === id));
     expect(batches.map((b: any) => [b.id, b.priorUniqueTrials, b.hypothesisCount, b.resultingUniqueTrials]))
       .toEqual([["rw5-crypto-2026-10-24", 446, 2, 448], ["rw5d-2026-10-24", 448, 2, 450]]);
@@ -2485,7 +2489,7 @@ describe("historical hypothesis ledger", () => {
       expect(r.criteriaVerdict).toBe(`FALLA: ${r.criteriaFailed.join(", ")}`);
       expect(r.wired).toBe(false);
     }
-    for (const r of rw5dRows) {
+    for (const r of [...rw5dRows, ...rw5dCashRows]) {
       const f = r.figures, b = f.robustness;
       expect(f.deltaCagrPp).toBeGreaterThanOrEqual(3);
       expect(f.sharpe).toBeGreaterThanOrEqual(0.8 * f.currentSharpe);
@@ -2509,13 +2513,16 @@ describe("historical hypothesis ledger", () => {
       expect(r.criteriaVerdict).toBe("CUMPLE");
     }
     for (const [entry, r] of [[rw5d, rw5dRows[0]], [ledger.authoritativeArtifactRw5dPit, rw5dRows[1]]]) {
-      expect([entry.trial, entry.path, entry.manifest, entry.wired]).toEqual([r.trial, r.path, r.manifest, false]);
+      expect([entry.trial, entry.path, entry.manifest]).toEqual([r.trial, r.path, r.manifest]);
     }
+    expect(ledger.authoritativeArtifactRw5dPit.wired).toBe(false);
     expect(rw5d.selected).toBe(true);
     expect(rw5d.verdict).toContain("PASA K1-K7; ELEGIDO");
-    expect(rw5d.wiring.reason).toContain(">=30%");
+    expect(rw5d.wiring.reason).toContain("35%");
     expect(rw5d.wiring.reason).toContain("romper la congelacion de momentum_stocks");
-    expect(rw5d.wiring.requiredBeforeWiring).toHaveLength(3);
+    expect(rw5d.wiring.requiredBeforeWiring).toBeUndefined();
+    expect(rw5d.wiring.variantTrial).toBe(453);
+    expect(rw5d.wiring.artifactEntry).toBe("authoritativeArtifactRw5dCash");
     expect(rw5d.referenceNote).toContain("2x SIN contingencia");
     expect(rw5d.k7).toEqual({ trial: 449, controlTrial: 441, pass: true, criteriaFailed: [], deltaCagrPp: rw5dRows[1].figures.deltaCagrPp });
     expect(ledger.authoritativeArtifactRw5dPit.measurement).toEqual(Object.fromEntries(["cagrPct", "currentCagrPct", "deltaCagrPp", "sharpe", "currentSharpe"].map(k => [k, rw5dRows[1].figures[k]])));
@@ -2611,10 +2618,10 @@ describe("historical hypothesis ledger", () => {
     expect(batch.evidence).toContain("tamano, decision de riesgo del dueno, no un nuevo sizing validado");
   });
 
-  testWithDb("RW5 crypto/HWM/trail artifacts reproduce every T1–T6 value, figure and verdict through rw5-crypto-evaluate.ts --json", () => {
+  testWithDb("RW5 crypto/HWM/trail/size artifacts reproduce every T/S value, figure and verdict through rw5-crypto-evaluate.ts --json", () => {
     const r4 = rw5Round;
-    for (const r of [...rw5CryptoRows, ...rw5HwmRows, ...rw5TrailRows]) {
-      const proc = Bun.spawnSync([process.execPath, "scripts/rw5-crypto-evaluate.ts", r.path, "--control", rw5CryptoPath(r.control), "--e1", rw5Path(r.e1), "--e2", rw5Path(r.e2), "--other-crypto", rw5CryptoPath(r.otherCrypto), "--json"], { cwd: root });
+    for (const r of [...rw5CryptoRows, ...rw5HwmRows, ...rw5TrailRows, ...rw5Q5SizeRows]) {
+      const proc = Bun.spawnSync([process.execPath, "scripts/rw5-crypto-evaluate.ts", r.path, "--control", rw5CryptoPath(r.control), "--e1", rw5Path(r.e1), "--e2", rw5Path(r.e2), "--other-crypto", rw5CryptoPath(r.otherCrypto), ...(r.trial === 452 ? ["--sizing"] : []), "--json"], { cwd: root });
       expect({ trial: r.trial, exit: proc.exitCode, stderr: proc.stderr.toString() }).toEqual({ trial: r.trial, exit: 0, stderr: "" });
       const e = JSON.parse(proc.stdout.toString()), s = e.candidateStats, a = e.controlStats;
       expect(e.windows.map((w: any) => [w.id, w.from, w.to])).toEqual([
@@ -2641,6 +2648,12 @@ describe("historical hypothesis ledger", () => {
       const folds = (s: any) => s.outerTests.map((t: any) => [t.foldPath, t.result.fromMs, t.result.toMs]);
       expect(summary.outerTests).toHaveLength(3);
       expect(folds(summary)).toEqual(folds(control));
+      if (r.trial === 452) {
+        expect(summary.dataHash).toBe(control.dataHash);
+        expect(e.verdict).toBe("FALLA: S1_ownerLine, S2_calmar, S3_sharpe");
+        expect(rw5Q5Size.verdict).toContain("FALLA S1-S3");
+        expect(rw5Q5Size.wired).toBe(false);
+      }
       if (r.trial === 451) {
         expect(summary.dataHash).toBe(control.dataHash);
         expect(e.verdict.startsWith("FALLA:")).toBe(true);
@@ -2659,5 +2672,110 @@ describe("historical hypothesis ledger", () => {
         expect(rw5Hwm.wired).toBe(false);
       }
     }
+  }, 120_000);
+
+  test("Q5 sizing/cash pin 452→454, single manifest changes, conditional rejection and wiring through cash", () => {
+    const ids = ["rw5-q5-size-2026-10-24", "rw5d-cash-2026-10-24"];
+    const batches = ids.map(id => ledger.batches.find((b: any) => b.id === id));
+    expect(batches.map((b: any) => [b.id, b.priorUniqueTrials, b.hypothesisCount, b.resultingUniqueTrials]))
+      .toEqual([[ids[0], 452, 1, 453], [ids[1], 453, 1, 454]]);
+    expect(ledger.batches.find((b: any) => b.id === "rw5-trail-2026-10-24").resultingUniqueTrials).toBe(batches[0].priorUniqueTrials);
+    expect(ledger.batches.at(-1).id).toBe(ids[1]);
+    expect(ledger.batches.at(-1).resultingUniqueTrials).toBe(454);
+    expect(batches.map((b: any) => b.sourceCommit)).toEqual([
+      "7be4c50 (pre-registro SS16.13 antes de correr); cfaa87b (resultado SS16.14)",
+      "ab11fe5 (pre-registro SS16.15 antes de correr); 59bebd9 (resultado SS16.16)",
+    ]);
+    expect(rw5Q5SizeRows).toHaveLength(1);
+    expect(rw5dCashRows).toHaveLength(1);
+    const designs = [
+      [rw5Q5SizeRows[0], "momentum-crypto-usdc-daily-s5-rw5-size075-pure-v1", "bffc241253b03ce381f9a043e1f81d971320f51b3c96d4a8fdafd2358cc281ca", "momentum-crypto-usdc-daily-s5-rw4a-xc-dd-pure-v1", "d13-s5-xc-dd-size075"],
+      [rw5dCashRows[0], "rw5-e1-lev-vt30-g250-sma200-fastvol5-cash-v1", "fb410729eaf8cbe6efd32c0193f2e23b0313af4ceae0514aebdff1109a66e74b", "rw5-e1-lev-vt30-g250-sma200-fastvol5-v1", "e1-lev-vt30-g250-sma200-fastvol5"],
+    ] as const;
+    designs.forEach(([r, stem, artifact, baseStem, name], i) => {
+      const batch = batches[i];
+      expect(batch).toMatchObject({ inventoryComplete: false, resultsComplete: false, executionReported: true });
+      for (const p of batch.sourcePaths) expect(sourcePathPresent(p)).toBe(true);
+      expect(r.trial).toBe(452 + i);
+      expect(r.manifest).toBe(`experiments/${stem}.json`);
+      expect(r.path).toBe(`data/backtests/${artifact}/`);
+      expect(batch.sourcePaths.filter((p: string) => p.startsWith("experiments/"))).toEqual([r.manifest]);
+      const m = JSON.parse(readFileSync(join(root, r.manifest), "utf8"));
+      const base = JSON.parse(readFileSync(join(root, `experiments/${baseStem}.json`), "utf8"));
+      expect(m.name).toBe(stem);
+      expect(m.trialAccounting).toEqual({ priorUniqueTrials: r.trial, complete: false });
+      expect(m.candidates).toHaveLength(1);
+      const c = m.candidates[0], b = base.candidates[0];
+      expect(c.name).toBe(name);
+      if (i === 0) {
+        expect([c.notionalPctPerSlot, b.notionalPctPerSlot]).toEqual([0.15, 0.20]);
+        expect(c.maxLongs).toBe(5);
+        c.notionalPctPerSlot = b.notionalPctPerSlot;
+        expect([r.control, r.e1, r.e2, r.otherCrypto]).toEqual(["8892c1e9", "33b0ac05", "0b088ca3", "efc086b4"]);
+      } else {
+        expect(c.portfolio.strategy.regimeOverlay.defensive).toBeUndefined();
+        expect(b.portfolio.strategy.regimeOverlay.defensive).toEqual({ assets: ["BIL"], momentumLookback: 63, volLookback: 63, cashProxy: "BIL" });
+        c.portfolio.strategy.regimeOverlay.defensive = b.portfolio.strategy.regimeOverlay.defensive;
+        expect([r.current, r.partner, r.sameLeverage]).toEqual(["33b0ac05", "0b088ca3", "49a1160c"]);
+      }
+      c.name = b.name;
+      // Every other knob, data source, cost, window and acceptance rule must be identical.
+      expect({ ...m, name: base.name, description: base.description, trialAccounting: base.trialAccounting }).toEqual(base);
+    });
+    const r = rw5Q5SizeRows[0], f = r.figures, k = r.criteria;
+    const pass = {
+      S1_ownerLine: f.maxDrawdownPct <= 40,
+      S2_calmar: f.calmar >= f.controlCalmar,
+      S3_sharpe: f.sharpe >= f.controlSharpe - 0.05,
+      T4_psr: k.T4_psr.value >= 0.95,
+      T4_folds: k.T4_folds.value.filter((v: number) => v > 0.5).length / k.T4_folds.value.length >= 2 / 3,
+      T4_loo: k.T4_loo.value >= 0.6,
+      T5_combinedBook: f.combinedBook.maxDrawdown <= 0.2,
+      T6_protocolGates: k.T6_protocolGates.value.failedOnlyHere.length === 0,
+    };
+    expect(Object.fromEntries(Object.entries(k).map(([id, c]: [string, any]) => [id, c.pass]))).toEqual(pass);
+    expect(r.criteriaFailed).toEqual(Object.entries(pass).filter(([, p]) => !p).map(([id]) => id));
+    expect(r.criteriaFailed).toEqual(["S1_ownerLine", "S2_calmar", "S3_sharpe"]);
+    expect(r.criteriaVerdict).toBe(`FALLA: ${r.criteriaFailed.join(", ")}`);
+    expect([r.wired, rw5Q5Size.wired]).toEqual([false, false]);
+    expect(rw5Q5Size.verdict).toContain("NO SE CABLEA");
+    expect(batches[0].evidence).toContain("al fallar queda A");
+    expect(f.reported.ownerLine40).toBe(false);
+    expect(f.reported.trades).toEqual([117, 107]);
+
+    const cash = rw5dCashRows[0], parity = rw5dCash.parity, wiring = rw5dCash.wiring;
+    expect([rw5dCash.trial, rw5dCash.manifest, rw5dCash.path]).toEqual([cash.trial, cash.manifest, cash.path]);
+    expect([cash.criteriaFailed, cash.criteriaNotApplicable, cash.criteriaVerdict]).toEqual([[], [], "CUMPLE"]);
+    expect([rw5d.wired, rw5dCash.wired]).toEqual([true, true]);
+    expect(rw5dCash.verdict).toContain("PASA K1-K6 y PARIDAD");
+    expect(rw5d.verdict).toContain("CABLEADO mediante la variante en efectivo #453");
+    expect(rw5d.path).not.toBe(cash.path); // keep #448's original evidence and K7, not relabel it as cash
+    expect(parity).toMatchObject({ controlTrial: rw5d.trial, controlPath: rw5d.path, ppy: 252, commonDays: 1755, deltaSharpe: -0.0029, maxAbsDeltaSharpe: 0.1 });
+    expect(parity.pass).toBe(Math.abs(parity.deltaSharpe) <= parity.maxAbsDeltaSharpe);
+    expect(rw5d.wiring).toMatchObject({ variantTrial: cash.trial, version: wiring.version, wiredAt: wiring.wiredAt, firstLivePass: wiring.firstLivePass });
+    expect(wiring).toMatchObject({ version: "momentum_stocks@pe-vt30-g250-sma200-fv5", wiredAt: "2026-10-24T18:31:00Z", firstLivePass: "2026-10-26T13:35:00Z", modelStart: "2026-10-27" });
+    const versions = readFileSync(join(root, "src/portfolio/modelVersions.ts"), "utf8");
+    const version = versions.slice(versions.indexOf(`{ id: "${wiring.version}"`)).split("},")[0];
+    expect(version).toContain(`since: "${wiring.firstLivePass}"`);
+    expect(version).toContain(`modelStart: "${wiring.modelStart}"`);
+    expect(version).toContain(`manifest: "${cash.manifest}"`);
+    expect(version).toContain(cash.path.replace(/\/$/, ""));
+  });
+
+  testWithDb("RW5d cash reproduces parity against the original RW5d artifact, not a new K7 or independent replication", () => {
+    const proc = Bun.spawnSync([process.execPath, "scripts/rw3-compare-artifacts.ts", rw5dCash.path, rw5dCash.parity.controlPath, "--ppy", "252"], { cwd: root });
+    expect({ exit: proc.exitCode, stderr: proc.stderr.toString() }).toEqual({ exit: 0, stderr: "" });
+    const cmp = JSON.parse(proc.stdout.toString()), p = rw5dCash.parity;
+    expect(p).toEqual({ controlTrial: rw5d.trial, controlPath: rw5d.path, ppy: 252, commonDays: cmp.commonDays, from: cmp.from, to: cmp.to,
+      deltaSharpe: rw5Round(cmp.deltaSharpe), maxAbsDeltaSharpe: 0.1, pass: Math.abs(cmp.deltaSharpe) <= 0.1 });
+    expect(p.pass).toBe(true);
+    expect(rw5Round(cmp.candidate.sharpe)).toBe(rw5dCashRows[0].figures.sharpe);
+    expect(rw5Round(cmp.control.sharpe)).toBe(rw5dRows[0].figures.sharpe);
+    const summary = (path: string) => JSON.parse(readFileSync(join(root, path, "summary.json"), "utf8"));
+    const c = summary(rw5dCash.path), a = summary(rw5d.path);
+    expect(c.dataHash).toBe(a.dataHash);
+    const folds = (s: any) => s.outerTests.map((t: any) => [t.foldPath, t.result.fromMs, t.result.toMs]);
+    expect(c.outerTests).toHaveLength(3);
+    expect(folds(c)).toEqual(folds(a));
   }, 120_000);
 });

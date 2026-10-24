@@ -1,0 +1,113 @@
+{
+  "name": "rw5-e1-lev-vt30-g250-sma200-fastvol5-cash-v1",
+  "sleeve": "stocks",
+  "description": "PRE-REGISTERED (2026-10-24) BEFORE any run, docs/reports/RW-reescritura-rentable.md §16.15: the live-parity check of RW5d, chosen by quorum Q5. Exact candidate of rw5-e1-lev-vt30-g250-sma200-fastvol5-v1 except regimeOverlay.defensive is absent: risk-off scales the core to 0 and leaves cash (live, the treasury sweeps idle cash into BOXX; BIL, SGOV and BOXX are reserved for the treasury). The simulator pays no interest on positive cash, so this check is conservative. Criteria: K1-K6 of §16.1 with K3/K4 against the 2x reference 49a1160c as in §16.7, and |delta Sharpe| <= 0.10 against RW5d (2a92b1fb) on common sessions. Trial 453 -> 454.",
+  "trialAccounting": {
+    "priorUniqueTrials": 453,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH",
+      "BIL"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-24",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000
+  },
+  "candidates": [
+    {
+      "name": "e1-lev-vt30-g250-sma200-fastvol5",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": {
+          "kind": "volManaged",
+          "universe": [
+            "SPY",
+            "QQQ",
+            "IWM",
+            "GLD",
+            "AAPL",
+            "MSFT",
+            "NVDA",
+            "META",
+            "GOOGL",
+            "AMZN",
+            "SMH"
+          ],
+          "inceptionGuardBars": 252,
+          "volLookback": 63,
+          "covLookback": 21,
+          "portfolioVolTarget": 0.3,
+          "annualization": 252,
+          "perAssetCap": 0.25,
+          "maxGross": 2.5,
+          "regimeOverlay": {
+            "signals": [
+              {
+                "kind": "maTrend",
+                "symbol": "SPY",
+                "period": 200,
+                "sampling": "daily",
+                "bandPct": 1
+              }
+            ],
+            "combine": "any",
+            "coreScale": 0
+          },
+          "fastVolLookback": 5
+        },
+        "venue": {
+          "venue": "alpaca",
+          "fractional": true,
+          "minOrderNotional": 5,
+          "rebalanceBand": 0.01
+        }
+      }
+    }
+  ],
+  "acceptance": {}
+}

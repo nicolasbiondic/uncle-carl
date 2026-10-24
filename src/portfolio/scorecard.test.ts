@@ -334,7 +334,7 @@ describe("sleeveExpectationArtifacts — the CURRENT model version's artifact, o
   const saved = Object.fromEntries(envKeys.map(k => [k, process.env[k]]));
   const restore = () => { for (const k of envKeys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } };
 
-  test("every live sleeve's band points at its current version's artifact + manifest — the stock sleeves at the RW2 E1/E2 chains, never the incumbents' (cb516547 / 624d50e9)", () => {
+  test("every live sleeve's band points at its current version's artifact + manifest — RW5d cash-parity E1 and RW2 E2, never the incumbents' (cb516547 / 624d50e9)", () => {
     for (const k of envKeys) delete process.env[k];
     try {
       const arts = sleeveExpectationArtifacts();
@@ -342,8 +342,8 @@ describe("sleeveExpectationArtifacts — the CURRENT model version's artifact, o
         const v = currentModelVersion(sleeve)!;
         expect(arts[sleeve]).toEqual({ dir: v.artifact!.dir, shiftDays: v.artifact!.shiftDays, manifest: v.manifest! });
       }
-      expect(arts.momentum_stocks.dir).toBe("data/backtests/b2324d4f74f15042af8bfba4170df8b41f05e8ec033e324bebe8e284e24e5236");
-      expect(arts.momentum_stocks.manifest).toBe("experiments/rw2-e1-stocks-volmanaged-v1.json");
+      expect(arts.momentum_stocks.dir).toBe("data/backtests/fb410729eaf8cbe6efd32c0193f2e23b0313af4ceae0514aebdff1109a66e74b");
+      expect(arts.momentum_stocks.manifest).toBe("experiments/rw5-e1-lev-vt30-g250-sma200-fastvol5-cash-v1.json");
       expect(arts.meanrev_stocks.dir).toBe("data/backtests/0b088ca320e3521d8bff05b10c1ad7eed2816bc2a1b0b927eb3134e2a3dca4c2");
       expect(arts.meanrev_stocks.manifest).toBe("experiments/rw2-e2-meanrev-volmanaged-v1.json");
       // Portfolio replays label a session by its date (weekday labels, verified on both artifacts): no −1 shift.

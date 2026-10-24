@@ -9,9 +9,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDB, initDatabase } from "../src/db/database";
 import { makeTestDb, seedOpenTrade } from "../src/test-support/db";
-import { initPlatformPortfolios, loadPlatformPortfolioRows } from "../src/portfolios/store";
+import { initPlatformPortfolios, loadPlatformPortfolioRows, loadPlatformPortfolioDefinitions } from "../src/portfolios/store";
 import { DEFAULT_MEANREV_CONFIG } from "../src/strategies/meanrev/MeanRevEngine";
-import { designHash } from "../src/portfolio-engine/live/cutover";
+import { designHash, resolvePortfolioWiring } from "../src/portfolio-engine/live/cutover";
+import { MODEL_VERSIONS } from "../src/portfolio/modelVersions";
+import { buildPortfolioEngines } from "../src/portfolio-engine/live/wiring";
+import { HistoricalPriceView } from "../src/portfolio-engine/live/priceView";
+import { makeHistDb, weekdaySessions } from "../src/portfolio-engine/live/testSupport";
+import { decide } from "../src/portfolio-engine/decide";
+import { planOrders } from "../src/portfolio-engine/orders";
+import { getPortfolioDecision } from "../src/portfolio-engine/live/persistence";
+import type { VolManagedConfig } from "../src/portfolio-engine/types";
+import { portfolioUniverse } from "../src/portfolios/validate";
+import { isTreasurySymbol } from "../src/treasury/treasurySymbols";
 import { savePortfolioDecision } from "../src/portfolio-engine/live/persistence";
 import type { PortfolioEngineParams } from "../src/portfolios/types";
 import { applyCutover, main, parseArgs, planCutover, type CutoverArgs } from "./portfolio-engine-cutover";
@@ -221,6 +231,139 @@ describe("live: the same design observed first, the version registered", () => {
     const live = planCutover(getDB(), base({ mode: "live", manifest: path, candidate: cand.name }), { modelVersions: versions("momentum_stocks", `momentum_stocks@pe-${cand.name}`) });
     expect(live.ok).toBe(false);
     expect(live.errors.join(" ")).toContain("overlaps 'meanrev_stocks'");
+  });
+});
+
+describe("Q5 RW5d: pe-vt15 → cash design, without handing the sleeve back to TSM", () => {
+  const manifest = "experiments/rw5-e1-lev-vt30-g250-sma200-fastvol5-cash-v1.json";
+  const candidate = "e1-lev-vt30-g250-sma200-fastvol5";
+  const versionName = "pe-vt30-g250-sma200-fv5";
+  const version = `momentum_stocks@${versionName}`;
+  const next = (over: Partial<CutoverArgs> = {}) => base({ manifest, candidate, versionName, ...over });
+  const ready = { alpaca: null, binance_usdm: null, binance_usdc: null } as const;
+  const oldArgs = base({ manifest: "experiments/rw2-e1-stocks-volmanaged-v1.json", candidate: "vt15", versionName: "pe-vt15" });
+  const oldVersions = { ...MODEL_VERSIONS, momentum_stocks: MODEL_VERSIONS.momentum_stocks.slice(0, -1) };
+  function oldLive() {
+    applyCutover(getDB(), planCutover(getDB(), oldArgs));
+    const plan = planCutover(getDB(), { ...oldArgs, mode: "live", minObserved: 0 }, { modelVersions: oldVersions });
+    expect(plan.errors).toEqual([]); applyCutover(getDB(), plan);
+  }
+
+  test("cannot run the new observer next to live pe-vt15; deploying the new last version alone refuses pe-vt15", () => {
+    oldLive();
+    const defs = loadPlatformPortfolioDefinitions(getDB());
+    const alone = resolvePortfolioWiring({ defs, venueReady: ready });
+    expect(alone.live).toEqual([]);
+    expect(alone.problems.some(p => p.message.includes("not the LAST entry"))).toBe(true);
+    const observer = planCutover(getDB(), next());
+    expect(observer.ok).toBe(true);
+    const row = (observer.write as any).row;
+    const alongside = resolvePortfolioWiring({ defs: [...defs, { ...row, id: "rw5_observer" }], venueReady: ready, modelVersions: oldVersions });
+    expect(alongside.live).toEqual([]); expect(alongside.observers).toEqual([]);
+    expect(alongside.problems.some(p => p.message.includes("ambiguous, none runs"))).toBe(true);
+  });
+
+  test("observer then live in ONE transaction, no observer boot: explicit override 0, exact manifest and no treasury holdings", () => {
+    oldLive(); observePasses(3, "momentum_stocks@pe-vt15");
+    expect(planCutover(getDB(), next({ mode: "live", minObserved: 0 })).errors.join(" ")).toContain("DIFFERENT design");
+    getDB().transaction(() => {
+      applyCutover(getDB(), planCutover(getDB(), next()));
+      const normal = planCutover(getDB(), next({ mode: "live" }));
+      expect(normal.ok).toBe(false); // old-version evidence does not count
+      expect(normal.errors.join(" ")).toContain("only 0 observed");
+      const live = planCutover(getDB(), next({ mode: "live", minObserved: 0 }));
+      expect(live.errors).toEqual([]); applyCutover(getDB(), live);
+    })();
+    const params = peRow()!.params as PortfolioEngineParams;
+    const block = manifestBlock(manifest, candidate);
+    expect(params.strategy).toEqual(block.strategy);
+    expect(params).toMatchObject({ venue: block.venue.venue, minOrderNotional: block.venue.minOrderNotional, rebalanceBand: block.venue.rebalanceBand });
+    expect(params.provenance!.designSha256).toBe(designHash({ strategy: block.strategy, venue: block.venue.venue, minOrderNotional: block.venue.minOrderNotional, rebalanceBand: block.venue.rebalanceBand }));
+    expect(portfolioUniverse("portfolio", params).some(isTreasurySymbol)).toBe(false);
+    const wiring = resolvePortfolioWiring({ defs: loadPlatformPortfolioDefinitions(getDB()), venueReady: ready });
+    expect(wiring.problems).toEqual([]); expect(wiring.live.map(p => p.params.strategyVersion)).toEqual([version]);
+  });
+
+  test("runbook dry-run uses an in-memory snapshot; a failed live validation rolls back even the staged observer", () => {
+    oldLive();
+    const before = peRow();
+    const copy = Database.deserialize(getDB().serialize());
+    try {
+      copy.transaction(() => {
+        applyCutover(copy, planCutover(copy, next()));
+        const live = planCutover(copy, next({ mode: "live", minObserved: 0 }));
+        expect(live.errors).toEqual([]); applyCutover(copy, live);
+      })();
+      expect(peRow()).toEqual(before);
+    } finally { copy.close(); }
+    expect(() => getDB().transaction(() => {
+      applyCutover(getDB(), planCutover(getDB(), next()));
+      const live = planCutover(getDB(), next({ mode: "live", minObserved: 0 }), { modelVersions: oldVersions });
+      expect(live.errors.join(" ")).toContain("append that version");
+      if (!live.ok) throw Error("REFUSED: transaction rolled back");
+      applyCutover(getDB(), live);
+    })()).toThrow("REFUSED");
+    expect(peRow()).toEqual(before);
+  });
+
+  for (const scenario of ["on", "off", "cold-band"] as const) test(`synthetic prod-like factory + LIVE runner = decide/planOrders (${scenario}); no observer/research trial`, async () => {
+    const asOf = "2026-10-23", session = "2026-10-26";
+    const config = manifestBlock(manifest, candidate).strategy as VolManagedConfig;
+    const sessions = weekdaySessions(asOf, 300);
+    const hist = makeHistDb(Object.fromEntries(config.universe.map((s, j) => [s, { sessions, close: (i: number) =>
+      s === "SPY" ? (i === 299 ? (scenario === "on" ? 140 : scenario === "off" ? 80 : 100) : 100 + Math.sin(i))
+        : 100 + i * 0.04 + 2 * Math.sin(i * (0.3 + j * 0.1)) }] )));
+    try {
+      const view = new HistoricalPriceView({ db: hist, asOf, symbols: config.universe });
+      const prices = Object.fromEntries(config.universe.map(s => [s, view.lastClose(s)!]));
+      seedOpenTrade("old_spy", "momentum_stocks", { symbol: "SPY", strategy: "PORTFOLIO", strategyVersion: "momentum_stocks@pe-vt15", quantity: 10, entryPrice: prices.SPY });
+      // Realistic old-version state exists, but the new version MUST cold-start independently.
+      savePortfolioDecision({ accountId: "momentum_stocks", strategyVersion: "momentum_stocks@pe-vt15", session: "2026-10-23", asOf: "2026-10-22",
+        mode: "live", status: "submitted", equity: 50000, book: [], weights: {}, stops: [], memory: { oldVersionOnly: true }, diagnostics: {}, orders: [], note: null, decidedAt: 1, updatedAt: 1 });
+      const book = { equity: 50000, positions: [{ symbol: "SPY", qty: 10, avgEntryPrice: prices.SPY }], memory: {} };
+      const expected = decide({ view, config, book, executionSession: session });
+      expect((expected.memory.portfolioCore as any).regime.riskOff).toBe(scenario !== "on");
+      if (scenario === "on") expect(Object.keys(expected.weights).length).toBeGreaterThan(0);
+      else expect(expected.weights).toEqual({}); // core to 0, no BIL/BOXX/SGOV: all cash
+      const sent: any[] = [];
+      const executor: any = { isConnected: () => true, getPositions: async () => [{ symbol: "SPY", market: "stock", side: "buy", quantity: 10, avgEntryPrice: prices.SPY, currentPrice: prices.SPY }],
+        getLatestPrice: async (s: string) => prices[s], getRegTBuyingPower: async () => 1000000,
+        getAccount: async () => ({ equity: "100000", long_market_value: "50000" }),
+        client: { createOrder: async (p: any) => { sent.push(p); return { id: `o${sent.length}`, status: "filled", filled_qty: p.qty, filled_avg_price: String(prices[p.symbol]) }; },
+          getOrderByClientId: async () => { throw Object.assign(new Error("absent"), { status: 404 }); } } };
+      applyCutover(getDB(), planCutover(getDB(), next()));
+      const live = planCutover(getDB(), next({ mode: "live", minObserved: 0 }));
+      expect(live.errors).toEqual([]); applyCutover(getDB(), live);
+      const wiring = resolvePortfolioWiring({ defs: loadPlatformPortfolioDefinitions(getDB()), venueReady: ready });
+      const built = buildPortfolioEngines(wiring, { alpacaExecutor: executor, binanceTransports: {}, historicalDb: () => hist,
+        now: () => Date.parse("2026-10-26T13:35:00Z"), engineOverrides: { tradingEnabled: () => true } });
+      expect(built.problems).toEqual([]);
+      const report = await built.live.get("momentum_stocks")!.tick();
+      expect(report.status).toBe("submitted"); expect(report.rejected).toBe(0);
+      const stored = getPortfolioDecision("momentum_stocks", version, session)!;
+      expect(stored.weights).toEqual(expected.weights); expect(stored.memory).toEqual(expected.memory);
+      expect(stored.orders.map(o => o.intent)).toEqual(planOrders(expected, book, prices, { venue: "alpaca", fractional: true, minOrderNotional: 5, rebalanceBand: 0.01 }));
+      expect(sent.every(p => !isTreasurySymbol(p.symbol))).toBe(true);
+      expect((getDB().prepare("SELECT strategy_version v FROM trades WHERE id='old_spy'").get() as any).v).toBe("momentum_stocks@pe-vt15");
+      expect((await built.live.get("momentum_stocks")!.tick()).status).toBe("already_done");
+    } finally { hist.close(); }
+  });
+
+  test("rollback to pe-vt15 is a versioned portfolio→portfolio transition, NOT --mode rollback (TSM)", () => {
+    applyCutover(getDB(), planCutover(getDB(), next()));
+    applyCutover(getDB(), planCutover(getDB(), next({ mode: "live", minObserved: 0 })));
+    const args = { ...oldArgs, versionName: "pe-vt15-rw5d-rollback" };
+    const rollbackVersion = "momentum_stocks@pe-vt15-rw5d-rollback";
+    const modelVersions = { ...MODEL_VERSIONS, momentum_stocks: [...MODEL_VERSIONS.momentum_stocks,
+      { ...oldVersions.momentum_stocks.at(-1)!, id: rollbackVersion, since: "2026-10-27T13:35:00Z" }] };
+    getDB().transaction(() => {
+      applyCutover(getDB(), planCutover(getDB(), args, { modelVersions }));
+      const live = planCutover(getDB(), { ...args, mode: "live", minObserved: 0 }, { modelVersions });
+      expect(live.errors).toEqual([]); applyCutover(getDB(), live);
+    })();
+    expect((peRow()!.params as PortfolioEngineParams).strategy).toEqual(manifestBlock(oldArgs.manifest!, "vt15").strategy);
+    const wiring = resolvePortfolioWiring({ defs: loadPlatformPortfolioDefinitions(getDB()), venueReady: ready, modelVersions });
+    expect(wiring.problems).toEqual([]); expect(wiring.live[0].params.strategyVersion).toBe(rollbackVersion);
   });
 });
 

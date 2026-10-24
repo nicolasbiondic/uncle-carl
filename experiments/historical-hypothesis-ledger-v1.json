@@ -1392,7 +1392,7 @@
       "inventoryComplete": false,
       "resultsComplete": false,
       "executionReported": true,
-      "evidence": "RW5d SS16.7-16.8: +2, 448->450. Copias de #444 y #445 con vol objetivo 30% y bruto 2.5x, mantienen SMA200 SPY/banda 1%, fastvol5, costes y margen 6.5%. #448 2a92b1fb: 1755 sesiones, CAGR 30.1542% vs E1 21.4495% (+8.7047pp), Sharpe 1.1587, DD sleeve 25.9412%, cuenta con E2 23.7690%, Calmar 1.1624. PASA K1-K6; K3/K4 contra 49a1160c, referencia a 2x SIN contingencia declarada ANTES de correr: no existe control sin contingencia a 2.5x por limite del validador. DD de esa referencia 35.5604%, Calmar 0.9599; cada crash 2020/2022/2025 mejora (25.8888/22.5522/17.0462% vs 26.7263/33.5000/25.5073%). #449 83fff6de, gemelo PIT propio: CAGR 29.4116% vs #441 19.9647% (+9.4469pp), DD sleeve/cuenta 27.0345/24.2804%, PASA K1/K2 y por tanto K7 de SS16.7. K3/K4 del gemelo no aplican, no se certifican. #448 PASA K1-K7 y es ELEGIDO por SS16.1, mayor CAGR entre los que cumplen todo; esto NO reescribe el K7 fallado de RW5/b/c. wired=false: el dueno debe confirmar presupuesto de caida >=30% y romper la congelacion de momentum_stocks antes de 2027-01-21; antes de encender, defensa viva efectivo/BOXX sin BIL y comprobar Reg-T compartido. authoritativeArtifactRw5d y authoritativeArtifactRw5dPit. Seleccion de investigacion, no approved=true: inventario historico incompleto."
+      "evidence": "RW5d SS16.7-16.8: +2, 448->450. Copias de #444 y #445 con vol objetivo 30% y bruto 2.5x, mantienen SMA200 SPY/banda 1%, fastvol5, costes y margen 6.5%. #448 2a92b1fb: 1755 sesiones, CAGR 30.1542% vs E1 21.4495% (+8.7047pp), Sharpe 1.1587, DD sleeve 25.9412%, cuenta con E2 23.7690%, Calmar 1.1624. PASA K1-K6; K3/K4 contra 49a1160c, referencia a 2x SIN contingencia declarada ANTES de correr: no existe control sin contingencia a 2.5x por limite del validador. DD de esa referencia 35.5604%, Calmar 0.9599; cada crash 2020/2022/2025 mejora (25.8888/22.5522/17.0462% vs 26.7263/33.5000/25.5073%). #449 83fff6de, gemelo PIT propio: CAGR 29.4116% vs #441 19.9647% (+9.4469pp), DD sleeve/cuenta 27.0345/24.2804%, PASA K1/K2 y por tanto K7 de SS16.7. K3/K4 del gemelo no aplican, no se certifican. #448 PASA K1-K7 y es ELEGIDO por SS16.1, mayor CAGR entre los que cumplen todo; esto NO reescribe el K7 fallado de RW5/b/c. Actualizacion Q5/SS16.15-16.16: CABLEADO mediante la variante en efectivo #453 (fb410729), no mediante el artefacto BIL original; Q5 autoriza romper la congelacion y fija presupuesto de cuenta 35%. Version momentum_stocks@pe-vt30-g250-sma200-fv5, desplegada el 2026-10-24 18:31 UTC; primera pasada prevista el lunes 2026-10-26 09:35 ET. authoritativeArtifactRw5dCash conserva la paridad y el enlace al cableado. Seleccion de investigacion, no approved=true: inventario historico incompleto."
     },
     {
       "id": "rw5-hwm-2026-10-24",
@@ -1425,6 +1425,41 @@
       "resultsComplete": false,
       "executionReported": true,
       "evidence": "RW5 trail SS16.11-16.12: +1, 451->452. #451 copia el manifest vivo USDC con UN cambio: tsmTrail pasa de 8 sigma de 20 sesiones a 4 sigma de 22, mismo suelo 5% y tope 30%; aproximacion del chandelier de LeBeau (3 ATR22, ATR aproximadamente 1.3 sigma), no un ATR exacto. Stop duro, senales, slots, tamano, RiskGuard y control de exposicion intactos. Control +0: 8892c1e9; E1/E2 33b0ac05/0b088ca3 y otro cripto efc086b4. Artefacto 57cf6c19, mismos datos y folds que el control, 1410 dias comunes. FALLA T1, T2 (Calmar), T3 (empeora el bajista 2025-26), T4_psr y T6 (stressMaxDrawdown, looMaxDrawdown, minOuterPsr nuevas); PASA T4_folds, T4_loo y T5. CAGR 25.5110% vs 45.0829%, Sharpe 0.7388 vs 1.0383, DD 50.6408% vs 51.9465%, Calmar 0.5038 vs 0.8679; 148 operaciones vs 107. No baja de la linea del 40%. Sale antes, vuelve a entrar y a perder: 2024 apenas mejora (44.8416% vs 48.8525%) y pierde casi 20pp de CAGR. Sesgo declarado: hipotesis elegida tras observar 2024 en estos mismos datos; parametro tomado de literatura, no ajustado a nuestros datos. Balance SS16.12: los cuatro disenos de contingencia cripto fallan (tendencia propia en horario y USDC, HWM y trail corto en USDC). La caida de USDC cercana al 50% es estructural en este backtest: cinco slots del 20% en altcoins muy correlacionadas, siempre largos e igual tamano nominal. Ninguna salida ni freno ensayado la reduce sin destruir retorno; la unica palanca restante es el tamano, decision de riesgo del dueno, no un nuevo sizing validado. NO SE CABLEA; los sleeves siguen operando con sus versiones vivas, sin pausa ni reasignacion de capital. authoritativeArtifactRw5Trail conserva criterios y cifras; inventario historico incompleto, sin approved=true."
+    },
+    {
+      "id": "rw5-q5-size-2026-10-24",
+      "sourceCommit": "7be4c50 (pre-registro SS16.13 antes de correr); cfaa87b (resultado SS16.14)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-usdc-daily-s5-rw5-size075-pure-v1.json",
+        "scripts/rw5-crypto-evaluate.ts",
+        "docs/reports/RW-reescritura-rentable.md",
+        "docs/reports/Q5-quorum-decision.md"
+      ],
+      "hypothesisCount": 1,
+      "priorUniqueTrials": 452,
+      "resultingUniqueTrials": 453,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "Q5 pregunta 3 / RW SS16.13-16.14: +1, 452->453. #452 copia USDC vivo con UN cambio: notionalPctPerSlot 0.20->0.15, cinco slots, bruto 0.75 con lambda=1; senales, stops, RiskGuard y control de exposicion intactos. Control +0 8892c1e9, E1/E2 33b0ac05/0b088ca3, otro cripto efc086b4. bffc2412: mismos datos y folds, 1410 dias comunes. FALLA S1 (DD 48.0593% >40%), S2 (Calmar 0.5875 vs 0.8679), S3 (Sharpe 0.8535 vs 1.0383; tolerancia 0.05); PASA T4-T6, PSR 0.9502, libro DD 14.5939%. CAGR 28.2366% vs 45.0829%, 117 operaciones vs 107. La estimacion lineal de Q5 (CAGR aproximado 34%, DD 40%) no se cumple: las pausas y lambda dependen de la caida, el tamano no escala linealmente. Hipotesis propuesta tras ver la caida estructural de estos mismos datos, no evidencia independiente. NO SE CABLEA. B de Q5 era condicional al test: al fallar queda A, USDC sigue con su version viva, sin pausa ni reasignacion. authoritativeArtifactRw5Q5Size; inventario historico incompleto, sin approved=true."
+    },
+    {
+      "id": "rw5d-cash-2026-10-24",
+      "sourceCommit": "ab11fe5 (pre-registro SS16.15 antes de correr); 59bebd9 (resultado SS16.16)",
+      "sourcePaths": [
+        "experiments/rw5-e1-lev-vt30-g250-sma200-fastvol5-cash-v1.json",
+        "scripts/rw5-evaluate.ts",
+        "scripts/rw3-compare-artifacts.ts",
+        "docs/reports/RW-reescritura-rentable.md",
+        "docs/reports/Q5-quorum-decision.md"
+      ],
+      "hypothesisCount": 1,
+      "priorUniqueTrials": 453,
+      "resultingUniqueTrials": 454,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW5d efectivo / Q5 pregunta 1 / SS16.15-16.16: +1, 453->454. #453 copia #448 sin regimeOverlay.defensive; conserva SMA200 SPY, coreScale=0, fastvol5, vt30, bruto 2.5x, costes y margen 6.5%. Riesgo apagado queda en efectivo; en vivo tesoreria usa BOXX, no BIL reservado. El simulador no remunera efectivo positivo: no se atribuye rendimiento BOXX probado. fb410729: PASA K1-K6 contra E1 33b0ac05, cuenta con E2 0b088ca3; K3/K4 conservan la referencia 49a1160c a 2x SIN contingencia, no un control inexistente a 2.5x. 1755 sesiones, CAGR 30.0581% vs 21.4495%, Sharpe 1.1558, DD sleeve 26.1691%, cuenta 23.7724%, Calmar 1.1486; crashes 25.8837/22.7169/17.1872%. PASA paridad frente a #448 2a92b1fb: delta Sharpe -0.0029, valor absoluto <=0.10; no es una replica independiente ni un K7 nuevo: el K7 de la familia sigue siendo #449 contra #441. CABLEADO como momentum_stocks@pe-vt30-g250-sma200-fv5 desde el despliegue declarado 2026-10-24 18:31 UTC; primera pasada prevista lunes 2026-10-26 09:35 ET. Q5 autoriza romper la congelacion y presupuesto cuenta 35%; SS16.16 pre-registra alerta/revision 20%, E1 2x al 25%, 1x y rediseno al 30%, decide el dueno al 35%, cortes versionados sin apagar ni pausar. Estas acciones no son un nuevo backtest ni garantia de perdida maxima. authoritativeArtifactRw5dCash; inventario historico incompleto, sin approved=true."
     }
   ],
   "authoritativeArtifactRw5Crypto": {
@@ -1572,20 +1607,95 @@
       }
     ]
   },
+  "authoritativeArtifactRw5Q5Size": {
+    "wired": false,
+    "verdict": "FALLA S1-S3; PASA T4-T6. NO SE CABLEA: Q5 pregunta 3 vuelve a A, USDC sigue sin cambios.",
+    "figuresNote": "SS16.13-16.14. Esquema de authoritativeArtifactRw5Crypto: dias OOS comunes, anualizacion 365, 4 decimales, Pct en porcentajes y combinedBook en fracciones. --sizing sustituye T1-T3 por S1 DD <=40%, S2 Calmar >=control, S3 Sharpe >=control-0.05; T4-T6 intactos. Ventanas de crash reportadas, no criterios S adicionales. Hipotesis posterior a observar estos datos; no approved=true, inventario incompleto.",
+    "candidates": [
+      {
+        "trial": 452,
+        "manifest": "experiments/momentum-crypto-usdc-daily-s5-rw5-size075-pure-v1.json",
+        "path": "data/backtests/bffc241253b03ce381f9a043e1f81d971320f51b3c96d4a8fdafd2358cc281ca/",
+        "control": "8892c1e9", "e1": "33b0ac05", "e2": "0b088ca3", "otherCrypto": "efc086b4",
+        "wired": false,
+        "figures": {
+          "commonDays": 1410, "from": "2022-11-15", "to": "2026-09-25",
+          "cagrPct": 28.2366, "controlCagrPct": 45.0829, "totalReturnPct": 161.1956, "controlTotalReturnPct": 320.6286,
+          "sharpe": 0.8535, "controlSharpe": 1.0383, "maxDrawdownPct": 48.0593, "controlMaxDrawdownPct": 51.9465, "calmar": 0.5875, "controlCalmar": 0.8679,
+          "crashDrawdownsPct": [8.093, 45.9333, 26.6338, 28.6659], "controlCrashDrawdownsPct": [10.5974, 48.8525, 28.7347, 29.0137], "crashDays": [78, 202, 131, 330],
+          "combinedBook": { "days": 1360, "from": "2022-11-15", "to": "2026-08-05", "totalReturn": 1.1773, "maxDrawdown": 0.1459 },
+          "reported": {
+            "ownerLine40": false, "trendExitStats": { "exits": 0, "reentries": 0, "orders": 0 }, "trades": [117, 107], "fees": [55.9613, 75.4419],
+            "turnoverAnnual": [[8.8828, 11.8858, 6.4803], [11.6056, 15.0849, 7.546]]
+          }
+        },
+        "criteria": {
+          "S1_ownerLine": { "pass": false, "value": 0.4806, "threshold": 0.4 },
+          "S2_calmar": { "pass": false, "value": [0.588, 0.868], "threshold": "Calmar ≥ control's" },
+          "S3_sharpe": { "pass": false, "value": [0.8535, 1.0383], "threshold": "Sharpe ≥ control's − 0.05" },
+          "T4_psr": { "pass": true, "value": 0.9502, "threshold": 0.95 },
+          "T4_folds": { "pass": true, "value": [0.914, 0.625, 0.864], "threshold": "≥ 2/3 folds with PSR > 0.5" },
+          "T4_loo": { "pass": true, "value": 0.806, "threshold": "worst LOO ≥ 0.6 × stitched Sharpe" },
+          "T5_combinedBook": { "pass": true, "value": 0.1459, "threshold": 0.2 },
+          "T6_protocolGates": { "pass": true, "value": { "failed": ["maxDrawdown", "minExcessReturnVsBench"], "failedOnlyHere": [] }, "threshold": "no gate fails that the control passes" }
+        },
+        "criteriaFailed": ["S1_ownerLine", "S2_calmar", "S3_sharpe"],
+        "criteriaVerdict": "FALLA: S1_ownerLine, S2_calmar, S3_sharpe"
+      }
+    ]
+  },
+  "authoritativeArtifactRw5dCash": {
+    "trial": 453,
+    "manifest": "experiments/rw5-e1-lev-vt30-g250-sma200-fastvol5-cash-v1.json",
+    "path": "data/backtests/fb410729eaf8cbe6efd32c0193f2e23b0313af4ceae0514aebdff1109a66e74b/",
+    "wired": true,
+    "verdict": "PASA K1-K6 y PARIDAD con RW5d; CABLEADO como momentum_stocks@pe-vt30-g250-sma200-fv5. Primera pasada prevista lunes 2026-10-26 09:35 ET; no es una replica independiente ni otro K7.",
+    "figuresNote": "SS16.15-16.16. Esquema de authoritativeArtifactRw5d: sesiones comunes, anualizacion 252, 4 decimales, Pct/Pp en porcentajes/puntos. R7 null con pass=true no afirma coste finito. K3/K4 contra la referencia declarada 2x SIN contingencia, no 2.5x. La paridad usa compareArtifacts ppy=252 y |deltaSharpe| <=0.10; el K7 familiar sigue siendo #449 contra #441, no se repite para efectivo. Simulador sin interes positivo; no valida BOXX ni garantiza limite de perdida. Inventario incompleto, no approved=true.",
+    "wiring": {
+      "version": "momentum_stocks@pe-vt30-g250-sma200-fv5",
+      "wiredAt": "2026-10-24T18:31:00Z",
+      "firstLivePass": "2026-10-26T13:35:00Z",
+      "modelStart": "2026-10-27",
+      "note": "Hora de despliegue declarada en el encargo; el test CI comprueba version, manifest, artefacto y primera pasada en modelVersions.ts, no consulta produccion."
+    },
+    "parity": {
+      "controlTrial": 448,
+      "controlPath": "data/backtests/2a92b1fb8a087fdc1a1025dd75d05c552462724f101ed1a0326e4176084dfc7c/",
+      "ppy": 252, "commonDays": 1755, "from": "2019-09-30", "to": "2026-09-23",
+      "deltaSharpe": -0.0029, "maxAbsDeltaSharpe": 0.1, "pass": true
+    },
+    "candidates": [
+      {
+        "trial": 453,
+        "manifest": "experiments/rw5-e1-lev-vt30-g250-sma200-fastvol5-cash-v1.json",
+        "path": "data/backtests/fb410729eaf8cbe6efd32c0193f2e23b0313af4ceae0514aebdff1109a66e74b/",
+        "current": "33b0ac05", "partner": "0b088ca3", "sameLeverage": "49a1160c",
+        "figures": {
+          "commonSessions": 1755, "cagrPct": 30.0581, "deltaCagrPp": 8.6086, "sharpe": 1.1558, "maxDrawdownPct": 26.1691, "accountMaxDrawdownPct": 23.7724, "calmar": 1.1486,
+          "currentCagrPct": 21.4495, "currentSharpe": 1.2905, "sameLeverageMaxDrawdownPct": 35.5604, "sameLeverageCalmar": 0.9599,
+          "crashDrawdownsPct": [25.8837, 22.7169, 17.1872], "sameLeverageCrashDrawdownsPct": [26.7263, 33.5, 25.5073], "crashSessions": [93, 251, 91],
+          "robustness": { "K5_R1_psr": 0.9979, "K5_R4_stressSharpe": 1.1116, "K5_R5_yearShare": 0.2823, "K5_R6_exTopDecile": 0.9852, "K5_R7_breakEven": null }
+        },
+        "criteriaFailed": [], "criteriaNotApplicable": [], "criteriaVerdict": "CUMPLE"
+      }
+    ]
+  },
   "authoritativeArtifactRw5d": {
     "trial": 448,
     "manifest": "experiments/rw5-e1-lev-vt30-g250-sma200-fastvol5-v1.json",
     "path": "data/backtests/2a92b1fb8a087fdc1a1025dd75d05c552462724f101ed1a0326e4176084dfc7c/",
     "selected": true,
-    "wired": false,
-    "verdict": "PASA K1-K7; ELEGIDO por la regla de SS16.1 (mayor CAGR entre quienes cumplen todo), NO SE CABLEA sin decision del dueno.",
+    "wired": true,
+    "verdict": "PASA K1-K7; ELEGIDO por la regla de SS16.1. CABLEADO mediante la variante en efectivo #453, no con el artefacto BIL original; Q5 autoriza el corte y presupuesto de cuenta 35%.",
     "wiring": {
-      "reason": "El dueno debe confirmar el presupuesto de caida (>=30%) y romper la congelacion de momentum_stocks antes de 2027-01-21",
-      "requiredBeforeWiring": [
-        "Confirmacion explicita del dueno del presupuesto de caida >=30% y ruptura de la congelacion",
-        "Defensa viva a efectivo/BOXX, porque BIL esta reservado a tesoreria",
-        "Comprobar que el motor respeta el poder de compra Reg-T compartido: E1 a 2.5x mas E2 a 1x; la proporcion cambia con sus patrimonios"
-      ]
+      "status": "wired through cash variant",
+      "reason": "Q5 elige RW5d 3-0, autoriza romper la congelacion de momentum_stocks y presupuesto de cuenta 35%; la paridad en efectivo cumple SS16.15-16.16.",
+      "variantTrial": 453,
+      "artifactEntry": "authoritativeArtifactRw5dCash",
+      "version": "momentum_stocks@pe-vt30-g250-sma200-fv5",
+      "wiredAt": "2026-10-24T18:31:00Z",
+      "firstLivePass": "2026-10-26T13:35:00Z",
+      "note": "Cableado desplegado; primera pasada prevista el lunes 09:35 ET, no ejecutada aun. El artefacto original #448 y su gemelo PIT #449 no se sustituyen en este registro."
     },
     "referenceNote": "SS16.7 pre-registro K3/K4 contra 49a1160c, referencia a 2x SIN contingencia, no a la misma palanca 2.5x: el validador no admite ese control. No se inventa un control ni se cuenta uno nuevo.",
     "k7": { "trial": 449, "controlTrial": 441, "pass": true, "criteriaFailed": [], "deltaCagrPp": 9.4469 },

@@ -30,6 +30,9 @@ import type { LegacyStopRelease, OrderIntent, OrderResult, Position, VenueAdapte
 
 const log = createLogger("PortfolioVenue:alpaca");
 
+/** Q5: shared-account headroom below overnight Reg-T (live execution only). */
+export const ALPACA_ACCOUNT_MAX_GROSS = 1.9;
+
 /** The raw v3-shaped client surface this venue needs (alpaca-v5-compat). */
 export interface AlpacaVenueClient {
   createOrder(params: Record<string, unknown>): Promise<any>;
@@ -46,6 +49,8 @@ export interface AlpacaVenueExecutor {
   getCachedPrice?(symbol: string): number;
   /** Account Reg-T buying power (null = unreadable). Absent = no guard (fails open). */
   getRegTBuyingPower?(): Promise<number | null>;
+  /** Whole account, including the other sleeve, manual holdings and treasury. */
+  getAccount?(): Promise<{ equity?: unknown; long_market_value?: unknown } | null>;
   /** Cutover: this bot's resting stop orders (uc8- stamped only), and a targeted cancel by id. */
   getOpenStopOrders?(symbol?: string): Promise<Array<{ id: string; clientOrderId: string; symbol: string; side: string }>>;
   cancelOrderById?(orderId: string): Promise<boolean>;
@@ -76,6 +81,9 @@ export function formatFractionalQty(qty: number): string {
 export class AlpacaVenue implements VenueAdapter {
   readonly venue = "alpaca" as const;
   private readonly sleep: (ms: number) => Promise<void>;
+  // E1 and E2 share this executor: serialize buys THROUGH settlement so both cannot spend
+  // the same headroom. Sells remain unguarded; research and other venues never use this.
+  private static readonly buys = new WeakMap<AlpacaVenueExecutor, Promise<void>>();
 
   constructor(
     private readonly executor: AlpacaVenueExecutor,
@@ -199,8 +207,46 @@ export class AlpacaVenue implements VenueAdapter {
   }
 
   async submit(order: OrderIntent, clientOrderId: string): Promise<OrderResult> {
+    if (order.side !== "buy") return this.submitOrder(order, clientOrderId);
+    const previous = AlpacaVenue.buys.get(this.executor) ?? Promise.resolve();
+    let release!: () => void;
+    const next = new Promise<void>(resolve => { release = resolve; });
+    AlpacaVenue.buys.set(this.executor, next);
+    await previous;
+    try { return await this.submitOrder(order, clientOrderId); }
+    finally {
+      release();
+      if (AlpacaVenue.buys.get(this.executor) === next) AlpacaVenue.buys.delete(this.executor);
+    }
+  }
+
+  private async submitOrder(order: OrderIntent, clientOrderId: string): Promise<OrderResult> {
     if (!this.executor.isConnected()) return { ok: false, filledQty: 0, avgPrice: null, status: "disconnected", error: "alpaca not connected" };
     if (!(order.qty > 0)) return { ok: false, filledQty: 0, avgPrice: null, status: "invalid", error: `non-positive qty ${order.qty}` };
+    if (order.side === "buy" && this.executor.getAccount) {
+      let headroom: number | null = null;
+      try {
+        const account = await this.executor.getAccount();
+        const equity = parseFloat(String(account?.equity ?? ""));
+        const gross = parseFloat(String(account?.long_market_value ?? ""));
+        if (Number.isFinite(equity) && Number.isFinite(gross) && gross >= 0) {
+          headroom = Math.max(0, ALPACA_ACCOUNT_MAX_GROSS * equity - gross);
+        } else log.warn("account gross/equity unreadable — failing open");
+      } catch (e: any) { log.warn(`account gross/equity unreadable (${e?.message ?? e}) — failing open`); }
+      if (headroom !== null && order.notional > headroom) {
+        // A retry may already have filled and consumed the headroom. Resolve that id BEFORE
+        // clipping/blocking, or the engine could lose its fill after a crash. Unknown is not absent.
+        try { return await this.awaitTerminal(await this.client.getOrderByClientId(clientOrderId), order); }
+        catch (e: any) { if ((e?.response?.status || e?.status) !== 404) throw e; }
+        const qty = Math.floor(order.qty * headroom / order.notional * 1e9) / 1e9;
+        const notional = qty * order.notional / order.qty;
+        log.warn(`BUY ${order.symbol} clipped by account gross cap ${ALPACA_ACCOUNT_MAX_GROSS}x: $${order.notional.toFixed(2)} → $${notional.toFixed(2)} (headroom $${headroom.toFixed(2)})`);
+        if (!(qty > 0) || notional < (this.opts.minOrderNotional ?? 5)) {
+          return { ok: false, filledQty: 0, avgPrice: null, status: "account_gross_cap", error: `account gross cap ${ALPACA_ACCOUNT_MAX_GROSS}x: remaining headroom $${headroom.toFixed(2)} below minimum order` };
+        }
+        order = { ...order, qty, notional };
+      }
+    }
     if (order.side === "buy" && this.executor.getRegTBuyingPower) {
       let bp: number | null = null;
       try { bp = await this.executor.getRegTBuyingPower(); } catch (e: any) { log.warn(`Reg-T buying power unreadable (${e?.message ?? e}) — failing open`); }

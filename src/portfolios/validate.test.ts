@@ -106,7 +106,9 @@ describe("create from a validated preset", () => {
   test("RW2: a preset whose validated model runs on the portfolio engine cannot create a portfolio — the retired incumbent params are not 'validated' (2026-10-23)", () => {
     for (const preset of ["momentum_stocks", "meanrev_stocks"]) {
       expect(VALIDATED_PRESETS[preset].template).toBe("portfolio");
-      expect(VALIDATED_PRESETS[preset].portfolioEngine).toEqual({ version: `${preset}@pe-vt15`, candidate: "vt15" });
+      expect(VALIDATED_PRESETS[preset].portfolioEngine).toEqual(preset === "momentum_stocks"
+        ? { version: "momentum_stocks@pe-vt30-g250-sma200-fv5", candidate: "e1-lev-vt30-g250-sma200-fastvol5" }
+        : { version: "meanrev_stocks@pe-vt15", candidate: "vt15" });
       const rows = seededRows((r) => { const x = r.find((y) => y.id === preset)!; x.status = "archived"; x.enabled = false; });
       const out = validateCreatePortfolio(
         { id: `${preset}_v2`, name: "v2", account: "alpaca_main", capital: 1_000, preset },

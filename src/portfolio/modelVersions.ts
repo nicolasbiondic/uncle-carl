@@ -82,6 +82,11 @@ export const MODEL_VERSIONS: Readonly<Record<string, readonly ModelVersion[]>> =
       // RW2 §9: Sharpe OOS 1.29, +262%, DD 21.9%, PSR 0.999; R1–R7 met. Portfolio replays label by session date.
       manifest: "experiments/rw2-e1-stocks-volmanaged-v1.json", candidate: "vt15",
       artifact: { dir: "data/backtests/b2324d4f74f15042af8bfba4170df8b41f05e8ec033e324bebe8e284e24e5236", shiftDays: 0 } },
+    { id: "momentum_stocks@pe-vt30-g250-sma200-fv5", since: "2026-10-26T13:35:00Z", modelStart: "2026-10-27",
+      note: "Quorum Q5 RW5d (RW §16.7-16.8, §16.15-16.16): vt30, gross <= 2.5x, fast vol 5, SPY SMA200 band 1% risk-off core to cash; live account BUY cap 1.9x; cash-defense parity: CAGR 30.1%, Sharpe 1.16, DD 26.2%, account DD 23.8%; first live pass Monday 2026-10-26 09:35 ET",
+      engine: "portfolio",
+      manifest: "experiments/rw5-e1-lev-vt30-g250-sma200-fastvol5-cash-v1.json", candidate: "e1-lev-vt30-g250-sma200-fastvol5",
+      artifact: { dir: "data/backtests/fb410729eaf8cbe6efd32c0193f2e23b0313af4ceae0514aebdff1109a66e74b", shiftDays: 0 } },
   ],
   meanrev_stocks: [
     { id: "meanrev_stocks@pre-slot10", since: EPOCH, modelStart: null,

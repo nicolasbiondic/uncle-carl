@@ -68,10 +68,23 @@ describe("the version table", () => {
     expect(list.at(-2)!.artifact?.shiftDays).toBe(-1);
   });
 
+  test("Q5 RW5d appends after pe-vt15; Monday first pass and next full session, cash manifest, cash-parity artifact fb410729", () => {
+    const list = MODEL_VERSIONS.momentum_stocks;
+    expect(list.at(-2)!.id).toBe("momentum_stocks@pe-vt15");
+    const v = list.at(-1)!;
+    expect(v).toMatchObject({ id: "momentum_stocks@pe-vt30-g250-sma200-fv5", engine: "portfolio",
+      since: "2026-10-26T13:35:00Z", modelStart: "2026-10-27",
+      manifest: "experiments/rw5-e1-lev-vt30-g250-sma200-fastvol5-cash-v1.json", candidate: "e1-lev-vt30-g250-sma200-fastvol5",
+      artifact: { dir: "data/backtests/fb410729eaf8cbe6efd32c0193f2e23b0313af4ceae0514aebdff1109a66e74b", shiftDays: 0 } });
+    expect(modelVersionAt("momentum_stocks", T(v.since) - 1)!.id).toBe("momentum_stocks@pe-vt15");
+    expect(modelVersionAt("momentum_stocks", T(v.since))!.id).toBe(v.id);
+    expect(rowModelVersion("momentum_stocks", { strategy_version: "momentum_stocks@pe-vt15", entry_time: T(v.since) })).toBe("momentum_stocks@pe-vt15");
+  });
+
   test("the scorecard's MODEL_START IS the current version's modelStart (one source), for every scorecard sleeve", () => {
     expect(MODEL_START).toEqual(currentModelStarts());
     expect(MODEL_START).toEqual({
-      momentum_stocks: "2026-10-26",
+      momentum_stocks: "2026-10-27",
       meanrev_stocks: "2026-10-26",
       momentum_crypto: "2026-10-24",
       momentum_crypto_usdc: "2026-10-24",

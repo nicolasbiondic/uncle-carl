@@ -114,7 +114,11 @@ unlinked) pages every boot ("orphaned").
 
 - Treasury sweep (`ALPACA_TREASURY_SWEEP`, BOXX): buys find cash the way the
   incumbents do. The engine sizes from the sleeve ledger, never from account
-  cash; the only gate is the account's Reg-T buying power, and the 15:50 cover
+  cash; buys obey account Reg-T buying power and the live-only 1.9× account
+  gross-long cap (`ALPACA_ACCOUNT_MAX_GROSS`), including treasury holdings. The
+  cap clips buys (account reads fail open); it does not force sells when marks
+  move above it. Shared-executor portfolio buys serialize through settlement.
+  The 15:50 cover
   sells BOXX when the day's buys drew cash negative. `AlpacaVenue.submit` mirrors
   `regt_buying_power` before every buy (blocked pre-submit with
   `insufficient_buying_power`, reported as a rejected order, paged; unreadable
@@ -150,6 +154,12 @@ unlinked) pages every boot ("orphaned").
   OPEN.md).
 
 ### Runbook (per sleeve; `scripts/portfolio-engine-cutover.ts`, dry-run by default)
+
+This is the incumbent → portfolio runbook. For a portfolio → portfolio change,
+an observer CANNOT run beside the current live definition: the resolver refuses
+both. Appending a new last model version also refuses the old live definition on
+the next boot. Coordinate definition + code in one release; RW5d's explicit
+zero-observation exception and portfolio rollback: `docs/reports/rw5-contingencia/cableado-rw5d.md`.
 
 1. Observer: `bun scripts/portfolio-engine-cutover.ts --sleeve <id> --mode observer --manifest experiments/<m>.json --candidate <name>`
    (read the plan) then the same with `--apply`, then restart the bot. The

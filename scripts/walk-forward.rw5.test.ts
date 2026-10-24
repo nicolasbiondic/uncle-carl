@@ -89,7 +89,7 @@ test("absent knobs keep hashes; every knob/parameter enters candidate identity",
 });
 
 test("RW5 pre-registration (§16.1, §16.3, §16.4, §16.7): 13 manifests, trials 435→446 and 448→450, the window/costs/capital of their RW3 base, the exact contingencies", () => {
-  const files = readdirSync(dir).filter(f => /^rw5-.*\.json$/.test(f)).sort();
+  const files = readdirSync(dir).filter(f => /^rw5-.*\.json$/.test(f) && !f.includes("-cash-")).sort();
   expect(files).toHaveLength(13);
   const ms = files.map(f => loadManifest(join(dir, f)));
   expect(ms.map(m => m.trialAccounting.priorUniqueTrials).sort((a, b) => a - b)).toEqual([435, 436, 437, 438, 439, 440, 441, 442, 443, 444, 445, 448, 449]);
@@ -118,4 +118,17 @@ test("RW5 pre-registration (§16.1, §16.3, §16.4, §16.7): 13 manifests, trial
     const lev = m.name.includes("vt30-g250") ? [0.3, 2.5] : m.name.includes("vt25-g200") ? [0.25, 2] : m.name.includes("vt20-g150") ? [0.2, 1.5] : [0.15, 1];
     expect([s.portfolioVolTarget, s.maxGross]).toEqual(lev);
   }
+});
+
+test("RW5d live-parity check (§16.15): the ONLY candidate change is removing the defensive leg; trial 453 -> 454", () => {
+  const original = loadManifest(join(dir, "rw5-e1-lev-vt30-g250-sma200-fastvol5-v1.json"));
+  const cash = loadManifest(join(dir, "rw5-e1-lev-vt30-g250-sma200-fastvol5-cash-v1.json"));
+  expect(() => validateManifest(cash)).not.toThrow();
+  expect(cash.trialAccounting).toEqual({ priorUniqueTrials: 453, complete: false });
+  expect(cash.description).toContain("PRE-REGISTERED (2026-10-24) BEFORE any run");
+  const expected = structuredClone(original);
+  delete (expected.candidates[0].portfolio!.strategy as VolManagedConfig).regimeOverlay!.defensive;
+  const rest = (m: typeof cash) => { const { name, description, trialAccounting, ...r } = m; return r; };
+  expect(rest(cash)).toEqual(rest(expected));
+  expect((cash.candidates[0].portfolio!.strategy as VolManagedConfig).regimeOverlay).not.toHaveProperty("defensive");
 });
