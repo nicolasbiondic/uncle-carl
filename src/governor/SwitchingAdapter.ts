@@ -94,7 +94,7 @@ export class SwitchingAdapter implements MomentumBrokerAdapter {
     return this.real.openPosition(action);
   }
 
-  async closePosition(action: { symbol: string; side: "buy" | "sell" }): Promise<{ ok: boolean; reason?: string }> {
+  async closePosition(action: Parameters<MomentumBrokerAdapter["closePosition"]>[0]): Promise<{ ok: boolean; reason?: string }> {
     // Deliberately does NOT call this.riskEngine.evaluateSubmit — same
     // principle as NautilusTrader's RiskEngine being absent from cancel/
     // query: a risk limit (HALTED/REDUCING/notional cap/rate limit) must
@@ -141,15 +141,19 @@ export class SwitchingAdapter implements MomentumBrokerAdapter {
     return target.scalePosition(action);
   }
 
-  async fetchCandles(symbol: string, bars: number): Promise<OHLCV[]> {
-    return this.real.fetchCandles(symbol, bars);
+  async fetchCandles(symbol: string, bars: number, opts?: { strictVenue?: boolean }): Promise<OHLCV[]> {
+    return opts ? this.real.fetchCandles(symbol, bars, opts) : this.real.fetchCandles(symbol, bars);
+  }
+  async fetchDailyBars(symbol: string, days: number): Promise<OHLCV[]> {
+    return await this.real.fetchDailyBars?.(symbol, days) ?? [];
   }
 
   /** Market-trend gate data (optional interface method): data reads route to
    *  the real adapter like fetchCandles — mode never changes what the market
    *  looks like. A real adapter without the method = no data → the engine's
    *  gate fails OPEN (its documented contract). */
-  async fetchDailyCloses(symbol: string, days: number): Promise<number[]> {
-    return this.real.fetchDailyCloses ? this.real.fetchDailyCloses(symbol, days) : [];
+  async fetchDailyCloses(symbol: string, days: number, opts?: { strictUtc?: boolean }): Promise<number[]> {
+    if (!this.real.fetchDailyCloses) return [];
+    return opts ? this.real.fetchDailyCloses(symbol, days, opts) : this.real.fetchDailyCloses(symbol, days);
   }
 }

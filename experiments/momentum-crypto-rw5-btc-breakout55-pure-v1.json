@@ -1,0 +1,45 @@
+{
+  "name": "momentum-crypto-rw5-btc-breakout55-pure-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTERED (2026-10-24) BEFORE any run, docs/reports/RW-reescritura-rentable.md §16.19 (quorum Q5 question 4, runner-up; criteria O1, O2, T1, T3-T6, scripts/rw5-crypto-evaluate.ts --overlay; trial 455 -> 456). Q5 question 4 runner-up: BTC-only Turtle System 2 short-lite, one unit without pyramiding, 55 completed UTC daily lows / 20 daily highs, Wilder N20 seeded with SMA20 true ranges, stop at fill + 2N. Local adaptation: triggers and exits at each hourly decision on the last completed hourly close, fills at the next executable price; NO native/intrabar stop. One N risks 1% of sleeve equity (2N about 2% before costs/gaps). Can coexist with other-coin longs, never BTC long; momentum BTC has priority. Independent of momentum regime/sharpe/trend filters and slots, no exposureControl resizes; obeys risk/maintenance and gross/margin gates, hard drawdown closes the unit. Copy of live momentum-crypto-rw3-vt-35-corroff-pure-v1 with ONLY breakoutShort added to the candidate. Trial 455 -> 456.",
+  "trialAccounting": { "priorUniqueTrials": 455, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-10-02T08:00:00Z",
+  "window": {
+    "from": "2021-01-01", "to": "2026-12-31",
+    "outerFoldCount": 3, "innerFoldCount": 3,
+    "purgeYears": 0.25, "warmupDays": 45
+  },
+  "costs": {
+    "base": { "slippageBps": 5, "commissionBps": 4 },
+    "stress": { "slippageBps": 10, "commissionBps": 8 }
+  },
+  "ledger": { "initialEquity": 5000, "leverage": 2, "hardStopPct": 0.04 },
+  "candidates": [{
+    "name": "vt-35-corr92", "cadenceMin": 60, "notionalPctPerSlot": 0.375,
+    "entryPct": 5, "exitPct": -2, "maxLongs": 4, "maxShorts": 0,
+    "volTarget": { "annualizedPct": 35, "lookbackBars": 720, "minScale": 0.33, "maxScale": 1.5 },
+    "sharpeGate": { "lookbackDays": 30, "minSharpe": 0 },
+    "risk": { "peakHalfLifeDays": 30 },
+    "regime": { "correlationCeiling": 1.01 },
+    "breakoutShort": { "symbol": "BTC/USD", "entryDays": 55, "exitDays": 20, "atrDays": 20, "stopN": 2, "riskPerN": 0.01 }
+  }],
+  "acceptance": {
+    "minSharpe": 0, "maxDrawdown": 0.45, "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0, "maxConcentration": 0.6, "minTrades": 10,
+    "stressMinSharpe": -0.5, "stressMaxDrawdown": 0.55, "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5, "looMaxDrawdown": 0.55, "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95, "minFoldsPsrAbove": { "threshold": 0.5, "count": 2 },
+    "maxTurnoverAnnual": 150, "maxDisplacementShare": 0.35, "minBreakEvenSlippageBps": 20
+  }
+}

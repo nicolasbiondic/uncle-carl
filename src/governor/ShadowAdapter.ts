@@ -23,7 +23,7 @@
 // (same bug class as shadow_pairs 2026-07-16, price path instead of candles).
 
 import type { MomentumBrokerAdapter } from "../strategies/momentum/MomentumEngine";
-import { MODEL_CUTOVER_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, TIME_STOP_CLOSE_REASON, TRAIL_STOP_CLOSE_REASON, TREND_EXIT_CLOSE_REASON } from "../strategies/momentum/MomentumEngine";
+import { BREAKOUT_SHORT_EXIT, BREAKOUT_SHORT_STOP, BREAKOUT_SHORT_PRIORITY, BREAKOUT_SHORT_DRAWDOWN, IDLE_OVERLAY_EXIT_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, TIME_STOP_CLOSE_REASON, TRAIL_STOP_CLOSE_REASON, TREND_EXIT_CLOSE_REASON } from "../strategies/momentum/MomentumEngine";
 import type { CurrentPosition } from "../strategies/momentum/Rebalancer";
 import type { OHLCV } from "../utils/types";
 import { getDB, insertTrade, closeTrade, updateTradeCloseReason, getOpenTrades, RECONCILE_CLOSE_SQL, accumulatePartialCloseLedger, getPartialCloseLedger, increaseOpenTradeQuantity, pnlOf } from "../db/database";
@@ -41,7 +41,7 @@ export const SHADOW_SLIPPAGE = 0.0002;
 // distinguish TRAIL_STOP/TIME_STOP/SLOT_DISPLACED from a signal-flip close.
 // Anything else (or absent) falls back to cfg.closeReason, so free-text can
 // never land in the enum-ish column.
-const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, TREND_EXIT_CLOSE_REASON]);
+const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, TREND_EXIT_CLOSE_REASON, IDLE_OVERLAY_EXIT_CLOSE_REASON, BREAKOUT_SHORT_EXIT, BREAKOUT_SHORT_STOP, BREAKOUT_SHORT_PRIORITY, BREAKOUT_SHORT_DRAWDOWN]);
 
 /** Minimal slice of AlpacaExecutor the shadow adapter needs (test-injectable). */
 export interface ShadowPriceSource {
@@ -104,6 +104,8 @@ export class ShadowAdapter implements MomentumBrokerAdapter {
         quantity: t.quantity,
         notional: t.quantity * current,
         entryTime: t.entryTime,
+        ...(t.strategy === "IDLE_OVERLAY" ? { role: "idle-overlay" as const } : {}),
+        ...(t.strategy === "BREAKOUT_SHORT" ? { role: "breakout-short" as const, entryPrice: t.entryPrice, stopLoss: t.stopLoss, breakoutN: t.breakoutN } : {}),
       };
     });
   }
@@ -124,12 +126,13 @@ export class ShadowAdapter implements MomentumBrokerAdapter {
   }
 
   async openPosition(action: Parameters<MomentumBrokerAdapter["openPosition"]>[0]): Promise<{ ok: boolean; reason?: string }> {
+    if (action.role === "breakout-short" && (this.cfg.market !== "crypto" || action.symbol !== "BTC/USD" || action.side !== "sell" || !action.breakout || ![action.breakout.n, action.breakout.stopN, action.breakout.quantity].every(x => Number.isFinite(x) && x > 0))) return { ok: false, reason: "invalid breakout short unit" };
     const price = await this.currentPrice(action.symbol);
     if (price <= 0) return { ok: false, reason: `no price for ${action.symbol}` };
 
     // Adverse fill: buying pays up, shorting sells down.
     const fill = action.side === "buy" ? price * (1 + SHADOW_SLIPPAGE) : price * (1 - SHADOW_SLIPPAGE);
-    const qty = this.cfg.market === "stock"
+    const qty = action.role === "breakout-short" ? action.breakout!.quantity : this.cfg.market === "stock"
       ? Math.floor(action.notionalUsd / fill)
       : action.notionalUsd / fill;
     if (qty <= 0) return { ok: false, reason: "computed qty <= 0" };
@@ -139,7 +142,7 @@ export class ShadowAdapter implements MomentumBrokerAdapter {
     // simulated FILL, side-aware. Absent → undefined → NULL (legacy fixed
     // distance, unaffected — checkAllStopLoss's rowStopPct falls back to
     // the profile's fixed pct).
-    const stopLoss = action.stopLossPct !== undefined && action.stopLossPct > 0
+    const stopLoss = action.role === "breakout-short" ? fill + action.breakout!.n * action.breakout!.stopN : action.stopLossPct !== undefined && action.stopLossPct > 0
       ? (action.side === "buy"
         ? fill * (1 - action.stopLossPct / 100)
         : fill * (1 + action.stopLossPct / 100))
@@ -150,7 +153,8 @@ export class ShadowAdapter implements MomentumBrokerAdapter {
       symbol: action.symbol,
       market: this.cfg.market,
       side: action.side,
-      strategy: this.cfg.strategy as any,
+      strategy: action.role === "breakout-short" ? "BREAKOUT_SHORT" : action.role === "idle-overlay" ? "IDLE_OVERLAY" : this.cfg.strategy as any,
+      breakoutN: action.role === "breakout-short" ? action.breakout!.n : undefined,
       entryPrice: fill,
       quantity: qty,
       entryTime: Date.now(),

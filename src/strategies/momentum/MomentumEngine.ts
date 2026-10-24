@@ -65,7 +65,7 @@ export interface MomentumBrokerAdapter {
    *  `volStop` config). Adapters that persist a stop derive the stop PRICE
    *  from the FILL price with it; absent → the adapter/profile legacy fixed
    *  distance applies unchanged. */
-  openPosition(action: { symbol: string; side: "buy" | "sell"; notionalUsd: number; stopLossPct?: number }): Promise<{ ok: boolean; reason?: string }>;
+  openPosition(action: { symbol: string; side: "buy" | "sell"; notionalUsd: number; stopLossPct?: number; role?: "idle-overlay" | "breakout-short"; breakout?: { n: number; stopN: number; quantity: number } }): Promise<{ ok: boolean; reason?: string }>;
   /** Close the entire position for the given symbol/side. `closeReason` is an
    *  optional CANONICAL telemetry label (e.g. TRAIL_STOP_CLOSE_REASON) the
    *  adapter maps onto trades.close_reason; absent (plan-driven signal-flip
@@ -84,7 +84,7 @@ export interface MomentumBrokerAdapter {
    */
   scalePosition?(action: { symbol: string; side: "buy" | "sell"; factor: number; reason?: string }): Promise<{ ok: boolean; reason?: string }>;
   /** Fetch the candle history for one symbol at the engine's bar timeframe. */
-  fetchCandles(symbol: string, bars: number): Promise<OHLCV[]>;
+  fetchCandles(symbol: string, bars: number, opts?: { strictVenue?: boolean }): Promise<OHLCV[]>;
   /**
    * OPTIONAL — data source for the market-trend entry gate (see
    * MomentumEngineConfig.marketTrend): the last `days` closes of CLOSED
@@ -96,7 +96,11 @@ export interface MomentumBrokerAdapter {
    * FAILS OPEN (entries allowed), documented on evaluateMarketTrendGate.
    * Adapters that don't implement it behave as "no data" (fail-open).
    */
-  fetchDailyCloses?(symbol: string, days: number): Promise<number[]>;
+  /** strictUtc is used by the monthly overlay: exactly `days` consecutive
+   * complete UTC days ending yesterday, or []. Never compress calendar gaps. */
+  fetchDailyCloses?(symbol: string, days: number, opts?: { strictUtc?: boolean }): Promise<number[]>;
+  /** Consecutive completed UTC OHLC bars ending yesterday; [] on gaps. */
+  fetchDailyBars?(symbol: string, days: number): Promise<OHLCV[]>;
 }
 
 // v8: cross-sectional mode was removed (dead — every call site, live and
@@ -541,6 +545,120 @@ export function exposureResizeFactor(frac: number, scale: number, notionalUsd: n
   return factor;
 }
 
+export interface IdleOverlayConfig {
+  kind: "tsm";
+  symbols: string[];
+  lookbackDays: number;
+  /** Fraction, NOT percent units. No division by the number of coins. */
+  volTargetPerAsset: number;
+  ewmaCenterOfMassDays: number;
+  annualization: number;
+}
+
+/** Single-unit Turtle short; channel and ATR inputs are completed UTC days. */
+export interface BreakoutShortConfig {
+  symbol: "BTC/USD";
+  entryDays: number;
+  exitDays: number;
+  atrDays: number;
+  stopN: number;
+  riskPerN: number;
+}
+export const BREAKOUT_SHORT_EXIT = "BREAKOUT_SHORT_EXIT";
+export const BREAKOUT_SHORT_STOP = "BREAKOUT_SHORT_STOP";
+export const BREAKOUT_SHORT_PRIORITY = "BREAKOUT_SHORT_PRIORITY";
+export const BREAKOUT_SHORT_DRAWDOWN = "BREAKOUT_SHORT_DRAWDOWN";
+export interface TurtleDailyState { day: number; n: number; close: number }
+export const breakoutHistoryDays = (c: BreakoutShortConfig): number => Math.max(c.entryDays, c.exitDays, c.atrDays + 1);
+export function validateBreakoutShort(c: any): asserts c is BreakoutShortConfig {
+  if (!c || typeof c !== "object" || Array.isArray(c) ||
+      Object.keys(c).sort().join(",") !== "atrDays,entryDays,exitDays,riskPerN,stopN,symbol" || c.symbol !== "BTC/USD" ||
+      ![c.entryDays, c.exitDays, c.atrDays].every(n => Number.isInteger(n) && n >= 2 && n <= 990) ||
+      !Number.isFinite(c.stopN) || c.stopN <= 0 || !Number.isFinite(c.riskPerN) || c.riskPerN <= 0 || c.riskPerN > 0.01) {
+    throw new Error("breakoutShort requires BTC/USD, integer days 2..990, positive stopN and riskPerN in (0,0.01]");
+  }
+}
+/** Initial N: SMA of the first atrDays true ranges in the initial window.
+ * Thereafter continue Wilder's recurrence, never reseed a rolling window.
+ * Strict UTC continuity is checked here as well as at the adapter seam. */
+export function turtleChannels(bars: OHLCV[], c: BreakoutShortConfig, now: number, previous?: TurtleDailyState): { low: number; high: number; state: TurtleDailyState } | null {
+  const D = 86_400_000, end = Math.floor(now / D) * D;
+  if (bars.length < breakoutHistoryDays(c) || bars.at(-1)!.timestamp !== end - D ||
+      bars.some((b, i) => b.timestamp !== end - (bars.length - i) * D ||
+        ![b.high, b.low, b.close].every(x => Number.isFinite(x) && x > 0) || b.high < b.low || b.close < b.low || b.close > b.high)) return null;
+  let state = previous;
+  if (state && (!Number.isFinite(state.day) || state.day % D !== 0 || !Number.isFinite(state.n) || state.n <= 0 || !Number.isFinite(state.close) || state.close <= 0 || state.day > end - D || state.day < bars[0].timestamp - D)) return null;
+  const tr = (b: OHLCV, close: number) => Math.max(b.high - b.low, Math.abs(b.high - close), Math.abs(b.low - close));
+  if (!state) {
+    let sum = 0;
+    for (let i = 1; i <= c.atrDays; i++) sum += tr(bars[i], bars[i - 1].close);
+    state = { day: bars[c.atrDays].timestamp, n: sum / c.atrDays, close: bars[c.atrDays].close };
+  }
+  for (const b of bars) if (b.timestamp > state.day) {
+    state = { day: b.timestamp, n: ((c.atrDays - 1) * state.n + tr(b, state.close)) / c.atrDays, close: b.close };
+  }
+  if (!(state.n > 0)) return null;
+  return { low: Math.min(...bars.slice(-c.entryDays).map(b => b.low)), high: Math.max(...bars.slice(-c.exitDays).map(b => b.high)), state };
+}
+
+/** Fixed research safety bounds, not fitted to prices. Caps apply at entry;
+ * monthly holds can drift beyond them, just like the normal book's cap. */
+export const IDLE_OVERLAY_ASSET_CAP = 1;
+export const IDLE_OVERLAY_GROSS_CAP = 1.5;
+export const IDLE_OVERLAY_EXIT_CLOSE_REASON = "IDLE_OVERLAY_EXIT";
+
+/** Ten EWMA time constants leave <0.005% omitted weight. Same finite,
+ * normalized window live/sim; enough for the trailing return as well. */
+export function idleOverlayHistoryDays(cfg: IdleOverlayConfig): number {
+  return Math.max(cfg.lookbackDays, Math.ceil(10 * (cfg.ewmaCenterOfMassDays + 1))) + 1;
+}
+
+export function validateIdleOverlay(value: unknown): asserts value is IdleOverlayConfig {
+  const c = value as IdleOverlayConfig;
+  if (!c || typeof c !== "object" || Array.isArray(c) ||
+      Object.keys(c).some(k => !["kind", "symbols", "lookbackDays", "volTargetPerAsset", "ewmaCenterOfMassDays", "annualization"].includes(k)) ||
+      c.kind !== "tsm" || !Array.isArray(c.symbols) || c.symbols.length === 0 ||
+      c.symbols.some(s => !["BTC/USD", "ETH/USD"].includes(s)) || new Set(c.symbols).size !== c.symbols.length ||
+      !Number.isInteger(c.lookbackDays) || c.lookbackDays < 2 || c.lookbackDays > 3650 ||
+      !Number.isFinite(c.volTargetPerAsset) || c.volTargetPerAsset <= 0 || c.volTargetPerAsset > 1 ||
+      !Number.isInteger(c.ewmaCenterOfMassDays) || c.ewmaCenterOfMassDays < 1 || c.ewmaCenterOfMassDays > 365 ||
+      c.annualization !== 365) {
+    throw new Error("idleOverlay requires tsm, unique BTC/USD/ETH/USD symbols, lookbackDays 2..3650, target fraction (0,1], EWMA COM 1..365 and annualization 365");
+  }
+}
+
+/** MOP-style weighted population variance of SIMPLE daily price returns,
+ * centered on their weighted mean. Missing/degenerate data authors no risk. */
+export function idleOverlayTargets(histories: Map<string, number[]>, cfg: IdleOverlayConfig, equity: number): Array<{ symbol: string; side: "buy" | "sell"; notionalUsd: number }> {
+  if (!(equity > 0) || !Number.isFinite(equity)) return [];
+  const targets: Array<{ symbol: string; side: "buy" | "sell"; notionalUsd: number }> = [];
+  const n = idleOverlayHistoryDays(cfg);
+  const delta = cfg.ewmaCenterOfMassDays / (cfg.ewmaCenterOfMassDays + 1);
+  for (const symbol of cfg.symbols) {
+    const closes = (histories.get(symbol) ?? []).slice(-n);
+    if (closes.length < n || closes.some(p => !(p > 0) || !Number.isFinite(p))) continue;
+    const r = closes[n - 1] / closes[n - 1 - cfg.lookbackDays] - 1;
+    if (r === 0) continue;
+    let weight = 1, sumW = 0, sum = 0;
+    const returns: Array<{ r: number; w: number }> = [];
+    for (let i = n - 1; i > 0; i--, weight *= delta) {
+      const ret = closes[i] / closes[i - 1] - 1;
+      returns.push({ r: ret, w: weight });
+      sumW += weight;
+      sum += weight * ret;
+    }
+    const mean = sum / sumW;
+    const variance = returns.reduce((s, x) => s + x.w * (x.r - mean) ** 2, 0) / sumW;
+    const sigma = Math.sqrt(variance * cfg.annualization);
+    if (!(sigma > 1e-12) || !Number.isFinite(sigma)) continue;
+    const notionalUsd = equity * Math.min(IDLE_OVERLAY_ASSET_CAP, cfg.volTargetPerAsset / sigma);
+    if (notionalUsd > 0) targets.push({ symbol, side: r > 0 ? "buy" : "sell", notionalUsd });
+  }
+  const gross = targets.reduce((s, p) => s + p.notionalUsd, 0);
+  const scale = gross > equity * IDLE_OVERLAY_GROSS_CAP ? equity * IDLE_OVERLAY_GROSS_CAP / gross : 1;
+  return targets.map(p => ({ ...p, notionalUsd: p.notionalUsd * scale }));
+}
+
 export interface MomentumEngineConfig {
   /** Strategy mode. Only "time-series" exists (see MomentumMode). Kept as a
    *  field so existing config literals don't need editing. */
@@ -671,6 +789,16 @@ export interface MomentumEngineConfig {
    * and add-backs (never invent a trend exit or new risk). Absent = OFF.
    * Uses fetchDailyCloses, not the often shorter hourly ranking window. */
   trendExit?: TrendExitConfig;
+  /** OFF when absent. Monthly symmetric TSM uses ONLY idle capital. First
+   * decision of each UTC month renews at monthly sizes; a busy/blocked month
+   * is skipped, with no intramonth re-entry after displacement. Hourly longs
+   * always retain priority. Own signal/sizing bypass hourly regime/trend/
+   * Sharpe/volTarget/exposureControl; RiskGuard and maintenance still gate
+   * opens, and the hard-DD breaker closes overlay inventory immediately. */
+  idleOverlay?: IdleOverlayConfig;
+  /** Independent one-unit BTC short, hourly close triggers; no native stop,
+   * no momentum slots/vol scaling/resizes. Absent = byte-identical legacy. */
+  breakoutShort?: BreakoutShortConfig;
   scorer: Partial<MomentumScorerConfig>;
   tsm: Partial<TSMConfig>;
   regime: Partial<RegimeFilterConfig>;
@@ -873,6 +1001,13 @@ export interface MomentumPersistedState {
    *  envelope keeps its exact shape; pruned against live positions on every
    *  tick like trailMarks. Absent/invalid entry = 1 (full size). */
   exposureFracs?: Record<string, number>;
+  /** Last consumed UTC month (YYYY-MM). Inventory ownership lives on trade
+   * rows, not just in this file, so a restart cannot mistake it for momentum. */
+  idleOverlayMonth?: string;
+  /** Retry liquidation only after a rejected/partial monthly or priority
+   * close. Never shift a month-start entry decision to a later day. */
+  idleOverlayExitPending?: boolean;
+  turtleDaily?: TurtleDailyState;
 }
 
 export interface MomentumStatePersistence {
@@ -991,6 +1126,9 @@ export class MomentumEngine {
    *  `${symbol}|${side}` (see MomentumPersistedState.exposureFracs). Only
    *  ever populated while cfg.exposureControl is set. */
   private exposureFracs = new Map<string, number>();
+  private idleOverlayMonth?: string;
+  private idleOverlayExitPending = false;
+  private turtleDaily?: TurtleDailyState;
   /** Shadow-equity resume (cfg.risk.shadowResume): symbols the VIRTUAL long
    *  book held at the previous tick, and their last decision closes.
    *  Deliberately EPHEMERAL (not persisted): the monetary anchors live on
@@ -1040,6 +1178,18 @@ export class MomentumEngine {
     if (cfg.trendExit && (!Number.isInteger(cfg.trendExit.smaDays) || cfg.trendExit.smaDays < 2 || cfg.trendExit.basis !== "dailyClose")) {
       throw new Error('trendExit requires integer smaDays >= 2 and basis "dailyClose"');
     }
+    if (cfg.idleOverlay !== undefined) {
+      validateIdleOverlay(cfg.idleOverlay);
+      if ((cfg.tsm?.maxShorts ?? 0) !== 0 || cfg.idleOverlay.symbols.some(s => !(cfg.universe ?? DEFAULT_ENGINE_CONFIG.universe).includes(s))) {
+        throw new Error("idleOverlay requires a long-only momentum book and overlay symbols in its universe");
+      }
+    }
+    if (cfg.breakoutShort !== undefined) {
+      validateBreakoutShort(cfg.breakoutShort);
+      if (cfg.idleOverlay || (cfg.tsm?.maxShorts ?? 0) !== 0 || cfg.tsm?.barMinutes !== 60 || cfg.rebalanceMinutes !== 60 || !(cfg.universe ?? DEFAULT_ENGINE_CONFIG.universe).includes(cfg.breakoutShort.symbol)) {
+        throw new Error("breakoutShort requires hourly long-only momentum with BTC in universe and no idleOverlay");
+      }
+    }
     this.cfg = {
       ...DEFAULT_ENGINE_CONFIG,
       ...cfg,
@@ -1057,6 +1207,11 @@ export class MomentumEngine {
         this.restoreTrailMarks(loaded.trailMarks);
         this.restoreEntryMarks(loaded.entryMarks);
         if (this.cfg.exposureControl) this.restoreExposureFracs(loaded.exposureFracs);
+        if (this.cfg.idleOverlay && typeof loaded.idleOverlayMonth === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(loaded.idleOverlayMonth) && loaded.idleOverlayMonth <= new Date(this.clock.now()).toISOString().slice(0, 7)) {
+          this.idleOverlayMonth = loaded.idleOverlayMonth;
+        }
+        this.idleOverlayExitPending = loaded.idleOverlayExitPending === true;
+        if (this.cfg.breakoutShort) this.turtleDaily = loaded.turtleDaily;
         this.lastRebalanceAt = validRiskAnchor(loaded.riskAnchorAt, this.clock.now());
       }
     }
@@ -1328,7 +1483,11 @@ export class MomentumEngine {
     const candleEntries = await Promise.all(
       this.cfg.universe.map(async (sym): Promise<[string, OHLCV[]]> => {
         try {
-          const c = await this.broker.fetchCandles(sym, this.cfg.historyBars);
+          // Turtle entry AND stop must use the executed perpetual's close,
+          // never an Alpaca fallback when the Binance feed is unavailable.
+          const c = this.cfg.breakoutShort?.symbol === sym
+            ? await this.broker.fetchCandles(sym, this.cfg.historyBars, { strictVenue: true })
+            : await this.broker.fetchCandles(sym, this.cfg.historyBars);
           return [sym, c];
         } catch (e: any) {
           this.log.warn(`fetchCandles ${sym} failed: ${e.message}`);
@@ -1426,7 +1585,79 @@ export class MomentumEngine {
     // Score, plan, execute.
     const positions = await this.broker.getOpenPositions();
     const universeSet = new Set(this.cfg.universe);
-    let universePositions = positions.filter(p => universeSet.has(p.symbol));
+    let universePositions = positions.filter(p => universeSet.has(p.symbol) && !p.role);
+    const overlayActions: RebalanceAction[] = [];
+    let overlayPositions = positions.filter(p => p.role === "idle-overlay");
+    const closeOverlay = async (): Promise<boolean> => {
+      if (overlayPositions.length > 0) {
+        this.idleOverlayExitPending = true;
+        this.persistState();
+      }
+      for (const p of [...overlayPositions]) {
+        try {
+          const res = await this.broker.closePosition({ symbol: p.symbol, side: p.side, closeReason: IDLE_OVERLAY_EXIT_CLOSE_REASON });
+          if (res.ok) {
+            overlayPositions = overlayPositions.filter(x => x !== p);
+            overlayActions.push({ type: "close", symbol: p.symbol, side: p.side, closeReason: IDLE_OVERLAY_EXIT_CLOSE_REASON, reason: "idle overlay renewal, hard drawdown or momentum priority" });
+          } else this.log.warn(`idle overlay close ${p.symbol} failed: ${res.reason}`);
+        } catch (e: any) { this.log.error(`idle overlay close ${p.symbol} threw: ${e.message}`); }
+      }
+      const closed = overlayPositions.length === 0;
+      if (this.idleOverlayExitPending && closed) {
+        this.idleOverlayExitPending = false;
+        this.persistState();
+      }
+      return closed;
+    };
+    const month = new Date(now).toISOString().slice(0, 7);
+    const overlayMonthDue = !!this.cfg.idleOverlay && this.idleOverlayMonth !== month;
+    // A fresh installation/fold midmonth must not invent a month-start
+    // observation. Existing state may catch up on the first post-outage tick.
+    const overlayCanStartMonth = this.idleOverlayMonth !== undefined || new Date(now).getUTCDate() === 1;
+    if (overlayMonthDue) {
+      // Consume before ANY order: failed renewals only retry exits, never
+      // recalculate the monthly basket later using newer daily closes.
+      this.idleOverlayMonth = month;
+      this.persistState();
+    }
+    const hardDrawdown = equityValid && ((this.riskState.peakEquity - equity) / Math.max(this.riskState.peakEquity, 1) >= this.cfg.risk.hardDrawdownPct! || riskBlockedReason?.startsWith("hard drawdown"));
+    const breakoutActions: RebalanceAction[] = [];
+    let breakoutPositions = positions.filter(p => p.role === "breakout-short");
+    let breakoutClosedThisTick = false;
+    const closeBreakout = async (closeReason: string): Promise<boolean> => {
+      for (const p of [...breakoutPositions]) {
+        try {
+          const res = await this.broker.closePosition({ symbol: p.symbol, side: p.side, closeReason });
+          if (res.ok) {
+            breakoutPositions = breakoutPositions.filter(x => x !== p);
+            breakoutClosedThisTick = true;
+            breakoutActions.push({ type: "close", symbol: p.symbol, side: p.side, closeReason, reason: closeReason });
+          } else this.log.warn(`breakout short close failed: ${res.reason}`);
+        } catch (e: any) { this.log.error(`breakout short close threw: ${e.message}`); }
+      }
+      return breakoutPositions.length === 0;
+    };
+    const bc = this.cfg.breakoutShort;
+    let channel: ReturnType<typeof turtleChannels> = null;
+    const breakoutPrice = bc ? candles.get(bc.symbol)?.at(-1)?.close : undefined;
+    if (bc) {
+      try {
+        const days = Math.max(breakoutHistoryDays(bc), this.turtleDaily ? Math.floor(now / 86_400_000) - this.turtleDaily.day / 86_400_000 - 1 : 0);
+        channel = turtleChannels(await this.broker.fetchDailyBars?.(bc.symbol, days) ?? [], bc, now, this.turtleDaily);
+        if (channel) { this.turtleDaily = channel.state; this.persistState(); }
+      } catch (e: any) { this.log.warn(`breakout daily fetch failed: ${e.message}`); }
+    }
+    // Stop remains available even when daily history fails. A row missing its
+    // entry/stop is drained rather than inventing a new N after a restart.
+    for (const p of breakoutPositions) {
+      const reason = hardDrawdown ? BREAKOUT_SHORT_DRAWDOWN
+        : !bc || !p.breakoutN || !p.stopLoss || !p.entryPrice ? BREAKOUT_SHORT_EXIT
+        : breakoutPrice && breakoutPrice >= p.stopLoss ? BREAKOUT_SHORT_STOP
+        : breakoutPrice && channel && breakoutPrice > channel.high ? BREAKOUT_SHORT_EXIT : undefined;
+      if (reason) { await closeBreakout(reason); break; }
+    }
+    // Removing the knob also drains owned inventory.
+    if (overlayMonthDue || this.idleOverlayExitPending || hardDrawdown || universePositions.length > 0 || !this.cfg.idleOverlay) await closeOverlay();
 
     // Model cutover (opt-in, one-shot — see reunderwriteBefore's docstring):
     // positions underwritten by a prior model/regime are closed BEFORE the
@@ -1674,14 +1905,14 @@ export class MomentumEngine {
     // for the productive-silence signal. Keyed by heartbeatName — every wired
     // sleeve has one; tests without it skip the monitor (no DB writes).
     const sleeve = this.cfg.heartbeatName;
-    const executed = [...trailActions, ...timeStopActions, ...cutoverActions];
+    const executed = [...trailActions, ...timeStopActions, ...cutoverActions, ...overlayActions.splice(0), ...breakoutActions.splice(0)];
     if (sleeve && executed.length > 0) sleeveOutput.recordClose(sleeve);
     // Gross-exposure guard bookkeeping (see maxGrossExposureMult docstring):
     // local running total, no extra broker reads. Seeded from THIS tick's
     // pre-loop position snapshot (universePositions) and updated in lockstep
     // as closes/opens execute below, so it stays accurate without re-fetching.
-    const notionalBySymbolSide = new Map(universePositions.map(p => [`${p.symbol}|${p.side}`, Math.abs(p.notional)]));
-    let liveGrossNotional = universePositions.reduce((s, p) => s + Math.abs(p.notional), 0);
+    const notionalBySymbolSide = new Map([...universePositions, ...breakoutPositions].map(p => [`${p.symbol}|${p.side}`, Math.abs(p.notional)]));
+    let liveGrossNotional = [...universePositions, ...breakoutPositions].reduce((s, p) => s + Math.abs(p.notional), 0);
     // ── P0 funnel counters (telemetry only — recordDecisionPass at the end;
     // never read by any branch below). Gate keys count BLOCKED PASSES (one
     // per tick), entry keys (gross_cap/capacity/no_slot/open_failed) count
@@ -1797,6 +2028,13 @@ export class MomentumEngine {
           }
           else this.log.warn(`close ${a.symbol} failed: ${res.reason}`);
         } else {
+          if (a.symbol === "BTC/USD" && a.side === "buy" && breakoutPositions.length) {
+            const freed = breakoutPositions.reduce((s, p) => s + Math.abs(p.notional), 0);
+            const closed = await closeBreakout(BREAKOUT_SHORT_PRIORITY);
+            executed.push(...breakoutActions.splice(0));
+            if (!closed) { bumpBlock("breakout_short_close_failed"); continue; }
+            liveGrossNotional -= freed;
+          }
           const notionalUsd = a.notionalTarget ?? 0;
           if (this.cfg.maxGrossExposureMult !== undefined && equityValid) {
             const cap = equity * this.cfg.maxGrossExposureMult;
@@ -1843,6 +2081,14 @@ export class MomentumEngine {
             : this.cfg.volStop
             ? trailPctFromVol((candles.get(a.symbol) ?? []).map(c => c.close), this.cfg.volStop, this.barsPerDay())
             : undefined;
+          // Last step before submitting a normal entry: all overlay exits
+          // must be confirmed. Failure vetoes the entry, never coexistence.
+          const overlayClosed = overlayPositions.length === 0 || await closeOverlay();
+          executed.push(...overlayActions.splice(0));
+          if (!overlayClosed) {
+            bumpBlock("idle_overlay_close_failed");
+            continue;
+          }
           if (a.side === "buy") survivingLongOpens++;
           intendedOpenUsd += notionalUsd;
           const res = await this.broker.openPosition({ symbol: a.symbol, side: a.side, notionalUsd, ...(stopLossPct !== undefined ? { stopLossPct } : {}) });
@@ -1878,6 +2124,58 @@ export class MomentumEngine {
     // No open this tick (or every open was gated away): the resize phase
     // still runs — reductions must never wait for an entry to happen.
     await runResizePhase();
+    // Independent signal after normal closes/opens and resizes. Momentum BTC
+    // has priority, other coins may coexist. Risk/maintenance/gross gates
+    // apply; hourly regime/trend/sharpe gates belong to the LONG model only.
+    if (bc && channel && breakoutPrice && breakoutPrice < channel.low && !breakoutClosedThisTick &&
+        !breakoutPositions.length && equityValid && realisedValid && canOpen && !tradingDisabled && !hardDrawdown && !hasUndecidableHold) {
+      const remaining = await this.broker.getOpenPositions();
+      const notionalUsd = equity * bc.riskPerN / channel.state.n * breakoutPrice;
+      const gross = remaining.reduce((s, p) => s + Math.abs(p.notional), 0);
+      if (!remaining.some(p => p.symbol === bc.symbol) && Number.isFinite(notionalUsd) && notionalUsd > 0 &&
+          (this.cfg.maxGrossExposureMult === undefined || gross + notionalUsd <= equity * this.cfg.maxGrossExposureMult)) {
+        try {
+          const res = await this.broker.openPosition({ symbol: bc.symbol, side: "sell", notionalUsd, role: "breakout-short", breakout: { n: channel.state.n, stopN: bc.stopN, quantity: equity * bc.riskPerN / channel.state.n } });
+          intendedOpenUsd += notionalUsd;
+          if (res.ok) {
+            liveGrossNotional += notionalUsd;
+            executed.push({ type: "open", symbol: bc.symbol, side: "sell", notionalTarget: notionalUsd, reason: "Turtle daily low breakout" });
+            if (sleeve) sleeveOutput.recordOpenSuccess(sleeve);
+          } else this.log.warn(`breakout short open failed: ${res.reason}`);
+        } catch (e: any) { this.log.error(`breakout short open threw: ${e.message}`); }
+      }
+    }
+    if (this.cfg.idleOverlay) {
+      const remaining = await this.broker.getOpenPositions();
+      // A busy, gated, data-starved or failed-renewal month stays consumed;
+      // a crash/restart cannot submit the monthly basket twice.
+      if (overlayMonthDue && overlayPositions.length === 0) {
+        if (overlayCanStartMonth && !tradingDisabled && canOpen && realisedValid && !hardDrawdown &&
+            remaining.length === 0 && !ordered.some(a => a.type === "open")) {
+          const histories = new Map<string, number[]>();
+          const cfg = this.cfg.idleOverlay;
+          for (const symbol of cfg.symbols) {
+            try { histories.set(symbol, await this.broker.fetchDailyCloses?.(symbol, idleOverlayHistoryDays(cfg), { strictUtc: true }) ?? []); }
+            catch (e: any) { this.log.warn(`idle overlay daily fetch ${symbol} failed: ${e.message}`); }
+          }
+          const targets = idleOverlayTargets(histories, cfg, equity);
+          let gross = 0;
+          for (const target of targets) {
+            const notionalUsd = target.notionalUsd * (entryScale ?? 1);
+            if (this.cfg.maxGrossExposureMult !== undefined && gross + notionalUsd > equity * this.cfg.maxGrossExposureMult) continue;
+            try {
+              const res = await this.broker.openPosition({ ...target, notionalUsd, role: "idle-overlay" });
+              if (res.ok) {
+                gross += notionalUsd;
+                overlayActions.push({ type: "open", symbol: target.symbol, side: target.side, notionalTarget: notionalUsd, reason: "idle overlay monthly TSM" });
+                if (sleeve) sleeveOutput.recordOpenSuccess(sleeve);
+              } else this.log.warn(`idle overlay open ${target.symbol} failed: ${res.reason}`);
+            } catch (e: any) { this.log.error(`idle overlay open ${target.symbol} threw: ${e.message}`); }
+          }
+        }
+      }
+    }
+    executed.push(...overlayActions);
     // Fractions recorded by this tick's opens (λ < 1) must reach disk this
     // tick — a restart before the next persist would otherwise read them as
     // full-size positions and never add back.
@@ -1938,7 +2236,7 @@ export class MomentumEngine {
         };
         if (equityValid && equity > 0) {
           const planCloseKeys = new Set(plan.actions.filter(a => a.type === "close").map(a => `${a.symbol}|${a.side}`));
-          const keptGross = universePositions
+          const keptGross = [...universePositions, ...breakoutPositions]
             .filter(p => !planCloseKeys.has(`${p.symbol}|${p.side}`))
             .reduce((s, p) => s + Math.abs(p.notional), 0);
           gateTelemetry.exposureReal = Math.max(0, liveGrossNotional) / equity;
@@ -2074,7 +2372,7 @@ export class MomentumEngine {
       return actions;
     }
     const universeSet = new Set(this.cfg.universe);
-    const held = positions.filter(p => universeSet.has(p.symbol));
+    const held = positions.filter(p => universeSet.has(p.symbol) && !p.role);
 
     // Drop watermarks for positions that no longer exist (closed elsewhere).
     // This prune ALSO validates restored marks (restoreTrailMarks): running
@@ -2158,7 +2456,7 @@ export class MomentumEngine {
       return actions;
     }
     const universeSet = new Set(this.cfg.universe);
-    const held = positions.filter(p => universeSet.has(p.symbol));
+    const held = positions.filter(p => universeSet.has(p.symbol) && !p.role);
 
     // Prune anchors for positions that no longer exist (closed elsewhere, or
     // side flipped → different key). Runs before any anchor is read, so a
@@ -2214,6 +2512,9 @@ export class MomentumEngine {
         // Key written ONLY under the exposure control with a non-empty map:
         // every legacy envelope keeps its exact shape (and its tests).
         ...(this.cfg.exposureControl && this.exposureFracs.size > 0 ? { exposureFracs: Object.fromEntries(this.exposureFracs) } : {}),
+        ...(this.cfg.idleOverlay && this.idleOverlayMonth ? { idleOverlayMonth: this.idleOverlayMonth } : {}),
+        ...(this.idleOverlayExitPending ? { idleOverlayExitPending: true } : {}),
+        ...(this.cfg.breakoutShort && this.turtleDaily ? { turtleDaily: this.turtleDaily } : {}),
       });
     }
   }

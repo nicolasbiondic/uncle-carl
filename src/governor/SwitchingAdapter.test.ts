@@ -50,6 +50,38 @@ function makeSwitching(mode: () => SleeveMode, liveAccount: string, riskEngine?:
   return { sw, real, shadow };
 }
 
+test("strict overlay UTC history reaches the real data source in shadow mode; legacy calls retain two arguments", async () => {
+  const { sw, real, shadow } = makeSwitching(() => "shadow", "idle-daily");
+  const calls: unknown[][] = [];
+  real.adapter.fetchDailyCloses = async (...args) => { calls.push(args); return [100]; };
+  expect(await sw.fetchDailyCloses("BTC/USD", 611, { strictUtc: true })).toEqual([100]);
+  expect(await sw.fetchDailyCloses("BTC/USD", 65)).toEqual([100]);
+  expect(calls).toEqual([["BTC/USD", 611, { strictUtc: true }], ["BTC/USD", 65]]);
+  expect(shadow.calls).toEqual([]);
+});
+
+test("Turtle daily OHLC always routes to real data; role/N and every exit label survive switching", async () => {
+  for (const mode of ["live", "shadow"] as const) {
+    const account = `switch-turtle-${mode}`, { sw, real, shadow } = makeSwitching(() => mode, account);
+    const dataCalls: unknown[][] = [];
+    real.adapter.fetchDailyBars = async (...args) => { dataCalls.push(args); return []; };
+    await sw.fetchDailyBars("BTC/USD", 55); expect(dataCalls).toEqual([["BTC/USD", 55]]);
+    const candleCalls: unknown[][] = [];
+    real.adapter.fetchCandles = async (...args) => { candleCalls.push(args); return []; };
+    await sw.fetchCandles("BTC/USD", 50, { strictVenue: true });
+    expect(candleCalls).toEqual([["BTC/USD", 50, { strictVenue: true }]]);
+    const target = mode === "live" ? real.adapter : shadow.adapter;
+    const opens: any[] = [], closes: any[] = [];
+    target.openPosition = async a => { opens.push(a); return { ok: true }; };
+    target.closePosition = async a => { closes.push(a); return { ok: true }; };
+    const a = { symbol: "BTC/USD", side: "sell" as const, notionalUsd: 100, role: "breakout-short" as const, breakout: { n: 2, stopN: 2, quantity: 1 } };
+    await sw.openPosition(a); expect(opens).toEqual([a]);
+    if (mode === "live") seedOpenLiveRow(account, "BTC/USD");
+    for (const closeReason of ["BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN"]) await sw.closePosition({ symbol: "BTC/USD", side: "sell", closeReason });
+    expect(closes.map(c => c.closeReason)).toEqual(["BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN"]);
+  }
+});
+
 // Maintenance kill-switch backstop (TRADING_ENABLED=false, src/config/
 // index.ts): even in mode=live, openPosition must never reach the real
 // adapter on a host explicitly configured not to open new positions.

@@ -3,10 +3,12 @@
  * own-coin trend exit (`trendExit`) against its live control on their common out-of-sample days.
  *
  *   bun scripts/rw5-crypto-evaluate.ts <candidateDir> --control <dir> --e1 <dir> --e2 <dir>
- *       --other-crypto <dir> [--sizing] [--json]
+ *       --other-crypto <dir> [--sizing | --overlay] [--json]
  *
  * --sizing (§16.13, a pure size change): T1–T3 become S1 drawdown ≤ 40 % (the owner's line),
  * S2 Calmar ≥ the control's and S3 Sharpe ≥ the control's − 0.05; T4–T6 stay.
+ * --overlay (§16.17, an added return stream): T2 becomes O1 CAGR ≥ the control's + 3 points and
+ * O2 drawdown ≤ 40 %; T1 and T3–T6 stay.
  *
  * T1–T3 on the common days of candidate and control (365 days a year, the RW4a arithmetic of
  * rw3-compare-artifacts.ts). T4 and T6 from the summary.json files. T5 on the four-sleeve book
@@ -51,7 +53,7 @@ export function combinedBookDrawdown(series: readonly DailySeries[], capitals: r
   return { days: dates.length, from, to, totalReturn: eq.reduce((a, b) => a + b, 0) / start - 1, maxDrawdown };
 }
 
-export function evaluateCrypto(dirs: { candidate: string; control: string; e1: string; e2: string; otherCrypto: string }, opts: { sizing?: boolean } = {}) {
+export function evaluateCrypto(dirs: { candidate: string; control: string; e1: string; e2: string; otherCrypto: string }, opts: { sizing?: boolean; overlay?: boolean } = {}) {
   const load = (d: string) => seriesOf(loadArtifactOuterDailyReturns(d));
   const C = load(dirs.candidate), A = load(dirs.control);
   const cmp = compareOnCommonDays(C, A, PPY);
@@ -93,6 +95,10 @@ export function evaluateCrypto(dirs: { candidate: string; control: string; e1: s
     S2_calmar: { pass: calmar(c) >= calmar(a), value: [+calmar(c).toFixed(3), +calmar(a).toFixed(3)], threshold: "Calmar ≥ control's" },
     S3_sharpe: { pass: c.sharpe >= a.sharpe - 0.05, value: [+c.sharpe.toFixed(4), +a.sharpe.toFixed(4)], threshold: "Sharpe ≥ control's − 0.05" },
     ...Object.fromEntries(Object.entries(T).filter(([id]) => !/^T[123]_/.test(id))),
+  } : opts.overlay ? {
+    O1_moreReturn: { pass: c.cagr >= a.cagr + 0.03, value: +(c.cagr - a.cagr).toFixed(4), threshold: "+0.03 CAGR vs control" },
+    O2_ownerLine: { pass: c.maxDrawdown <= 0.40, value: +c.maxDrawdown.toFixed(4), threshold: 0.40 },
+    ...Object.fromEntries(Object.entries(T).filter(([id]) => id !== "T2_drawdownAndCalmar")),
   } : T;
   const sumStats = (sm: any) => (sm.outerTests ?? []).reduce((acc: any, t: any) => {
     const x = t.result.trendExitStats;
@@ -120,9 +126,9 @@ if (import.meta.main) {
   const [candidate] = args;
   const control = flag("--control"), e1 = flag("--e1"), e2 = flag("--e2"), otherCrypto = flag("--other-crypto");
   if (!candidate || !control || !e1 || !e2 || !otherCrypto) {
-    throw new Error("usage: rw5-crypto-evaluate.ts <candidateDir> --control <dir> --e1 <dir> --e2 <dir> --other-crypto <dir> [--sizing] [--json]");
+    throw new Error("usage: rw5-crypto-evaluate.ts <candidateDir> --control <dir> --e1 <dir> --e2 <dir> --other-crypto <dir> [--sizing | --overlay] [--json]");
   }
-  const out = evaluateCrypto({ candidate, control, e1, e2, otherCrypto }, { sizing: args.includes("--sizing") });
+  const out = evaluateCrypto({ candidate, control, e1, e2, otherCrypto }, { sizing: args.includes("--sizing"), overlay: args.includes("--overlay") });
   if (args.includes("--json")) console.log(JSON.stringify(out, null, 2));
   else {
     const c = out.candidateStats, a = out.controlStats;

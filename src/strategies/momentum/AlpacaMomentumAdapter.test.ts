@@ -243,7 +243,7 @@ describe("AlpacaMomentumAdapter.closePosition — DB persistence failure", () =>
     expect(row.close_reason).toBe("MOMENTUM_REBALANCE");
   });
 
-  test.each(["TRAIL_STOP", "TREND_EXIT"])("engine close persists %s; a signal-flip close stays MOMENTUM_REBALANCE", async closeReason => {
+  test.each(["TRAIL_STOP", "TREND_EXIT", "IDLE_OVERLAY_EXIT", "BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN"])("engine close persists %s; a signal-flip close stays MOMENTUM_REBALANCE", async closeReason => {
     const alpaca = {
       isConnected: () => true,
       closePosition: async () => ({ success: true, filledPrice: 205 }),

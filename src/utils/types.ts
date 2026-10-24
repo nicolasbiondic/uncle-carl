@@ -11,6 +11,8 @@ export type StrategyName =
   | "BOLLINGER"
   | "VWAP"
   | "MOMENTUM"         // v7.0: cross-sectional momentum engine (replacement strategy)
+  | "IDLE_OVERLAY"     // monthly idle-capital TSM; deliberately no protective stops
+  | "BREAKOUT_SHORT"   // hourly-close Turtle unit; engine owns its 2N stop
   | "MEANREV"           // Connors-style daily mean reversion (MeanRevEngine)
   | "MEANREV_WIDE"      // shadow_meanrev_wide breadth sleeve (ShadowAdapter)
   | "CARRY"             // shadow_carry funding-carry sleeve (CarryShadowEngine)
@@ -128,6 +130,8 @@ export interface TradeRecord {
   profileId?: string;
   orderId?: string;
   openCommission?: number;
+  /** Daily Turtle N at entry, stored atomically with fill and 2N stop. */
+  breakoutN?: number;
   closeCommission?: number;
   stopLoss?: number;
   takeProfit?: number;

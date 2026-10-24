@@ -9,11 +9,12 @@
 // v8: trades rows live under account_id "momentum_crypto"; candles are
 // Binance klines at cfg.candleTimeframe (1h legacy default; 1d for the
 // USDC daily kernel) from the venue we execute on, with Alpaca bars as the
-// fallback; every open attaches a broker-native STOP_MARKET at the
-// engine's vol-scaled stopLossPct (profile fixed pct as fallback).
+// fallback; normal momentum attaches a broker-native STOP_MARKET at the
+// engine's vol-scaled stopLossPct (profile fixed pct as fallback). Explicit
+// research roles opt out: idle TSM has no stop, Turtle stops at hourly close.
 
 import type { MomentumBrokerAdapter } from "./MomentumEngine";
-import { MODEL_CUTOVER_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, TIME_STOP_CLOSE_REASON, TRAIL_STOP_CLOSE_REASON, TREND_EXIT_CLOSE_REASON } from "./MomentumEngine";
+import { BREAKOUT_SHORT_EXIT, BREAKOUT_SHORT_STOP, BREAKOUT_SHORT_PRIORITY, BREAKOUT_SHORT_DRAWDOWN, IDLE_OVERLAY_EXIT_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, TIME_STOP_CLOSE_REASON, TRAIL_STOP_CLOSE_REASON, TREND_EXIT_CLOSE_REASON } from "./MomentumEngine";
 import type { CurrentPosition } from "./Rebalancer";
 import type { OHLCV } from "../../utils/types";
 import type { AlpacaExecutor } from "../../executor/alpaca-executor";
@@ -39,7 +40,7 @@ const log = createLogger("BinanceMomentumAdapter");
 // MOMENTUM_REBALANCE — both were previously recorded as the latter). Any
 // other/absent value falls back to MOMENTUM_REBALANCE, so free-text can
 // never land in the enum-ish column. Mirrors AlpacaMomentumAdapter.
-const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, TREND_EXIT_CLOSE_REASON]);
+const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, TREND_EXIT_CLOSE_REASON, IDLE_OVERLAY_EXIT_CLOSE_REASON, BREAKOUT_SHORT_EXIT, BREAKOUT_SHORT_STOP, BREAKOUT_SHORT_PRIORITY, BREAKOUT_SHORT_DRAWDOWN]);
 
 export interface BinanceMomentumAdapterConfig {
   /** Profile id to associate trades with. */
@@ -137,6 +138,8 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
         // one-shot MODEL_CUTOVER). Missing here, the USDC daily kernel's
         // first pass (2026-09-27) silently kept the hourly model's positions.
         entryTime: t.entryTime,
+        ...(t.strategy === "IDLE_OVERLAY" ? { role: "idle-overlay" as const } : {}),
+        ...(t.strategy === "BREAKOUT_SHORT" ? { role: "breakout-short" as const, entryPrice: t.entryPrice, stopLoss: t.stopLoss, breakoutN: t.breakoutN } : {}),
       });
     }
     return out;
@@ -160,7 +163,7 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
         `SELECT COALESCE(SUM(pnl), 0) net
          FROM trades
          WHERE account_id = ? AND status = 'closed' AND exit_time > ?
-           AND strategy = 'MOMENTUM' AND ${RECONCILE_CLOSE_SQL}`
+           AND strategy IN ('MOMENTUM', 'IDLE_OVERLAY', 'BREAKOUT_SHORT') AND ${RECONCILE_CLOSE_SQL}`
       ).get(this.cfg.accountId, epochMs) as any;
       return row?.net ?? 0;
     } catch (e: any) {
@@ -169,7 +172,13 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
     }
   }
 
-  async openPosition(action: { symbol: string; side: "buy" | "sell"; notionalUsd: number; stopLossPct?: number }): Promise<{ ok: boolean; reason?: string }> {
+  async openPosition(action: Parameters<MomentumBrokerAdapter["openPosition"]>[0]): Promise<{ ok: boolean; reason?: string }> {
+    if (action.role === "breakout-short" && (this.cfg.quoteAsset !== "USDT" || action.symbol !== "BTC/USD" || action.side !== "sell" || !action.breakout || ![action.breakout.n, action.breakout.stopN, action.breakout.quantity].every(x => Number.isFinite(x) && x > 0))) {
+      return { ok: false, reason: "breakout short requires BTC USDT sell with positive N/stopN" };
+    }
+    if (action.role === "idle-overlay" && (this.cfg.quoteAsset !== "USDT" || !["BTC/USD", "ETH/USD"].includes(action.symbol))) {
+      return { ok: false, reason: "idle overlay supports BTC/ETH USDT perpetuals only" };
+    }
     if (!this.binance.isConnected()) return { ok: false, reason: "binance not connected" };
 
     const binanceSym = this.toNative(action.symbol);
@@ -205,7 +214,7 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
     // MARGIN the broker locks — it must NOT multiply qty. The old ×leverage
     // here doubled the backtested exposure and starved slots 2-4 of margin
     // ("Margin is insufficient" on the first live tick, 2026-07-10).
-    const rawQty = action.notionalUsd / price;
+    const rawQty = action.role === "breakout-short" ? action.breakout!.quantity : action.notionalUsd / price;
     if (rawQty <= 0) return { ok: false, reason: "computed qty <= 0" };
 
     // BinanceExecutor.placeOrder expects a Signal-like input. Build a minimal one.
@@ -340,7 +349,7 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
     const stopPct = action.stopLossPct !== undefined && action.stopLossPct > 0
       ? action.stopLossPct
       : this.cfg.stopLossPct;
-    const stopLoss = action.side === "buy"
+    const stopLoss = action.role === "breakout-short" ? filledPrice + action.breakout!.n * action.breakout!.stopN : action.role === "idle-overlay" ? 0 : action.side === "buy"
       ? filledPrice * (1 - stopPct / 100)
       : filledPrice * (1 + stopPct / 100);
 
@@ -348,8 +357,10 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
     // unattended protection for this position (the 15s client stop loop is
     // a secondary backstop, not primary) — an open can never report success
     // while genuinely unprotected, so a failed install reconciles the
-    // position closed instead of persisting it.
-    const nativeStop = await this.binance.placeStopMarketClose(action.symbol, action.side, stopLoss, finalQty);
+    // position closed instead of persisting it. Role-tagged units explicitly
+    // opt out: idle TSM has no stop; Turtle evaluates 2N at HOURLY CLOSE only
+    // in the shared engine (including live). No unattended stop for that unit.
+    const nativeStop = !!action.role || await this.binance.placeStopMarketClose(action.symbol, action.side, stopLoss, finalQty);
     if (!nativeStop) return this.closeAfterStopFailure(action, finalQty, stopLoss);
 
     // Persist a trade row so getRealisedPnlSince() can attribute the close later.
@@ -439,7 +450,7 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
    */
   private async persistFillOrReconcile(
     orderId: string,
-    action: { symbol: string; side: "buy" | "sell" },
+    action: Parameters<MomentumBrokerAdapter["openPosition"]>[0],
     filledPrice: number,
     filledQty: number,
     stopLoss: number,
@@ -450,7 +461,8 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
       symbol: action.symbol,
       market: "crypto",
       side: action.side,
-      strategy: "MOMENTUM" as any, // same pre-existing literal-widening cast as openPosition's signal above
+      strategy: action.role === "breakout-short" ? "BREAKOUT_SHORT" : action.role === "idle-overlay" ? "IDLE_OVERLAY" : "MOMENTUM" as any,
+      breakoutN: action.role === "breakout-short" ? action.breakout!.n : undefined,
       entryPrice: filledPrice,
       quantity: filledQty,
       entryTime: Date.now(),
@@ -524,7 +536,7 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
     try {
       row = getDB().prepare(
         `SELECT id, entry_price, quantity, side, open_commission FROM trades
-         WHERE account_id = ? AND symbol = ? AND status = 'open' AND strategy IN ('MOMENTUM', 'SYNC_RECOVERY')
+         WHERE account_id = ? AND symbol = ? AND status = 'open' AND strategy IN ('MOMENTUM', 'SYNC_RECOVERY', 'IDLE_OVERLAY', 'BREAKOUT_SHORT')
          ORDER BY entry_time DESC LIMIT 1`
       ).get(this.cfg.accountId, action.symbol) as any;
     } catch (e: any) {
@@ -896,7 +908,7 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
     return false;
   }
 
-  async fetchCandles(symbol: string, bars: number): Promise<OHLCV[]> {
+  async fetchCandles(symbol: string, bars: number, opts?: { strictVenue?: boolean }): Promise<OHLCV[]> {
     // Klines from the venue we execute on, at the configured signal
     // timeframe (default "1Hour" — legacy; "1Day" = the USDC daily kernel).
     // Binance caps a single request at 1500 rows — enough for the hourly
@@ -905,6 +917,7 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
       const klines = await fetchBinanceKlines(symbol, this.cfg.candleTimeframe, Math.min(bars, 1000), this.cfg.quoteAsset);
       if (klines.length > 0) return klines;
     }
+    if (opts?.strictVenue) return [];
     // Fallback: Alpaca crypto bars at the SAME timeframe. Alpaca has no
     // USDC/COIN-M pairs — for a USDC symbol this legitimately returns []
     // (fail-closed to no signal for that symbol), never a USDT-symbol proxy.
@@ -914,6 +927,17 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
   /** Per-UTC-day cache for fetchDailyCloses: the answer only changes when a
    *  new daily bar closes, so at most one klines request per symbol per day. */
   private dailyClosesCache = new Map<string, { utcDay: number; closes: number[] }>();
+  private dailyBarsCache = new Map<string, { utcDay: number; bars: OHLCV[] }>();
+  async fetchDailyBars(symbol: string, days: number): Promise<OHLCV[]> {
+    if (!binanceKlinesEnabled() || days > 997) return [];
+    const utcDay = Math.floor(Date.now() / 86_400_000), key = `${symbol}|${days}`;
+    const cached = this.dailyBarsCache.get(key);
+    if (cached?.utcDay === utcDay) return cached.bars;
+    const bars = (await fetchBinanceKlines(symbol, "1Day", days + 3, this.cfg.quoteAsset)).filter(b => b.timestamp < utcDay * 86_400_000).slice(-days);
+    if (bars.length !== days || bars.some((b, i) => b.timestamp !== (utcDay - days + i) * 86_400_000)) return [];
+    this.dailyBarsCache.set(key, { utcDay, bars });
+    return bars;
+  }
 
   /**
    * Market-trend gate data source (MomentumBrokerAdapter.fetchDailyCloses):
@@ -925,15 +949,19 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
    * fallback here (pitfall 4: no cross-exchange price mixing — the gate
    * either reads the venue's own daily closes or abstains).
    */
-  async fetchDailyCloses(symbol: string, days: number): Promise<number[]> {
+  async fetchDailyCloses(symbol: string, days: number, opts?: { strictUtc?: boolean }): Promise<number[]> {
     if (!binanceKlinesEnabled()) return [];
     const utcDay = Math.floor(Date.now() / 86_400_000);
-    const key = `${symbol}|${days}`;
+    const key = `${symbol}|${days}${opts?.strictUtc ? "|strict" : ""}`;
     const cached = this.dailyClosesCache.get(key);
     if (cached && cached.utcDay === utcDay) return cached.closes;
     // +3 slack: the dropped forming bar plus venue-side off-by-one never
     // starve the SMA window of its exact `days` closes.
     const klines = await fetchBinanceKlines(symbol, "1Day", days + 3, this.cfg.quoteAsset);
+    if (opts?.strictUtc) {
+      const window = klines.slice(-days);
+      if (window.length !== days || window.some((b, i) => b.timestamp !== (utcDay - days + i) * 86_400_000)) return [];
+    }
     const closes = klines.map(k => k.close).slice(-days);
     if (closes.length > 0) this.dailyClosesCache.set(key, { utcDay, closes });
     return closes;

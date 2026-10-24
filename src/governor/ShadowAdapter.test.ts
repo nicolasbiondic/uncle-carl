@@ -75,11 +75,11 @@ describe("ShadowAdapter — simulated opens", () => {
 });
 
 describe("ShadowAdapter — simulated closes and PnL math", () => {
-  test("TREND_EXIT is persisted verbatim", async () => {
+  test.each(["TREND_EXIT", "IDLE_OVERLAY_EXIT", "BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN"])("%s is persisted verbatim", async closeReason => {
     const a = makeAdapter(priceSource({ AAPL: 100 }));
     await a.openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 1_000 });
-    expect((await a.closePosition({ symbol: "AAPL", side: "buy", closeReason: "TREND_EXIT" })).ok).toBe(true);
-    expect((getDB().query("SELECT close_reason FROM trades WHERE account_id = ?").get(a.accountId) as any).close_reason).toBe("TREND_EXIT");
+    expect((await a.closePosition({ symbol: "AAPL", side: "buy", closeReason })).ok).toBe(true);
+    expect((getDB().query("SELECT close_reason FROM trades WHERE account_id = ?").get(a.accountId) as any).close_reason).toBe(closeReason);
   });
   test("close fills at price − 2bps, writes pnl and close_reason", async () => {
     const a = makeAdapter(priceSource({ AAPL: 100 }));

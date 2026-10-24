@@ -1460,8 +1460,138 @@
       "resultsComplete": false,
       "executionReported": true,
       "evidence": "RW5d efectivo / Q5 pregunta 1 / SS16.15-16.16: +1, 453->454. #453 copia #448 sin regimeOverlay.defensive; conserva SMA200 SPY, coreScale=0, fastvol5, vt30, bruto 2.5x, costes y margen 6.5%. Riesgo apagado queda en efectivo; en vivo tesoreria usa BOXX, no BIL reservado. El simulador no remunera efectivo positivo: no se atribuye rendimiento BOXX probado. fb410729: PASA K1-K6 contra E1 33b0ac05, cuenta con E2 0b088ca3; K3/K4 conservan la referencia 49a1160c a 2x SIN contingencia, no un control inexistente a 2.5x. 1755 sesiones, CAGR 30.0581% vs 21.4495%, Sharpe 1.1558, DD sleeve 26.1691%, cuenta 23.7724%, Calmar 1.1486; crashes 25.8837/22.7169/17.1872%. PASA paridad frente a #448 2a92b1fb: delta Sharpe -0.0029, valor absoluto <=0.10; no es una replica independiente ni un K7 nuevo: el K7 de la familia sigue siendo #449 contra #441. CABLEADO como momentum_stocks@pe-vt30-g250-sma200-fv5 desde el despliegue declarado 2026-10-24 18:31 UTC; primera pasada prevista lunes 2026-10-26 09:35 ET. Q5 autoriza romper la congelacion y presupuesto cuenta 35%; SS16.16 pre-registra alerta/revision 20%, E1 2x al 25%, 1x y rediseno al 30%, decide el dueno al 35%, cortes versionados sin apagar ni pausar. Estas acciones no son un nuevo backtest ni garantia de perdida maxima. authoritativeArtifactRw5dCash; inventario historico incompleto, sin approved=true."
+    },
+    {
+      "id": "rw5-q5-idle-tsm-2026-10-24",
+      "sourceCommit": "96a96b4 (pre-registro SS16.17 antes de correr); 0bcea00 (resultado SS16.18)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-rw5-idle-tsm12-pure-v1.json",
+        "scripts/rw5-crypto-evaluate.ts",
+        "docs/reports/RW-reescritura-rentable.md",
+        "docs/reports/Q5-quorum-decision.md"
+      ],
+      "hypothesisCount": 1,
+      "priorUniqueTrials": 454,
+      "resultingUniqueTrials": 455,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "Q5 pregunta 4 / RW SS16.17-16.18: +1, 454->455. #454 copia momentum_crypto vivo con UN mando: idleOverlay TSM simetrico BTC/ETH, signo del retorno de precio 365 dias, decision mensual UTC, vol objetivo por moneda 40% EWMA centro de masa 60 dias, solo con el libro largo vacio. Adaptaciones: topes 1x por moneda/1.5x cesta, mes ocupado o bloqueado se salta, sin stop protector; RiskGuard y margen vigentes, largos normales tienen prioridad. No es replica literal de Moskowitz-Ooi-Pedersen. Control +0 efc086b4, E1/E2 33b0ac05/0b088ca3, otro cripto 8892c1e9; evaluador --overlay. f5c9e72d: mismos folds, dataHash e04e0b09 distinto del 77c87d51 vivo por historia diaria extra declarada; 1575 dias comunes. FALLA O2 (DD 42.2923% >40%), T3 (FTX, 2024 y 2025-26), T4_loo (0.432x) y T6 (maxDrawdown nueva); PASA O1 (+11.1178pp CAGR), T1, T4_psr/folds y T5 (DD libro 13.7511%). CAGR 66.2734% vs 55.1556%, Sharpe 1.3686 vs 1.3313; en 2024 DD 39.0483% vs 16.0470%: el signo a 12 meses sigue largo durante la correccion, compra justo cuando el sleeve se queda sin senales. Telemetria por fold y total: 88 ordenes, 44 aperturas/cierres, 163.2083 dias activo, 115.7083 cortos y 67.9167 largos (pueden solaparse entre monedas), funding neto pagado 58.1734 USD. Sesgo: hipotesis propuesta tras observar octubre de 2026; parametros de literatura, no evidencia independiente. NO SE CABLEA; Q5 pasa al segundo diseno. authoritativeArtifactRw5Q5IdleTsm; inventario historico incompleto, sin approved=true."
+    },
+    {
+      "id": "rw5-q5-breakout-2026-10-24",
+      "sourceCommit": "22e38d1 (pre-registro SS16.19 antes de correr); f26139f (resultado y cierre SS16.20)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-rw5-btc-breakout55-pure-v1.json",
+        "scripts/rw5-crypto-evaluate.ts",
+        "docs/reports/RW-reescritura-rentable.md",
+        "docs/reports/Q5-quorum-decision.md"
+      ],
+      "hypothesisCount": 1,
+      "priorUniqueTrials": 455,
+      "resultingUniqueTrials": 456,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "Q5 pregunta 4 / RW SS16.19-16.20: +1, 455->456. #455 copia momentum_crypto vivo con UN mando: breakoutShort BTC, minimo 55 dias completos UTC, salida maximo 20 dias o stop 2N, ATR Wilder20 con semilla 55 dias, una unidad sin piramidar, 1N=1% equity. Adaptaciones: triggers al cierre horario, no stop nativo/intrabar; puede convivir con largos de otras monedas, nunca BTC largo (prioridad momentum); respeta riesgo, bruto y margen. Control +0 efc086b4, E1/E2 33b0ac05/0b088ca3, otro cripto 8892c1e9; --overlay. 726b818d: mismos folds, dataHash 40229b0f distinto por historia diaria extra declarada; 1575 dias comunes. FALLA O1 (+1.5240pp CAGR <3) y T3 (2024 DD 21.2985% vs 16.0470%; FTX empata a precision reportada); PASA T1, O2 (DD 30.9120%), T4 (PSR 0.9979, folds 0.960/0.985/0.774, exclusion 0.675x), T5 (DD libro 14.6139%) y T6. CAGR 56.6796% vs 55.1556%, Sharpe 1.3489 vs 1.3313. Telemetria por fold y total: 26 ordenes, 13 aperturas/cierres, 332.9583 dias en corto, salidas 3 por maximo20 / 5 stop2N / 5 prioridad BTC largo; funding neto cobrado 57.8731 USD. Mejora bajista 2025-26 (20.3509% vs 28.6745%), pero suma perdidas por stops en 2024 y poco retorno. Hipotesis tras ver octubre de 2026, parametros publicados, no evidencia independiente. Balance SS16.20: los dos disenos de cortos Q5 fallan; TSM12 anade retorno con demasiada caida y dependencia de una moneda, ruptura protege bajistas pero anade poco y falla en correcciones. No es prueba universal contra los cortos. NO SE CABLEA; los sleeves siguen con sus versiones vivas, sin pausa ni reasignacion. authoritativeArtifactRw5Q5Breakout; inventario historico incompleto, sin approved=true."
     }
   ],
+  "authoritativeArtifactRw5Q5IdleTsm": {
+    "wired": false,
+    "verdict": "FALLA O2, T3, T4_loo y T6; NO SE CABLEA. El retorno adicional no compensa la caida ni la dependencia de una moneda; sigue el segundo diseno de Q5.",
+    "figuresNote": "SS16.17-16.18. Esquema de authoritativeArtifactRw5Crypto, dias OOS comunes, anualizacion 365, 4 decimales, Pct en porcentajes y combinedBook en fracciones. --overlay exige O1 CAGR >=control+0.03, O2 DD <=40%, T1 y T3-T6; no T2. Telemetria por fold y total sumado ANTES de redondear; dias son horas/24, longDays y shortDays pueden solaparse entre monedas; fundingPaid positivo es pagado, negativo cobrado, en USD. trendExitStats=0 no describe el overlay. Mismos folds; dataHash distinto por historia diaria extra declarada, no identidad de datos ni replica independiente. Hipotesis posterior a observar octubre de 2026, parametros de literatura y adaptaciones locales declaradas; inventario incompleto, no approved=true.",
+    "candidates": [
+      {
+        "trial": 454,
+        "manifest": "experiments/momentum-crypto-rw5-idle-tsm12-pure-v1.json",
+        "path": "data/backtests/f5c9e72d1b5b8315037d7394aedc7f4c80ff690a6555667c7958f8c282909a04/",
+        "control": "efc086b4", "e1": "33b0ac05", "e2": "0b088ca3", "otherCrypto": "8892c1e9",
+        "wired": false,
+        "dataHash": "e04e0b090e26299d2370019052624538fd0c6f4924fd6350aec9b8aa181511ed",
+        "controlDataHash": "77c87d51f19d7799b011ef4e02566f327438ffd9c64ff457fd05c69d6df9bfeb",
+        "figures": {
+          "commonDays": 1575, "from": "2022-06-11", "to": "2026-10-02",
+          "cagrPct": 66.2734, "controlCagrPct": 55.1556, "totalReturnPct": 794.559, "controlTotalReturnPct": 563.8799,
+          "sharpe": 1.3686, "controlSharpe": 1.3313, "maxDrawdownPct": 42.2923, "controlMaxDrawdownPct": 33.5689, "calmar": 1.567, "controlCalmar": 1.6431,
+          "crashDrawdownsPct": [20.5074, 39.0483, 12.8026, 30.7149], "controlCrashDrawdownsPct": [19.2074, 16.047, 16.9512, 28.6745], "crashDays": [92, 202, 131, 330],
+          "combinedBook": { "days": 1360, "from": "2022-11-15", "to": "2026-08-05", "totalReturn": 1.2965, "maxDrawdown": 0.1375 },
+          "reported": {
+            "ownerLine40": false, "trendExitStats": { "exits": 0, "reentries": 0, "orders": 0 }, "trades": [1279, 1312], "fees": [1397.6698, 1328.0894],
+            "turnoverAnnual": [[143.1472, 102.463, 133.1721], [135.9103, 99.3266, 115.1933]]
+          }
+        },
+        "idleOverlayStats": {
+          "folds": [
+            { "orders": 20, "opens": 10, "closes": 10, "activeDays": 41.4583, "longDays": 15.9167, "shortDays": 25.5417, "fundingPaid": -13.7308 },
+            { "orders": 28, "opens": 14, "closes": 14, "activeDays": 38.7083, "longDays": 38.7083, "shortDays": 13.5833, "fundingPaid": 63.3842 },
+            { "orders": 40, "opens": 20, "closes": 20, "activeDays": 83.0417, "longDays": 13.2917, "shortDays": 76.5833, "fundingPaid": 8.5201 }
+          ],
+          "total": { "orders": 88, "opens": 44, "closes": 44, "activeDays": 163.2083, "longDays": 67.9167, "shortDays": 115.7083, "fundingPaid": 58.1734 }
+        },
+        "criteria": {
+          "O1_moreReturn": { "pass": true, "value": 0.1112, "threshold": "+0.03 CAGR vs control" },
+          "O2_ownerLine": { "pass": false, "value": 0.4229, "threshold": 0.4 },
+          "T1_sharpe": { "pass": true, "value": [1.3686, 1.3313], "threshold": "Sharpe ≥ control's, common days" },
+          "T3_everyCrash": { "pass": false, "value": ["2022_ftx: 20.5% vs 19.2% (92 d)", "2024_correction: 39.0% vs 16.0% (202 d)", "2025_q1: 12.8% vs 17.0% (131 d)", "2025_26_bear: 30.7% vs 28.7% (330 d)"], "threshold": "window DD ≤ control's in every window, ≥ 20 days each" },
+          "T4_psr": { "pass": true, "value": 0.9979, "threshold": 0.95 },
+          "T4_folds": { "pass": true, "value": [0.951, 0.976, 0.876], "threshold": "≥ 2/3 folds with PSR > 0.5" },
+          "T4_loo": { "pass": false, "value": 0.432, "threshold": "worst LOO ≥ 0.6 × stitched Sharpe" },
+          "T5_combinedBook": { "pass": true, "value": 0.1375, "threshold": 0.2 },
+          "T6_protocolGates": { "pass": false, "value": { "failed": ["maxDrawdown", "maxDisplacementShare"], "failedOnlyHere": ["maxDrawdown"] }, "threshold": "no gate fails that the control passes" }
+        },
+        "criteriaFailed": ["O2_ownerLine", "T3_everyCrash", "T4_loo", "T6_protocolGates"],
+        "criteriaVerdict": "FALLA: O2_ownerLine, T3_everyCrash, T4_loo, T6_protocolGates"
+      }
+    ]
+  },
+  "authoritativeArtifactRw5Q5Breakout": {
+    "wired": false,
+    "verdict": "FALLA O1 y T3; NO SE CABLEA. Balance SS16.20: los dos disenos de cortos Q5 fallan; los sleeves siguen con sus versiones vivas, sin pausa ni reasignacion.",
+    "figuresNote": "SS16.19-16.20. Mismo evaluador --overlay y esquema que authoritativeArtifactRw5Q5IdleTsm. breakoutShortStats por fold y total sumado antes de redondear; fundingPaid negativo es cobrado. FTX empata a precision reportada (diferencia numerica ~4e-16); T3 falla materialmente en 2024. Historia diaria extra cambia dataHash, folds identicos. Trigger y stop 2N horarios, no stop nativo/intrabar; no se certifica proteccion con el bot caido. Hipotesis tras observar octubre de 2026, reglas publicadas con adaptaciones; no replica independiente ni approved=true, inventario incompleto. El cierre concierne a estos dos disenos, no prueba que todos los cortos fallen.",
+    "candidates": [
+      {
+        "trial": 455,
+        "manifest": "experiments/momentum-crypto-rw5-btc-breakout55-pure-v1.json",
+        "path": "data/backtests/726b818d81ce14177b9e4779d8609a5c57d3170632e96f527968e2c01eb48c11/",
+        "control": "efc086b4", "e1": "33b0ac05", "e2": "0b088ca3", "otherCrypto": "8892c1e9",
+        "wired": false,
+        "dataHash": "40229b0f79ee3999c2ab0096251d7a7f8efde750f9421a128f97cc7b70e136c0",
+        "controlDataHash": "77c87d51f19d7799b011ef4e02566f327438ffd9c64ff457fd05c69d6df9bfeb",
+        "figures": {
+          "commonDays": 1575, "from": "2022-06-11", "to": "2026-10-02",
+          "cagrPct": 56.6796, "controlCagrPct": 55.1556, "totalReturnPct": 592.4408, "controlTotalReturnPct": 563.8799,
+          "sharpe": 1.3489, "controlSharpe": 1.3313, "maxDrawdownPct": 30.912, "controlMaxDrawdownPct": 33.5689, "calmar": 1.8336, "controlCalmar": 1.6431,
+          "crashDrawdownsPct": [19.2074, 21.2985, 15.8794, 20.3509], "controlCrashDrawdownsPct": [19.2074, 16.047, 16.9512, 28.6745], "crashDays": [92, 202, 131, 330],
+          "combinedBook": { "days": 1360, "from": "2022-11-15", "to": "2026-08-05", "totalReturn": 1.2296, "maxDrawdown": 0.1461 },
+          "reported": {
+            "ownerLine40": true, "trendExitStats": { "exits": 0, "reentries": 0, "orders": 0 }, "trades": [1325, 1312], "fees": [1333.4156, 1328.0894],
+            "turnoverAnnual": [[137.9763, 100.9713, 116.0524], [135.9103, 99.3266, 115.1933]]
+          }
+        },
+        "breakoutShortStats": {
+          "folds": [
+            { "orders": 12, "opens": 6, "closes": 6, "shortDays": 117, "fundingPaid": -15.364, "exits": { "BREAKOUT_SHORT_EXIT": 1, "BREAKOUT_SHORT_STOP": 2, "BREAKOUT_SHORT_PRIORITY": 3 } },
+            { "orders": 8, "opens": 4, "closes": 4, "shortDays": 83.5, "fundingPaid": -26.1363, "exits": { "BREAKOUT_SHORT_STOP": 3, "BREAKOUT_SHORT_PRIORITY": 1 } },
+            { "orders": 6, "opens": 3, "closes": 3, "shortDays": 132.4583, "fundingPaid": -16.3728, "exits": { "BREAKOUT_SHORT_EXIT": 2, "BREAKOUT_SHORT_PRIORITY": 1 } }
+          ],
+          "total": { "orders": 26, "opens": 13, "closes": 13, "shortDays": 332.9583, "fundingPaid": -57.8731, "exits": { "BREAKOUT_SHORT_EXIT": 3, "BREAKOUT_SHORT_STOP": 5, "BREAKOUT_SHORT_PRIORITY": 5 } }
+        },
+        "criteria": {
+          "O1_moreReturn": { "pass": false, "value": 0.0152, "threshold": "+0.03 CAGR vs control" },
+          "O2_ownerLine": { "pass": true, "value": 0.3091, "threshold": 0.4 },
+          "T1_sharpe": { "pass": true, "value": [1.3489, 1.3313], "threshold": "Sharpe ≥ control's, common days" },
+          "T3_everyCrash": { "pass": false, "value": ["2022_ftx: 19.2% vs 19.2% (92 d)", "2024_correction: 21.3% vs 16.0% (202 d)", "2025_q1: 15.9% vs 17.0% (131 d)", "2025_26_bear: 20.4% vs 28.7% (330 d)"], "threshold": "window DD ≤ control's in every window, ≥ 20 days each" },
+          "T4_psr": { "pass": true, "value": 0.9979, "threshold": 0.95 },
+          "T4_folds": { "pass": true, "value": [0.96, 0.985, 0.774], "threshold": "≥ 2/3 folds with PSR > 0.5" },
+          "T4_loo": { "pass": true, "value": 0.675, "threshold": "worst LOO ≥ 0.6 × stitched Sharpe" },
+          "T5_combinedBook": { "pass": true, "value": 0.1461, "threshold": 0.2 },
+          "T6_protocolGates": { "pass": true, "value": { "failed": ["maxDisplacementShare"], "failedOnlyHere": [] }, "threshold": "no gate fails that the control passes" }
+        },
+        "criteriaFailed": ["O1_moreReturn", "T3_everyCrash"],
+        "criteriaVerdict": "FALLA: O1_moreReturn, T3_everyCrash"
+      }
+    ]
+  },
   "authoritativeArtifactRw5Crypto": {
     "wired": false,
     "verdict": "FALLAN ambos disenos de salida por tendencia propia; no se cablean y los sleeves siguen con sus versiones vivas.",

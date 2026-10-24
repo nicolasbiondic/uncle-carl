@@ -118,16 +118,17 @@ describe("openPosition — inverse sizing + persistence", () => {
 });
 
 describe("closePosition — explicit inverse PnL, bypasses closeTrade's linear formula", () => {
-  test("TREND_EXIT is persisted verbatim", async () => {
-    seedOpenTrade("coinm-trend", "coinm-trend", {
+  test.each(["TREND_EXIT", "IDLE_OVERLAY_EXIT", "BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN"])("%s is persisted verbatim", async closeReason => {
+    const id = `coinm-${closeReason}`;
+    seedOpenTrade(id, id, {
       symbol: COINM_INTERNAL_SYMBOL, market: "crypto", entryPrice: 50_000, quantity: 10,
     });
     const exec = fakeExecutor({
       getOwnedPosition: async () => ({ symbol: "BTCUSD_PERP", positionAmt: 10, entryPrice: 50_000 }),
     });
-    const a = new BinanceCoinMMomentumAdapter(exec, { accountId: "coinm-trend" });
-    expect((await a.closePosition({ symbol: COINM_INTERNAL_SYMBOL, side: "buy", closeReason: "TREND_EXIT" })).ok).toBe(true);
-    expect((getDB().query("SELECT close_reason FROM trades WHERE id = 'coinm-trend'").get() as any).close_reason).toBe("TREND_EXIT");
+    const a = new BinanceCoinMMomentumAdapter(exec, { accountId: id });
+    expect((await a.closePosition({ symbol: COINM_INTERNAL_SYMBOL, side: "buy", closeReason })).ok).toBe(true);
+    expect((getDB().query("SELECT close_reason FROM trades WHERE id = ?").get(id) as any).close_reason).toBe(closeReason);
   });
   test("long win: pnl = contracts*contractSize*(1/entry-1/exit)*exit, pnl_pct on constant notional", async () => {
     seedOpenTrade("coinm-long-1", "t-close-1", {

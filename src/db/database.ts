@@ -323,6 +323,7 @@ function migrateColumns() {
 
   // Task 6 (v1.4): SL/TP stored per trade
   safeAddColumn("trades", "stop_loss", "REAL", "NULL");
+  safeAddColumn("trades", "breakout_n", "REAL", "NULL");
   safeAddColumn("trades", "take_profit", "REAL", "NULL");
   safeAddColumn("trades", "close_reason", "TEXT", "NULL");
   // Exact margin (cash) deducted from the per-profile ledger at open, so the
@@ -905,15 +906,15 @@ export function insertTrade(trade: TradeRecord, accountId: string) {
     ?? (isAdoption ? "ops_sync" : currentModelVersionId(accountId))
     ?? "legacy";
   db.prepare(`
-    INSERT INTO trades (id, symbol, market, side, strategy, entry_price, exit_price, quantity, pnl, pnl_pct, entry_time, exit_time, status, account_id, order_id, open_commission, stop_loss, take_profit, profile_id, strategy_version)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO trades (id, symbol, market, side, strategy, entry_price, exit_price, quantity, pnl, pnl_pct, entry_time, exit_time, status, account_id, order_id, open_commission, stop_loss, take_profit, profile_id, strategy_version, breakout_n)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     trade.id, trade.symbol, trade.market, trade.side, trade.strategy,
     trade.entryPrice, trade.exitPrice ?? null, trade.quantity, trade.pnl ?? null,
     trade.pnlPct ?? null, trade.entryTime, trade.exitTime ?? null, trade.status,
     accountId, (trade as any).orderId ?? null, (trade as any).openCommission ?? 0,
     (trade as any).stopLoss ?? null, (trade as any).takeProfit ?? null,
-    accountId, strategyVersion,
+    accountId, strategyVersion, trade.breakoutN ?? null,
   );
 }
 
@@ -1166,6 +1167,7 @@ export function getOpenTrades(accountId?: string): TradeRecord[] {
     status: r.status,
     accountId: r.account_id,
     stopLoss: r.stop_loss,
+    breakoutN: r.breakout_n ?? undefined,
     takeProfit: r.take_profit,
     marginUsed: r.margin_used ?? undefined,
     orderId: r.order_id ?? undefined,

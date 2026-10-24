@@ -40,6 +40,18 @@ function rowStatus(id: string) {
 beforeAll(() => { makeTestDb(); });
 
 describe("checkAllStopLoss (15s loop) — row's stop_loss takes precedence over the profile's fixed pct", () => {
+  test.each(["IDLE_OVERLAY", "BREAKOUT_SHORT"] as const)("durable %s ownership exempts model-specific inventory from the 15s stop", async strategy => {
+    const id = `role-no-stop-${strategy}`;
+    seedOpenTrade(id, "momentum_crypto", { symbol: "BTC/USD", market: "crypto", strategy, side: "sell", stopLoss: 105 });
+    let closes = 0;
+    const manager = makeAccountManager({ binance: {
+      isConnected: () => true, getPrice: async () => 200,
+      closePosition: async () => { closes++; return { success: true, filledPrice: 1, commission: 0, realizedPnl: -99 }; },
+    } });
+    await (manager as any).checkAllStopLoss();
+    expect(closes).toBe(0);
+    expect(rowStatus(id).status).toBe("open");
+  });
   // Falsifier: reverting the loop to `acc.profile.stopLossPct` (ignoring
   // rowStopPct) would close this row at the -5% breach below — the 8%
   // vol-scaled row stop must NOT fire there.

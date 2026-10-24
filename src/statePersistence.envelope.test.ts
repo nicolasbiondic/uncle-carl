@@ -19,6 +19,22 @@ afterAll(() => { rmSync(dir, { recursive: true, force: true }); });
 const store = (path: string) => fileStatePersistence(path, 50_000, 50_000, EQUITY_SEMANTICS.SLEEVE_LEDGER);
 
 describe("fileStatePersistence envelope round-trip", () => {
+  test("Turtle N recurrence survives a fresh atomic-file store; off stays absent", () => {
+    const path = join(dir, "turtle.json"), turtleDaily = { day: Date.parse("2024-01-01"), n: 123.5, close: 40000 };
+    store(path).save({ v: 1, risk: INITIAL_RISK_STATE, turtleDaily });
+    expect(store(path).load()!.turtleDaily).toEqual(turtleDaily);
+    store(path).save({ v: 1, risk: INITIAL_RISK_STATE });
+    expect(store(path).load()!).not.toHaveProperty("turtleDaily");
+  });
+  test("idle overlay month survives the atomic file store; absent stays absent", () => {
+    const path = join(dir, "idle.json");
+    store(path).save({ v: 1, risk: INITIAL_RISK_STATE, idleOverlayMonth: "2026-10", idleOverlayExitPending: true });
+    expect(store(path).load()!.idleOverlayMonth).toBe("2026-10");
+    expect(store(path).load()!.idleOverlayExitPending).toBe(true);
+    store(path).save({ v: 1, risk: INITIAL_RISK_STATE });
+    expect(store(path).load()!).not.toHaveProperty("idleOverlayMonth");
+    expect(store(path).load()!).not.toHaveProperty("idleOverlayExitPending");
+  });
   test("riskAnchorAt and entryMarks survive a write and a fresh read", () => {
     const path = join(dir, "momentum-state-crypto.json");
     store(path).save({ v: 1, risk: { ...INITIAL_RISK_STATE, consecutiveLosses: 3 }, trailMarks: {}, entryMarks: { "LINK/USD|buy": 1_790_960_400_000 }, riskAnchorAt: 1_790_964_000_000 });

@@ -1,0 +1,113 @@
+{
+  "name": "momentum-crypto-rw5-idle-tsm12-pure-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTERED (2026-10-24) BEFORE any run, docs/reports/RW-reescritura-rentable.md §16.17 (quorum Q5 question 4, first choice; criteria O1, O2, T1, T3-T6, scripts/rw5-crypto-evaluate.ts --overlay; trial 454 -> 455). Q5 question 4 first choice: monthly symmetric price-return TSM on BTC/ETH, using momentum_crypto capital only while its normal long book is empty. Copy of the live momentum-crypto-rw3-vt-35-corroff-pure-v1 manifest with ONLY idleOverlay added to its candidate. No historical trial has been run. Price sign over 365 completed UTC days (not funding-adjusted excess return); normalized finite EWMA mean/variance of simple daily returns, delta=60/61, 610 returns (611 closes), annualization sqrt(365). Per-coin notional=equity*0.40/sigma, no division by N; cap 1x per coin and 1.5x basket, proportional gross clipping at entry (hold drift allowed). These are local adaptations, not a literal MOP replication. At the first decision of each UTC month close/re-size the overlay; skip a busy, risk-blocked or data-starved month, no intramonth entry/re-entry, fresh midmonth starts wait for the next month. Normal hourly longs have priority: close ALL overlay inventory successfully before any normal open. Overlay bypasses hourly regime/Sharpe/trend/volTarget/exposureControl, but respects maintenance, RiskGuard entry permission, ddScale if configured, sleeve gross cap and broker margin. No protective stop; hard sleeve drawdown closes overlay positions with IDLE_OVERLAY_EXIT. Funding/fees/slippage/liquidation modeled normally. The director approves these bounds and conventions in §16.17; acceptance copied unchanged. Trial 454 -> 455.",
+  "trialAccounting": {
+    "priorUniqueTrials": 454,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1h",
+    "universe": [
+      "BTC/USD",
+      "ETH/USD",
+      "SOL/USD",
+      "XRP/USD",
+      "ADA/USD",
+      "AVAX/USD",
+      "DOGE/USD",
+      "LINK/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 60,
+    "barMinutesEq": 60
+  },
+  "asOf": "2026-10-02T08:00:00Z",
+  "window": {
+    "from": "2021-01-01",
+    "to": "2026-12-31",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 45
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 5,
+      "commissionBps": 4
+    },
+    "stress": {
+      "slippageBps": 10,
+      "commissionBps": 8
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "vt-35-corr92",
+      "cadenceMin": 60,
+      "notionalPctPerSlot": 0.375,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 4,
+      "maxShorts": 0,
+      "volTarget": {
+        "annualizedPct": 35,
+        "lookbackBars": 720,
+        "minScale": 0.33,
+        "maxScale": 1.5
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30
+      },
+      "regime": {
+        "correlationCeiling": 1.01
+      },
+      "idleOverlay": {
+        "kind": "tsm",
+        "symbols": [
+          "BTC/USD",
+          "ETH/USD"
+        ],
+        "lookbackDays": 365,
+        "volTargetPerAsset": 0.4,
+        "ewmaCenterOfMassDays": 60,
+        "annualization": 365
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

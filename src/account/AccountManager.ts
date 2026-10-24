@@ -811,7 +811,7 @@ export class AccountManager {
           // Portfolio-engine rows (RW, 2026-10-20): no fixed/fallback hard
           // stop — the design's own stops live at the venue (syncStops).
           // See isPortfolioEngineRow in db/database.ts.
-          if (isPortfolioEngineRow(trade)) continue;
+          if (isPortfolioEngineRow(trade) || trade.strategy === "IDLE_OVERLAY" || trade.strategy === "BREAKOUT_SHORT") continue;
           // In scope regardless of skip/continue below — a PDT-blocked or
           // market-closed position is still open and must not be pruned.
           openDeferKeys.add(`${id}:${trade.symbol}:STOP_LOSS`);

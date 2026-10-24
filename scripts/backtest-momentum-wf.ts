@@ -41,7 +41,7 @@
 
 import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
-import { MomentumEngine, TREND_EXIT_CLOSE_REASON, shortStopDistancePct, trailPctFromVol, type ExposureControlConfig, type MarketTrendGateConfig, type MomentumBrokerAdapter, type MomentumStatePersistence, type ShortStopSpec, type TimeStopConfig, type TrailMark, type TrailStopConfig, type TrendExitConfig, type VolSizingConfig, type VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
+import { MomentumEngine, TREND_EXIT_CLOSE_REASON, breakoutHistoryDays, idleOverlayHistoryDays, shortStopDistancePct, trailPctFromVol, type BreakoutShortConfig, type IdleOverlayConfig, type ExposureControlConfig, type MarketTrendGateConfig, type MomentumBrokerAdapter, type MomentumStatePersistence, type ShortStopSpec, type TimeStopConfig, type TrailMark, type TrailStopConfig, type TrendExitConfig, type VolSizingConfig, type VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
 import type { CurrentPosition } from "../src/strategies/momentum/Rebalancer";
 import { DEFAULT_TSM_CONFIG, type TSMConfig } from "../src/strategies/momentum/TimeSeriesMomentum";
 import type { OHLCV } from "../src/utils/types";
@@ -637,6 +637,9 @@ export class FundingBook {
 // ── sim broker ────────────────────────────────────────────────────────
 export interface SimPosition {
   symbol: string; side: "buy" | "sell"; qty: number; entryPrice: number; entryAt: number; entryMargin: number;
+  role?: "idle-overlay" | "breakout-short";
+  breakoutN?: number;
+  breakoutStop?: number;
   /** Commission charged at open (already deducted from cash there). Netted into ClosedTrade.pnl at close. */
   entryCommission?: number;
   /** Running net cash impact of funding since entry (positive = credit received, negative = cost paid; already applied to cash as it accrued). Netted into ClosedTrade.pnl at close. */
@@ -781,7 +784,36 @@ export function normalizeGateReason(reason: string): string {
  * dayEndMs` — SimBroker.fetchDailyCloses enforces that cut, this function
  * just builds the lookup arrays. Pure/exported for unit tests.
  */
-export function dailyClosesFromBars(bars: OHLCV[]): { dayEndMs: number[]; closes: number[] } {
+export function dailyBarsFromBars(bars: OHLCV[], barMs: number): OHLCV[] {
+  const out: OHLCV[] = [];
+  const groups = new Map<number, OHLCV[]>();
+  for (const b of bars) {
+    const day = Math.floor(b.timestamp / 86_400_000) * 86_400_000;
+    const group = groups.get(day) ?? [];
+    group.push(b); groups.set(day, group);
+  }
+  for (const [day, group] of groups) {
+    if (group.length * barMs !== 86_400_000 || group.some((b, i) => b.timestamp !== day + i * barMs)) continue;
+    out.push({ timestamp: day, open: group[0].open, high: Math.max(...group.map(b => b.high)), low: Math.min(...group.map(b => b.low)), close: group.at(-1)!.close, volume: group.reduce((s, b) => s + b.volume, 0) });
+  }
+  return out;
+}
+
+export function dailyClosesFromBars(bars: OHLCV[], completeBarMs?: number): { dayEndMs: number[]; closes: number[] } {
+  if (completeBarMs !== undefined) {
+    // Overlay only: a day's LAST AVAILABLE hour is not necessarily its
+    // closing hour. Reject missing, duplicate, off-grid or partial days.
+    const days = new Map<number, { count: number; valid: boolean; close: number }>();
+    for (const b of bars) {
+      const start = Math.floor(b.timestamp / 86_400_000) * 86_400_000;
+      const d = days.get(start) ?? { count: 0, valid: true, close: b.close };
+      if (b.timestamp !== start + d.count * completeBarMs) d.valid = false;
+      d.count++; d.close = b.close;
+      days.set(start, d);
+    }
+    const entries = [...days].filter(([, d]) => d.valid && d.count * completeBarMs === 86_400_000);
+    return { dayEndMs: entries.map(([t]) => t + 86_400_000), closes: entries.map(([, d]) => d.close) };
+  }
   const dayEndMs: number[] = [];
   const closes: number[] = [];
   for (const b of bars) {
@@ -877,6 +909,8 @@ export class SimBroker implements MomentumBrokerAdapter {
   resizes: SimResize[] = [];
   /** Attributed trend-exit orders, NOT a counterfactual delta vs baseline. */
   trendExitOrders = { exits: 0, reentries: 0, orders: 0 };
+  idleOverlayStats = { orders: 0, opens: 0, closes: 0, activeDays: 0, longDays: 0, shortDays: 0, fundingPaid: 0 };
+  breakoutShortStats = { orders: 0, opens: 0, closes: 0, shortDays: 0, fundingPaid: 0, exits: {} as Record<string, number> };
   private awaitingTrendReentry = new Set<string>();
   /** symbol → decisionTicks value at which entries unblock (B2 axis). Empty
    *  unless cooldownBarsAfterStop > 0 AND a hard stop actually fired. */
@@ -947,6 +981,8 @@ export class SimBroker implements MomentumBrokerAdapter {
     return this.positions.map(p => ({
       symbol: p.symbol, side: p.side, quantity: p.qty,
       notional: p.qty * this.price(p.symbol, this.now),
+      ...(p.role ? { role: p.role } : {}),
+      ...(p.role === "breakout-short" ? { entryPrice: p.entryPrice, breakoutN: p.breakoutN, stopLoss: p.breakoutStop } : {}),
     }));
   }
 
@@ -965,7 +1001,7 @@ export class SimBroker implements MomentumBrokerAdapter {
     return this.closed.filter(t => t.exitAt > epochMs).reduce((s, t) => s + t.pnl, 0);
   }
 
-  async openPosition(a: { symbol: string; side: "buy" | "sell"; notionalUsd: number }) {
+  async openPosition(a: Parameters<MomentumBrokerAdapter["openPosition"]>[0]) {
     // Gross-exposure diagnostic (observer only — see grossCapDiag): the
     // engine's cap compares Σ|getOpenPositions().notional| + new against
     // equity × mult, so record exactly those terms at attempt time.
@@ -984,7 +1020,7 @@ export class SimBroker implements MomentumBrokerAdapter {
     const px = this.executionPrice(a.symbol);
     if (!px || a.notionalUsd <= 0) return { ok: false, reason: "no price" };
     const slip = a.side === "buy" ? px * (1 + this.slippageBps / 10_000) : px * (1 - this.slippageBps / 10_000);
-    const rawQty = a.notionalUsd / slip;
+    const rawQty = a.role === "breakout-short" ? a.breakout!.quantity : a.notionalUsd / slip;
     const qty = this.isStock ? Math.floor(rawQty) : rawQty;
     if (qty <= 0) return { ok: false, reason: "zero_qty" };
     const actualNotional = qty * slip;
@@ -1001,7 +1037,9 @@ export class SimBroker implements MomentumBrokerAdapter {
     // bar at `now` is excluded, so volScaled sees exactly what the live
     // engine would have seen when sizing the stop).
     let stopFrac: number | null | undefined;
-    if (a.side === "sell" && this.shortStopSpec) {
+    if (a.role) {
+      stopFrac = null;
+    } else if (a.side === "sell" && this.shortStopSpec) {
       // Line S-bis: the short's OWN entry-anchored distance, resolved from
       // decision-time CLOSED bars only (same causality as the branch below;
       // volScaled uses COMPLETED UTC daily closes — shortStopDistancePct).
@@ -1019,7 +1057,12 @@ export class SimBroker implements MomentumBrokerAdapter {
       }
       stopFrac = entryStopFraction(this.hardStopSpec, closes, this.barsPerDay);
     }
-    this.positions.push({ symbol: a.symbol, side: a.side, qty, entryPrice: slip, entryAt: this.now, entryMargin: need, entryCommission: fee, fundingCashDelta: 0, stopFrac, peakPrice: slip, lockLevel: null });
+    this.positions.push({ symbol: a.symbol, side: a.side, qty, entryPrice: slip, entryAt: this.now, entryMargin: need, entryCommission: fee, fundingCashDelta: 0, stopFrac, peakPrice: slip, lockLevel: null, ...(a.role ? { role: a.role } : {}) });
+    if (a.role === "breakout-short") {
+      Object.assign(this.positions.at(-1)!, { breakoutN: a.breakout!.n, breakoutStop: slip + a.breakout!.n * a.breakout!.stopN });
+      this.breakoutShortStats.opens++; this.breakoutShortStats.orders++;
+    }
+    if (a.role === "idle-overlay") { this.idleOverlayStats.opens++; this.idleOverlayStats.orders++; }
     if (a.side === "buy" && this.awaitingTrendReentry.delete(a.symbol)) {
       this.trendExitOrders.reentries++;
       this.trendExitOrders.orders++;
@@ -1172,6 +1215,11 @@ export class SimBroker implements MomentumBrokerAdapter {
     const idx = this.positions.findIndex(p => p.symbol === symbol && p.side === side);
     if (idx < 0 || !px) return { ok: false, reason: "no position/price" };
     const p = this.positions[idx];
+    if (p.role === "idle-overlay") { this.idleOverlayStats.closes++; this.idleOverlayStats.orders++; }
+    if (p.role === "breakout-short") {
+      const s = this.breakoutShortStats, key = engineCloseReason ?? reason;
+      s.closes++; s.orders++; s.exits[key] = (s.exits[key] ?? 0) + 1;
+    }
     const slip = side === "buy" ? px * (1 - this.slippageBps / 10_000) : px * (1 + this.slippageBps / 10_000);
     this.turnoverNotional += p.qty * slip;
     const gross = (slip - p.entryPrice) * p.qty * (side === "buy" ? 1 : -1);
@@ -1227,6 +1275,7 @@ export class SimBroker implements MomentumBrokerAdapter {
     for (const p of [...this.positions]) {
       const bar = barBySymbol.get(p.symbol);
       if (!bar || bar.timestamp < p.entryAt) continue;
+      if (p.role) continue; // role-specific exits belong to the shared engine
 
       p.peakPrice = p.side === "buy"
         ? Math.max(p.peakPrice ?? p.entryPrice, bar.close)
@@ -1316,15 +1365,32 @@ export class SimBroker implements MomentumBrokerAdapter {
           this.cash -= amt;
           p.fundingCashDelta = (p.fundingCashDelta ?? 0) - amt;
           this.fundingPaid += amt;
+          if (p.role === "idle-overlay") this.idleOverlayStats.fundingPaid += amt;
           this.fundingBySymbol.set(p.symbol, (this.fundingBySymbol.get(p.symbol) ?? 0) + amt);
         } else if (this.shortFundingMode === "credit") {
           this.cash += amt;
           p.fundingCashDelta = (p.fundingCashDelta ?? 0) + amt;
           this.fundingPaid -= amt;
+          if (p.role === "idle-overlay") this.idleOverlayStats.fundingPaid -= amt;
+          if (p.role === "breakout-short") this.breakoutShortStats.fundingPaid -= amt;
           this.fundingBySymbol.set(p.symbol, (this.fundingBySymbol.get(p.symbol) ?? 0) - amt);
         } // shortFunding === "zero": shorts pay/receive nothing
       }
     }
+  }
+
+  /** Time-weighted sleeve days, not summed coin-days. Mixed baskets count
+   * in both longDays and shortDays; fundingPaid is signed (credits < 0). */
+  accrueIdleOverlayActivity(fromMs: number, toMs: number) {
+    const held = this.positions.filter(p => p.role === "idle-overlay");
+    if (!held.length || toMs <= fromMs) return;
+    const days = (toMs - fromMs) / 86_400_000;
+    this.idleOverlayStats.activeDays += days;
+    if (held.some(p => p.side === "buy")) this.idleOverlayStats.longDays += days;
+    if (held.some(p => p.side === "sell")) this.idleOverlayStats.shortDays += days;
+  }
+  accrueBreakoutActivity(fromMs: number, toMs: number) {
+    if (toMs > fromMs && this.positions.some(p => p.role === "breakout-short")) this.breakoutShortStats.shortDays += (toMs - fromMs) / 86_400_000;
   }
 
   /**
@@ -1383,6 +1449,13 @@ export class SimBroker implements MomentumBrokerAdapter {
    *  short-side reference symbol. */
   shortRegimeDaily?: { symbol: string; dayEndMs: number[]; closes: number[] };
   trendExitDaily?: Map<string, { dayEndMs: number[]; closes: number[] }>;
+  idleOverlayDaily?: Map<string, { dayEndMs: number[]; closes: number[] }>;
+  breakoutDaily?: Map<string, OHLCV[]>;
+  async fetchDailyBars(symbol: string, days: number): Promise<OHLCV[]> {
+    const end = Math.floor(this.now / 86_400_000) * 86_400_000;
+    const bars = (this.breakoutDaily?.get(symbol) ?? []).filter(b => b.timestamp + 86_400_000 <= end).slice(-days);
+    return bars.length === days && bars.every((b, i) => b.timestamp === end - (days - i) * 86_400_000) ? bars : [];
+  }
 
   /**
    * MomentumBrokerAdapter.fetchDailyCloses (optional interface method):
@@ -1390,21 +1463,23 @@ export class SimBroker implements MomentumBrokerAdapter {
    * (dayEndMs <= now — strict causality: the day the current bar belongs to
    * is never visible, no matter how many of its bars exist in the tape).
    */
-  async fetchDailyCloses(symbol: string, days: number): Promise<number[]> {
+  async fetchDailyCloses(symbol: string, days: number, opts?: { strictUtc?: boolean }): Promise<number[]> {
     // Registry lookup: marketTrend's series first (legacy), then the
     // short-regime series (line S). A miss returns [] — the long gate then
     // fails OPEN and the short gate fails CLOSED, each per its contract.
-    let d: { dayEndMs: number[]; closes: number[] } | undefined = this.marketTrendDaily?.symbol === symbol
+    let d: { dayEndMs: number[]; closes: number[] } | undefined = opts?.strictUtc
+      ? this.idleOverlayDaily?.get(symbol)
+      : this.marketTrendDaily?.symbol === symbol
       ? this.marketTrendDaily
       : this.shortRegimeDaily?.symbol === symbol
         ? this.shortRegimeDaily
         : undefined;
-    const own = this.trendExitDaily?.get(symbol);
-    if (own) {
+    const own = this.trendExitDaily?.get(symbol) ?? this.idleOverlayDaily?.get(symbol);
+    if (own && !opts?.strictUtc) {
       // These series share the same tape/end. Use the deepest when knobs
       // coexist: a short marketTrend window must not starve SMA65, nor may
       // SMA65 starve a longer shortRegime window. OFF keeps legacy lookup.
-      const sources = [d, own, this.shortRegimeDaily?.symbol === symbol ? this.shortRegimeDaily : undefined];
+      const sources = [d, own, this.idleOverlayDaily?.get(symbol), this.shortRegimeDaily?.symbol === symbol ? this.shortRegimeDaily : undefined];
       d = sources.filter((x): x is NonNullable<typeof x> => !!x).reduce((a, b) => a.closes.length >= b.closes.length ? a : b);
     }
     if (!d || days <= 0) return [];
@@ -1415,7 +1490,10 @@ export class SimBroker implements MomentumBrokerAdapter {
       if (d.dayEndMs[mid] <= this.now) { ans = mid; lo = mid + 1; } else hi = mid - 1;
     }
     if (ans < 0) return [];
-    return d.closes.slice(Math.max(0, ans + 1 - days), ans + 1);
+    const start = Math.max(0, ans + 1 - days);
+    if (opts?.strictUtc && (ans + 1 - start !== days ||
+        d.dayEndMs.slice(start, ans + 1).some((end, i) => end !== (Math.floor(this.now / 86_400_000) - days + 1 + i) * 86_400_000))) return [];
+    return d.closes.slice(start, ans + 1);
   }
 
   async fetchCandles(symbol: string, bars: number): Promise<OHLCV[]> {
@@ -1610,6 +1688,8 @@ export interface ReplayConfig {
    *  legacy hash (canonicalJson drops undefined). */
   exposureControl?: ExposureControlConfig;
   trendExit?: TrendExitConfig;
+  idleOverlay?: IdleOverlayConfig;
+  breakoutShort?: BreakoutShortConfig;
   /** Present iff sleeve === "meanrev": routes the trial to runMeanRevReplay. */
   meanrev?: MeanRevSimParams;
   /**
@@ -1742,6 +1822,8 @@ export interface ReplayResult {
   /** Actual TREND_EXIT closes and first successful long reentries after them.
    * Fees/turnover already include both. Absent when the knob is OFF. */
   trendExitStats?: { exits: number; reentries: number; orders: number };
+  idleOverlayStats?: SimBroker["idleOverlayStats"];
+  breakoutShortStats?: SimBroker["breakoutShortStats"];
   /** Exposure-control telemetry (cfg.exposureControl only; legacy runs keep
    *  the exact result shape): resize ORDERS executed (the extra orders the
    *  protocol counts), their Σ|Δnotional| in USD (already inside
@@ -2174,6 +2256,20 @@ export async function runWithConfig(
         broker.trendExitDaily.set(symbol, dailyClosesFromBars(bars));
       }
     }
+    if (cfg.breakoutShort) {
+      const extraFrom = fromMs - (breakoutHistoryDays(cfg.breakoutShort) + 15) * 86_400_000;
+      const bars = loadBars(cfg.breakoutShort.symbol, cfg.timeframe, cfg.source, cfg.rthOnly, extraFrom, toMs, db);
+      broker.breakoutDaily = new Map([[cfg.breakoutShort.symbol, dailyBarsFromBars(bars, barDurationMs)]]);
+    }
+    if (cfg.idleOverlay) {
+      broker.idleOverlayDaily = new Map();
+      const days = idleOverlayHistoryDays(cfg.idleOverlay);
+      const overlayFrom = fromMs - (days + 15) * 86_400_000;
+      for (const symbol of cfg.idleOverlay.symbols.filter(s => replayUniverse.includes(s))) {
+        const bars = loadBars(symbol, cfg.timeframe, cfg.source, cfg.rthOnly, overlayFrom, toMs, db);
+        broker.idleOverlayDaily.set(symbol, dailyClosesFromBars(bars, barDurationMs));
+      }
+    }
     // Market-trend gate data: the gate symbol's own bars, loaded with
     // maDays(+slack) of EXTRA history before the fold start so the very
     // first decision tick already sees a full SMA window — never lookahead
@@ -2318,6 +2414,8 @@ export async function runWithConfig(
         // executes the resizes. undefined = OFF, byte-identical engine config.
         exposureControl: cfg.exposureControl,
         trendExit: cfg.trendExit,
+        idleOverlay: cfg.idleOverlay,
+        breakoutShort: cfg.breakoutShort,
         // maxGrossExposureMult: already a MomentumEngineConfig field (prod
         // parity — the sim instantiates the real engine). undefined = OFF,
         // matching the engine's own default.
@@ -2376,6 +2474,8 @@ export async function runWithConfig(
         // funding event exactly AT toMs — which belongs to the NEXT fold.
         // The price snapshot still prices at `t` (unaffected).
         if (prevT && cfg.funding) broker.applyFunding(prevT, t, Math.min(t, toMs - 1));
+        if (prevT && cfg.idleOverlay) broker.accrueIdleOverlayActivity(prevT, Math.min(t, toMs));
+        if (prevT && cfg.breakoutShort) broker.accrueBreakoutActivity(prevT, Math.min(t, toMs));
         // Margin interest accrues over the same capped range — a UTC-day
         // boundary exactly AT toMs belongs to the next fold, like a funding
         // event. No-op unless cfg.marginInterest set a nonzero rate.
@@ -2455,6 +2555,8 @@ export async function runWithConfig(
     // excluded. checkLiquidation already zeroed `positions` on ruin, so this
     // is a no-op in that case.
     if (cfg.funding) broker.applyFunding(prevT, toMs, toMs - 1);
+    if (cfg.idleOverlay) broker.accrueIdleOverlayActivity(prevT, toMs);
+    if (cfg.breakoutShort) broker.accrueBreakoutActivity(prevT, toMs);
 
     // Terminal margin-interest settle mirrors the funding settle: UTC-day
     // boundaries in (lastBar, toMs) accrue while positions are still open;
@@ -2585,6 +2687,8 @@ export async function runWithConfig(
       // Key absent on legacy candidates (RW4a exposure control only).
       ...(exposureStats ? { exposureStats } : {}),
       ...(cfg.trendExit ? { trendExitStats: { ...broker.trendExitOrders } } : {}),
+      ...(cfg.idleOverlay ? { idleOverlayStats: { ...broker.idleOverlayStats } } : {}),
+      ...(cfg.breakoutShort ? { breakoutShortStats: { ...broker.breakoutShortStats } } : {}),
       // Line-S output-only telemetry: absent unless the run actually charged
       // borrow / vetoed a short on the gross cap (legacy shape preserved).
       ...(broker.shortBorrowPaid > 0 ? { shortBorrow: broker.shortBorrowPaid } : {}),

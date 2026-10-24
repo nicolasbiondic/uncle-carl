@@ -149,6 +149,48 @@ describe("BinanceMomentumAdapter ownership boundary — the DB, not the broker, 
 });
 
 describe("BinanceMomentumAdapter close_reason telemetry — TRAIL_STOP vs signal-flip (P2)", () => {
+  test("Turtle gets consecutive completed venue OHLC only, and its hourly source never falls back to Alpaca", async () => {
+    const saved = globalThis.fetch, day = Math.floor(Date.now() / 86400000) * 86400000;
+    let alpacaReads = 0;
+    const raw = Array.from({ length: 56 }, (_, i) => {
+      const t = day - (55 - i) * 86400000;
+      return [t, "100", i === 55 ? "1000000000" : "110", "90", "100", "1", t + 86400000 - 1];
+    });
+    const a = new BinanceMomentumAdapter({ getBars: async () => { alpacaReads++; return []; } } as any, {} as any);
+    try {
+      globalThis.fetch = (async () => new Response(JSON.stringify(raw))) as any;
+      const bars = await a.fetchDailyBars("BTC/USD", 55);
+      expect(bars).toHaveLength(55); expect(bars.at(-1)!.timestamp).toBe(day - 86400000);
+      expect(Math.max(...bars.map(b => b.high))).toBe(110);
+      raw.splice(10, 1);
+      expect(await new BinanceMomentumAdapter({} as any, {} as any).fetchDailyBars("BTC/USD", 55)).toEqual([]);
+      globalThis.fetch = (async () => new Response("[]")) as any;
+      expect(await a.fetchCandles("BTC/USD", 50, { strictVenue: true })).toEqual([]); expect(alpacaReads).toBe(0);
+      await a.fetchCandles("BTC/USD", 50); expect(alpacaReads).toBe(1); // legacy contract
+    } finally { globalThis.fetch = saved; }
+  });
+  test.each(["buy", "sell"] as const)("idle overlay %s: durable role, no native stop, restart ownership and risk PnL", async side => {
+    const accountId = `idle-role-${side}`;
+    let stops = 0;
+    const bin = {
+      isConnected: () => true,
+      getPrice: async () => 100,
+      getPositions: async () => [{ symbol: "BTCUSDT", positionAmt: side === "buy" ? 0.2 : -0.2, entryPrice: 100, unrealizedProfit: 0 }],
+      placeOrder: async () => ({ id: `idle-fill-${side}`, quantity: 0.2, price: 100, status: "filled", filledPrice: 100, filledAt: Date.now(), createdAt: Date.now(), updatedAt: Date.now() }),
+      placeStopMarketClose: async () => { stops++; return true; },
+      closePosition: async () => ({ success: true, filledPrice: 105, commission: 0, realizedPnl: side === "buy" ? 1 : -1 }),
+      cancelAllOrders: async () => {},
+    } as any;
+    const a = new BinanceMomentumAdapter({} as any, bin, { accountId });
+    expect(await a.openPosition({ symbol: "BTC/USD", side, notionalUsd: 20, role: "idle-overlay" })).toEqual({ ok: true });
+    expect(stops).toBe(0);
+    expect((getDB().query("SELECT strategy, stop_loss FROM trades WHERE account_id = ?").get(accountId) as any)).toEqual({ strategy: "IDLE_OVERLAY", stop_loss: 0 });
+    const restarted = new BinanceMomentumAdapter({} as any, bin, { accountId });
+    expect(await restarted.getOpenPositions()).toMatchObject([{ side, role: "idle-overlay" }]);
+    expect(await restarted.closePosition({ symbol: "BTC/USD", side, closeReason: "IDLE_OVERLAY_EXIT" })).toEqual({ ok: true });
+    expect(await restarted.getRealisedPnlSince(0)).toBe(side === "buy" ? 1 : -1);
+  });
+
   const mkBin = (native: string) => ({
     isConnected: () => true,
     getPositions: async () => [{ symbol: native, positionAmt: 0.2, entryPrice: 100 }],
@@ -156,7 +198,7 @@ describe("BinanceMomentumAdapter close_reason telemetry — TRAIL_STOP vs signal
     cancelAllOrders: async () => {},
   } as any);
 
-  test.each(["TRAIL_STOP", "TREND_EXIT"])("engine close persists close_reason=%s", async closeReason => {
+  test.each(["TRAIL_STOP", "TREND_EXIT", "IDLE_OVERLAY_EXIT", "BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN"])("engine close persists close_reason=%s", async closeReason => {
     const id = `trail-close-binance-${closeReason}`;
     seedOpenTrade(id, "momentum_crypto_trailreason", {
       symbol: "BTC/USD", market: "crypto", quantity: 0.2, entryTime: Date.now(),
@@ -168,6 +210,25 @@ describe("BinanceMomentumAdapter close_reason telemetry — TRAIL_STOP vs signal
     expect(res.ok).toBe(true);
     const row = getDB().prepare(`SELECT status, close_reason FROM trades WHERE id = ?`).get(id) as any;
     expect(row).toEqual({ status: "closed", close_reason: closeReason });
+  });
+
+  test("Turtle entry stores N, fill and 2N stop atomically; restart recovers ownership, no native stop", async () => {
+    const accountId = "breakout-persistence";
+    let stops = 0, submittedQty = 0;
+    const bin = {
+      isConnected: () => true, getPrice: async () => 100,
+      getPositions: async () => [{ symbol: "BTCUSDT", positionAmt: -0.2, entryPrice: 99, unrealizedProfit: 0 }],
+      placeOrder: async (_s: any, qty: number) => { submittedQty = qty; return { id: "breakout-fill", quantity: 0.2, status: "filled", filledPrice: 99, filledAt: Date.now(), createdAt: Date.now(), updatedAt: Date.now() }; },
+      placeStopMarketClose: async () => { stops++; return true; },
+      closePosition: async () => ({ success: true, filledPrice: 105, commission: 0, realizedPnl: -1.2 }), cancelAllOrders: async () => {},
+    } as any;
+    const a = new BinanceMomentumAdapter({} as any, bin, { accountId });
+    expect(await a.openPosition({ symbol: "BTC/USD", side: "sell", notionalUsd: 20, role: "breakout-short", breakout: { n: 3, stopN: 2, quantity: 0.2 } })).toEqual({ ok: true });
+    expect(stops).toBe(0); expect(submittedQty).toBe(0.2);
+    const restarted = new BinanceMomentumAdapter({} as any, bin, { accountId });
+    expect(await restarted.getOpenPositions()).toMatchObject([{ role: "breakout-short", entryPrice: 99, breakoutN: 3, stopLoss: 105, quantity: 0.2 }]);
+    expect(await restarted.closePosition({ symbol: "BTC/USD", side: "sell", closeReason: "BREAKOUT_SHORT_STOP" })).toEqual({ ok: true });
+    expect(await restarted.getRealisedPnlSince(0)).toBeCloseTo(-1.2);
   });
 
   test("signal-flip close (no closeReason) still persists MOMENTUM_REBALANCE; free text falls back too", async () => {

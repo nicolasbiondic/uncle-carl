@@ -55,7 +55,7 @@ import { expandDataPath } from "./lib/researchData";
 import { hashCloseSlices } from "./lib/closeSlices";
 import { hashSignalEvents } from "./lib/signalData";
 import { missingLiveExcludes } from "./lib/liveStockExcludes";
-import type { ExposureControlConfig, MarketTrendGateConfig, ShortStopSpec, TimeStopConfig, TrailStopConfig, TrendExitConfig, VolSizingConfig, VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
+import { breakoutHistoryDays, validateBreakoutShort, idleOverlayHistoryDays, validateIdleOverlay, type BreakoutShortConfig, type IdleOverlayConfig, type ExposureControlConfig, type MarketTrendGateConfig, type ShortStopSpec, type TimeStopConfig, type TrailStopConfig, type TrendExitConfig, type VolSizingConfig, type VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
 import type { RiskGuardConfig, RiskState } from "../src/strategies/momentum/RiskGuard";
 import { getETDateKey } from "../src/db/database";
 import type { PortfolioStrategyConfig, VenueRules } from "../src/portfolio-engine/types";
@@ -161,6 +161,8 @@ export interface CandidateConfig {
   exposureControl?: ExposureControlConfig;
   /** Own-coin completed daily SMA exit + long entry restriction; absent = OFF. */
   trendExit?: TrendExitConfig;
+  idleOverlay?: IdleOverlayConfig;
+  breakoutShort?: BreakoutShortConfig;
   /** Present iff the manifest sleeve is "meanrev" (enforced in validateManifest). */
   meanrev?: MeanRevSimParams;
   /** Hard-stop axis (stop-sizing sweep) — valid on EVERY sleeve, including
@@ -256,6 +258,8 @@ const VALID_CANDIDATE_KEYS = new Set<keyof CandidateConfig>([
   "risk",
   "exposureControl",
   "trendExit",
+  "idleOverlay",
+  "breakoutShort",
   "meanrev",
   "hardStop",
   "profitLock",
@@ -835,6 +839,8 @@ export function validateCandidate(c: unknown): CandidateConfig {
   if (obj.volSizing !== undefined) validateVolSizing(obj.volSizing);
   // `exposureControl` (RW4a) is momentum-only (forbidden below), shape-validated up front.
   if (obj.exposureControl !== undefined) validateExposureControl(obj.exposureControl);
+  if (obj.idleOverlay !== undefined) validateIdleOverlay(obj.idleOverlay);
+  if (obj.breakoutShort !== undefined) validateBreakoutShort(obj.breakoutShort);
   if (obj.trendExit !== undefined) {
     const t = obj.trendExit as Record<string, unknown>;
     if (!t || typeof t !== "object" || Array.isArray(t)) throw new Error("trendExit must be an object");
@@ -874,7 +880,7 @@ export function validateCandidate(c: unknown): CandidateConfig {
     // maxGrossExposureMult left this list 2026-10-05: runMeanRevReplay now
     // forwards it to MeanRevEngine (it is no longer config that changes
     // nothing on meanrev) — see the G gross-cap diagnostic.
-    const forbidden = ["entryPct", "exitPct", "maxLongs", "maxShorts", "shortEntryPct", "shortExitPct", "shortRegime", "shortUniverse", "shortStop", "notionalPctPerSlot", "volTarget", "volSizing", "tsmTrail", "sharpeGate", "timeStop", "marketTrend", "risk", "exposureControl", "trendExit", "cooldownBarsAfterStop", "slotHysteresis", "regime", "profitLock", "lookbackDays", "maLengthDays", "lookbackDaysList"]
+    const forbidden = ["entryPct", "exitPct", "maxLongs", "maxShorts", "shortEntryPct", "shortExitPct", "shortRegime", "shortUniverse", "shortStop", "notionalPctPerSlot", "volTarget", "volSizing", "tsmTrail", "sharpeGate", "timeStop", "marketTrend", "risk", "exposureControl", "trendExit", "idleOverlay", "breakoutShort", "cooldownBarsAfterStop", "slotHysteresis", "regime", "profitLock", "lookbackDays", "maLengthDays", "lookbackDaysList"]
       .filter(k => obj[k] !== undefined);
     if (forbidden.length > 0) {
       throw new Error(`meanrev CandidateConfig must not set momentum-only keys: ${forbidden.join(", ")}`);
@@ -907,6 +913,8 @@ export function validateCandidate(c: unknown): CandidateConfig {
   if (!Number.isFinite(obj.exitPct)) throw new Error("CandidateConfig.exitPct must be finite");
   if (!Number.isInteger(obj.maxLongs) || (obj.maxLongs as number) < 0) throw new Error("CandidateConfig.maxLongs must be a non-negative integer");
   if (!Number.isInteger(obj.maxShorts) || (obj.maxShorts as number) < 0) throw new Error("CandidateConfig.maxShorts must be a non-negative integer");
+  if (obj.idleOverlay !== undefined && obj.maxShorts !== 0) throw new Error("idleOverlay requires maxShorts=0 in the normal momentum book");
+  if (obj.breakoutShort !== undefined && (obj.maxShorts !== 0 || obj.cadenceMin !== 60 || obj.idleOverlay !== undefined)) throw new Error("breakoutShort requires hourly long-only momentum and no idleOverlay");
   if ((obj.maxLongs as number) + (obj.maxShorts as number) === 0) throw new Error("CandidateConfig must allow at least one position");
   // Line-S short axes: every short knob is INERT unless the candidate can
   // actually short (maxShorts >= 1) — config that changes nothing is the
@@ -1598,6 +1606,14 @@ export function validateManifest(m: ExperimentManifest): ExperimentManifest {
   for (let i = 0; i < m.candidates.length; i++) {
     try {
       validateCandidate(m.candidates[i]);
+      const idle = m.candidates[i].idleOverlay;
+      const breakout = m.candidates[i].breakoutShort;
+      if (breakout && (m.sleeve !== "crypto" || m.data.source !== "binance_futures" || m.data.timeframe !== "1h" || m.data.barMinutes !== 60 || m.data.barMinutesEq !== 60 || !m.data.funding || m.data.rthOnly || m.data.membership || m.data.perpsMembership || !m.data.universe.includes(breakout.symbol))) {
+        throw new Error("breakoutShort requires fixed-universe hourly Binance crypto perpetuals with funding and BTC in data.universe");
+      }
+      if (idle && (m.sleeve !== "crypto" || m.data.source !== "binance_futures" || !m.data.funding || m.data.rthOnly || m.data.membership || m.data.perpsMembership || idle.symbols.some(s => !m.data.universe.includes(s)))) {
+        throw new Error("idleOverlay requires fixed-universe Binance crypto perpetuals with funding and overlay symbols in data.universe");
+      }
       if (m.sleeve === "meanrev" && !m.candidates[i].meanrev) {
         throw new Error("meanrev manifests require candidate.meanrev params");
       }
@@ -1894,6 +1910,8 @@ export function candidateToReplayConfig(
     // RW4a exposure control: absent = OFF AND the legacy hash.
     exposureControl: c.exposureControl,
     trendExit: c.trendExit,
+    idleOverlay: c.idleOverlay,
+    breakoutShort: c.breakoutShort,
     // 2026-09 axes (simulator stream): undefined values are dropped by
     // canonicalJson, so every legacy candidate keeps its legacy hash.
     // `regime: "off"` is manifest sugar for `{ enabled: false }`.
@@ -2451,6 +2469,11 @@ export async function runLoo(
       }
       const cfg = candidateToReplayConfig(m, selected, "base", snapshotPath);
       cfg.universe = remainingUniverse;
+      if (cfg.breakoutShort?.symbol === sym) cfg.breakoutShort = undefined;
+      if (cfg.idleOverlay) {
+        const symbols = cfg.idleOverlay.symbols.filter(s => s !== sym);
+        cfg.idleOverlay = symbols.length ? { ...cfg.idleOverlay, symbols } : undefined;
+      }
       // If the excluded symbol was the timeline driver, fall back to the first
       // remaining symbol so the replay still has a reference series.
       cfg.refSymbol = cfg.refSymbol === sym ? cfg.universe[0] : cfg.refSymbol;
@@ -2782,7 +2805,9 @@ export async function runWalkForward(
       replayToMs,
       // Trend exits can read farther back than the ranking warmup. Include
       // every consumed daily-source bar in the immutable data identity.
-      Math.max(m.window.warmupDays, ...m.candidates.map(c => c.trendExit ? c.trendExit.smaDays * 2 + 15 : 0)),
+      Math.max(m.window.warmupDays, ...m.candidates.map(c => c.trendExit ? c.trendExit.smaDays * 2 + 15 : 0),
+        ...m.candidates.map(c => c.idleOverlay ? idleOverlayHistoryDays(c.idleOverlay) + 15 : 0),
+        ...m.candidates.map(c => c.breakoutShort ? breakoutHistoryDays(c.breakoutShort) + 15 : 0)),
       m.data.membership,
     );
     // §12-septies G0: the 15:45-slice rows are consumed data, so they are

@@ -19,7 +19,7 @@
 // explicit pnl AND pnl_pct (never derives pnl_pct from the linear formula).
 
 import type { MomentumBrokerAdapter } from "./MomentumEngine";
-import { MODEL_CUTOVER_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, TIME_STOP_CLOSE_REASON, TRAIL_STOP_CLOSE_REASON, TREND_EXIT_CLOSE_REASON } from "./MomentumEngine";
+import { BREAKOUT_SHORT_EXIT, BREAKOUT_SHORT_STOP, BREAKOUT_SHORT_PRIORITY, BREAKOUT_SHORT_DRAWDOWN, IDLE_OVERLAY_EXIT_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, TIME_STOP_CLOSE_REASON, TRAIL_STOP_CLOSE_REASON, TREND_EXIT_CLOSE_REASON } from "./MomentumEngine";
 import type { CurrentPosition } from "./Rebalancer";
 import type { OHLCV } from "../../utils/types";
 import {
@@ -41,7 +41,7 @@ export const COINM_INTERNAL_SYMBOL = "BTC/COIN-M";
 // momentum_btc sleeve does NOT configure tsmTrail today (index.ts), so the
 // engine never actually sends TRAIL_STOP here; the mapping exists so
 // enabling the trail later needs no adapter change.
-const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, TREND_EXIT_CLOSE_REASON]);
+const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, TREND_EXIT_CLOSE_REASON, IDLE_OVERLAY_EXIT_CLOSE_REASON, BREAKOUT_SHORT_EXIT, BREAKOUT_SHORT_STOP, BREAKOUT_SHORT_PRIORITY, BREAKOUT_SHORT_DRAWDOWN]);
 
 export interface BinanceCoinMMomentumAdapterConfig {
   accountId: string;
@@ -103,7 +103,8 @@ export class BinanceCoinMMomentumAdapter implements MomentumBrokerAdapter {
     }
   }
 
-  async openPosition(action: { symbol: string; side: "buy" | "sell"; notionalUsd: number }): Promise<{ ok: boolean; reason?: string }> {
+  async openPosition(action: Parameters<MomentumBrokerAdapter["openPosition"]>[0]): Promise<{ ok: boolean; reason?: string }> {
+    if (action.role === "breakout-short") return { ok: false, reason: "breakout short supports Binance USDT only" };
     if (action.symbol !== COINM_INTERNAL_SYMBOL) return { ok: false, reason: `unsupported symbol: ${action.symbol} (only ${COINM_INTERNAL_SYMBOL})` };
     if (!this.executor.isConnected()) return { ok: false, reason: "binance coin-m not connected" };
 
