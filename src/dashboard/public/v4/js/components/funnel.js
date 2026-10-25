@@ -13,6 +13,7 @@ import { byId, esc } from "../ui.js";
 import { num, n } from "../fmt.js";
 
 let data = null;
+let slippage = null; // /api/analytics/slippage — execution quality (moved here from Performance, 2026-10-25)
 let days = 7;
 let loading = false;
 
@@ -80,7 +81,18 @@ function tableHtml() {
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
-    <div class="funnel-total">${totalLine}</div>`;
+    <div class="funnel-total">${totalLine}</div>
+    ${executionLine(slippage)}`;
+}
+
+/** One sentence on execution quality: typical and bad-case slippage, mean
+ *  latency, fills measured. Nothing when no fills were measured. Exported
+ *  for tests. */
+export function executionLine(sl) {
+  if (!sl || !n(sl.count)) return "";
+  const tip = t("Slippage = fill price vs the price when the order was decided, in basis points (1 bp = 0.01%). p50 is the typical fill, p95 the bad-case one.",
+    "Slippage = precio de ejecución frente al precio al decidir la orden, en puntos básicos (1 pb = 0,01%). p50 es la ejecución típica, p95 la mala.");
+  return `<div class="funnel-total exec-line" title="${esc(tip)}">${t("Execution quality", "Calidad de ejecución")}: ${t("slippage", "slippage")} <b>${num(sl.p50, 1)} bps</b> ${t("typical", "típico")}, <b>${num(sl.p95, 1)} bps</b> ${t("bad case", "en el peor 5%")}, ${t("latency", "latencia")} <b>${num(sl.meanLatencyMs, 0)} ms</b>, ${num(sl.count, 0)} ${t("fills", "ejecuciones")}</div>`;
 }
 
 /** The "Volume" tab body (analytics card): window selector + funnel table. */
@@ -89,7 +101,7 @@ export function renderFunnelPanel() {
     .map(([v, l]) => `<button class="${v === days ? "on" : ""}" data-fdays="${v}" aria-pressed="${v === days}">${l}</button>`)
     .join("");
   return `<div id="funnelPanel">
-    <div class="funnel-head"><span class="card-note">${t("Volume & funnel", "Volumen y embudo")}</span><span class="seg">${seg}</span></div>
+    <div class="funnel-head"><span class="an-h" style="margin:0">${t("Decisions, signals and orders", "Decisiones, señales y órdenes")}</span><span class="seg">${seg}</span></div>
     <div id="funnelBody">${tableHtml()}</div>
   </div>`;
 }
@@ -98,8 +110,9 @@ export async function loadFunnel() {
   if (loading) return;
   loading = true;
   try {
-    const d = await api.funnel(days);
+    const [d, sl] = await Promise.all([api.funnel(days), api.slippage()]);
     if (d) data = d;
+    if (sl) slippage = sl;
   } finally {
     loading = false;
   }

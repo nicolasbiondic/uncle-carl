@@ -4,11 +4,11 @@ import { byId, on, esc, icon } from "./ui.js";
 import { renderHeader, renderActions, renderNav, nextMenuIndex, NAV_PAGES, tickClock } from "./components/header.js";
 import { renderKpis, kpiValues } from "./components/kpis.js";
 import { openPnlBreakdown } from "./components/pnl-breakdown.js";
-import { renderProfiles, loadProfileSparks } from "./components/profiles.js";
-import { renderPositions } from "./components/positions.js";
+import { loadProfileSparks } from "./components/profiles.js";
+import { renderPositions, togglePositionGroup } from "./components/positions.js";
 import { renderTrades } from "./components/trades.js";
 import { renderAnalyticsShell, loadTab, setMonthlyReturnsProfile } from "./components/analytics.js";
-import { fitTable, fitTablesIn } from "./fit.js";
+import { fitTable, fitTablesIn, fitStrip } from "./fit.js";
 import { renderNewsBar, loadNews, toggleNews } from "./components/news.js";
 import { setFunnelDays } from "./components/funnel.js";
 import { connectWS } from "./ws.js";
@@ -94,20 +94,23 @@ window.addEventListener("resize", () => { clearTimeout(tickerResizeT); tickerRes
 /** flash the equity / today-P&L KPI cells when the value changes ("live" feel) */
 function flashKpis() {
   const k = kpiValues(store.state);
-  const cells = byId("kpis")?.querySelectorAll(".kpi");
-  if (cells) {
-    if (prevKpi.equity != null && k.equity !== prevKpi.equity) cells[0]?.classList.add(k.equity >= prevKpi.equity ? "flash-up" : "flash-down");
-    if (prevKpi.periodPnl != null && k.periodPnl !== prevKpi.periodPnl) cells[1]?.classList.add(k.periodPnl >= prevKpi.periodPnl ? "flash-up" : "flash-down");
+  const strip = byId("kpis");
+  if (strip) {
+    const equity = strip.querySelector('[data-k="equity"]'), today = strip.querySelector('[data-k="today"]');
+    if (prevKpi.equity != null && k.equity !== prevKpi.equity) equity?.classList.add(k.equity >= prevKpi.equity ? "flash-up" : "flash-down");
+    if (prevKpi.periodPnl != null && k.periodPnl !== prevKpi.periodPnl) today?.classList.add(k.periodPnl >= prevKpi.periodPnl ? "flash-up" : "flash-down");
   }
   prevKpi = { equity: k.equity, periodPnl: k.periodPnl };
 }
 
 /** Positions/Trades: columns give way instead of a sideways scroll (fit.js). */
 function fitOps() { fitTable(document.querySelector("#opsBody > .scroll")); }
+/** The KPI strip drops its sparklines, then the win rate, before it scrolls. */
+function fitKpis() { fitStrip(byId("kpis")); }
 let fitResizeT = null;
-window.addEventListener("resize", () => { clearTimeout(fitResizeT); fitResizeT = setTimeout(() => { fitOps(); fitTablesIn(byId("anBody")); }, 150); });
+window.addEventListener("resize", () => { clearTimeout(fitResizeT); fitResizeT = setTimeout(() => { fitKpis(); fitOps(); fitTablesIn(byId("anBody")); }, 150); });
 // Google Fonts load with display=swap: the real face can be wider than the fallback.
-document.fonts?.ready?.then(() => { fitOps(); fitTablesIn(byId("anBody")); });
+document.fonts?.ready?.then(() => { fitKpis(); fitOps(); fitTablesIn(byId("anBody")); });
 
 /** The ops card's scroller: the table box when it scrolls, else the card
  *  body (layouts where the box is capped or not a scroller). */
@@ -174,13 +177,16 @@ function paintActions() {
   if (focused) host.querySelector(`[data-act="${focused}"]`)?.focus();
 }
 
-/** Header + nav + KPI strip — shared by every page. */
+/** Header + nav + KPI strip (equity, both portfolios, P&L windows, goals) —
+ *  shared by every page. */
 function renderChrome() {
   applyTheme();
   byId("hdr").innerHTML = renderHeader();
   paintActions();
   byId("nav").innerHTML = renderNav();
   byId("kpis").innerHTML = renderKpis();
+  fitKpis();
+  loadProfileSparks();
   renderTicker();
   flashKpis();
 }
@@ -204,10 +210,8 @@ function renderPage() {
   } else {
     // Resumen — the original monitor screen.
     withOpsScroll(() => {
-      host.innerHTML = `<div class="grid cols-2 profiles-grid" id="profiles"></div>
-        <div class="main-area" id="mainArea"><div class="ops-wrap" id="opsWrap"></div><div class="an-col" id="analyticsCol"></div></div>
+      host.innerHTML = `<div class="main-area" id="mainArea"><div class="ops-wrap" id="opsWrap"></div><div class="an-col" id="analyticsCol"></div></div>
         <div id="newsBar"></div>`;
-      byId("profiles").innerHTML = renderProfiles();
       // Positions/Trades owns the left column. The funnel is the analytics
       // card's "Volume" tab since 2026-10-12: as a card below this one it
       // crushed the positions table to its tabs at 875px tall.
@@ -216,7 +220,6 @@ function renderPage() {
     byId("analyticsCol").innerHTML = `<div class="card" id="analyticsCard">${renderAnalyticsShell()}</div>`;
     byId("newsBar").innerHTML = renderNewsBar();
     fitOps(); // the whole page is laid out now (the analytics column and news bar arrived after the ops card)
-    loadProfileSparks();
     loadTab();
     loadNews();
   }
@@ -302,10 +305,16 @@ function wireEvents() {
   on(app, "click", "[data-broker]", (e, el) => openBrokerModal(el.dataset.broker, (id) => { store.set({ view: id }); refresh().then(render); }));
   on(app, "keydown", "[data-broker]", (e, el) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); el.click(); } });
   on(app, "click", "[data-opstab]", (e, el) => { opsTab = el.dataset.opstab; byId("opsCard").outerHTML = renderOps(); fitOps(); });
+  // Positions: a portfolio's header row folds/unfolds its rows (persisted).
+  on(app, "click", "[data-pgroup]", (e, el) => {
+    togglePositionGroup(el.dataset.pgroup, el.getAttribute("aria-expanded") !== "true");
+    const b = byId("opsBody");
+    if (b) withOpsScroll(() => { b.innerHTML = renderPositions(store.state, tradesCache); });
+  });
   on(app, "click", "[data-atab]", (e, el) => setTab(el.dataset.atab));
   on(app, "click", "[data-period]", (e, el) => { store.set({ period: +el.dataset.period }); refresh().then(render); });
   on(app, "click", "[data-fdays]", (e, el) => setFunnelDays(+el.dataset.fdays));
-  on(app, "click", "[data-mr]", (e, el) => { setMonthlyReturnsProfile(el.dataset.mr); loadTab(); });
+  on(app, "change", "[data-mr]", (e, el) => { setMonthlyReturnsProfile(el.value); loadTab(); });
 }
 
 function setTab(id) {

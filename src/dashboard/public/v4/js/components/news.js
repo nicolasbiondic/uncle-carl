@@ -33,7 +33,7 @@ function cardsHtml(items) {
     const tag = url ? "a" : "div";
     const attrs = url ? `href="${esc(url)}" target="_blank" rel="noopener noreferrer"` : `role="presentation"`;
     return `<${tag} class="news-card" ${attrs} data-src="${slug(n.source)}">
-      <div class="n-src">${esc(n.source)} <span class="n-lang">${esc(n.lang)}</span></div>
+      <div class="n-src">${esc(n.source)}${n.tag ? ` <span class="n-tag">${esc(n.tag)}</span>` : ""}</div>
       <div class="n-title">${esc(n.title || "")}</div>
       <div class="n-time">${esc(n.pubDate ? ago(n.pubDate) : "")}</div></${tag}>`;
   }).join("");
@@ -46,7 +46,7 @@ function paint() {
   if (items === null) return; // keep the "…" placeholder until the FIRST load resolves
   el.innerHTML = items.length
     ? cardsHtml(items)
-    : `<div class="muted" style="padding:var(--s3)">${t("Couldn't reach news feeds", "No se pudo conectar a las fuentes")}</div>`;
+    : `<div class="muted news-empty">${t("No market-moving news", "Sin noticias relevantes")}</div>`;
   if (items.length) startRotation();
 }
 

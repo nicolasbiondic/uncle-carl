@@ -7,7 +7,7 @@
 // classes on the <table> (fit-1, fit-2, …); app.css maps each to the cells it
 // hides, least important first. Phones (< 981px) keep the sideways scroll:
 // the page scrolls there and the symbol column sticks to the left edge.
-export const FIT_STEPS = ["fit-1", "fit-2", "fit-3", "fit-4"];
+export const FIT_STEPS = ["fit-1", "fit-2", "fit-3"];
 export const DESKTOP = "(min-width: 981px)";
 
 /** Re-fit one scroll box's table; returns how many groups it hid. */
@@ -24,4 +24,20 @@ export function fitTable(box, steps = FIT_STEPS, desktop = matchMedia(DESKTOP).m
 /** Re-fit every table box under `root` (the analytics card's tab body). */
 export function fitTablesIn(root, steps = FIT_STEPS) {
   for (const box of root?.querySelectorAll(".scroll") ?? []) fitTable(box, steps);
+}
+
+// ── The KPI strip (one row: equity, two portfolios, P&L, goals) ─────────────
+// Same idea for the header's single row: when the cells do not fit, the
+// sparklines go first (fit-1), then the win rate (fit-2). app.css maps the
+// classes on the strip. Phones keep the strip's own sideways scroll.
+export const STRIP_STEPS = ["fit-1", "fit-2"];
+
+/** Re-fit the KPI strip; returns how many groups it hid. */
+export function fitStrip(strip, steps = STRIP_STEPS, desktop = matchMedia(DESKTOP).matches) {
+  if (!strip) return 0;
+  strip.classList.remove(...steps);
+  if (!desktop) return 0;
+  let hidden = 0;
+  while (hidden < steps.length && strip.scrollWidth > strip.clientWidth) strip.classList.add(steps[hidden++]);
+  return hidden;
 }

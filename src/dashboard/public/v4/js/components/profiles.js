@@ -27,15 +27,37 @@ export function statsById(profiles) {
 export const brokerKey = (b) => String(b || "").split("_")[0];
 export const BROKER_LABEL = { alpaca: "Alpaca", binance: "Binance" };
 
-// One aggregated card per broker (Alpaca / Binance) — the 5 sleeves live
-// behind the "Details →" modal (broker-modal.js) so the top grid stays 2
-// cards instead of a 2x2+1 block of near-duplicate chrome.
-function brokerCard(key, group, bt, stats) {
+/** Binance wallet decomposition (mandate 2026-07-19), now the tooltip of the
+ *  Binance cell (it rode in the header balance pill until 2026-10-25): FOUR
+ *  independently-sourced components — USDT Futures margin equity, USDC
+ *  Futures margin equity, FAPI BTC collateral USD, COIN-M BTC margin equity —
+ *  each present only when its sleeve/asset is active. The Total is built
+ *  BOTTOM-UP as the sum of whatever components are present (never a
+ *  separately-fetched total that components are subtracted from), so every
+ *  included bucket is labeled. "" when no component is available. */
+export function walletBreakdownTitle(account) {
+  const b = account?.marginBreakdown;
+  if (!b) return "";
+  const parts = [];
+  if (Number.isFinite(b.usdtFutures)) parts.push(["USDT Futures", b.usdtFutures]);
+  if (Number.isFinite(b.usdcFutures)) parts.push(["USDC Futures", b.usdcFutures]);
+  if (Number.isFinite(b.fapiBtcCollateral)) parts.push(["FAPI BTC collateral", b.fapiBtcCollateral]);
+  if (Number.isFinite(b.coinmMargin)) parts.push(["COIN-M BTC margin", b.coinmMargin]);
+  if (!parts.length) return "";
+  const total = parts.reduce((sum, [, v]) => sum + n(v), 0);
+  return `Total ${money(total)} = ${parts.map(([label, v]) => `${label} ${money(v)}`).join(" + ")}`;
+}
+
+// One cell per broker (Alpaca / Binance) in the KPI strip — the 5 sleeves live
+// behind the cell's click (broker-modal.js). It reads like its neighbours: a
+// label line (name, status), the balance with the return since the start, and
+// the window's P&L beneath; a small equity sparkline sits at the right.
+function brokerCell(key, group, bt, stats) {
   // Headline numbers come from BROKER-TRUTH (bt = the v2 brokerAccounts entry:
-  // the same `${broker}_main` snapshot source the header pill and the TODAY/ALL
-  // KPIs use), so the two broker cards SUM to the headline KPI. The old per-
-  // sleeve sums (kept as a fallback) miss unrealized P&L on open positions —
-  // which is exactly why Alpaca −24 + Binance +28 didn't reconcile with −298.
+  // the same `${broker}_main` snapshot source the TODAY/ALL KPIs use), so the
+  // two broker cells SUM to the headline KPI. The old per-sleeve sums (kept as
+  // a fallback) miss unrealized P&L on open positions — which is exactly why
+  // Alpaca −24 + Binance +28 didn't reconcile with −298.
   const btOk = !!(bt && bt.equity != null);
   const equity = btOk ? n(bt.equity) : group.reduce((s, a) => s + n(a.equity), 0);
   const first = n(bt?.firstEquity);
@@ -49,31 +71,32 @@ function brokerCard(key, group, bt, stats) {
   const pausedCount = group.filter((a) => a.paused).length;
   const on = group.some((a) => store.state.view === a.id);
   const name = BROKER_LABEL[key] || key;
-  // Status rides next to the title now (was a bottom .pfoot row) — LIVE when
-  // every sleeve is running, else an amber "N paused" chip.
-  const status = pausedCount === 0
-    ? `<span class="live"><span class="d"></span>LIVE</span>`
-    : `<span class="chip" style="color:var(--warn)">${pausedCount} ${t("paused", "en pausa")}</span>`;
-  // Two lines per column (2026-10-12): equity and the period P&L share a line,
-  // so the card is ~64px instead of ~90px of the one-screen Overview.
+  // A broker that reports itself disconnected says so (it was a dot in the
+  // header pill); otherwise Live when every sleeve runs, else an amber count.
+  // Unknown connection state (older server) never reads as disconnected.
+  const conn = store.state.connections?.[key];
+  const status = conn && !(conn.connected || conn.dataConnected)
+    ? `<span class="bk-st down">${t("Disconnected", "Desconectado")}</span>`
+    : pausedCount === 0
+      ? `<span class="live"><span class="d"></span>${t("Live", "En vivo")}</span>`
+      : `<span class="bk-st warn">${pausedCount} ${t("paused", "en pausa")}</span>`;
+  const wallet = key === "binance" ? walletBreakdownTitle(bt) : "";
+  const title = `${t("Details", "Detalle")}: ${name}${wallet ? `\n${wallet}` : ""}`;
   return `
-    <div class="pcard ${on ? "on" : ""} fade-up" data-broker="${esc(key)}" role="button" tabindex="0" title="${esc(name)}">
-      <div class="pcol pcol-l">
-        <span class="pname"><span class="pdot" style="background:${dotColor(key)}"></span><b>${esc(name)}</b>${status}</span>
-        <span class="pline"><span class="peq">${money(equity, 0)}</span><span class="psub">${esc(periodLabel(store.state.period))} <b style="color:${pnlColor(periodPnl)}">${moneySigned(periodPnl)}</b>${periodPct == null ? "" : ` <span class="muted">${pctSigned(periodPct)}</span>`}</span></span>
+    <div class="kpi bk sm${on ? " on" : ""}" data-broker="${esc(key)}" role="button" tabindex="0" title="${esc(title)}">
+      <div class="bk-text">
+        <span class="kl"><span class="pdot" style="background:${dotColor(key)}"></span><b>${esc(name)}</b>${status}</span>
+        <span class="kv">${money(equity, 0)} <span class="kv sub" title="${esc(t("Return since the start of the current system", "Rentabilidad desde el inicio del sistema actual"))}"><span style="color:${pnlColor(allPct)}">${pctSigned(allPct)}</span> ${t("total", "total")}</span></span>
+        <span class="ks">${esc(periodLabel(store.state.period))} <b style="color:${pnlColor(periodPnl)}">${moneySigned(periodPnl, 0)}</b>${periodPct == null ? "" : ` ${pctSigned(periodPct)}`}</span>
       </div>
       <div class="pspark" data-spark="${esc(key)}_main" aria-hidden="true"></div>
-      <div class="pcol pcol-r">
-        <span class="pall" style="color:${pnlColor(allPct)}" title="${esc(t("Return since the start of the current system", "Rentabilidad desde el inicio del sistema actual"))}">${pctSigned(allPct)} <span class="muted ptot">${t("total", "total")}</span></span>
-        <span class="psub"><span class="pdet">${t("Details →", "Detalle →")}</span></span>
-      </div>
     </div>`;
 }
 
 export function renderProfiles() {
   const s = store.state;
   const accounts = s.dashboard?.accounts || [];
-  if (!accounts.length) return `<div class="pcard skel" style="height:72px"></div>`.repeat(2);
+  if (!accounts.length) return `<div class="kpi bk"><span class="skel bk-skel"></span></div>`.repeat(2);
   const stats = statsById(s.profiles);
   const brokerAccts = (s.profiles || []).flatMap((p) => p.brokerAccounts || []);
   const groups = new Map();
@@ -83,7 +106,7 @@ export function renderProfiles() {
     groups.get(k).push(a);
   }
   const order = [...groups.keys()].sort((a, b) => (a === "alpaca" ? -1 : b === "alpaca" ? 1 : 0));
-  return order.map((k) => brokerCard(k, groups.get(k), brokerAccts.find((a) => String(a.brokerId || "").includes(k)), stats)).join("");
+  return order.map((k) => brokerCell(k, groups.get(k), brokerAccts.find((a) => String(a.brokerId || "").includes(k)), stats)).join("");
 }
 
 function sparkPath(vals, W, H, pad) {
@@ -100,10 +123,10 @@ function sparkPath(vals, W, H, pad) {
 let tipEl = null;
 const tooltip = () => (tipEl || (tipEl = Object.assign(document.body.appendChild(document.createElement("div")), { className: "tip" })));
 
-// Fills each broker card's centre gutter with that broker's equity trend — one
-// small fetch of its *_main broker-truth series per card, following the global
+// Fills each broker cell's sparkline with that broker's equity trend — one
+// small fetch of its *_main broker-truth series per cell, following the global
 // window (store.state.period). Colour follows the window's direction. Called
-// after every render() (the #profiles innerHTML is replaced each time).
+// after every chrome render (the KPI strip's innerHTML is replaced each time).
 export async function loadProfileSparks() {
   const s = store.state;
   const days = s.period === 0 ? undefined : s.period;
@@ -123,7 +146,7 @@ export async function loadProfileSparks() {
 function drawSpark(box, rows) {
   if (rows.length < 2) {
     box.classList.remove("has-data");
-    box.innerHTML = `<span class="spark-empty">${t("No history yet", "Sin historial aún")}</span>`;
+    box.innerHTML = "";
     return;
   }
   const vals = rows.map((r) => r.v);

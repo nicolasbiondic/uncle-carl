@@ -1,6 +1,6 @@
-import { store, t } from "../store.js";
+import { store, t, isEs } from "../store.js";
 import { api } from "../api.js";
-import { moneySigned, pct, pctSigned, pctFrac, pnlColor, n, num, etDateTime } from "../fmt.js";
+import { moneySigned, pnlWhole, pct, pctSigned, pctFrac, pnlColor, n, num, etDateTime } from "../fmt.js";
 import { byId, esc } from "../ui.js";
 import { windowSeg } from "./kpis.js";
 import { fitTablesIn } from "../fit.js";
@@ -40,7 +40,7 @@ export async function loadTab() {
     // own to clean up after itself).
     const { destroyEquityChart } = await import("./equity.js");
     destroyEquityChart();
-    if (tab === "performance") { body.innerHTML = await performance(); fitTablesIn(body); }
+    if (tab === "performance") { body.innerHTML = await performance(); fitTablesIn(body); rememberOpenRows(body); }
     else if (tab === "volume") {
       const { renderFunnelPanel, loadFunnel } = await import("./funnel.js");
       body.innerHTML = renderFunnelPanel();
@@ -50,8 +50,11 @@ export async function loadTab() {
   } catch (e) { body.innerHTML = `<div class="empty">${t("Could not load", "No se pudo cargar")}: ${esc(e.message)}</div>`; }
 }
 
-// Performance deep-dive: scorecard + tearsheet summary + P&L source +
-// by-symbol + by-hour, stacked (each sub-renderer carries its own header).
+// Performance: one plain-language line per portfolio (return vs its benchmark,
+// worst drop; the statistics fold under each line), then monthly returns and
+// the drawdown of the whole account, then where the P&L comes from, by symbol
+// and by hour. Execution stats (slippage, latency) live in the Volume tab
+// since 2026-10-25 — they are about execution, not performance.
 async function performance() {
   const period = store.state.period === 0 ? 90 : Math.max(7, store.state.period);
   const [sc, ts, pnl, sym, hrs] = await Promise.all([
@@ -63,25 +66,47 @@ async function performance() {
   ]);
   const sep = `<div style="border-top:1px solid var(--border);margin:var(--s4) 0"></div>`;
   return scorecard(sc) + sep + ts + sep + pnlAttr(pnl) + sep
-    + `<div class="card-note" style="margin-bottom:var(--s2)">${t("By symbol", "Por símbolo")}</div>` + symbols(sym) + sep
+    + `<div class="an-h">${t("By symbol", "Por símbolo")}</div>` + symbols(sym) + sep
     + hours(hrs);
 }
 
-// ── Scorecard (W5): one row per live sleeve — return vs benchmark on the
-// SAME dates, OLS alpha, Sharpe, maxDD, and the OOS expectation-band chip
+// ── Scorecard (W5): one line per live sleeve — return vs benchmark on the
+// SAME dates, worst drop; OLS alpha, Sharpe and the OOS expectation band
 // (block bootstrap over the validated pure chain; "below" = automatic
-// "worse than validated" signal). Window shown: since the current model's
-// start when it has data, else 30d (labelled). Exported for tests.
+// "worse than validated" signal) fold under the line. Window shown: since
+// the current model's start when it has data, else 30d. Exported for tests.
 export function scorecardWindow(e) {
   const model = (e.windows || []).find((w) => w.window === "model");
   if (model && model.totalReturnPct != null) return model;
   return (e.windows || []).find((w) => w.window === "30d") || model || null;
 }
 
+/** "since Sep 25" / "last 30 days" — the window in words. Exported for tests. */
+export function windowLabel(w, modelStart) {
+  if (w.window === "model") {
+    const d = modelStart ? new Date(`${modelStart}T12:00:00Z`) : null;
+    if (d && !Number.isNaN(d.getTime())) {
+      const day = d.toLocaleDateString(isEs() ? "es" : "en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+      return `${t("since", "desde")} ${day}`;
+    }
+    return t("since the current model", "desde el modelo actual");
+  }
+  const days = parseInt(w.window, 10);
+  if (Number.isFinite(days)) return t(`last ${days} days`, `últimos ${days} días`);
+  return String(w.window);
+}
+
+/** The benchmark in words a reader knows. Exported for tests. */
+export function benchmarkName(symbol) {
+  const names = { SPY: "S&P 500", QQQ: "Nasdaq 100", IWM: "Russell 2000", "BTC/USD": "Bitcoin", "ETH/USD": "Ether" };
+  return names[symbol] || String(symbol || "").replace("/USD", "");
+}
+
 const BAND_LABEL = () => ({
-  below: t("BELOW band", "POR DEBAJO"), within: t("within band", "dentro"),
-  above: t("above band", "por encima"),
-  unavailable: t("unavailable", "no disponible"),
+  below: t("below the expected band", "por debajo de la banda esperada"),
+  within: t("within the expected band", "dentro de la banda esperada"),
+  above: t("above the expected band", "por encima de la banda esperada"),
+  unavailable: t("band unavailable", "banda no disponible"),
 });
 
 function bandChip(band) {
@@ -116,32 +141,51 @@ export function costCell(c) {
   return `<span title="${esc(c.verdict || "")}" style="white-space:nowrap">${real}${vs}${margin}</span>`;
 }
 
+/** Which portfolio lines the reader has unfolded; survives the 30 s refresh
+ *  (the tab is rebuilt from scratch each time). Session only. */
+const openRows = new Set();
+function rememberOpenRows(body) {
+  for (const d of body?.querySelectorAll?.("details.sc-row") ?? []) {
+    d.addEventListener("toggle", () => { if (d.open) openRows.add(d.dataset.sc); else openRows.delete(d.dataset.sc); });
+  }
+}
+
 export function scorecard(sc) {
   if (!sc?.entities?.length) return `<div class="empty">${t("Scorecard unavailable", "Scorecard no disponible")}</div>`;
   const costBySleeve = {};
   for (const c of sc.costs?.sleeves || []) costBySleeve[c.sleeve] = c;
+  const dash = `<span class="muted">—</span>`;
   const rows = sc.entities.filter((e) => e.kind === "sleeve").map((e) => {
     const w = scorecardWindow(e);
     if (!w) return "";
-    const bench = e.benchmarkSymbol.replace("/USD", "");
-    const winLabel = w.window === "model" ? `${t("model", "modelo")} ${e.modelStart || ""}` : w.window;
+    const bench = benchmarkName(e.benchmarkSymbol);
+    const win = windowLabel(w, e.modelStart);
     // Tearsheet of the sleeve's authoritative artifact (only when one exists).
     const tsLink = e.band?.artifactDir
-      ? ` <a href="/api/v2/tearsheet/${encodeURIComponent(e.id)}" target="_blank" rel="noopener" style="font-size:var(--t-xs)">tearsheet</a>`
+      ? `<a href="/api/v2/tearsheet/${encodeURIComponent(e.id)}" target="_blank" rel="noopener">${t("Backtest tearsheet", "Tearsheet del backtest")}</a>`
       : "";
-    return `<tr><td>${esc(e.label)} <span class="muted" style="font-size:var(--t-xs)">${esc(winLabel)}</span>${tsLink}</td>
-      <td style="color:${pnlColor(w.totalReturnPct)}">${w.totalReturnPct == null ? "—" : pctSigned(w.totalReturnPct)}</td>
-      <td class="fx1">${w.benchmark?.totalReturnPct == null ? "—" : `${esc(bench)} ${pctSigned(w.benchmark.totalReturnPct)}`}</td>
-      <td>${w.alphaAnnPct == null ? "—" : pctSigned(w.alphaAnnPct)}</td>
-      <td>${w.sharpe == null ? "—" : num(w.sharpe, 2)}</td>
-      <td>${w.maxDrawdownPct == null ? "—" : pctSigned(-w.maxDrawdownPct, 1)}</td>
-      <td>${bandChip(e.band)}</td>
-      <td class="fx2">${costCell(costBySleeve[e.id])}</td></tr>`;
+    const stat = (label, value) => `<span class="sc-stat"><span class="sc-l">${label}</span> ${value}</span>`;
+    return `<details class="sc-row" data-sc="${esc(e.id)}"${openRows.has(e.id) ? " open" : ""}>
+      <summary title="${esc(t("Return vs its benchmark on the same dates. Click for Sharpe, alpha, band and costs.", "Retorno frente a su referencia en las mismas fechas. Clic para Sharpe, alfa, banda y costes."))}">
+        <span class="sc-name">${esc(e.label)} <span class="sc-win">${esc(win)}</span></span>
+        <span class="sc-ret" style="color:${pnlColor(w.totalReturnPct)}">${w.totalReturnPct == null ? "—" : pctSigned(w.totalReturnPct)}</span>
+        <span class="sc-bench">${w.benchmark?.totalReturnPct == null ? dash : `<span class="sc-l">${esc(bench)}</span> ${pctSigned(w.benchmark.totalReturnPct)}`}</span>
+        <span class="sc-dd">${w.maxDrawdownPct == null ? dash : `<span class="sc-l">${t("worst drop", "peor caída")}</span> ${pctSigned(-w.maxDrawdownPct, 1)}`}</span>
+        <span class="sc-chev" aria-hidden="true"></span>
+      </summary>
+      <div class="sc-more">
+        ${stat("Sharpe", w.sharpe == null ? "—" : num(w.sharpe, 2))}
+        ${stat(t("Alpha per year", "Alfa anual"), w.alphaAnnPct == null ? "—" : pctSigned(w.alphaAnnPct))}
+        ${stat(t("Vs the backtest", "Frente al backtest"), bandChip(e.band))}
+        ${stat(t("Costs per side", "Costes por lado"), costCell(costBySleeve[e.id]))}
+        ${tsLink}
+      </div>
+    </details>`;
   }).join("");
-  return `<div class="card-note" style="margin-bottom:var(--s2)" title="${esc(t(
+  return `<div class="an-h" title="${esc(t(
       "Few weeks of live data certify nothing; the band detects breakage vs the validated OOS distribution, it does not prove alpha.",
-      "Con pocas semanas de vivo ninguna métrica certifica edge; la banda detecta roturas frente al OOS validado, no prueba alpha."))}">${t("Scorecard — live vs validated backtest", "Scorecard — vivo vs backtest validado")}</div>
-    <div class="scroll"><table><thead><tr><th>Sleeve</th><th>${t("Return", "Retorno")}</th><th class="fx1">Benchmark</th><th>α (${t("ann.", "anual")})</th><th>Sharpe</th><th>maxDD</th><th>${t("Band", "Banda")}</th><th class="fx2">${t("Costs", "Costes")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      "Con pocas semanas de vivo ninguna métrica certifica edge; la banda detecta roturas frente al OOS validado, no prueba alpha."))}">${t("Each portfolio against its benchmark", "Cada portafolio frente a su referencia")}</div>
+    <div class="sc-list">${rows}</div>`;
 }
 
 function activity(items) {
@@ -158,7 +202,7 @@ function hours(data) {
       <div style="height:70px;width:100%;display:flex;align-items:flex-end;justify-content:center"><div style="width:60%;height:${pctH}%;background:${up ? "var(--up)" : "var(--down)"};border-radius:2px 2px 0 0"></div></div>
       <span class="muted" style="font-size:9px">${h.hour}</span></div>`;
   }).join("");
-  return `<div class="card-note" style="margin-bottom:var(--s2)">${t("Avg P&L by hour (ET)", "P&L medio por hora (ET)")}</div><div style="display:flex;gap:2px;align-items:flex-end">${bars}</div>`;
+  return `<div class="an-h">${t("Average P&L by hour (ET)", "P&L medio por hora (ET)")}</div><div style="display:flex;gap:2px;align-items:flex-end">${bars}</div>`;
 }
 
 function symbols(data) {
@@ -170,10 +214,10 @@ function symbols(data) {
 function pnlAttr(d) {
   if (!d?.buckets) return `<div class="empty">${t("No data", "Sin datos")}</div>`;
   const label = { algo: t("Algorithm edge", "Edge del algoritmo"), reconcile: t("Reconcile", "Reconciliado"), sync: t("Broker sync", "Sync broker") };
-  const rows = d.buckets.map((b) => `<tr><td>${label[b.bucket] || b.bucket}</td><td>${n(b.trades)}</td><td>${pctFrac(b.winRate)}</td><td style="color:${pnlColor(b.totalPnl)}">${moneySigned(b.totalPnl)}</td><td>${b.profitFactor == null ? "∞" : num(b.profitFactor, 2)}</td></tr>`).join("");
-  return `<div class="card-note" style="margin-bottom:var(--s2)">${t("Where the P&L comes from: real algo edge vs broker-sync reconciliation", "De dónde viene el P&L: edge real del algoritmo vs reconciliación del broker")}</div>
+  const rows = d.buckets.map((b) => `<tr><td>${label[b.bucket] || b.bucket}</td><td>${n(b.trades)}</td><td>${pctFrac(b.winRate)}</td><td style="color:${pnlColor(b.totalPnl)}">${pnlWhole(b.totalPnl)}</td><td>${b.profitFactor == null ? "∞" : num(b.profitFactor, 2)}</td></tr>`).join("");
+  return `<div class="an-h" title="${esc(t("Real algorithm edge vs what broker-sync reconciliation booked", "Edge real del algoritmo frente a lo que anotó la reconciliación con el broker"))}">${t("Where the P&L comes from", "De dónde viene el P&L")}</div>
     <div class="scroll"><table><thead><tr><th>${t("Source", "Fuente")}</th><th>${t("Trades", "Trades")}</th><th>Win</th><th>P&L</th><th>PF</th></tr></thead><tbody>${rows}</tbody></table></div>
-    <div style="margin-top:var(--s2);color:${pnlColor(d.netPnl)}">${t("Net", "Neto")}: <b>${moneySigned(d.netPnl)}</b> <span class="muted">(${n(d.windowDays)}d)</span></div>`;
+    <div style="margin-top:var(--s2);color:${pnlColor(d.netPnl)}">${t("Net", "Neto")}: <b>${pnlWhole(d.netPnl)}</b> <span class="muted">(${n(d.windowDays)}d)</span></div>`;
 }
 
 // "Monthly returns" used to hard-bind to binance_main regardless of what the
@@ -196,33 +240,41 @@ export function monthlyReturnsOptions(accounts) {
 /** Resolves the profile to display: an explicit user pick (mrProfile) wins;
  *  otherwise a selected sleeve view binds directly to it (a reader looking
  *  at momentum_crypto shouldn't see binance_main's blended returns), and the
- *  consolidated view falls back to the first available option (was always
- *  "binance_main" before — same default when it's still present). */
+ *  consolidated view shows a WHOLE broker account — the first `*_main` leg
+ *  (Alpaca, where most of the capital sits; owner 2026-10-25) — never a
+ *  single sleeve by default. */
 export function resolveMonthlyReturnsProfile(explicit, view, options) {
   if (explicit && options.some((o) => o.id === explicit)) return explicit;
   if (view && view !== "consolidated" && options.some((o) => o.id === view)) return view;
-  return options.find((o) => o.id === "binance_main")?.id ?? options[0]?.id ?? "binance_main";
+  return options.find((o) => /_main$/.test(o.id))?.id ?? options[0]?.id ?? "binance_main";
 }
 
 export function setMonthlyReturnsProfile(id) { mrProfile = id; }
 
+/** "2026-10" -> "Oct" (localized); the full key rides in the title. */
+export function monthShort(key) {
+  const m = /^(\d{4})-(\d{2})/.exec(String(key || ""));
+  if (!m) return String(key || "");
+  return new Date(Date.UTC(+m[1], +m[2] - 1, 15)).toLocaleDateString(isEs() ? "es" : "en-US", { month: "short", timeZone: "UTC" });
+}
+
 async function tearsheet() {
   const options = monthlyReturnsOptions(store.state.dashboard?.accounts);
   const profile = resolveMonthlyReturnsProfile(mrProfile, store.state.view, options);
-  const [mr, dd, sl] = await Promise.all([api.monthlyReturns(profile, 12), api.drawdown(profile, 90), api.slippage()]);
-  const months = (mr || []).map((m) => `<span class="mchip"><span class="l">${esc((m.month || "").slice(5))}</span><b style="color:${pnlColor(m.pct)}">${pctSigned(m.pct)}</b></span>`).join("") || `<span class="muted">${t("not enough data", "sin datos suficientes")}</span>`;
+  const [mr, dd] = await Promise.all([api.monthlyReturns(profile, 12), api.drawdown(profile, 90)]);
+  const months = (mr || []).map((m) => `<span class="mr-m" title="${esc(m.month || "")}"><span class="sc-l">${esc(monthShort(m.month))}</span><b style="color:${pnlColor(m.pct)}">${pctSigned(m.pct)}</b></span>`).join("") || `<span class="muted">${t("not enough data yet", "aún sin datos suficientes")}</span>`;
   let ddHtml = "";
   if (Array.isArray(dd) && dd.length > 1) {
     const W = 320, H = 44, N = dd.length, min = Math.min(...dd.map((d) => d.dd), -0.01);
     const X = (i) => (i / (N - 1)) * W, Y = (v) => 1 + (v / min) * (H - 2);
     let line = `M ${X(0).toFixed(1)} ${Y(dd[0].dd).toFixed(1)}`;
     for (let i = 1; i < N; i++) line += ` L ${X(i).toFixed(1)} ${Y(dd[i].dd).toFixed(1)}`;
-    ddHtml = `<div class="card-note" style="margin-top:var(--s3)">${t("Drawdown (underwater)", "Drawdown")} · ${t("max", "máx")} ${pct(min, 1)}</div>
+    ddHtml = `<div class="an-h" style="margin-top:var(--s3)" title="${esc(t("How far below its last peak the account has been, last 90 days", "Cuánto por debajo de su último máximo ha estado la cuenta, últimos 90 días"))}">${t("Drop from peak, last 90 days", "Caída desde máximos, últimos 90 días")} <span class="muted">${t("worst", "peor")} ${pct(min, 1)}</span></div>
       <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:44px"><path d="${line} L ${W} 1 Z" fill="var(--down-soft)"/><path d="${line}" fill="none" stroke="var(--down)" stroke-width="1.2" vector-effect="non-scaling-stroke"/></svg>`;
   }
-  const tca = sl && sl.count ? `<div class="chips" style="margin-top:var(--s3)"><span class="mchip"><span class="l">Slippage p50</span><b>${num(sl.p50, 1)} bps</b></span><span class="mchip"><span class="l">p95</span><b>${num(sl.p95, 1)} bps</b></span><span class="mchip"><span class="l">${t("Latency", "Latencia")}</span><b>${num(sl.meanLatencyMs, 0)} ms</b></span><span class="mchip"><span class="l">Fills</span><b>${n(sl.count)}</b></span></div>` : "";
+  // Compact switch: a native select (six segmented buttons took a whole row).
   const picker = options.length > 1
-    ? `<span class="seg" style="margin-left:var(--s2)">${options.map((o) => `<button class="${o.id === profile ? "on" : ""}" data-mr="${esc(o.id)}">${esc(o.label)}</button>`).join("")}</span>`
-    : "";
-  return `<div class="card-note" style="display:flex;align-items:center;flex-wrap:wrap;gap:var(--s2)">${t("Monthly returns", "Retornos mensuales")} <span class="muted">(${esc(profile)})</span>${picker}</div><div class="chips" style="margin-top:var(--s2)">${months}</div>${ddHtml}${tca}`;
+    ? `<select class="mr-pick" data-mr aria-label="${esc(t("Account or portfolio", "Cuenta o portafolio"))}">${options.map((o) => `<option value="${esc(o.id)}"${o.id === profile ? " selected" : ""}>${esc(o.label)}</option>`).join("")}</select>`
+    : `<span class="muted">${esc(options[0]?.label || profile)}</span>`;
+  return `<div class="an-h" style="display:flex;align-items:center;flex-wrap:wrap;gap:var(--s2)">${t("Monthly returns", "Retornos mensuales")}${picker}</div><div class="mr-row">${months}</div>${ddHtml}`;
 }

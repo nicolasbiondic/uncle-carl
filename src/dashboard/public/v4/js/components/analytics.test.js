@@ -4,7 +4,8 @@
 // (data-mr click wiring in main.js) isn't unit-tested here, same convention
 // as the rest of the codebase's DOM-wiring code.
 import { describe, expect, test } from "bun:test";
-import { costCell, monthlyReturnsOptions, resolveMonthlyReturnsProfile, scorecard } from "./analytics.js";
+import { costCell, monthlyReturnsOptions, resolveMonthlyReturnsProfile, scorecard, windowLabel, benchmarkName, monthShort } from "./analytics.js";
+import { executionLine } from "./funnel.js";
 import { store } from "../store.js";
 
 const ACCOUNTS = [
@@ -41,12 +42,12 @@ describe("resolveMonthlyReturnsProfile", () => {
     expect(resolveMonthlyReturnsProfile(null, "momentum_stocks", options)).toBe("momentum_stocks");
   });
 
-  test("no explicit pick, consolidated view: falls back to binance_main (the old default) when present", () => {
-    expect(resolveMonthlyReturnsProfile(null, "consolidated", options)).toBe("binance_main");
+  test("no explicit pick, consolidated view: a WHOLE broker account (the first *_main leg), never a single sleeve", () => {
+    expect(resolveMonthlyReturnsProfile(null, "consolidated", options)).toBe("alpaca_main");
   });
 
   test("an explicit pick that is no longer a valid option (sleeve disappeared) is discarded, not trusted blindly", () => {
-    expect(resolveMonthlyReturnsProfile("momentum_btc", "consolidated", options)).toBe("binance_main");
+    expect(resolveMonthlyReturnsProfile("momentum_btc", "consolidated", options)).toBe("alpaca_main");
   });
 
   test("binance_main absent from options (e.g. only Alpaca configured): falls back to the first option, never throws", () => {
@@ -55,18 +56,74 @@ describe("resolveMonthlyReturnsProfile", () => {
   });
 });
 
-describe("scorecard table", () => {
+// ── One plain-language line per portfolio (owner, 2026-10-25) ──────────────
+describe("scorecard — plain-language rows", () => {
   const entity = (band) => ({
     id: "momentum_stocks", kind: "sleeve", label: "Momentum Stocks", benchmarkSymbol: "SPY",
     band, windows: [{ window: "model", nObs: 5, totalReturnPct: 1, benchmark: {} }],
   });
 
-  test("caveat is only a tooltip on the scorecard heading", () => {
+  test("a row reads: name, window, return, benchmark by name, worst drop — statistics folded underneath", () => {
+    const lang = store.state.lang;
+    try {
+      store.state.lang = "en";
+      const html = scorecard({ entities: [{
+        id: "momentum_stocks", kind: "sleeve", label: "Momentum Stocks", benchmarkSymbol: "SPY", modelStart: "2026-09-25",
+        band: { status: "within", artifactDir: "data/backtests/abc", cumReturnPct: { p5: -4, p50: 3, p95: 12 }, horizonSessions: 20 },
+        windows: [{ window: "model", nObs: 20, totalReturnPct: -3.5, alphaAnnPct: 2.1, sharpe: 0.8, maxDrawdownPct: 7.7, benchmark: { totalReturnPct: -1.0 } }],
+      }] });
+      expect(html).toContain('<details class="sc-row" data-sc="momentum_stocks">');
+      expect(html).toContain('<span class="sc-name">Momentum Stocks <span class="sc-win">since Sep 25</span></span>');
+      expect(html).toContain('<span class="sc-ret" style="color:var(--down)">−3.5%</span>');
+      expect(html).toContain('<span class="sc-bench"><span class="sc-l">S&amp;P 500</span> −1.0%</span>');
+      expect(html).toContain('<span class="sc-dd"><span class="sc-l">worst drop</span> −7.7%</span>');
+      // the statistics are still there, in the fold
+      const more = html.slice(html.indexOf('class="sc-more"'));
+      expect(more).toContain("Sharpe</span> 0.80");
+      expect(more).toContain("Alpha per year</span> +2.1%");
+      expect(more).toContain("within the expected band");
+      expect(more).toContain("Costs per side</span>");
+      expect(more).toContain('href="/api/v2/tearsheet/momentum_stocks"');
+      // no table, no ALL-CAPS heading, no em-dash label
+      expect(html).not.toContain("<table");
+      expect(html).not.toContain("card-note");
+      expect(html).not.toMatch(/Scorecard —|SCORECARD/);
+    } finally { store.state.lang = lang; }
+  });
+
+  test("the window is in words: since <date> for the model window, last N days otherwise", () => {
+    const lang = store.state.lang;
+    try {
+      store.state.lang = "en";
+      expect(windowLabel({ window: "model" }, "2026-09-25")).toBe("since Sep 25");
+      expect(windowLabel({ window: "30d" }, "2026-09-25")).toBe("last 30 days");
+      expect(windowLabel({ window: "model" }, null)).toBe("since the current model");
+      store.state.lang = "es";
+      expect(windowLabel({ window: "30d" }, null)).toBe("últimos 30 días");
+      expect(windowLabel({ window: "model" }, "2026-09-25")).toMatch(/^desde 25 sep/);
+    } finally { store.state.lang = lang; }
+  });
+
+  test("benchmarks are named, unknown symbols fall back to the ticker", () => {
+    expect(benchmarkName("SPY")).toBe("S&P 500");
+    expect(benchmarkName("BTC/USD")).toBe("Bitcoin");
+    expect(benchmarkName("XLE")).toBe("XLE");
+    expect(benchmarkName("SOL/USD")).toBe("SOL");
+  });
+
+  test("months are short names, not numbers", () => {
+    const lang = store.state.lang;
+    try {
+      store.state.lang = "en";
+      expect(monthShort("2026-10")).toBe("Oct");
+      expect(monthShort("garbage")).toBe("garbage");
+    } finally { store.state.lang = lang; }
+  });
+
+  test("caveat is only a tooltip on the heading", () => {
     const html = scorecard({ entities: [entity({ status: "unavailable" })] });
-    expect(html).toMatch(/class="card-note"[^>]*title="[^"]*(Few weeks|Con pocas semanas)[^"]*">Scorecard/);
+    expect(html).toMatch(/class="an-h"[^>]*title="[^"]*(Few weeks|Con pocas semanas)[^"]*">/);
     expect(html.replace(/title="[^"]*"/g, "")).not.toMatch(/Few weeks|Con pocas semanas/);
-    expect(html).toContain('class="fx1"');
-    expect(html).toContain('class="fx2"');
   });
 
   test("insufficient data is a muted dash, with the escaped reason in its tooltip", () => {
@@ -110,8 +167,8 @@ describe("scorecard table", () => {
       band: { status: "unavailable" },
       windows: [{ window: "model", nObs: 5, totalReturnPct: 1.0, benchmark: {} }],
     }] });
-    expect(html).toContain("Cost"); // header present (Costs/Costes)
-    expect(html).not.toContain("tearsheet"); // no artifactDir → no link
+    expect(html).toMatch(/Costs per side|Costes por lado/); // the stat is present, its value an em dash
+    expect(html).not.toContain("/api/v2/tearsheet/"); // no artifactDir → no link
   });
 
   test("tearsheet link only for sleeves with an authoritative artifact", () => {
@@ -122,6 +179,26 @@ describe("scorecard table", () => {
     }] });
     expect(html).toContain(`href="/api/v2/tearsheet/momentum_stocks"`);
     expect(html).toContain(`target="_blank"`);
+  });
+});
+
+describe("execution quality line (Volume tab)", () => {
+  test("one sentence with typical and bad-case slippage, latency and fills", () => {
+    const lang = store.state.lang;
+    try {
+      store.state.lang = "en";
+      const html = executionLine({ count: 124, p50: 3.14, p95: 9.02, meanLatencyMs: 419.6 });
+      expect(html).toContain("Execution quality");
+      expect(html).toContain("<b>3.1 bps</b> typical");
+      expect(html).toContain("<b>9.0 bps</b> bad case");
+      expect(html).toContain("<b>420 ms</b>");
+      expect(html).toContain("124 fills");
+    } finally { store.state.lang = lang; }
+  });
+
+  test("nothing measured → nothing rendered (no fabricated zeros)", () => {
+    expect(executionLine(null)).toBe("");
+    expect(executionLine({ count: 0, p50: 0, p95: 0 })).toBe("");
   });
 });
 

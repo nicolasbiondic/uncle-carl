@@ -2,7 +2,7 @@
 // Persisted keys survive reloads. Components read store.state and subscribe to
 // re-render on change.
 
-const PERSIST = ["view", "period", "lang", "theme", "tab", "newsShown", "page"];
+const PERSIST = ["view", "period", "lang", "theme", "tab", "newsShown", "page", "posGroups"];
 const load = (k, d) => { try { const v = localStorage.getItem("uc4_" + k); return v == null ? d : JSON.parse(v); } catch { return d; } };
 
 export const store = {
@@ -21,6 +21,10 @@ export const store = {
     // (#/resumen…) is the source of truth on load; this remembers the last
     // page for hash-less visits. See router in main.js.
     page: load("page", "resumen"),
+    // Positions table groups (2026-10-25): per portfolio id, "open" | "closed"
+    // once the reader has clicked a group header; absent = the default rule
+    // in positions.js (big groups start collapsed).
+    posGroups: load("posGroups", {}),
     // live data (not persisted)
     dashboard: null,
     profiles: [],

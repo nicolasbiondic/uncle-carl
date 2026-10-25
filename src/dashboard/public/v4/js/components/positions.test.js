@@ -4,8 +4,11 @@
 import { describe, expect, test } from "bun:test";
 import {
   positionsTotals, positionNotional, isInverseContractSleeve,
-  sleeveBadgeCode, sleeveExposure, renderPositions, stopDistancePct, exposureColor,
+  sleeveExposure, renderPositions, stopDistancePct, exposureColor,
+  positionGroups, isGroupCollapsed, exposurePhrase, togglePositionGroup, COLLAPSE_OVER,
 } from "./positions.js";
+import { store } from "../store.js";
+import { dur } from "../fmt.js";
 
 describe("positionsTotals", () => {
   test("sums the unrealized P&L of every priced position", () => {
@@ -99,22 +102,111 @@ describe("positionNotional", () => {
   });
 });
 
-describe("sleeveBadgeCode", () => {
-  test("every currently-declared sleeve id gets a distinct, short code", () => {
-    const ids = ["momentum_stocks", "momentum_crypto", "meanrev_stocks", "momentum_crypto_usdc", "momentum_btc"];
-    const codes = ids.map(sleeveBadgeCode);
-    expect(new Set(codes).size).toBe(ids.length);
-    for (const c of codes) expect(c.length).toBeLessThanOrEqual(11);
+// ── Groups: one block per portfolio (owner, 2026-10-25: "demasiado ruido") ──
+describe("positionGroups", () => {
+  const accounts = [
+    { id: "meanrev_stocks", label: "Reversión Stocks", broker: "alpaca", initialEquity: 25_000, equity: 24_500, grossCapMult: 0.966, grossCapBase: "allocation" },
+    { id: "momentum_stocks", label: "Momentum Stocks", broker: "alpaca", initialEquity: 50_000, equity: 58_800, grossCapMult: 2.5 },
+    { id: "momentum_crypto_usdc", label: "Momentum Cripto USDC", broker: "binance_usdc", initialEquity: 5_000, equity: 7_400, grossCapMult: 1.15 },
+  ];
+  const stock = (id, symbol, qty, entry, pnl) => ({ symbol, side: "buy", quantity: qty, avgEntryPrice: entry, currentPrice: entry, unrealizedPnl: pnl, profileId: id });
+  const book = [
+    stock("momentum_crypto_usdc", "ETH/USDC", 1, 2_000, 10),
+    stock("meanrev_stocks", "UNH", 10, 300, -50),
+    stock("momentum_stocks", "NVDA", 100, 570.21, -1_234),
+    stock("meanrev_stocks", "PFE", 100, 30, 20),
+  ];
+
+  test("one group per portfolio, biggest invested first, with its own count, $ at cost and unrealized total", () => {
+    const groups = positionGroups(book, accounts);
+    expect(groups.map((g) => g.id)).toEqual(["momentum_stocks", "meanrev_stocks", "momentum_crypto_usdc"]);
+    const [mom, mr, usdc] = groups;
+    expect(mom.label).toBe("Momentum Stocks");
+    expect(mom.rows.length).toBe(1);
+    expect(mom.invested).toBeCloseTo(57_021, 2);
+    expect(mom.pnl.total).toBe(-1_234);
+    expect(mr.rows.length).toBe(2);
+    expect(mr.invested).toBe(6_000);
+    expect(mr.pnl.total).toBe(-30);
+    expect(usdc.exposure.ratio).toBeCloseTo(2_000 / 7_400, 6);
   });
 
-  test("distinguishes the two Binance quote-asset sleeves at a glance", () => {
-    expect(sleeveBadgeCode("momentum_crypto")).toBe("MOM-CRY");
-    expect(sleeveBadgeCode("momentum_crypto_usdc")).toBe("MOM-CRY-USD");
+  test("the group's exposure row is sleeveExposure's (market value over the engine's base)", () => {
+    const [mom] = positionGroups(book, accounts);
+    expect(mom.exposure.ratio).toBeCloseTo(57_021 / 58_800, 6);
+    expect(mom.exposure.cap).toBe(2.5);
   });
 
-  test("no id -> empty, not a crash", () => {
-    expect(sleeveBadgeCode(undefined)).toBe("");
+  test("a COIN-M group reports invested=null, never a fabricated partial sum", () => {
+    const coinm = [{ id: "momentum_btc", label: "Momentum BTC", broker: "binance_coinm", initialEquity: 1_000 }];
+    const [g] = positionGroups([{ symbol: "BTC/COIN-M", side: "buy", quantity: 37, avgEntryPrice: 65_000, unrealizedPnl: 30, profileId: "momentum_btc" }], coinm);
+    expect(g.invested).toBeNull();
+    expect(g.exposure.ratio).toBeNull();
   });
+
+  test("rows without a profileId land in one trailing group, no crash", () => {
+    const groups = positionGroups([...book, { symbol: "XYZ", side: "buy", quantity: 1, avgEntryPrice: 1 }], accounts);
+    expect(groups.at(-1).id).toBe("");
+    expect(groups.at(-1).rows.length).toBe(1);
+  });
+
+  test("no positions -> no groups", () => {
+    expect(positionGroups([], accounts)).toEqual([]);
+  });
+});
+
+describe("isGroupCollapsed", () => {
+  test(`default: a group with more than ${COLLAPSE_OVER} positions starts collapsed, smaller ones open`, () => {
+    expect(isGroupCollapsed("meanrev_stocks", 32, 3, {})).toBe(true);
+    expect(isGroupCollapsed("momentum_stocks", 11, 3, {})).toBe(false);
+    expect(isGroupCollapsed("x", COLLAPSE_OVER, 3, undefined)).toBe(false);
+  });
+
+  test("a lone group never starts collapsed (an empty table would be the result)", () => {
+    expect(isGroupCollapsed("meanrev_stocks", 32, 1, {})).toBe(false);
+  });
+
+  test("the reader's last click wins over the default, both ways", () => {
+    expect(isGroupCollapsed("meanrev_stocks", 32, 3, { meanrev_stocks: "open" })).toBe(false);
+    expect(isGroupCollapsed("momentum_stocks", 11, 3, { momentum_stocks: "closed" })).toBe(true);
+  });
+
+  test("togglePositionGroup persists the opposite of what is shown", () => {
+    const before = store.state.posGroups;
+    try {
+      store.state.posGroups = {};
+      togglePositionGroup("meanrev_stocks", true);
+      expect(store.state.posGroups.meanrev_stocks).toBe("open");
+      togglePositionGroup("meanrev_stocks", false);
+      expect(store.state.posGroups.meanrev_stocks).toBe("closed");
+    } finally { store.state.posGroups = before; }
+  });
+});
+
+describe("exposurePhrase — plain words, the cap only when it matters", () => {
+  test("far from the cap: ratio only, uncoloured", () => {
+    expect(exposurePhrase({ ratio: 0.97, cap: 2.5, usage: 0.97 / 2.5 })).toEqual({ text: "0.97× of its capital", color: null });
+  });
+  test("near the cap: the cap is named and the phrase takes the warning colour", () => {
+    const p = exposurePhrase({ ratio: 1.1, cap: 1.15, usage: 1.1 / 1.15 });
+    expect(p.text).toBe("1.10× of its capital, cap 1.15×");
+    expect(p.color).toBe("var(--warn)");
+  });
+  test("over the cap: red; cap precision without float noise", () => {
+    const p = exposurePhrase({ ratio: 1.0, cap: 0.9659999999, usage: 1.0 / 0.966 });
+    expect(p.text).toBe("1.00× of its capital, cap 0.966×");
+    expect(p.color).toBe("var(--down)");
+  });
+  test("unknown ratio (COIN-M) -> null, the header simply omits it", () => {
+    expect(exposurePhrase({ ratio: null, cap: 1.15, usage: null })).toBeNull();
+    expect(exposurePhrase(null)).toBeNull();
+  });
+});
+
+describe("dur — one unit only (owner, 2026-10-25)", () => {
+  test.each([
+    [12 * 864e5 + 11 * 36e5, "12d"], [864e5, "1d"], [11 * 36e5 + 40 * 6e4, "11h"], [45 * 6e4, "45m"], [12e3, "12s"],
+  ])("%s ms → %s", (ms, expected) => { expect(dur(ms)).toBe(expected); });
 });
 
 // ── sleeveExposure (2026-08-19) — "4 positions" -> "2.05x" ─────────────────
@@ -177,9 +269,9 @@ describe("renderPositions (partial data)", () => {
     expect(renderPositions(state, [])).toContain("XYZ");
   });
 
-  test("consolidated view: LINK/USD (momentum_crypto) and LINK/USDC (momentum_crypto_usdc) rows carry distinct sleeve badges", () => {
+  test("consolidated view: each portfolio is a block under a header in plain words; rows carry no badge", () => {
     const state = {
-      ...baseState,
+      ...baseState, posGroups: {},
       dashboard: {
         ...baseState.dashboard,
         portfolio: {
@@ -191,24 +283,70 @@ describe("renderPositions (partial data)", () => {
       },
     };
     const html = renderPositions(state, []);
-    expect(html).toContain("MOM-CRY<");
-    expect(html).toContain("MOM-CRY-USD<");
+    expect(html.match(/class="pgroup"/g)?.length).toBe(2);
+    expect(html).toContain('<span class="pg-name">Momentum Crypto</span><span class="pg-sum">1 position, $2,000 invested, 0.42× of its capital</span>'); // invested at cost, exposure at market
+    expect(html).toContain('<span class="pg-name">Momentum Crypto USDC</span>');
+    expect(html).toContain('<span class="pg-pnl" style="color:var(--up)">+$100</span>');
+    expect(html).not.toContain("sbadge");
+    expect(html).not.toContain("MOM-CRY");
+    expect(html).not.toContain("xchip");
+    // the header comes before its rows, and each block is in order
+    expect(html.indexOf("Momentum Crypto</span>")).toBeLessThan(html.indexOf("LINK/USD<"));
   });
 
-  test("a COIN-M-only sleeve's exposure chip shows — for notional, never a fabricated $0", () => {
+  test("a COIN-M-only group: header without a $ invested or an exposure, never a fabricated $0", () => {
     const state = {
-      ...baseState,
+      ...baseState, posGroups: {},
       dashboard: {
         accounts: [...baseState.dashboard.accounts, { id: "momentum_btc", label: "Momentum BTC (COIN-M)", broker: "binance_coinm", initialEquity: 1_000 }],
         portfolio: { positions: [{ symbol: "BTC/COIN-M", side: "buy", quantity: 37, avgEntryPrice: 65_000, currentPrice: 66_000, unrealizedPnl: 30, profileId: "momentum_btc" }] },
       },
     };
     const html = renderPositions(state, []);
-    const chip = html.slice(html.indexOf('class="mchip xchip"'), html.indexOf("</div>", html.indexOf('class="mchip xchip"')));
-    expect(chip).toContain("MOM-BTC");
-    expect(chip).toContain(">—</b>");
-    expect(chip).not.toContain("$0");
-    expect(chip).toContain("COIN-M");
+    const head = html.slice(html.indexOf('class="pgroup"'), html.indexOf("</button>"));
+    expect(head).toContain('<span class="pg-sum">1 position</span>');
+    expect(head).not.toContain("$0");
+    expect(head).not.toContain("×");
+    expect(head).toContain("COIN-M"); // the title explains why
+  });
+
+  test("big groups start collapsed (header only, rows hidden) while the totals still count every position", () => {
+    const many = Array.from({ length: 32 }, (_, i) => ({ symbol: `MR${i}`, side: "buy", quantity: 1, avgEntryPrice: 100, currentPrice: 101, unrealizedPnl: 1, profileId: "meanrev_stocks" }));
+    const few = Array.from({ length: 11 }, (_, i) => ({ symbol: `MO${i}`, side: "buy", quantity: 1, avgEntryPrice: 100, currentPrice: 101, unrealizedPnl: 1, profileId: "momentum_stocks" }));
+    const state = {
+      view: "consolidated", posGroups: {},
+      dashboard: {
+        accounts: [{ id: "meanrev_stocks", label: "Reversión Stocks", broker: "alpaca", initialEquity: 25_000 }, ...baseState.dashboard.accounts],
+        portfolio: { positions: [...many, ...few] },
+      },
+    };
+    let html = renderPositions(state, []);
+    expect(html.match(/<tr class="pos">/g)?.length).toBe(11);
+    expect(html).toContain('data-pgroup="meanrev_stocks" aria-expanded="false"');
+    expect(html).toContain('data-pgroup="momentum_stocks" aria-expanded="true"');
+    expect(html).toContain("32 positions");
+    expect(html).toContain("· 43"); // totals row still counts the folded rows
+    // the reader opened it
+    html = renderPositions({ ...state, posGroups: { meanrev_stocks: "open" } }, []);
+    expect(html.match(/<tr class="pos">/g)?.length).toBe(43);
+    expect(html).toContain('data-pgroup="meanrev_stocks" aria-expanded="true"');
+  });
+
+  test("single-sleeve view with one big group: never collapsed by default", () => {
+    const many = Array.from({ length: 32 }, (_, i) => ({ symbol: `MR${i}`, side: "buy", quantity: 1, avgEntryPrice: 100, currentPrice: 101, unrealizedPnl: 1 }));
+    const state = { view: "meanrev_stocks", posGroups: {}, dashboard: { accounts: [{ id: "meanrev_stocks", label: "Reversión Stocks", broker: "alpaca", initialEquity: 25_000 }], portfolio: { positions: many } } };
+    const html = renderPositions(state, []);
+    expect(html.match(/<tr class="pos">/g)?.length).toBe(32);
+    expect(html).toContain('aria-expanded="true"');
+  });
+
+  test("the header cell spans every column so hidden columns never shift it (colspan = rendered columns)", () => {
+    const state = { ...baseState, posGroups: {}, dashboard: { ...baseState.dashboard, portfolio: { positions: [
+      { symbol: "AAPL", side: "buy", quantity: 10, avgEntryPrice: 100, currentPrice: 101, unrealizedPnl: 10, stopLoss: 96, profileId: "momentum_stocks" },
+    ] } } };
+    expect(renderPositions(state, [])).toContain('<tr class="pgroup"><td colspan="8">'); // sym qty entry notional now pnl time sl
+    const noStop = { ...state, dashboard: { ...state.dashboard, portfolio: { positions: [{ ...state.dashboard.portfolio.positions[0], stopLoss: null }] } } };
+    expect(renderPositions(noStop, [])).toContain('<tr class="pgroup"><td colspan="7">');
   });
 
   test("single-sleeve view: positions with no profileId still resolve exposure/notional from state.view", () => {
@@ -291,7 +429,7 @@ describe("renderPositions — TP column + SL distance%", () => {
     expect(html).toContain("4.0%"); // (100-96)/100
   });
 
-  test("no stopLoss on any row -> SL cell is a plain dash, no fabricated %", () => {
+  test("no stopLoss on any row -> the SL column (header + cells) is entirely absent, like TP", () => {
     const state = {
       ...baseState2,
       dashboard: { ...baseState2.dashboard, portfolio: { positions: [
@@ -299,6 +437,20 @@ describe("renderPositions — TP column + SL distance%", () => {
       ] } },
     };
     const html = renderPositions(state, []);
+    expect(html).not.toContain(">SL<");
+    expect(html).not.toContain('class="opt1"');
+  });
+
+  test("one row with a stop brings the column back; the stop-less row shows a dash", () => {
+    const state = {
+      ...baseState2,
+      dashboard: { ...baseState2.dashboard, portfolio: { positions: [
+        { symbol: "AAPL", side: "buy", quantity: 10, avgEntryPrice: 100, currentPrice: 100, unrealizedPnl: 0, stopLoss: 96, profileId: "momentum_stocks" },
+        { symbol: "MSFT", side: "buy", quantity: 5, avgEntryPrice: 200, currentPrice: 201, unrealizedPnl: 5, profileId: "momentum_stocks" },
+      ] } },
+    };
+    const html = renderPositions(state, []);
+    expect(html).toContain(">SL</th>");
     expect(html).toContain('<td class="opt1">—</td>');
   });
 });
@@ -348,9 +500,13 @@ describe("sleeveExposure — current equity base and cap usage", () => {
     expect(row.ratio).toBeCloseTo(2_200 / 2_000, 6);
   });
 
-  test("the cap shows its real precision, without float noise", () => {
-    const html = renderPositions({ view: "consolidated", dashboard: { accounts: [acc({ equity: 52_960, grossCapMult: 1.7249999999999999 })], portfolio: { positions: book } } }, []);
-    expect(html).toContain('<span class="xcap">/ 1.725×</span>');
+  test("the cap shows its real precision, without float noise, and only when the book is near it", () => {
+    const html = renderPositions({ view: "consolidated", posGroups: {}, dashboard: { accounts: [acc({ equity: 52_960, grossCapMult: 1.7249999999999999 })], portfolio: { positions: book } } }, []);
+    expect(html).toContain("1.50× of its capital</span>"); // 87% of the cap: the cap stays in the title
+    expect(html).not.toContain("1.725×</span>");
+    expect(html).toMatch(/title="[^"]*Cap 1\.725×\./);
+    const near = renderPositions({ view: "consolidated", posGroups: {}, dashboard: { accounts: [acc({ equity: 50_000, grossCapMult: 1.7249999999999999 })], portfolio: { positions: book } } }, []);
+    expect(near).toContain('<span style="color:var(--warn)">1.59× of its capital, cap 1.725×</span>');
   });
 
   test("colour by share of the cap: normal below 90%, amber from 90%, red past the cap", () => {
@@ -367,12 +523,11 @@ describe("sleeveExposure — current equity base and cap usage", () => {
     expect(exposureColor(row)).toBe("var(--down)");
   });
 
-  test("the chip shows the ratio and the cap; the $ deployed rides in the tooltip", () => {
-    const state = { view: "consolidated", dashboard: { accounts: [acc({ equity: 52_960, grossCapMult: 1.725 })], portfolio: { positions: book } } };
+  test("the group header says it in words; the $ at market and the base ride in its title", () => {
+    const state = { view: "consolidated", posGroups: {}, dashboard: { accounts: [acc({ equity: 52_960, grossCapMult: 1.725 })], portfolio: { positions: book } } };
     const html = renderPositions(state, []);
-    expect(html).toContain(">1.50×</b>");
-    expect(html).toContain('<span class="xcap">/ 1.725×</span>');
-    expect(html).toMatch(/class="mchip xchip" title="[^"]*\$79,441[^"]*cap 1\.725×/);
+    expect(html).toContain('<span class="pg-sum">1 position, $79,441 invested, 1.50× of its capital</span>');
+    expect(html).toMatch(/class="pgroup-btn"[^>]*title="Holds \$79,441 at market against \$52,960 of current equity \(1\.50×\)\. Cap 1\.725×\. Allocation \$50,000\. Click to show or hide its positions\."/);
   });
 });
 

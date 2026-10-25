@@ -23,22 +23,48 @@ const week = {
 };
 
 describe("realized line under the P&L KPIs", () => {
-  test("shows the realized P&L and close count of the window, with the breakdown link for that window", () => {
+  test("shows the realized P&L and close count of the window; no breakdown text or link on the line", () => {
     Object.assign(store.state, { lang: "en" });
-    const html = realizedSub(7963.43, 19, 7);
+    const html = realizedSub(7963.43, 19);
     expect(html).toContain("realized");
     expect(html).toContain("+$7,963");
     expect(html).toContain("in 19 closes");
-    expect(html).toContain('data-act="pnl-why"');
-    expect(html).toContain('data-days="7"');
+    expect(html).not.toMatch(/breakdown|data-act|<button|·/);
   });
 
   test("Spanish wording; no closes reads as such; a missing figure renders nothing", () => {
     Object.assign(store.state, { lang: "es" });
-    expect(realizedSub(7963.43, 19, 7)).toContain("cobrado");
-    expect(realizedSub(7963.43, 19, 7)).toContain("desglose");
-    expect(realizedSub(0, 0, 1)).toContain("sin cierres");
-    expect(realizedSub(null, null, 1)).toBe("");
+    expect(realizedSub(7963.43, 19)).toContain("cobrado");
+    expect(realizedSub(7963.43, 19)).not.toContain("desglose");
+    expect(realizedSub(0, 0)).toContain("sin cierres");
+    expect(realizedSub(null, null)).toBe("");
+  });
+
+  // Owner 2026-10-25: the breakdown is a behaviour of the figure, not one more button.
+  test("the P&L figure is the button that opens its window's breakdown", () => {
+    Object.assign(store.state, {
+      lang: "en", period: 1, view: "consolidated", dashboard: { portfolio: {} },
+      profiles: [{ pnlAggregate: { equity: 122173, periodPnl: -51, periodPnlPct: -0.04, pnl7d: -1364, pnl7dPct: -1.1, periodRealized: 0, periodRealizedCount: 0, realized7d: -1364, realized7dCount: 6 } }],
+    });
+    const html = renderKpis();
+    const buttons = [...html.matchAll(/<button type="button" class="kfig" data-act="pnl-why" data-days="(\d+)" title="([^"]+)">(.*?)<\/button>/g)];
+    expect(buttons.map((m) => m[1])).toEqual(["1", "7"]);
+    expect(buttons[0][2]).toBe("Click for breakdown");
+    expect(buttons[0][3]).toContain("−$51");
+    expect(buttons[1][3]).toContain("−$1,364");
+    expect(html).not.toMatch(/breakdown<|>breakdown|class="lnk"/);
+    expect(html).toContain("no closes");
+    expect(html).toContain("in 6 closes");
+    Object.assign(store.state, { lang: "es" });
+    expect(renderKpis()).toContain('title="Clic para ver el desglose"');
+  });
+
+  test("a P&L without its realized line (old server) stays a plain, non-clickable figure", () => {
+    Object.assign(store.state, {
+      lang: "en", period: 1, view: "consolidated", dashboard: { portfolio: {} },
+      profiles: [{ pnlAggregate: { equity: 1000, periodPnl: 5, periodPnlPct: 0.5, pnl7d: 7, pnl7dPct: 0.7 } }],
+    });
+    expect(renderKpis()).not.toContain("pnl-why");
   });
 
   test("both P&L KPIs carry their own window's figure", () => {
@@ -114,6 +140,6 @@ describe("Trades tab — holding time", () => {
     Object.assign(store.state, { lang: "en" });
     const html = renderTrades([{ id: "m", status: "closed", symbol: "META", side: "buy", entryPrice: 607.52, exitPrice: 726.71, pnl: 4767.74, pnlPct: 19.6, entryTime: Date.UTC(2026, 8, 4, 13, 48), exitTime: Date.UTC(2026, 8, 28, 13, 35), strategy: "MOMENTUM", closeReason: "MODEL_CUTOVER" }]);
     expect(html).toContain("<th>Held</th>");
-    expect(html).toContain("23d 23h");
+    expect(html).toContain(">23d<"); // one unit only (owner, 2026-10-25)
   });
 });

@@ -36,15 +36,26 @@ describe("header", () => {
     expect(css).toContain(".nav { order: 2; flex: 1 1 auto; min-width: 0; }");
   });
 
-  // Owner 2026-10-25: the header balance pills repeat the broker cards, so
-  // they show exactly when the cards are hidden — never anywhere else.
-  test("the balance pills show only in the window that hides the broker cards", () => {
-    expect(css).toMatch(/\.hdr-brokers \{ display: none;/);
-    const hide = css.match(/(@media [^{]+) \{ #profiles \{ display: none; \}( \.hdr-brokers \{ display: flex; \})? \}/);
-    expect(hide).not.toBeNull();
-    expect(hide?.[2]).toBeTruthy(); // same @media block turns the pills on
-    // the only rule that makes #profiles display:none is that block
-    expect(css.match(/#profiles \{ display: none; \}/g)?.length).toBe(1);
-    expect(css.match(/\.hdr-brokers \{ display: flex; \}/g)?.length).toBe(1);
+  // Owner 2026-10-25: the two portfolios live in the KPI strip (one row), so
+  // the broker-card row and the header balance pills are gone for good.
+  test("no broker-card row and no header balance pills", () => {
+    const main = readFileSync(join(import.meta.dir, "main.js"), "utf-8");
+    for (const gone of ["#profiles", ".hdr-brokers", ".pcard", ".pill"]) expect(css).not.toContain(gone);
+    expect(html).not.toContain("profiles");
+    expect(main).not.toContain('id="profiles"');
+  });
+});
+
+describe("one summary row", () => {
+  test("the strip drops its sparklines first, then the win rate (js/fit.js adds the classes)", () => {
+    const spark = css.indexOf(".kpis.fit-1 .pspark { display: none; }");
+    const win = css.indexOf('.kpis.fit-2 [data-k="win"] { display: none; }');
+    expect(spark).toBeGreaterThan(-1);
+    expect(win).toBeGreaterThan(spark);
+  });
+
+  test("labels keep sentence case: no all-caps treatment on the KPI cells", () => {
+    expect(css).toMatch(/\.kpi \.kl \{[^}]*\}/);
+    expect(css.match(/\.kpi \.kl \{[^}]*\}/)?.[0]).not.toContain("uppercase");
   });
 });

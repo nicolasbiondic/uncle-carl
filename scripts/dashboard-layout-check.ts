@@ -216,13 +216,18 @@ async function main() {
         console.log("STATUS\tVIEWPORT\tVIEW\tELEMENT\tX scroll/client\tY scroll/client");
         await page.goto(`${base}/#/resumen`, { waitUntil: "networkidle" });
         await page.locator("#opsBody table tbody tr, #opsBody .empty").first().waitFor();
-        if (!values.base && await page.locator("#opsBody table tbody tr").count() !== 47) throw new Error("Synthetic Positions fixture did not render all 47 rows");
+        // Portfolios with > 12 positions start folded (positions.js): unfold them
+        // all so the table carries its 47 rows and a real vertical scrollbar.
+        for (let guard = 0; guard < 8 && await page.locator('#opsBody .pgroup-btn[aria-expanded="false"]').count(); guard++) {
+          await page.locator('#opsBody .pgroup-btn[aria-expanded="false"]').first().click();
+        }
+        if (!values.base && await page.locator("#opsBody table tbody tr.pos").count() !== 47) throw new Error("Synthetic Positions fixture did not render all 47 rows");
         await page.locator(values.base ? "#eqChart canvas, #anBody .empty" : "#eqChart canvas").first().waitFor();
         await capture("positions-equity");
         await page.locator('[data-atab="performance"]').click();
         await page.waitForFunction(() => document.querySelector("#anBody")?.textContent?.trim() !== "…");
-        await page.locator(values.base ? "#anBody table tbody tr, #anBody .empty" : "#anBody table tbody tr").first().waitFor();
-        if (!values.base && await page.locator("#anBody > .scroll").first().locator("tbody tr").count() !== 4) throw new Error("Synthetic scorecard did not render all four sleeves");
+        await page.locator(values.base ? "#anBody .sc-row, #anBody .empty" : "#anBody .sc-row").first().waitFor();
+        if (!values.base && await page.locator("#anBody .sc-row").count() !== 4) throw new Error("Synthetic scorecard did not render all four sleeves");
         await capture("positions-performance");
         await page.locator('[data-opstab="trades"]').click();
         await page.locator("#opsBody table tbody tr, #opsBody .empty").first().waitFor();

@@ -103,15 +103,15 @@ export function ago(ms) {
   return etDate(ts);
 }
 
-/** Duration in ms -> "3h 12m" / "45m" / "12s". */
+/** Duration in ms, one unit only: "12s" / "45m" / "11h" / "12d" (owner,
+ *  2026-10-25: "12d 11h" in the positions table was noise — a position held
+ *  for days reads in days, one held for hours in hours). */
 export function dur(ms) {
   const s = Math.max(0, Math.floor(n(ms) / 1000));
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
-  const rm = m % 60;
-  if (h < 24) return `${h}h ${rm}m`;
-  const d = Math.floor(h / 24);
-  return `${d}d ${h % 24}h`;
+  if (h < 24) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
 }

@@ -3,9 +3,9 @@
 // removed from the KPI bar entirely (superseded by the always-visible 7D
 // figure); the selected-window top P&L and the fixed 7D KPI now carry a
 // server-computed pct beside them (null hides, an actual 0 still renders
-// "0.0%" — never a frontend division). Profile cards label the P&L cell
-// with the SELECTED window, not a hardcoded "Today", and also carry the
-// server pct.
+// "0.0%" — never a frontend division). The portfolio cells (Alpaca / Binance,
+// part of the KPI strip since 2026-10-25) label their P&L with the SELECTED
+// window, not a hardcoded "Today", and also carry the server pct.
 // ══════════════════════════════════════════════
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -15,6 +15,13 @@ import { renderKpis } from "./kpis.js";
 import { renderProfiles } from "./profiles.js";
 
 const originalState = { ...store.state };
+
+const account = (id, label, broker = "alpaca") => ({
+  id, label: label || id, broker, equity: 50_000, cash: 40_000,
+  initialEquity: 50_000, totalPnl: 100, totalPnlPct: 0.2,
+  positions: 1, paused: false, todayTrades: 2,
+});
+
 afterEach(() => Object.assign(store.state, originalState));
 
 // pnlAggregate = the ONE server-computed figure (routes/profiles.ts,
@@ -23,17 +30,34 @@ afterEach(() => Object.assign(store.state, originalState));
 const withAggregate = (periodPnl, periodPnlPct) => [{ pnlAggregate: { equity: 106826, periodPnl, periodPnlPct, pnl7d: 0, pnl7dPct: 0 } }];
 
 describe("renderKpis — no Since Start, server-computed period pct", () => {
-  test("keeps seven useful KPIs, without Running, Fear & Greed or Open", () => {
+  test("one row: equity, both portfolios, the P&L windows, return, trades, win rate — no Risk, Running, Fear & Greed or Open", () => {
     Object.assign(store.state, {
       lang: "en", period: 1, profiles: withAggregate(-1794.42, -0.3),
-      dashboard: { daysRunning: 99, portfolio: { openPositions: 21 } },
+      dashboard: { daysRunning: 99, portfolio: { openPositions: 21 }, accounts: [account("momentum_stocks", "Stocks", "alpaca"), account("momentum_crypto", "Crypto", "binance")] },
       kpis: { ret: { dailyAvgPct30d: 0.1 }, risk: { drawdownPct: 1 } },
     });
     const html = renderKpis();
+    // plain labels, then the two portfolio cells (their label line holds the name + status)
     expect([...html.matchAll(/class="kl">([^<]+)</g)].map((m) => m[1])).toEqual([
-      "Total Equity", "Today P&amp;L", "7D P&amp;L", "Win Rate", "Trades today", "Return 30D", "Risk",
+      "Total equity", "Today P&amp;L", "7D P&amp;L", "Return 30D", "Trades today", "Win rate",
     ]);
-    expect(html).not.toMatch(/Running|Fear|Greed|>Open<|lo2/);
+    expect([...html.matchAll(/data-broker="(\w+)"/g)].map((m) => m[1])).toEqual(["alpaca", "binance"]);
+    // Alpaca and Binance sit between Total equity and Today P&L
+    const at = (s) => html.indexOf(s);
+    expect(at("Total equity")).toBeLessThan(at('data-broker="alpaca"'));
+    expect(at('data-broker="binance"')).toBeLessThan(at("Today P&amp;L"));
+    expect(html).not.toMatch(/Risk|Running|Fear|Greed|>Open<|lo2|DD/);
+  });
+
+  test("sub-lines are plain sentences, not 'A · B · C' strings", () => {
+    Object.assign(store.state, {
+      lang: "en", period: 1, view: "consolidated", dashboard: {}, profiles: withAggregate(10, 0.1),
+      kpis: { ret: { dailyAvgPct30d: -0.17 }, targets: { dailyReturnPct: 0.12, tradesPerDay: 30 }, volume: { today: 0, avg7d: 4.2 } },
+    });
+    const html = renderKpis();
+    expect(html).toContain("goal 0.12%/day");
+    expect(html).toContain("7d avg 4.2");
+    expect(html).not.toContain("·");
   });
 
   test("KPI money is whole dollars even below $100; percentages retain precision", () => {
@@ -97,12 +121,7 @@ describe("renderKpis — no Since Start, server-computed period pct", () => {
 // Profile cards are now aggregated PER BROKER (Alpaca / Binance) — one card
 // summing every sleeve on that broker; per-sleeve detail moved to the
 // broker-modal opened by clicking the card (data-broker, not data-pid).
-describe("profile cards — broker aggregation + period label", () => {
-  const account = (id, label, broker = "alpaca") => ({
-    id, label: label || id, broker, equity: 50_000, cash: 40_000,
-    initialEquity: 50_000, totalPnl: 100, totalPnlPct: 0.2,
-    positions: 1, paused: false, todayTrades: 2,
-  });
+describe("portfolio cells — broker aggregation + period label", () => {
   const profilesWith = (id, perAccountStats) => [{ brokerAccounts: [{ perAccountStats: { [id]: perAccountStats } }] }];
 
   test("shows 'Today' at period=1 and '7D' at period=7 — not always 'Today'", () => {
@@ -124,10 +143,10 @@ describe("profile cards — broker aggregation + period label", () => {
     });
     const html = renderProfiles();
     const pnlCell = html.slice(html.indexOf(">Today <b"), html.indexOf(">Today <b") + 150);
-    expect(pnlCell).toContain("+$42.00");
+    expect(pnlCell).toContain("+$42<"); // whole dollars, like the rest of the strip
   });
 
-  test("one card per broker: two sleeves on the same broker collapse into one card", () => {
+  test("one cell per broker: two sleeves on the same broker collapse into one cell", () => {
     Object.assign(store.state, {
       period: 1,
       profiles: [],
@@ -137,13 +156,14 @@ describe("profile cards — broker aggregation + period label", () => {
     expect((html.match(/data-broker="alpaca"/g) || []).length).toBe(1);
     expect(html).not.toContain("2 sleeves");
     expect(html).not.toContain('class="broker"');
-    expect(html).toContain("LIVE");
-    expect(html).toContain("Details →");
+    expect(html).toContain("Live");
+    expect(html).not.toMatch(/LIVE|→/);
+    expect(html).toContain('title="Details: Alpaca"');
     expect(html).toContain('data-spark="alpaca_main"');
     expect(html).toContain(money(100_000, 0));
   });
 
-  test("broker cards carry data-broker, not data-pid", () => {
+  test("broker cells carry data-broker, not data-pid, and are keyboard buttons", () => {
     Object.assign(store.state, {
       period: 1,
       profiles: [],
@@ -151,10 +171,22 @@ describe("profile cards — broker aggregation + period label", () => {
     });
     const html = renderProfiles();
     expect(html).toContain('data-broker="binance"');
+    expect(html).toMatch(/data-broker="binance" role="button" tabindex="0"/);
     expect(html).not.toContain("data-pid");
   });
 
-  test("broker card uses broker-truth (brokerAccounts) for equity + period P&L so the cards reconcile with the headline", () => {
+  test("a paused sleeve and a disconnected broker say so instead of Live", () => {
+    Object.assign(store.state, {
+      lang: "en", period: 1, profiles: [],
+      dashboard: { accounts: [{ ...account("momentum_crypto", "Crypto", "binance"), paused: true }] },
+    });
+    expect(renderProfiles()).toContain("1 paused");
+    Object.assign(store.state, { connections: { binance: { connected: false, dataConnected: false } } });
+    expect(renderProfiles()).toContain("Disconnected");
+    expect(renderProfiles()).not.toContain("Live");
+  });
+
+  test("broker cell uses broker-truth (brokerAccounts) for equity + period P&L so the cards reconcile with the headline", () => {
     // Per-sleeve today would be −24 (misses unrealized); broker-truth is −326.11.
     // Σ(broker-truth periodEquityPnl) === pnlAggregate.periodPnl (the headline).
     Object.assign(store.state, {
@@ -170,7 +202,7 @@ describe("profile cards — broker aggregation + period label", () => {
     const html = renderProfiles();
     expect(html).toContain(money(101909, 0)); // broker-truth equity, not the 50k sleeve
     const cell = html.slice(html.indexOf(">Today <b"), html.indexOf(">Today <b") + 200);
-    expect(cell).toContain("$326.11");         // broker-truth today (−326.11), not the sleeve figure
+    expect(cell).toContain("−$326<");          // broker-truth today (−326.11), not the sleeve figure
     expect(cell).toContain("var(--down)");     // rendered as a loss
   });
 });

@@ -12,6 +12,12 @@
 
 import type express from "express";
 import { parseFeed } from "../news/feedParser";
+import { rankNewsItems, type NewsRelevanceContext } from "../news/relevance";
+import { getDB } from "../../db/database";
+import { builtinPortfolios } from "../../portfolios/builtin";
+import { loadPlatformPortfolioRows } from "../../portfolios/store";
+import { portfolioUniverse } from "../../portfolios/validate";
+import type { PortfolioEngineParams } from "../../portfolios/types";
 import { createLogger } from "../../utils/logger";
 
 const log = createLogger("Dashboard");
@@ -56,20 +62,35 @@ export interface NewsItem {
   lang: "EN" | "ES";
   /** Epoch ms or null. */
   pubDate: number | null;
+  /** Matched held/traded asset or market-moving topic; never feed language. */
+  tag?: string;
 }
 
 export const NEWS_CACHE_TTL_MS = 10 * 60_000;
 export const NEWS_FEED_TIMEOUT_MS = 8_000;
-const MAX_ITEMS = 30;
+const MAX_ITEMS = 12;
 
 interface CacheEntry { at: number; items: NewsItem[]; }
 const cache = new Map<string, CacheEntry>(); // key: "en" | "es"
 
 export function resetNewsCacheForTests(): void { cache.clear(); }
 
-/** Pure merge: dedupe by title prefix, newest first, cap at MAX_ITEMS. */
-export function mergeNewsItems(lists: NewsItem[][]): NewsItem[] {
-  const all = lists.flat();
+/** DB is a read-only source here; no broker calls or client-specific filtering. */
+export function newsRelevanceContext(db = getDB(), source = process.env.PORTFOLIOS_SOURCE): NewsRelevanceContext {
+  const definitions = source === "db" && db
+    ? loadPlatformPortfolioRows(db).filter(d => d.status === "active")
+    : builtinPortfolios();
+  return {
+    heldSymbols: db ? (db.prepare("SELECT DISTINCT symbol FROM trades WHERE status = 'open'").all() as Array<{ symbol: string }>).map(t => t.symbol) : [],
+    tradedSymbols: definitions
+      .filter(d => d.enabled && (d.template !== "portfolio" || (d.params as PortfolioEngineParams).runMode === "live"))
+      .flatMap(d => portfolioUniverse(d.template, d.params)),
+  };
+}
+
+/** Filter/rank BEFORE dedupe and cap, so irrelevant items never consume slots. */
+export function mergeNewsItems(lists: NewsItem[][], context: NewsRelevanceContext = { heldSymbols: [] }): NewsItem[] {
+  const all = rankNewsItems(lists.flat(), context);
   const seen = new Set<string>();
   return all
     .filter((n) => {
@@ -78,7 +99,6 @@ export function mergeNewsItems(lists: NewsItem[][]): NewsItem[] {
       seen.add(k);
       return true;
     })
-    .sort((a, b) => (b.pubDate ?? 0) - (a.pubDate ?? 0))
     .slice(0, MAX_ITEMS);
 }
 
@@ -102,6 +122,7 @@ export async function getNews(
   lang: "en" | "es",
   fetchFn: typeof fetch = fetch,
   now: () => number = Date.now,
+  relevanceContext: () => NewsRelevanceContext = newsRelevanceContext,
 ): Promise<{ items: NewsItem[]; cachedAt: number; stale: boolean }> {
   const hit = cache.get(lang);
   if (hit && now() - hit.at < NEWS_CACHE_TTL_MS) {
@@ -111,13 +132,13 @@ export async function getNews(
   const feeds = lang === "es" ? [...NEWS_FEEDS.en, ...NEWS_FEEDS.es] : NEWS_FEEDS.en;
   const settled = await Promise.allSettled(feeds.map((f) => fetchFeed(f, fetchFn)));
   const own = lang === "es" ? "ES" : "EN";
+  const context = relevanceContext();
   const ok: NewsItem[][] = [];
   for (let i = 0; i < settled.length; i++) {
     const r = settled[i];
     if (r.status === "fulfilled") {
-      const fresh = r.value
-        .filter((n) => n.pubDate == null || now() - n.pubDate <= NEWS_MAX_AGE_MS)
-        .sort((a, b) => (b.pubDate ?? 0) - (a.pubDate ?? 0));
+      const fresh = rankNewsItems(r.value
+        .filter((n) => n.pubDate == null || now() - n.pubDate <= NEWS_MAX_AGE_MS), context);
       ok.push(fresh.slice(0, feeds[i].lang === own ? NEWS_PER_SOURCE.own : NEWS_PER_SOURCE.other));
     } else {
       log.warn(`news feed failed: ${feeds[i].url} — ${(r.reason as any)?.message ?? r.reason}`);
@@ -130,7 +151,7 @@ export async function getNews(
     return { items: [], cachedAt: now(), stale: false };
   }
 
-  const items = mergeNewsItems(ok);
+  const items = mergeNewsItems(ok, context);
   const entry = { at: now(), items };
   cache.set(lang, entry);
   return { items, cachedAt: entry.at, stale: false };

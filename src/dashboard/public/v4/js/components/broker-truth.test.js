@@ -13,7 +13,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { store } from "../store.js";
 import { kpiValues } from "./kpis.js";
-import { renderHeader } from "./header.js";
+import { renderProfiles } from "./profiles.js";
 
 const originalState = { ...store.state };
 
@@ -73,11 +73,15 @@ describe("broker-truth equity/P&L — server-computed pnlAggregate", () => {
     expect(values.equity).toBe(999999);
   });
 
-  test("header renders broker equity from marginBreakdown, independent of the KPI aggregate", () => {
+  test("the portfolio cells render each broker's own equity, independent of the KPI aggregate", () => {
     Object.assign(store.state, {
       ...store.state,
-      view: "consolidated",
+      view: "consolidated", period: 1,
       connections: { alpaca: { connected: true }, binance: { connected: true } },
+      dashboard: { accounts: [
+        { id: "momentum_stocks", broker: "alpaca", equity: 1, initialEquity: 1 },
+        { id: "momentum_crypto", broker: "binance", equity: 1, initialEquity: 1 },
+      ] },
       profiles: [{
         pnlAggregate: { equity: 112483.2, periodPnl: 0, periodPnlPct: 0, pnl7d: 0, pnl7dPct: 0 },
         brokerAccounts: [
@@ -90,8 +94,8 @@ describe("broker-truth equity/P&L — server-computed pnlAggregate", () => {
       }],
     });
 
-    const html = renderHeader();
-    expect(html).toContain("$102,167.88");
-    expect(html).toContain("$10,315.32");
+    const html = renderProfiles();
+    expect(html).toContain("$102,168");
+    expect(html).toContain("$10,315");
   });
 });

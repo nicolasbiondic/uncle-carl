@@ -1,9 +1,17 @@
 import { store, t, periodLabel } from "../store.js";
 import { money, moneySigned, pct, pctSigned, pnlColor, n, num } from "../fmt.js";
 import { esc } from "../ui.js";
+import { renderProfiles } from "./profiles.js";
 
-function kpi(label, valueHtml, cls = "", subHtml = "") {
-  return `<div class="kpi ${cls}"><span class="kl">${esc(label)}</span><span class="kv">${valueHtml}</span>${subHtml ? `<span class="ks">${subHtml}</span>` : ""}</div>`;
+/** `key` marks the cells main.js flashes when their value moves (data-k). */
+function kpi(label, valueHtml, cls = "", subHtml = "", key = "") {
+  return `<div class="kpi ${cls}"${key ? ` data-k="${key}"` : ""}><span class="kl">${esc(label)}</span><span class="kv">${valueHtml}</span>${subHtml ? `<span class="ks">${subHtml}</span>` : ""}</div>`;
+}
+
+/** A P&L figure that opens its breakdown (pnl-breakdown.js) when clicked: a
+ *  real button, so it takes focus and Enter/Space like any control. */
+function figure(html, days) {
+  return `<button type="button" class="kfig" data-act="pnl-why" data-days="${days}" title="${esc(t("Click for breakdown", "Clic para ver el desglose"))}">${html}</button>`;
 }
 
 /** Line under a P&L KPI (2026-09-29, owner: "Esos +4000 no los veo"): the
@@ -11,13 +19,12 @@ function kpi(label, valueHtml, cls = "", subHtml = "") {
  *  earned before the window barely moves it. This shows what closed trades
  *  realized in the SAME window (server-side getTradingStats periodPnl) and
  *  opens the attribution (pnl-breakdown.js). */
-export function realizedSub(realized, count, days) {
+export function realizedSub(realized, count) {
   if (realized == null) return "";
   const c = n(count);
-  const what = c === 0
+  return c === 0
     ? t("no closes", "sin cierres")
     : `${t("realized", "cobrado")} <b style="color:${pnlColor(realized)}">${moneySigned(realized, 0)}</b> ${t("in", "en")} ${num(c, 0)} ${c === 1 ? t("close", "cierre") : t("closes", "cierres")}`;
-  return `${what} · <button type="button" class="lnk" data-act="pnl-why" data-days="${days}">${t("breakdown", "desglose")}</button>`;
 }
 
 /** Consolidated "today"/period figures derived from the v2 profiles payload so
@@ -72,9 +79,7 @@ function volumeKpi(k, kp) {
   const val = target
     ? `${num(today, 0)}/${num(target, 0)} <span class="kv sub">${pct((today / target) * 100, 0)}</span>`
     : `${num(today, 0)} <span class="kv sub">${t("today", "hoy")}</span>`;
-  const sub = avg7 == null ? "" : target
-    ? `${t("7d avg", "media 7d")} ${num(avg7, 1)} · ${pct((avg7 / target) * 100, 0)}`
-    : `${t("7d avg", "media 7d")} ${num(avg7, 1)}`;
+  const sub = avg7 == null ? "" : `${t("7d avg", "media 7d")} ${num(avg7, 1)}`;
   return kpi(t("Trades today", "Trades hoy"), val, "sm", sub);
 }
 
@@ -84,22 +89,8 @@ function returnKpi(kp) {
   const r = kp.ret.dailyAvgPct30d;
   const goal = kp.targets?.dailyReturnPct ?? null;
   const val = `<span style="color:${pnlColor(r)}">${pctSigned(r, 2)}</span> <span class="kv sub">/${t("day", "día")}</span>`;
-  const sub = goal
-    ? `${t("goal", "meta")} ${pct(goal, 2)} · ${pct(Math.max(0, r / goal) * 100, 0)}`
-    : t("30d daily mean", "media diaria 30d");
+  const sub = goal ? `${t("goal", "meta")} ${pct(goal, 2)}/${t("day", "día")}` : t("30d daily mean", "media diaria 30d");
   return kpi(t("Return 30D", "Rentab. 30D"), val, "sm", sub);
-}
-
-/** P0: drawdown from the display-history peak vs the 25% budget. */
-function riskKpi(kp) {
-  if (kp?.risk?.drawdownPct == null) return "";
-  const dd = kp.risk.drawdownPct;
-  const budget = kp.targets?.riskBudgetDdPct ?? null;
-  const val = `${pct(dd, 1)} <span class="kv sub">DD</span>`;
-  const sub = budget
-    ? `${t("budget", "presupuesto")} ${pct(budget, 0)} · ${pct((dd / budget) * 100, 0)} ${t("used", "usado")}`
-    : t("from peak", "desde el pico");
-  return kpi(t("Risk", "Riesgo"), val, "sm", sub);
 }
 
 export function renderKpis() {
@@ -130,14 +121,23 @@ export function renderKpis() {
   const periodPct = derivedPct(k.periodPnlPct, k.periodPnl, s.period);
   const pnl7dPct = derivedPct(k.pnl7dPct, k.pnl7d, 7);
   const pctSpan = (v) => v == null ? "" : ` <span class="kv sub">${pctSigned(v)}</span>`;
+  // The figure opens the breakdown whenever its realized line exists (old
+  // servers without the realized fields keep a plain, non-clickable figure).
+  const pnlValue = (pnl, pctV, realized, days) => {
+    if (pnl == null) return "—";
+    const html = `<span style="color:${pnlColor(pnl)}">${moneySigned(pnl, 0)}${pctSpan(pctV)}</span>`;
+    return realized == null ? html : figure(html, days);
+  };
+  // One row: equity, the two portfolios (profiles.js), the P&L windows, the
+  // goals (return, trades), then the win rate.
   return (
-    kpi(t("Total Equity", "Patrimonio"), k.equity == null ? "—" : money(k.equity, 0)) +
-    kpi(pnlL, k.periodPnl == null ? "—" : `<span style="color:${pnlColor(k.periodPnl)}">${moneySigned(k.periodPnl, 0)}${pctSpan(periodPct)}</span>`, "", realizedSub(k.periodRealized, k.periodRealizedCount, s.period)) +
-    (s.period === 7 ? "" : kpi(t("7D P&L", "P&L 7D"), k.pnl7d == null ? "—" : `<span style="color:${pnlColor(k.pnl7d)}">${moneySigned(k.pnl7d, 0)}${pctSpan(pnl7dPct)}</span>`, "sm", realizedSub(k.realized7d, k.realized7dCount, 7))) +
-    kpi(t("Win Rate", "% Ganadas"), pct(k.winRate, 0), "sm") +
-    volumeKpi(k, s.kpis) +
+    kpi(t("Total equity", "Patrimonio"), k.equity == null ? "—" : money(k.equity, 0), "", "", "equity") +
+    renderProfiles() +
+    kpi(pnlL, pnlValue(k.periodPnl, periodPct, k.periodRealized, s.period), "", realizedSub(k.periodRealized, k.periodRealizedCount), "today") +
+    (s.period === 7 ? "" : kpi(t("7D P&L", "P&L 7D"), pnlValue(k.pnl7d, pnl7dPct, k.realized7d, 7), "sm", realizedSub(k.realized7d, k.realized7dCount))) +
     returnKpi(s.kpis) +
-    riskKpi(s.kpis)
+    volumeKpi(k, s.kpis) +
+    kpi(t("Win rate", "% Ganadas"), pct(k.winRate, 0), "sm", "", "win")
   );
 }
 
