@@ -60,6 +60,7 @@ import {
 } from "../portfolio/truth";
 import { heartbeats } from "../ops/heartbeat";
 import { grossCapOf } from "../ops/grossCaps";
+import { sleeveRealizedPnl } from "../portfolio-engine/live/rows";
 import { publishInstanceManifest } from "../ops/instanceManifest";
 import { checkPrice, DEFAULT_PLAUSIBILITY, plausibilityMode, RejectionTally } from "../market/plausibility";
 import { createLogger } from "../utils/logger";
@@ -1825,7 +1826,7 @@ export class AccountManager {
         const prices = await buildSleevePriceMap(this.executor.alpaca, open);
         const ledger = computeSleeveLedger(
           acc.equity.initialEquity,
-          getTradingStats(id).totalPnl,
+          sleeveRealizedPnl(id), // closed rows + realized trims still attached to OPEN rows
           open,
           s => prices.get(s) ?? 0,
         );

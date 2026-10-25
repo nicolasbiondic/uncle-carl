@@ -1,5 +1,5 @@
-import { describe, expect, test, beforeAll } from "bun:test";
-import { getDB, getTradingStats, getRecentTrades, getRecentSignals, insertSignal, RECONCILE_CLOSE_SQL, insertTrade, closeTrade, closeTradeExplicit } from "./database";
+import { describe, expect, test, beforeAll, beforeEach } from "bun:test";
+import { getDB, getTradingStats, getRecentTrades, getRecentSignals, insertSignal, RECONCILE_CLOSE_SQL, insertTrade, closeTrade, closeTradeExplicit, countExecutedOrders, recordFill } from "./database";
 import { makeTestDb } from "../test-support/db";
 
 beforeAll(() => { makeTestDb(); });
@@ -197,5 +197,64 @@ describe("getRecentTrades orders by latest activity (2026-09-29: UNI/USDC closed
     ins("open-entered-yesterday", now - 86_400_000, null);
     const ids = getRecentTrades(2, "order_probe").map(t => t.id);
     expect(ids).toEqual(["old-entry-closed-now", "open-entered-yesterday"]);
+  });
+});
+
+describe("executed orders include portfolio resizes without counting row events twice", () => {
+  beforeEach(() => { makeTestDb(); });
+  const start = Date.parse("2026-10-23T04:00:00Z");
+  const order = (symbol: string, side: string, id: string, filledQty = 1) => ({
+    intent: { symbol, side }, clientOrderId: id, filledAt: start + 20,
+    result: { ok: true, filledQty, brokerOrderId: id }, applied: true,
+  });
+  function decision(orders: any[], account = "momentum_stocks", mode = "live", updated = start + 100) {
+    getDB().prepare(`INSERT INTO portfolio_decisions
+      (account_id,strategy_version,session,as_of,mode,status,equity,book_json,weights_json,stops_json,memory_json,diagnostics_json,orders_json,decided_at,updated_at)
+      VALUES (?,'test','2026-10-23','2026-10-22',?,'submitted',100,'[]','{}','[]','{}','{}',?,?,?)`)
+      .run(account, mode, JSON.stringify(orders), start + 1, updated);
+  }
+  function row(id: string, symbol: string, entry: number, exit: number | null = null) {
+    getDB().prepare(`INSERT INTO trades (id,symbol,market,side,strategy,entry_price,quantity,entry_time,status,exit_time,account_id)
+      VALUES (?,?,'stock','buy','PORTFOLIO',100,1,?,?,?,'momentum_stocks')`)
+      .run(id, symbol, entry, exit === null ? "open" : "closed", exit);
+  }
+
+  test("new entry, full exit, trim, add-back and inherited entry each count once", () => {
+    row("new", "AAPL", start + 20, start + 30);
+    row("inherited", "SPY", start - 100);
+    decision([order("AAPL", "buy", "new"), order("AAPL", "sell", "exit"), order("SPY", "buy", "add"), order("SPY", "sell", "trim"), order("QQQ", "buy", "reject", 0)]);
+    expect(countExecutedOrders(start, start + 200)).toBe(4);
+    expect(countExecutedOrders(start - 200, start + 200, "momentum_stocks")).toBe(5);
+    expect(countExecutedOrders(start, start + 200, "meanrev_stocks")).toBe(0);
+  });
+
+  test("uses per-order confirmation time even if the decision is updated later; old records fall back to updated_at", () => {
+    const old = order("SPY", "sell", "old");
+    delete (old as any).filledAt;
+    decision([order("SPY", "buy", "new"), old], "momentum_stocks", "live", start + 300);
+    expect(countExecutedOrders(start, start + 100)).toBe(1);
+    expect(countExecutedOrders(start + 100, start + 400)).toBe(1);
+  });
+
+  test("deduplicates broker order ids and excludes observer and shadow books", () => {
+    const fill = order("SPY", "buy", "one-broker-order");
+    decision([fill, fill]);
+    decision([fill], "meanrev_stocks", "observer");
+    decision([fill], "shadow_momentum_stocks");
+    expect(countExecutedOrders(start, start + 200)).toBe(1);
+  });
+
+  test("Binance exposure-control fills count trims too, without double-counting entry/exit telemetry", () => {
+    row("existing", "SPY", start - 1_000_000);
+    row("new", "AAPL", start + 20, start + 40);
+    const fill = (tradeId: string, symbol: string, side: "buy" | "sell", orderId: string, at: number) => recordFill({
+      tradeId, symbol, side, orderId, accountId: "momentum_stocks", market: "stock", expectedPx: 100,
+      submittedPx: 100, filledPx: 100, filledQty: 1, fillTime: at, latencyMs: 0, broker: "alpaca",
+    });
+    fill("existing", "SPY", "sell", "trim", start + 20);
+    fill("new", "AAPL", "buy", "entry", start + 22);
+    fill("new", "AAPL", "sell", "exit", start + 42);
+    decision([order("SPY", "sell", "trim")]); // same broker order in two journals
+    expect(countExecutedOrders(start, start + 200)).toBe(3);
   });
 });

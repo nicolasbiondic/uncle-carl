@@ -34,6 +34,8 @@ import { registerAiQuorumRoutes } from "./routes/aiQuorum";
 import { registerPlatformRoutes } from "./routes/platform";
 import { registerPlatformAccountsRoutes, PLATFORM_ACCOUNTS_PUBLIC_PATHS } from "./routes/accounts";
 import { registerPlatformPortfoliosRoutes } from "./routes/portfolios";
+import { registerBotNowRoutes } from "./routes/botNow";
+import type { BotNowRuntime } from "./botNow";
 import { loadPlatformPortfolioRows, resolvePortfoliosSource, insertPlatformPortfolio, updatePlatformPortfolio } from "../portfolios/store";
 import { liveBandReadings } from "../portfolio/scorecard";
 import { getLastConstructedSleeveGovernor } from "../governor/SleeveGovernor";
@@ -42,6 +44,9 @@ import { getDB } from "../db/database";
 const log = createLogger("Dashboard");
 
 export class DashboardServer {
+  // index.ts registers only engines that were actually constructed, using
+  // their boot plans (registry edits pending a restart never change this).
+  botNowRuntime: () => readonly BotNowRuntime[] = () => [];
   private app: express.Application;
   private server: http.Server;
   private wss: WebSocketServer;
@@ -279,6 +284,7 @@ export class DashboardServer {
     // ── Route modules ─────────────────────────────────────────────────────
     registerDataRoutes(this.app, this.am);
     registerStrategyRoutes(this.app, this.am);
+    registerBotNowRoutes(this.app, this.am, () => this.botNowRuntime());
     // Owner KPIs + decision funnel (P0, 2026-10-09).
     registerKpiRoutes(this.app);
     registerProfileRoutes(this.app, this.am);

@@ -18,8 +18,9 @@
 // ══════════════════════════════════════════════
 
 import { createLogger } from "../utils/logger";
+import { sleeveRealizedPnl } from "../portfolio-engine/live/rows";
 import {
-  getDB, getEquityAt, getTradingStats, getOpenTrades,
+  getDB, getEquityAt, getOpenTrades,
   insertActivity, readSemantics, getEquityDisplayStart, getEquityPnlDisplay,
 } from "../db/database";
 import {
@@ -288,7 +289,8 @@ export function reconcilePortfolioInvariants(
 
   // (2) Each LEDGER sleeve (equity is a COMPUTED reconstruction, currently
   // only the two Alpaca sleeves — see LEDGER_SLEEVE_BROKERS) ≈ allocation +
-  // Σ closed-trade pnl + live unrealized. Every binance* sleeve reads its
+  // closed-trade pnl + realized partial legs on open rows + live unrealized.
+  // Every binance* sleeve reads its
   // OWN margin-pool balance straight from the broker every 60s, so it
   // carries perp FUNDING trades.pnl never records — reconstructing it would
   // ALWAYS drift by accumulated funding (benign), and check (1) above already
@@ -298,7 +300,7 @@ export function reconcilePortfolioInvariants(
     const eq = getSleeveEquityNow(id);
     if (eq == null) continue; // no snapshots yet (fresh DB) — nothing to check
     const expected = RISK_PROFILES[id].initialEquity
-      + getTradingStats(id).totalPnl
+      + sleeveRealizedPnl(id)
       + (unrealizedBySleeve[id] ?? 0);
     // ponytail: base tol $50 per spec + 1% of open notional — the snapshot lags
     // live prices by ≤60s, so pure price movement on open positions must not

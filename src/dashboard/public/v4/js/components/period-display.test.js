@@ -39,7 +39,7 @@ describe("renderKpis — no Since Start, server-computed period pct", () => {
     const html = renderKpis();
     // plain labels, then the two portfolio cells (their label line holds the name + status)
     expect([...html.matchAll(/class="kl">([^<]+)</g)].map((m) => m[1])).toEqual([
-      "Total equity", "Today P&amp;L", "7D P&amp;L", "Return 30D", "Trades today", "Win rate",
+      "Total equity", "Today P&amp;L", "7D P&amp;L", "Return 30D", "Orders today", "Win rate",
     ]);
     expect([...html.matchAll(/data-broker="(\w+)"/g)].map((m) => m[1])).toEqual(["alpaca", "binance"]);
     // Alpaca and Binance sit between Total equity and Today P&L
@@ -47,6 +47,7 @@ describe("renderKpis — no Since Start, server-computed period pct", () => {
     expect(at("Total equity")).toBeLessThan(at('data-broker="alpaca"'));
     expect(at('data-broker="binance"')).toBeLessThan(at("Today P&amp;L"));
     expect(html).not.toMatch(/Risk|Running|Fear|Greed|>Open<|lo2|DD/);
+    expect(html).toContain("all-time closes");
   });
 
   test("sub-lines are plain sentences, not 'A · B · C' strings", () => {

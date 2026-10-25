@@ -57,6 +57,7 @@ import { nextGridDay } from "./sleeveReturns";
 import { isTradingDay } from "../utils/marketHours";
 import { MODEL_VERSIONS, currentModelStarts, currentModelVersionId, rowModelVersion, type ModelVersion } from "./modelVersions";
 import { computeTrackRecord, type TrackRecord } from "./trackRecord";
+import { RISK_PROFILES } from "../config/riskProfiles";
 
 // ── Windows & entities ────────────────────────────────────────────────────
 
@@ -98,10 +99,10 @@ const SPY = { source: "alpaca_wide", symbol: "SPY" };
 const BTC = { source: "binance_futures", symbol: "BTC/USD" };
 
 export const SCORECARD_ENTITIES: ScorecardEntityDef[] = [
-  { id: "momentum_stocks", kind: "sleeve", label: "Momentum Stocks", grid: "trading_days", obsPerYear: 252, benchmark: SPY, tradeAccounts: ["momentum_stocks"] },
-  { id: "meanrev_stocks", kind: "sleeve", label: "Reversión Stocks", grid: "trading_days", obsPerYear: 252, benchmark: SPY, tradeAccounts: ["meanrev_stocks"] },
-  { id: "momentum_crypto", kind: "sleeve", label: "Momentum Cripto", grid: "calendar_days", obsPerYear: 365, benchmark: BTC, tradeAccounts: ["momentum_crypto"] },
-  { id: "momentum_crypto_usdc", kind: "sleeve", label: "Momentum Cripto USDC", grid: "calendar_days", obsPerYear: 365, benchmark: BTC, tradeAccounts: ["momentum_crypto_usdc"] },
+  { id: "momentum_stocks", kind: "sleeve", label: RISK_PROFILES.momentum_stocks.label, grid: "trading_days", obsPerYear: 252, benchmark: SPY, tradeAccounts: ["momentum_stocks"] },
+  { id: "meanrev_stocks", kind: "sleeve", label: RISK_PROFILES.meanrev_stocks.label, grid: "trading_days", obsPerYear: 252, benchmark: SPY, tradeAccounts: ["meanrev_stocks"] },
+  { id: "momentum_crypto", kind: "sleeve", label: RISK_PROFILES.momentum_crypto.label, grid: "calendar_days", obsPerYear: 365, benchmark: BTC, tradeAccounts: ["momentum_crypto"] },
+  { id: "momentum_crypto_usdc", kind: "sleeve", label: RISK_PROFILES.momentum_crypto_usdc.label, grid: "calendar_days", obsPerYear: 365, benchmark: BTC, tradeAccounts: ["momentum_crypto_usdc"] },
   { id: "alpaca_main", kind: "account", label: "Cuenta Alpaca", grid: "trading_days", obsPerYear: 252, benchmark: SPY, tradeAccounts: ["momentum_stocks", "meanrev_stocks"] },
   { id: "binance_main", kind: "account", label: "Cuenta Binance (FAPI)", grid: "calendar_days", obsPerYear: 365, benchmark: BTC, tradeAccounts: ["momentum_crypto", "momentum_crypto_usdc"] },
 ];

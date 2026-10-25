@@ -483,6 +483,7 @@ export class PortfolioEngine {
         result = { ...result, error: `${result.error} — gave up after ${o.attempts} attempts this session` };
       }
       o.result = result;
+      if (result.filledQty > 0) o.filledAt ??= this.now();
       if (result.filledQty > 0 && result.avgPrice !== null && result.avgPrice > 0) {
         if (o.intent.side === "buy") applyBuyFill(this.rows, o.intent.symbol, result.filledQty, result.avgPrice, this.now());
         else applySellFill(this.rows, o.intent.symbol, result.filledQty, result.avgPrice, { nowMs: this.now() });

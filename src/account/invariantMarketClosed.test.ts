@@ -67,6 +67,21 @@ function seedOpenRow() {
 }
 
 describe("daily invariant with the market CLOSED and real unrealized ≠ 0", () => {
+  test("portfolio partial realizes belong in sleeve equity, cash and the invariant, not unrealized", async () => {
+    seedOpenRow();
+    getDB().prepare("UPDATE trades SET strategy='PORTFOLIO', partial_realized_native=-1200 WHERE id='t_invariant_aapl'").run();
+    const m = marketClosedManager();
+    await (m as any).syncAlpacaAccount();
+    await m.updateAllStates();
+    (m as any).writeAllSnapshots();
+    const summary = m.getAccountSummaries().find(a => a.id === "momentum_stocks")!;
+    expect(summary.equity).toBeCloseTo(RISK_PROFILES.momentum_stocks.initialEquity - 1200 + REAL_UNREALIZED, 6);
+    expect(summary.cash).toBeCloseTo(RISK_PROFILES.momentum_stocks.initialEquity - 1200 - ENTRY * QTY, 6);
+    expect(m.getAccount("momentum_stocks").state.positions[0].unrealizedPnl).toBe(REAL_UNREALIZED);
+    const check = reconcilePortfolioInvariants({ momentum_stocks: REAL_UNREALIZED }).checks.find(c => c.name === "ledger_momentum_stocks")!;
+    expect(check.ok).toBe(true);
+  });
+
   test("updateAllStates prices stocks through the 24/7 broker-mark fallback, not entryPrice", async () => {
     seedOpenRow();
     const m = marketClosedManager();

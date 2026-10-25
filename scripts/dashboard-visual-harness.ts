@@ -61,6 +61,7 @@ export const server = Bun.serve({
     }
 
     // ── real fixtures ───────────────────────────────────────────────────
+    if (pathname === "/api/bot/now") return json({ asOf: Date.now(), portfolios: [], events: [] });
     // Fixtures captured before 2026-10-12 lack accounts[].grossCapMult/Base
     // (the engines' caps, src/ops/grossCaps.ts): fill in prod's values so the
     // exposure chips render as they do live.

@@ -80,7 +80,7 @@ function volumeKpi(k, kp) {
     ? `${num(today, 0)}/${num(target, 0)} <span class="kv sub">${pct((today / target) * 100, 0)}</span>`
     : `${num(today, 0)} <span class="kv sub">${t("today", "hoy")}</span>`;
   const sub = avg7 == null ? "" : `${t("7d avg", "media 7d")} ${num(avg7, 1)}`;
-  return kpi(t("Trades today", "Trades hoy"), val, "sm", sub);
+  return kpi(t("Orders today", "Órdenes hoy"), val, "sm", sub);
 }
 
 /** P0: 30-day mean compounded daily return of consolidated equity vs goal. */
@@ -137,7 +137,7 @@ export function renderKpis() {
     (s.period === 7 ? "" : kpi(t("7D P&L", "P&L 7D"), pnlValue(k.pnl7d, pnl7dPct, k.realized7d, 7), "sm", realizedSub(k.realized7d, k.realized7dCount))) +
     returnKpi(s.kpis) +
     volumeKpi(k, s.kpis) +
-    kpi(t("Win rate", "% Ganadas"), pct(k.winRate, 0), "sm", "", "win")
+    kpi(t("Win rate", "% Ganadas"), pct(k.winRate, 0), "sm", t("all-time closes", "cierres históricos"), "win")
   );
 }
 

@@ -2,7 +2,7 @@
 // Persisted keys survive reloads. Components read store.state and subscribe to
 // re-render on change.
 
-const PERSIST = ["view", "period", "lang", "theme", "tab", "newsShown", "page", "posGroups"];
+const PERSIST = ["view", "period", "lang", "theme", "tab", "newsShown", "page", "posGroups", "botTabSeen"];
 const load = (k, d) => { try { const v = localStorage.getItem("uc4_" + k); return v == null ? d : JSON.parse(v); } catch { return d; } };
 
 export const store = {
@@ -11,7 +11,10 @@ export const store = {
     period: load("period", 1),              // 1 | 7 | 30 | 0(all)  — global time filter
     lang: load("lang", "en"),               // en | es
     theme: load("theme", "dark"),           // dark | terminal | light
-    tab: load("tab", "equity"),             // active analytics tab (Equity is always useful, unlike Portfolio which duplicates Positions when empty)
+    // Active analytics tab. "Bot" is the default since 2026-10-25 (owner: the
+    // dashboard's job is to say what the bot is doing); see botTabSeen below.
+    tab: load("tab", "bot"),
+    botTabSeen: load("botTabSeen", false),
     // Market News card: open by default (owner, 2026-10-07). It was closed by
     // default since 2026-09-24, and a CSS bug kept showing its "…" placeholder
     // while closed, so the news never appeared. The key is new (newsShown, not
@@ -44,7 +47,20 @@ export const store = {
   },
 };
 
+// The Bot tab lands ONCE in every browser that still had the old default
+// ("equity") saved; from then on the reader's own pick persists as before.
+if (!store.state.botTabSeen) store.set({ tab: "bot", botTabSeen: true });
+
 // Localized (2026-10-12): the Spanish dashboard read "Today"/"All" here.
 export const periodLabel = (p) => p === 0 ? t("All", "Todo") : p === 1 ? t("Today", "Hoy") : `${p}D`;
 export const isEs = () => store.state.lang === "es";
 export const t = (en, es) => (isEs() ? es : en);
+
+/** One human sleeve name: dashboard.accounts is canonical, translated at render
+ *  time so changing the UI language also changes every portfolio label. */
+export function sleeveLabel(account) {
+  const canonical = (store.state.dashboard?.accounts || []).find(a => a.id === account?.id);
+  const label = canonical?.label || account?.label || account?.id || "";
+  const es = { "Momentum Stocks": "Momentum Acciones", "MeanRev Stocks": "Reversión Acciones", "Momentum Crypto": "Momentum Cripto", "Momentum Crypto USDC": "Momentum Cripto USDC" };
+  return t(label, es[label] || label);
+}

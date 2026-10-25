@@ -1415,6 +1415,8 @@ async function main() {
     log.warn(`Dashboard session persistence unavailable (${e.message}) — sessions end with this process`);
   }
   const dashboard = new DashboardServer(accountManager);
+  const botNowEngines: Array<() => import("./dashboard/botNow").BotNowRuntime> = [];
+  dashboard.botNowRuntime = () => botNowEngines.map(read => read());
   handles.dashboard = dashboard;
   try {
     await dashboard.start();
@@ -1490,6 +1492,12 @@ async function main() {
   });
   for (const p of peBuilt.problems) portfolioAlert("PortfolioCutover", `definition '${p.definitionId}' (${p.sleeve ?? "?"}) ${p.severity === "live_refused" ? "NOT live" : "ignored"}: ${p.message}`);
   portfolioCutoverSleeves = new Set(peBuilt.live.keys());
+  for (const plan of peWiring.live) {
+    const id = plan.params.sleeve ?? plan.portfolioId;
+    if (!peBuilt.live.has(id)) continue;
+    botNowEngines.push(() => ({ id, engine: "portfolio", maxGrossX: "maxGross" in plan.params.strategy ? plan.params.strategy.maxGross : null,
+      cadenceMinutes: 1440, strategy: plan.params.strategy, version: plan.params.strategyVersion }));
+  }
   for (const sleeve of portfolioCutoverSleeves) {
     log.warn(`🔀 ${sleeve}: LIVE on the portfolio engine — the incumbent engine is not built (no entries, no exits)`);
     insertActivity(sleeve, "system", `${sleeve} managed by the portfolio engine (live); incumbent engine not built this boot`);
@@ -1738,6 +1746,8 @@ async function main() {
       persistenceFor(cryptoPlan.statePersistence),
     );
     cryptoEngine.setDecisionRecorder(createDecisionRecorder(), "momentum_crypto");
+    botNowEngines.push(() => ({ id: "momentum_crypto", engine: "momentum", maxGrossX: cryptoPlan.engineConfig.maxGrossExposureMult ?? null,
+      cadenceMinutes: cryptoPlan.engineConfig.rebalanceMinutes!, statePath: cryptoPlan.statePersistence.path, risk: cryptoEngine!.getRiskState() }));
     handles.cryptoEngine = cryptoEngine;
     await cryptoEngine.start();
     log.info("🚀 momentum_crypto engine started (60min rebalance, 24/7)");
@@ -1785,6 +1795,8 @@ async function main() {
       persistenceFor(usdcPlan.statePersistence),
     );
     usdcEngine.setDecisionRecorder(createDecisionRecorder(), "momentum_crypto_usdc");
+    botNowEngines.push(() => ({ id: "momentum_crypto_usdc", engine: "momentum", maxGrossX: usdcPlan.engineConfig.maxGrossExposureMult ?? null,
+      cadenceMinutes: usdcPlan.engineConfig.rebalanceMinutes!, statePath: usdcPlan.statePersistence.path, risk: usdcEngine!.getRiskState() }));
     handles.usdcEngine = usdcEngine;
     await usdcEngine.start();
     log.info("🚀 momentum_crypto_usdc engine started (daily rebalance 00:00 UTC, 24/7, max 5 positions)");
@@ -1817,6 +1829,8 @@ async function main() {
       persistenceFor(coinmPlan.statePersistence),
     );
     coinmEngine.setDecisionRecorder(createDecisionRecorder(), "momentum_btc");
+    botNowEngines.push(() => ({ id: "momentum_btc", engine: "momentum", maxGrossX: coinmPlan.engineConfig.maxGrossExposureMult ?? null,
+      cadenceMinutes: coinmPlan.engineConfig.rebalanceMinutes!, statePath: coinmPlan.statePersistence.path, risk: coinmEngine!.getRiskState() }));
     handles.coinmEngine = coinmEngine;
     await coinmEngine.start();
     log.info("🚀 momentum_btc engine started (60min rebalance, 24/7, single position)");
@@ -1860,6 +1874,8 @@ async function main() {
       persistenceFor(stocksPlan.statePersistence),
     );
     stocks.setDecisionRecorder(createDecisionRecorder(), "momentum_stocks");
+    botNowEngines.push(() => ({ id: "momentum_stocks", engine: "momentum", maxGrossX: stocksPlan.engineConfig.maxGrossExposureMult ?? null,
+      cadenceMinutes: 1440, statePath: stocksPlan.statePersistence.path, risk: stocks.getRiskState() }));
     stocksEngine = stocks;
     // index.ts owns this loop (engine.start() not called) so it registers the
     // name; stocksEngine.tick() beats it on a successful in-hours rebalance.
@@ -1998,6 +2014,8 @@ async function main() {
       persistenceFor(meanrevPlan.statePersistence),
     );
     meanrevEngine.setDecisionRecorder(createDecisionRecorder());
+    botNowEngines.push(() => ({ id: "meanrev_stocks", engine: "meanrev", maxGrossX: meanrevPlan.engineConfig.maxGrossExposureMult ?? null,
+      cadenceMinutes: 1440, statePath: meanrevPlan.statePersistence.path, risk: meanrevEngine.getRiskState() }));
     const meanrevLabel = meanrevPlan.scheduler.kind === "index-meanrev-daily" ? meanrevPlan.scheduler.label : "meanrev";
     meanrevInterval = scheduleDailyStockRun(meanrevLabel, async ({ skipEntries }) => {
       const report = await meanrevEngine.runDaily({ skipEntries });

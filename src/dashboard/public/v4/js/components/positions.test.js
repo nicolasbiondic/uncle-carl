@@ -104,6 +104,16 @@ describe("positionNotional", () => {
 
 // ── Groups: one block per portfolio (owner, 2026-10-25: "demasiado ruido") ──
 describe("positionGroups", () => {
+  test("a portfolio-engine MeanRev at its current 1x equity cap is not red", () => {
+    const accounts = [{ id: "meanrev_stocks", label: "MeanRev Stocks", equity: 53_000, initialEquity: 50_000, grossCapMult: 1, grossCapBase: "equity" }];
+    const [g] = positionGroups([{ profileId: "meanrev_stocks", quantity: 100, avgEntryPrice: 540, currentPrice: 530 }], accounts);
+    expect(g.exposure.ratio).toBe(1);
+    expect(exposureColor(g.exposure)).toBe("var(--warn)");
+    expect(exposurePhrase(g.exposure).text).toContain("cap 1×");
+    expect(exposureColor({ ratio: 1.0000746, cap: 1, usage: 1.0000746 })).toBe("var(--warn)");
+    expect(exposureColor({ ratio: 1.01, cap: 1, usage: 1.01 })).toBe("var(--down)");
+  });
+
   const accounts = [
     { id: "meanrev_stocks", label: "Reversión Stocks", broker: "alpaca", initialEquity: 25_000, equity: 24_500, grossCapMult: 0.966, grossCapBase: "allocation" },
     { id: "momentum_stocks", label: "Momentum Stocks", broker: "alpaca", initialEquity: 50_000, equity: 58_800, grossCapMult: 2.5 },

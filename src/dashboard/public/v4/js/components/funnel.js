@@ -8,7 +8,7 @@
 // table's height in the viewport-locked layout.
 
 import { api } from "../api.js";
-import { store, t } from "../store.js";
+import { store, t, sleeveLabel } from "../store.js";
 import { byId, esc } from "../ui.js";
 import { num, n } from "../fmt.js";
 
@@ -31,7 +31,7 @@ const BLOCK_LABELS = () => ({
 
 function accountLabel(id) {
   const acc = (store.state.dashboard?.accounts || []).find((a) => a.id === id);
-  return acc?.label || id;
+  return sleeveLabel(acc || { id });
 }
 
 function blocksHtml(blocks, note) {

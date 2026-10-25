@@ -1,5 +1,5 @@
 import { api, setCsrf } from "./api.js";
-import { store, t } from "./store.js";
+import { store, t, sleeveLabel } from "./store.js";
 import { byId, on, esc, icon } from "./ui.js";
 import { renderHeader, renderActions, renderNav, nextMenuIndex, NAV_PAGES, tickClock } from "./components/header.js";
 import { renderKpis, kpiValues } from "./components/kpis.js";
@@ -345,8 +345,8 @@ function paletteActions() {
   // Dynamic: whatever sleeves the bot is actually running right now (id/label
   // straight from am.getAccountSummaries()) — no hardcoded/retired profile ids.
   const accounts = store.state.dashboard?.accounts || [];
-  const views = [["consolidated", t("Consolidated", "Consolidado")], ...accounts.map((a) => [a.id, a.label])];
-  const tabs = [["equity", "Equity"], ["performance", t("Performance", "Rendimiento")], ["activity", t("Activity", "Actividad")]];
+  const views = [["consolidated", t("Consolidated", "Consolidado")], ...accounts.map((a) => [a.id, sleeveLabel(a)])];
+  const tabs = [["bot", "Bot"], ["equity", "Equity"], ["performance", t("Performance", "Rendimiento")], ["activity", t("Activity", "Actividad")]];
   const acts = [];
   for (const [id, l] of views) acts.push({ label: `${t("View", "Vista")}: ${l}`, tag: "view", run: () => { store.set({ view: id }); refresh().then(render); } });
   for (const [id, l] of tabs) acts.push({ label: `${t("Tab", "Pestaña")}: ${l}`, tag: "tab", run: () => setTab(id) });

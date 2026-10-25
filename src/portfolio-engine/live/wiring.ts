@@ -14,6 +14,7 @@ import { claimPortfolioOrderId } from "./persistence";
 import type { PortfolioEngine } from "./PortfolioEngine";
 import { BinanceVenueAdapter } from "./venues/binance";
 import type { PortfolioWiring, WiringProblem } from "./cutover";
+import { registerGrossCap } from "../../ops/grossCaps";
 
 export interface EngineSources {
   alpacaExecutor?: AlpacaExecutor | null;
@@ -61,7 +62,12 @@ export function buildPortfolioEngines(wiring: PortfolioWiring, src: EngineSource
       const sleeve = plan.params.sleeve ?? plan.portfolioId;
       try {
         const engine = build(plan);
-        if (isLive) out.live.set(sleeve, engine); else out.observers.push(engine);
+        if (isLive) {
+          out.live.set(sleeve, engine);
+          // Only the engine that actually owns the sleeve supplies its display cap.
+          // Observer/refused definitions must not overwrite the incumbent's cap.
+          registerGrossCap(sleeve, "maxGross" in plan.params.strategy ? plan.params.strategy.maxGross : undefined, "equity");
+        } else out.observers.push(engine);
       } catch (e: any) {
         out.problems.push({
           definitionId: plan.portfolioId, sleeve, severity: isLive ? "live_refused" : "ignored",

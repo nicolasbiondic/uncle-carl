@@ -53,6 +53,8 @@ export const api = {
   equityHistory: ({ account = "consolidated", days, range } = {}) => soft("/api/equity/history" + qs({ account, days, range }), []),
   // Owner KPIs + decision funnel (P0 2026-10-09 — src/dashboard/routes/kpis.ts)
   kpis: () => soft("/api/kpis", null),
+  // "Bot" tab (2026-10-25): what each portfolio is doing right now + recent actions
+  botNow: () => soft("/api/bot/now", null),
   funnel: (days = 7) => soft("/api/funnel" + qs({ days }), null),
   // analytics — the v8 market-monitor/agent/strategies-matrix endpoints were
   // removed backend-side (2026-07-09/13); their frontend callers went with them.

@@ -1,4 +1,4 @@
-import { store, t } from "../store.js";
+import { store, t, sleeveLabel } from "../store.js";
 import { money, moneyCompact, pnlWhole, quantity, pctSigned, pnlColor, dur, num, n, pct } from "../fmt.js";
 import { esc } from "../ui.js";
 import { renderTrades } from "./trades.js";
@@ -52,11 +52,11 @@ export function positionNotional(p, account) {
 }
 
 /** Per-sleeve gross exposure: open notional ÷ the base the sleeve's engine
- *  checks its gross cap against — CURRENT equity for the momentum sleeves
- *  (MomentumEngine), the allocation for meanrev (MeanRevEngine baseUsd);
+ *  checks its gross cap against — CURRENT equity for MomentumEngine and the
+ *  live portfolio engine, allocation only for the incumbent MeanRevEngine;
  *  dashboard.accounts[].grossCapBase — and that ratio as a share of the
  *  sleeve's configured cap (accounts[].grossCapMult; both registered by
- *  index.ts from each engine's maxGrossExposureMult). Until 2026-10-12 the
+ *  the active engine plan's maxGrossExposureMult / maxGross). Until 2026-10-12 the
  *  ratio was taken over the initial allocation and painted red at ≥ 1×: the
  *  approved 1.5× sizing of momentum_stocks and a USDC sleeve whose equity
  *  grew from $5k to $7.4k both read as alarms at their designed size.
@@ -87,7 +87,7 @@ export function sleeveExposure(positions, accounts) {
     const ratio = base > 0 && bucket.unknown === 0 ? bucket.notional / base : null;
     const cap = acc && priced(acc.grossCapMult) && Number(acc.grossCapMult) > 0 ? Number(acc.grossCapMult) : null;
     const usage = ratio != null && cap != null ? ratio / cap : null;
-    rows.push({ id, label: acc?.label || id, notional: bucket.notional, allocation, equity, base, baseKind, ratio, cap, usage, count: bucket.count, unknown: bucket.unknown });
+    rows.push({ id, label: sleeveLabel(acc || { id }), notional: bucket.notional, allocation, equity, base, baseKind, ratio, cap, usage, count: bucket.count, unknown: bucket.unknown });
   }
   return rows.sort((a, b) => (b.ratio ?? -1) - (a.ratio ?? -1));
 }
@@ -103,11 +103,15 @@ function marketNotional(p, account) {
 }
 
 /** Colour of an exposure ratio: by its share of the sleeve's own cap when the
- *  cap is known (amber from 90%, red past the cap); without a cap, the old
+ *  cap is known (amber from 90%, red past the cap at the displayed 0.01×
+ *  precision, not for sub-cent rounding/fill drift); without a cap, the old
  *  rule (red at ≥ 1× of the base). */
 export function exposureColor(row) {
   if (row.ratio == null) return "var(--muted)";
-  if (row.usage != null) return row.usage > 1 ? "var(--down)" : row.usage >= 0.9 ? "var(--warn)" : "var(--text)";
+  if (row.usage != null) {
+    const cap = row.cap ?? row.ratio / row.usage;
+    return Math.round(row.ratio * 100) > Math.round(cap * 100) ? "var(--down)" : row.usage >= 0.9 ? "var(--warn)" : "var(--text)";
+  }
   return row.ratio >= 1 ? "var(--down)" : "var(--text)";
 }
 
@@ -156,7 +160,7 @@ export function positionGroups(positions, accounts) {
   }
   const groups = [...byId.values()].map((g) => ({
     ...g,
-    label: g.account?.label || g.id || t("Other", "Otros"),
+    label: sleeveLabel(g.account || { id: g.id }) || t("Other", "Otros"),
     invested: g.unknown ? null : g.invested,
     pnl: positionsTotals(g.rows),
     exposure: exposure.get(g.id) || null,

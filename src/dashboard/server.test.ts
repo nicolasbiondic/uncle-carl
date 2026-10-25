@@ -19,6 +19,8 @@ const fakeAm = {
   lastSyncAt: 0,
   getCircuits: () => ({}),
   getDashboardData: () => ({}),
+  getAccountSummaries: () => [],
+  getConsolidatedState: () => ({ positions: [] }),
 } as any;
 
 async function withServer<T>(fn: (baseUrl: string, cookie: string) => Promise<T>): Promise<T> {
@@ -53,6 +55,14 @@ async function withServer<T>(fn: (baseUrl: string, cookie: string) => Promise<T>
 }
 
 describe("DashboardServer legacy-dashboard removal", () => {
+  test("/api/bot/now is session-protected and returns the read-only contract", async () => {
+    await withServer(async (base, cookie) => {
+      expect((await fetch(`${base}/api/bot/now`)).status).toBe(401);
+      const response = await fetch(`${base}/api/bot/now`, { headers: { cookie } });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ asOf: expect.any(Number), portfolios: [], events: [] });
+    });
+  });
   test("/healthz is public and reports v4", async () => {
     await withServer(async (base) => {
       const res = await fetch(`${base}/healthz`);

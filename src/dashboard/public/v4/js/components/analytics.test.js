@@ -4,9 +4,11 @@
 // (data-mr click wiring in main.js) isn't unit-tested here, same convention
 // as the rest of the codebase's DOM-wiring code.
 import { describe, expect, test } from "bun:test";
-import { costCell, monthlyReturnsOptions, resolveMonthlyReturnsProfile, scorecard, windowLabel, benchmarkName, monthShort } from "./analytics.js";
+import { costCell, monthlyReturnsOptions, resolveMonthlyReturnsProfile, scorecard, windowLabel, benchmarkName, monthShort, pnlAttr, tearsheet } from "./analytics.js";
 import { executionLine } from "./funnel.js";
 import { store } from "../store.js";
+import { positionGroups } from "./positions.js";
+import { api } from "../api.js";
 
 const ACCOUNTS = [
   { id: "momentum_stocks", label: "Momentum Stocks", broker: "alpaca" },
@@ -22,11 +24,41 @@ describe("monthlyReturnsOptions", () => {
       "alpaca_main", "binance_main",
       "momentum_stocks", "meanrev_stocks", "momentum_crypto", "momentum_crypto_usdc",
     ]);
+    expect(opts.find(o => o.id === "binance_main").label).toBe("Binance (FAPI)");
   });
 
   test("empty/missing accounts -> empty options, never throws", () => {
     expect(monthlyReturnsOptions([])).toEqual([]);
     expect(monthlyReturnsOptions(undefined)).toEqual([]);
+  });
+});
+
+describe("audited performance figures", () => {
+  test("P&L sources explain bookkeeping without claiming algorithm edge", () => {
+    const lang = store.state.lang;
+    try {
+      store.state.lang = "es";
+      const html = pnlAttr({ buckets: ["algo", "reconcile", "sync"].map(bucket => ({ bucket, trades: 1, winRate: 1, totalPnl: 10, profitFactor: null })), netPnl: 30, windowDays: 365 });
+      expect(html).toContain("Operaciones de la estrategia");
+      expect(html).toContain("Correcciones del bróker");
+      expect(html).toContain("Posiciones recuperadas del bróker");
+      expect(html).toContain("algunos P&amp;L son provisionales");
+      expect(html).toContain("+$30");
+      expect(html).not.toContain("Edge del algoritmo");
+    } finally { store.state.lang = lang; }
+  });
+
+  test("a flat drawdown chart reports zero, not its negative SVG scale floor", async () => {
+    const old = { monthlyReturns: api.monthlyReturns, drawdown: api.drawdown, lang: store.state.lang };
+    try {
+      store.state.lang = "en";
+      api.monthlyReturns = async () => [];
+      api.drawdown = async () => [{ t: 1, dd: 0 }, { t: 2, dd: 0 }];
+      const html = await tearsheet();
+      expect(html).toContain("worst 0.0%");
+      expect(html).not.toContain("worst -0.0%");
+      expect(html).toContain("daily closing marks");
+    } finally { api.monthlyReturns = old.monthlyReturns; api.drawdown = old.drawdown; store.state.lang = old.lang; }
   });
 });
 
@@ -58,6 +90,27 @@ describe("resolveMonthlyReturnsProfile", () => {
 
 // ── One plain-language line per portfolio (owner, 2026-10-25) ──────────────
 describe("scorecard — plain-language rows", () => {
+  test("a zero worst drop never has a plus sign", () => {
+    const html = scorecard({ entities: [{ id: "momentum_crypto", kind: "sleeve", label: "Momentum Crypto", modelStart: "2026-10-24",
+      windows: [{ window: "model", totalReturnPct: 0, maxDrawdownPct: 0, benchmark: {} }] }] });
+    const dd = html.match(/<span class="sc-dd">(.*?%)<\/span>/s)?.[1];
+    expect(dd).toContain("0.0%");
+    expect(dd).not.toContain("+0.0%");
+  });
+
+  test("positions, performance and monthly picker use the same name in both UI languages", () => {
+    const prev = { lang: store.state.lang, dashboard: store.state.dashboard };
+    try {
+      store.state.dashboard = { accounts: ACCOUNTS };
+      for (const [lang, label] of [["en", "MeanRev Stocks"], ["es", "Reversión Acciones"]]) {
+        store.state.lang = lang;
+        const [group] = positionGroups([{ profileId: "meanrev_stocks", quantity: 1, avgEntryPrice: 10, currentPrice: 10 }], ACCOUNTS);
+        expect(group.label).toBe(label);
+        expect(monthlyReturnsOptions(ACCOUNTS).find(o => o.id === "meanrev_stocks").label).toBe(label);
+        expect(scorecard({ entities: [{ id: "meanrev_stocks", kind: "sleeve", label: "Reversión Stocks", windows: [{ window: "model", totalReturnPct: 0, benchmark: {} }] }] })).toContain(`<span class="sc-name">${label} `);
+      }
+    } finally { Object.assign(store.state, prev); }
+  });
   const entity = (band) => ({
     id: "momentum_stocks", kind: "sleeve", label: "Momentum Stocks", benchmarkSymbol: "SPY",
     band, windows: [{ window: "model", nObs: 5, totalReturnPct: 1, benchmark: {} }],

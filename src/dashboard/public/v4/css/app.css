@@ -333,6 +333,21 @@ tfoot tr.totals .muted { font-weight: 500; }
 .mr-m .sc-l { min-width: 2.2em; }
 .mr-pick { font: inherit; font-size: var(--t-xs); font-weight: 600; color: var(--text-2); background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r1); padding: 2px var(--s2); max-width: 220px; }
 .mr-pick:focus { outline: none; border-color: var(--accent); }
+/* "Bot" tab (2026-10-25): one block per portfolio — name, a coloured status
+   word, one short paragraph — then the recent actions as a dated list. The
+   status word is the only emphasis; the hairlines separate portfolios. */
+.bn-row { padding: var(--s3) 0; border-bottom: 1px solid var(--border); }
+.bn-row:first-child { padding-top: var(--s1); }
+.bn-head { display: flex; align-items: baseline; gap: var(--s2) var(--s3); flex-wrap: wrap; }
+.bn-name { font-weight: 600; }
+.bn-word { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: var(--t-xs); white-space: nowrap; }
+.bn-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.bn-text { margin: var(--s1) 0 0; color: var(--text-2); max-width: 72ch; line-height: 1.55; overflow-wrap: anywhere; }
+.bn-day { margin: var(--s3) 0 var(--s1); color: var(--muted); font-size: var(--t-xs); font-weight: 600; }
+.bn-day:first-child { margin-top: 0; }
+.bn-ev { display: grid; grid-template-columns: 3.4em minmax(0, 1fr); gap: var(--s2); padding: 3px 0; color: var(--text-2); overflow-wrap: anywhere; }
+.bn-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.bn-why { color: var(--muted); }
 #funnelPanel .exec-line { margin-top: var(--s3); }
 #funnelPanel .exec-line b { color: var(--text-2); font-weight: 600; }
 

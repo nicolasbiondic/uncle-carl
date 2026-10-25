@@ -20,6 +20,8 @@ export interface PersistedOrder {
   result: OrderResult | null;
   /** The fill was applied to the trades rows (restart-safe: never applied twice). */
   applied: boolean;
+  /** First fill confirmation time (ms); old journals use the decision's updatedAt. */
+  filledAt?: number;
   /** Skipped before submission (observer, trading disabled, …). */
   skipped?: string;
   /** Submissions of this order that the venue rejected as RETRYABLE (a sell refused because the

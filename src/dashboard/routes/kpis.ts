@@ -27,9 +27,9 @@ import { toBoundedInt } from "../dashboard-utils";
  * RW2 (2026-10-23): the two stock sleeves run on the portfolio engine
  * (`@pe-vt15`, docs/reports/RW-reescritura-rentable.md §9): orders per
  * session 0.74 (E1) and 0.46 (E2) → 0.37 / 0.23 ops per day. Until then:
- * 0.05 (5f03d68d) and 1.20 (624d50e9). Caveat (OPEN.md): the engine
- * rebalances quantities on existing rows, which countExecutedOrders does not
- * count, and writes no decision_passes — their funnel rows show 0 passes.
+ * 0.05 (5f03d68d) and 1.20 (624d50e9). countExecutedOrders includes confirmed
+ * rebalances from the portfolio decision journal; the engine still writes
+ * no decision_passes, so its funnel rows show 0 passes.
  */
 export const DESIGN_OPS_PER_DAY: Record<string, number> = {
   momentum_stocks: 0.37,

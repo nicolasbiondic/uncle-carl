@@ -15,6 +15,7 @@ import { resolvePortfolioWiring, restoreIncumbentRows, type ResolveInput } from 
 import { buildPortfolioEngines, startPortfolioEngines, type EngineSources } from "./wiring";
 import { getPortfolioDecision, listPortfolioDecisions } from "./persistence";
 import { loadSleeveRows } from "./rows";
+import { grossCapOf, registerGrossCap, resetGrossCapsForTests } from "../../ops/grossCaps";
 import { portfolioClientOrderId } from "./clientOrderId";
 import { PE_VERSION, fixedDecide, makeHistDb, peDefinition, peVersions, weekdaySessions } from "./testSupport";
 
@@ -90,7 +91,32 @@ function sources(alpaca: FakeAlpaca | null, over: Partial<EngineSources> = {}) {
 const strategyOf = (id: string) => (getDB().prepare("SELECT strategy, strategy_version, status FROM trades WHERE id = ?").get(id) as any);
 
 beforeAll(() => { makeTestDb(); });
-beforeEach(() => { getDB().exec("DELETE FROM trades; DELETE FROM portfolio_decisions; DELETE FROM activity_log; DELETE FROM portfolio_order_claims;"); });
+beforeEach(() => { resetGrossCapsForTests(); getDB().exec("DELETE FROM trades; DELETE FROM portfolio_decisions; DELETE FROM activity_log; DELETE FROM portfolio_order_claims;"); });
+
+describe("dashboard caps follow the engine actually constructed", () => {
+  test("live portfolio cap replaces the incumbent's cap and allocation base", () => {
+    registerGrossCap("momentum_stocks", 1.725, "equity");
+    registerGrossCap("meanrev_stocks", 0.966, "allocation");
+    for (const [sleeve, mult] of [["momentum_stocks", 2.5], ["meanrev_stocks", 1]] as const) {
+      const def = peDefinition(sleeve, { runMode: "live" });
+      const wiring = resolve([def], { defs: [def] });
+      const strategy = structuredClone(wiring.live[0].params.strategy);
+      if ("maxGross" in strategy) strategy.maxGross = mult;
+      wiring.live[0].params.strategy = strategy;
+      expect(buildPortfolioEngines(wiring, sources(fakeAlpaca()).src).live.size).toBe(1);
+    }
+    expect(grossCapOf("momentum_stocks")).toEqual({ mult: 2.5, base: "equity" });
+    expect(grossCapOf("meanrev_stocks")).toEqual({ mult: 1, base: "equity" });
+  });
+
+  test("observer or failed construction never replaces the incumbent's display cap", () => {
+    registerGrossCap("momentum_stocks", 1.725, "equity");
+    buildPortfolioEngines(resolve([peDefinition("momentum_stocks", { runMode: "observer" })]), sources(fakeAlpaca()).src);
+    expect(grossCapOf("momentum_stocks")?.mult).toBe(1.725);
+    buildPortfolioEngines(resolve([peDefinition("momentum_stocks", { runMode: "live" })]), sources(null).src);
+    expect(grossCapOf("momentum_stocks")?.mult).toBe(1.725);
+  });
+});
 
 describe("observer alongside the incumbent", () => {
   test("computes and persists on the sleeve's real rows; sends NOTHING; the incumbent's rows are untouched", async () => {
@@ -141,6 +167,7 @@ describe("live (cutover)", () => {
     expect([...built.live.keys()]).toEqual(["momentum_stocks"]);
     const rep = await built.live.get("momentum_stocks")!.tick();
     expect(rep.status).toBe("submitted");
+    expect(getPortfolioDecision("momentum_stocks", `momentum_stocks@${PE_VERSION}`, SESSION)!.orders.every(o => o.filledAt === NOW)).toBe(true);
     // adoption: same row, re-tagged, still open, same quantity — no close, no rebuy
     expect(strategyOf("inc_spy")).toEqual({ strategy: PORTFOLIO_ENGINE_STRATEGY, strategy_version: `momentum_stocks@${PE_VERSION}`, status: "open" });
     expect((getDB().prepare("SELECT quantity FROM trades WHERE id='inc_spy'").get() as any).quantity).toBe(10);

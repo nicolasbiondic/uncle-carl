@@ -1,6 +1,6 @@
 // ── broker-modal.js — sleeve detail modal opened from a broker summary card
 // (profiles.js). Same modal pattern as candle.js: backdrop, Escape, X, click-out.
-import { store, t, periodLabel } from "../store.js";
+import { store, t, periodLabel, sleeveLabel } from "../store.js";
 import { money, moneySigned, pct, pctSigned, pnlColor, n, dur } from "../fmt.js";
 import { esc, icon, byId } from "../ui.js";
 import { statsById, brokerKey, BROKER_LABEL } from "./profiles.js";
@@ -135,7 +135,7 @@ function modeChip(a, risk) {
 function row(a, st, exposure, unrealized, risk) {
   const winRate = n(st?.winRate), closed = n(st?.closedTrades);
   const periodPnl = n(st?.periodEquityPnl ?? st?.todayPnl);
-  const name = a.label || a.id;
+  const name = sleeveLabel(a);
   return `<div class="bm-row" data-sleeve="${esc(a.id)}" role="button" tabindex="0">
     <span class="bm-name"><b>${esc(name)}</b><span class="broker">${esc(a.broker || "")}</span></span>
     <span class="bm-metrics">

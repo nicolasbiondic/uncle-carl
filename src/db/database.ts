@@ -1248,21 +1248,50 @@ const V8_ACCOUNTS_SQL = `('${ALL_PROFILE_IDS.join("','")}')`;
  * *_RECONCILED, MANUAL_CLOSE_UNRECONCILED…). Entries always count — a row
  * only exists because an order filled (reconcile labels describe the CLOSE).
  * Shared by getTradingStats.todayTrades/periodTrades (dashboard header) and
- * the /api/kpis + Telegram volume lines so they can't drift apart.
+ * the /api/kpis + Telegram volume lines so they can't drift apart. Portfolio
+ * orders also resize existing rows: confirmed fills come from fills (including
+ * exposure-control trims) and the portfolio decision journal, deduplicated by
+ * broker order id and against the corresponding entry/exit row events.
  */
 export function countExecutedOrders(sinceMs: number, untilMs?: number, accountId?: string): number {
-  const whereAcc = accountId ? ` AND account_id = ?` : ` AND account_id IN ${V8_ACCOUNTS_SQL}`;
+  const whereAcc = accountId ? ` AND account_id = ?3` : ` AND account_id IN ${V8_ACCOUNTS_SQL}`;
   const bindAcc = accountId ? [accountId] : [];
   const until = untilMs ?? Number.MAX_SAFE_INTEGER;
   // `_` is a single-char wildcard in LIKE — escape it so 'syncX…' ids don't match.
   const NOT_SYNC = ` AND id NOT LIKE 'sync\\_%' ESCAPE '\\'`;
-  const entries = db.prepare(
-    `SELECT COUNT(*) c FROM trades WHERE entry_time > ? AND entry_time <= ?${NOT_SYNC}${whereAcc}`,
-  ).get(sinceMs, until, ...bindAcc) as any;
-  const exits = db.prepare(
-    `SELECT COUNT(*) c FROM trades WHERE exit_time IS NOT NULL AND exit_time > ? AND exit_time <= ? AND ${RECONCILE_CLOSE_SQL}${NOT_SYNC}${whereAcc}`,
-  ).get(sinceMs, until, ...bindAcc) as any;
-  return (entries?.c ?? 0) + (exits?.c ?? 0);
+  // Legacy row times are DB-write times; fills use broker times. Match only
+  // the same trade/side within one minute (never confuse an old entry with a
+  // later trim). Portfolio journals instead bound their own apply interval.
+  const result = db.prepare(`
+    WITH confirmed_fills AS (
+      SELECT account_id, decided_at, updated_at, NULL AS trade_id,
+        json_extract(o.value, '$.intent.symbol') AS symbol,
+        json_extract(o.value, '$.intent.side') AS side,
+        COALESCE(json_extract(o.value, '$.filledAt'), updated_at) AS filled_at,
+        COALESCE(json_extract(o.value, '$.result.brokerOrderId'), json_extract(o.value, '$.clientOrderId')) AS order_key
+      FROM portfolio_decisions, json_each(orders_json) o
+      WHERE mode = 'live' AND json_extract(o.value, '$.result.filledQty') > 0
+        AND json_extract(o.value, '$.clientOrderId') IS NOT NULL${whereAcc}
+      UNION ALL
+      SELECT account_id, fill_time - 60000, fill_time + 60000, trade_id,
+        symbol, side, fill_time, order_id
+      FROM fills WHERE filled_qty > 0 AND substr(trade_id, 1, 5) <> 'sync_'${whereAcc}
+    )
+    SELECT
+      (SELECT COUNT(*) FROM trades WHERE entry_time > ?1 AND entry_time <= ?2${NOT_SYNC}${whereAcc}
+        AND NOT EXISTS (SELECT 1 FROM confirmed_fills p WHERE p.account_id = trades.account_id
+          AND (p.trade_id IS NULL OR p.trade_id = trades.id) AND p.symbol = trades.symbol
+          AND p.side = CASE WHEN trades.side IN ('buy','long') THEN 'buy' ELSE 'sell' END
+          AND trades.entry_time BETWEEN p.decided_at AND p.updated_at))
+      + (SELECT COUNT(*) FROM trades WHERE exit_time > ?1 AND exit_time <= ?2 AND ${RECONCILE_CLOSE_SQL}${NOT_SYNC}${whereAcc}
+        AND NOT EXISTS (SELECT 1 FROM confirmed_fills p WHERE p.account_id = trades.account_id
+          AND (p.trade_id IS NULL OR p.trade_id = trades.id) AND p.symbol = trades.symbol
+          AND p.side = CASE WHEN trades.side IN ('buy','long') THEN 'sell' ELSE 'buy' END
+          AND trades.exit_time BETWEEN p.decided_at AND p.updated_at))
+      + (SELECT COUNT(*) FROM (SELECT account_id, order_key FROM confirmed_fills
+          WHERE filled_at > ?1 AND filled_at <= ?2 GROUP BY account_id, order_key)) AS c
+  `).get(sinceMs, until, ...bindAcc) as { c: number };
+  return result.c;
 }
 
 export function getTradingStats(accountId?: string, periodDays = 1) {
@@ -2459,7 +2488,7 @@ export function getHourlyAnalytics(profileId: string | null, days: number): any[
   // SQLi fix: parameterize profileId instead of string-interpolating it (the
   // /api/analytics/hourly?profile=<x> param reaches here unsanitized).
   // No profile ⇒ v8 live sleeves only (not shadow_/legacy/sync rows).
-  const whereProfile = profileId ? ` AND profile_id = ?` : ` AND profile_id IN ${V8_ACCOUNTS_SQL}`;
+  const whereProfile = profileId ? ` AND profile_id = ?` : ` AND account_id IN ${V8_ACCOUNTS_SQL}`;
   const args: any[] = profileId ? [since, profileId] : [since];
   const rows = db.prepare(`
     SELECT * FROM trades WHERE status = 'closed' AND ${RECONCILE_CLOSE_SQL} AND exit_time > ?${whereProfile}
@@ -2549,7 +2578,7 @@ export function setSyncState(key: string, value: string): void {
 export function getSymbolAnalytics(profileId: string | null, days: number): any[] {
   const since = Date.now() - days * 24 * 60 * 60_000;
   // SQLi fix: parameterize profileId (see getHourlyAnalytics).
-  const whereProfile = profileId ? ` AND profile_id = ?` : ` AND profile_id IN ${V8_ACCOUNTS_SQL}`;
+  const whereProfile = profileId ? ` AND profile_id = ?` : ` AND account_id IN ${V8_ACCOUNTS_SQL}`;
   const args: any[] = profileId ? [since, profileId] : [since];
   const rows = db.prepare(`
     SELECT symbol, COUNT(*) as count, SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,

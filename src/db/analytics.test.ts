@@ -52,3 +52,15 @@ describe("analytics SQL injection is neutralized", () => {
     expect(getSymbolAnalytics("real_prof", 3650).some(r => r.symbol === "MSFT")).toBe(true);
   });
 });
+
+describe("default analytics scope is the sleeve account, not profile_id", () => {
+  test("a live sleeve under the default platform profile is included; a legacy account is not", () => {
+    seedClosed({ symbol: "LIVE_PROBE", profile: "default", account: "momentum_stocks", exitTime: Date.now() - 1_000, pnl: 12 });
+    seedClosed({ symbol: "LEGACY_PROBE", profile: "momentum_stocks", account: "alpaca_low", exitTime: Date.now() - 1_000, pnl: 999 });
+    expect(getSymbolAnalytics(null, 7).map(r => r.symbol)).toContain("LIVE_PROBE");
+    expect(getSymbolAnalytics(null, 7).map(r => r.symbol)).not.toContain("LEGACY_PROBE");
+    const hourly = getHourlyAnalytics(null, 7);
+    expect(hourly.reduce((s, r) => s + r.tradeCount, 0)).toBe(1);
+    expect(hourly.reduce((s, r) => s + r.avgPnl * r.tradeCount, 0)).toBe(12);
+  });
+});

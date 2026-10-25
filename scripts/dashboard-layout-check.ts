@@ -62,6 +62,21 @@ function syntheticFixtures(dir: string) {
   save("dashboard", { accounts, daysRunning: 123, portfolio: {
     positions, openPositions: positions.length, equity: 100_000, cash: 32_000, winRate: 57,
   } });
+  save("api-bot-now", { asOf: now, portfolios: accounts.map((a, i) => ({
+    id: a.id, label: a.label, broker: a.broker, engine: a.broker === "alpaca" ? "portfolio" : "momentum",
+    version: `${a.id}@synthetic`, state: i === 2 ? "flat" : i === 3 ? "paused" : "invested",
+    positions: defs[i][3], investedUsd: i === 2 ? 0 : 24_250, equityUsd: 25_000, grossX: i === 2 ? 0 : 0.97,
+    maxGrossX: a.grossCapMult, cadence: { kind: i === 2 ? "hourly" : "daily",
+      at: a.broker === "alpaca" ? "09:35 America/New_York" : i === 2 ? ":00 each hour" : "00:00 UTC" },
+    lastDecision: { at: now - 3600e3, entries: i === 2 ? 0 : 2, exits: 0, resizes: 0, orders: i === 2 ? 0 : 2,
+      rejected: 0, signalsLong: i === 2 ? 0 : null, universe: i === 2 ? 8 : null, note: null },
+    nextDecisionAt: a.broker === "alpaca" ? Date.UTC(2026, 9, 26, 13, 35) : now + (i === 2 ? 3600e3 : 8 * 3600e3) + 15_000,
+    blocked: i === 2 ? { reason: "no_signal", detail: "Sin señal larga en 8 activos", until: null }
+      : i === 3 ? { reason: "soft_drawdown", detail: "soft drawdown 16.9% — paused 24h", until: now + 864e5 } : null,
+    regime: a.id === "momentum_stocks" ? { riskOn: true, ref: "SPY", distancePct: 5 } : null,
+    exposureScale: i === 3 ? 0.794 : null, drawdownPct: a.broker === "alpaca" ? null : i === 3 ? 16.9 : 0,
+  })), events: [{ at: now - 3600e3, portfolioId: "momentum_stocks", kind: "rebalance", symbol: null,
+    qty: null, usd: 12_345, pnlUsd: null, reason: "REBALANCE", detail: "2 compras, 1 venta; 0 rechazadas" }] });
   const trades = Array.from({ length: 24 }, (_, i) => ({
     id: `synthetic-trade-${i}`, accountId: accounts[i % 4].id, symbol: positions[i].symbol,
     status: "closed", side: "buy", strategy: "synthetic", closeReason: "TRAIL_STOP",
@@ -222,6 +237,12 @@ async function main() {
           await page.locator('#opsBody .pgroup-btn[aria-expanded="false"]').first().click();
         }
         if (!values.base && await page.locator("#opsBody table tbody tr.pos").count() !== 47) throw new Error("Synthetic Positions fixture did not render all 47 rows");
+        // The Bot tab is the analytics card's default (what each portfolio is doing).
+        await page.locator('[data-atab="bot"]').click();
+        await page.waitForFunction(() => document.querySelector("#anBody")?.textContent?.trim() !== "…");
+        await page.locator("#anBody .bn-row, #anBody .empty, #anBody .bn-list").first().waitFor();
+        await capture("positions-bot");
+        await page.locator('[data-atab="equity"]').click();
         await page.locator(values.base ? "#eqChart canvas, #anBody .empty" : "#eqChart canvas").first().waitFor();
         await capture("positions-equity");
         await page.locator('[data-atab="performance"]').click();
