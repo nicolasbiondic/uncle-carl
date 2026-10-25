@@ -23,6 +23,30 @@ afterEach(() => Object.assign(store.state, originalState));
 const withAggregate = (periodPnl, periodPnlPct) => [{ pnlAggregate: { equity: 106826, periodPnl, periodPnlPct, pnl7d: 0, pnl7dPct: 0 } }];
 
 describe("renderKpis — no Since Start, server-computed period pct", () => {
+  test("keeps seven useful KPIs, without Running, Fear & Greed or Open", () => {
+    Object.assign(store.state, {
+      lang: "en", period: 1, profiles: withAggregate(-1794.42, -0.3),
+      dashboard: { daysRunning: 99, portfolio: { openPositions: 21 } },
+      kpis: { ret: { dailyAvgPct30d: 0.1 }, risk: { drawdownPct: 1 } },
+    });
+    const html = renderKpis();
+    expect([...html.matchAll(/class="kl">([^<]+)</g)].map((m) => m[1])).toEqual([
+      "Total Equity", "Today P&amp;L", "7D P&amp;L", "Win Rate", "Trades today", "Return 30D", "Risk",
+    ]);
+    expect(html).not.toMatch(/Running|Fear|Greed|>Open<|lo2/);
+  });
+
+  test("KPI money is whole dollars even below $100; percentages retain precision", () => {
+    Object.assign(store.state, {
+      lang: "en", period: 1, view: "consolidated", dashboard: {}, kpis: null,
+      profiles: [{ pnlAggregate: { equity: 106826.74, periodPnl: -85.04, periodPnlPct: -0.3, pnl7d: -1794.42, pnl7dPct: -1.7, periodRealized: 8.99, periodRealizedCount: 1, realized7d: 7963.43, realized7dCount: 19 } }],
+    });
+    const html = renderKpis();
+    for (const value of ["$106,827", "−$85", "−$1,794", "+$9", "+$7,963", "−0.3%"])
+      expect(html).toContain(value);
+    expect(html).not.toMatch(/\$[\d,]+\./);
+  });
+
   test("the Since Start KPI is gone", () => {
     Object.assign(store.state, { period: 1, profiles: [], dashboard: { portfolio: {} } });
     expect(renderKpis()).not.toContain("Since Start");
@@ -111,7 +135,11 @@ describe("profile cards — broker aggregation + period label", () => {
     });
     const html = renderProfiles();
     expect((html.match(/data-broker="alpaca"/g) || []).length).toBe(1);
-    expect(html).toContain("2 sleeves");
+    expect(html).not.toContain("2 sleeves");
+    expect(html).not.toContain('class="broker"');
+    expect(html).toContain("LIVE");
+    expect(html).toContain("Details →");
+    expect(html).toContain('data-spark="alpaca_main"');
     expect(html).toContain(money(100_000, 0));
   });
 

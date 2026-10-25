@@ -1,7 +1,6 @@
 import { store, t, periodLabel } from "../store.js";
 import { money, moneySigned, pct, pctSigned, pnlColor, n, num } from "../fmt.js";
 import { esc } from "../ui.js";
-import { renderFngKpi } from "./fng.js";
 
 function kpi(label, valueHtml, cls = "", subHtml = "") {
   return `<div class="kpi ${cls}"><span class="kl">${esc(label)}</span><span class="kv">${valueHtml}</span>${subHtml ? `<span class="ks">${subHtml}</span>` : ""}</div>`;
@@ -59,9 +58,7 @@ function consolidated(state) {
     realized7d: agg?.realized7d ?? null,
     realized7dCount: agg?.realized7dCount ?? null,
     winRate: totalClosed > 0 ? (wins / totalClosed) * 100 : (n(d?.portfolio?.winRate) || 0),
-    open: n(d?.portfolio?.openPositions),
     todayTrades, totalTrades,
-    days: n(d?.daysRunning),
   };
 }
 
@@ -135,15 +132,12 @@ export function renderKpis() {
   const pctSpan = (v) => v == null ? "" : ` <span class="kv sub">${pctSigned(v)}</span>`;
   return (
     kpi(t("Total Equity", "Patrimonio"), k.equity == null ? "—" : money(k.equity, 0)) +
-    kpi(pnlL, k.periodPnl == null ? "—" : `<span style="color:${pnlColor(k.periodPnl)}">${moneySigned(k.periodPnl)}${pctSpan(periodPct)}</span>`, "", realizedSub(k.periodRealized, k.periodRealizedCount, s.period)) +
-    (s.period === 7 ? "" : kpi(t("7D P&L", "P&L 7D"), k.pnl7d == null ? "—" : `<span style="color:${pnlColor(k.pnl7d)}">${moneySigned(k.pnl7d)}${pctSpan(pnl7dPct)}</span>`, "sm", realizedSub(k.realized7d, k.realized7dCount, 7))) +
-    kpi(t("Win Rate", "% Ganadas"), pct(k.winRate, 0), "sm lo2") +
-    kpi(t("Open", "Abiertas"), num(k.open, 0), "sm lo2") +
+    kpi(pnlL, k.periodPnl == null ? "—" : `<span style="color:${pnlColor(k.periodPnl)}">${moneySigned(k.periodPnl, 0)}${pctSpan(periodPct)}</span>`, "", realizedSub(k.periodRealized, k.periodRealizedCount, s.period)) +
+    (s.period === 7 ? "" : kpi(t("7D P&L", "P&L 7D"), k.pnl7d == null ? "—" : `<span style="color:${pnlColor(k.pnl7d)}">${moneySigned(k.pnl7d, 0)}${pctSpan(pnl7dPct)}</span>`, "sm", realizedSub(k.realized7d, k.realized7dCount, 7))) +
+    kpi(t("Win Rate", "% Ganadas"), pct(k.winRate, 0), "sm") +
     volumeKpi(k, s.kpis) +
     returnKpi(s.kpis) +
-    riskKpi(s.kpis) +
-    kpi(t("Running", "Activo"), `${num(k.days, 0)} <span class="kv sub">${t("days", "días")}</span>`, "sm lo") +
-    renderFngKpi()
+    riskKpi(s.kpis)
   );
 }
 

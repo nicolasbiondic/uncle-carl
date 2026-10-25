@@ -33,11 +33,13 @@ button { font-family: inherit; cursor: pointer; }
 /* left cluster is a 2-line stack: brand+clock on top, broker totals beneath —
    fits inside the KPI-defined bar height, so it costs no extra vertical space */
 .hdr { display: flex; flex-direction: column; justify-content: center; align-items: flex-start; gap: 3px; flex-shrink: 0; }
-.hdr-brokers { display: flex; align-items: center; gap: var(--s2); }
+/* The balance pills repeat the broker cards (#profiles), so they show ONLY on
+   the windows that hide the cards: see the matching @media further down (a
+   layout.test.js pin keeps the two conditions identical). */
+.hdr-brokers { display: none; align-items: center; gap: var(--s2); }
 .hdr-actions { display: flex; align-items: center; gap: var(--s2); flex-shrink: 0; }
 .hdr .brand { display: flex; align-items: center; gap: var(--s2); font-weight: 700; font-size: var(--t-md); }
 .hdr .brand .ic { color: var(--accent); }
-.hdr .ver { font-size: var(--t-xs); color: var(--muted); font-family: var(--mono); border: 1px solid var(--border); border-radius: var(--r1); padding: 1px 6px; }
 .hdr .clock { color: var(--muted); font-family: var(--mono); font-size: var(--t-xs); }
 .hdr .pill { display: inline-flex; align-items: center; gap: 6px; font-size: var(--t-xs); border: 1px solid var(--border); border-radius: var(--r-pill); padding: 3px 10px; color: var(--text-2); text-decoration: none; }
 .hdr a.pill:hover { border-color: var(--text-2); color: var(--text-1); }
@@ -77,12 +79,14 @@ button { font-family: inherit; cursor: pointer; }
 
 /* user chip + dropdown menu */
 .uchip-wrap { position: relative; }
-.uchip .uchip-id { color: var(--muted); font-family: var(--mono); font-weight: 500; }
 .umenu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 300; min-width: 180px; background: var(--bg-1); border: 1px solid var(--border-2); border-radius: var(--r2); box-shadow: var(--shadow-2); padding: var(--s1); display: flex; flex-direction: column; }
 .umenu[hidden] { display: none; } /* display:flex would defeat the hidden attribute */
 .umenu-item { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3); border: none; background: none; color: var(--text-2); font: 600 var(--t-sm) var(--sans); border-radius: var(--r1); text-align: left; cursor: pointer; }
 .umenu-item:hover, .umenu-item:focus-visible { background: var(--accent-soft); color: var(--text); outline: none; }
 .umenu-item.danger:hover { color: var(--down); }
+/* current value of Language / Theme, right-aligned; account id + version below */
+.umenu-v { margin-left: auto; padding-left: var(--s4); color: var(--muted); font-weight: 500; font-size: var(--t-xs); }
+.umenu-meta { display: flex; flex-direction: column; gap: 2px; margin-top: var(--s1); padding: var(--s2) var(--s3) var(--s1); border-top: 1px solid var(--border); color: var(--muted); font-size: var(--t-xs); }
 
 /* Ajustes rows: label left, value/control right */
 .set-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); padding: var(--s2) 0; border-bottom: 1px solid var(--border); font-size: var(--t-sm); }
@@ -180,7 +184,6 @@ button { font-family: inherit; cursor: pointer; }
 .pspark .spark-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: var(--t-xs); color: var(--muted); }
 .pcard:hover { border-color: var(--border-2); transform: translateY(-1px); }
 .pcard.on { border-color: var(--accent); }
-.pcard .broker { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border: 1px solid var(--border); border-radius: var(--r1); padding: 1px 6px; }
 .pcard .peq { font-size: var(--t-lg); line-height: 1.15; font-weight: 800; }
 .pcard .pline { display: flex; align-items: baseline; gap: var(--s2); white-space: nowrap; }
 .pcard .pall { font-size: var(--t-sm); font-weight: 700; white-space: nowrap; }
@@ -266,6 +269,15 @@ tfoot tr.totals .muted { font-weight: 500; }
 @media (min-width: 981px) and (max-width: 1366px) { #opsBody .opt3 { display: none; } }
 @media (min-width: 981px) and (max-width: 1500px) { #opsBody .opt4 { display: none; } }
 @media (max-width: 480px) { #opsBody .opt3, #opsBody .opt4 { display: none; } }
+/* fit-N (js/fit.js, 2026-10-24): what the queries above cannot see — a
+   vertical scrollbar, a wider font, longer values — takes the next group off
+   while the table still overflows its box, in the same order. */
+#opsBody table.fit-1 .sbadge .sb-t { display: none; }
+#opsBody table.fit-1 .sbadge { padding: 2px 3px; }
+#opsBody table.fit-2 .opt1 { display: none; }
+#opsBody table.fit-3 .opt4 { display: none; }
+#opsBody table.fit-4 .opt3 { display: none; }
+#anBody table.fit-1 .fx1, #anBody table.fit-2 .fx2 { display: none; }
 /* Exposure chips: compact (sleeve, ratio, cap; the $ deployed rides in the
    tooltip) so four fit on one line; the cap gives way on mid widths. */
 .chips.xchips { gap: var(--s1) var(--s2); margin-bottom: var(--s2); }
@@ -508,6 +520,7 @@ code { font-family: var(--mono); background: var(--bg-2); padding: 1px 5px; bord
 }
 @media (min-width: 981px) and (min-height: 540px) and (max-height: 700px) {
   #profiles { display: none; }
+  .hdr-brokers { display: flex; }
 }
 
 /* responsive */
@@ -526,10 +539,6 @@ code { font-family: var(--mono); background: var(--bg-2); padding: 1px 5px; bord
 @media (max-width: 1600px) { .kpi { padding-right: var(--s3); } .kpi + .kpi { padding-left: var(--s3); } }
 @media (max-width: 1440px) { .kpi .kv { font-size: clamp(18px, 2.3vh, 22px); } }
 @media (max-width: 1300px) { .kpi { padding-right: var(--s2); } .kpi + .kpi { padding-left: var(--s2); } }
-/* Below 1366px the ten KPIs no longer fit: days running and Fear & Greed
-   (context, not the book) give way instead of being clipped off the edge. */
-@media (max-width: 1366px) { .kpi.lo { display: none; } }
-@media (min-width: 981px) and (max-width: 1200px) { .kpi.lo2 { display: none; } }
 @media (max-width: 1100px) { .grid.cols-4 { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 980px) { .grid.cols-2 { grid-template-columns: 1fr; } .kpi .kv { font-size: var(--t-lg); } }
 @media (max-width: 560px) { .grid.cols-4 { grid-template-columns: 1fr; } .wrap { padding: 0 var(--s3); } .hdr { gap: var(--s2); } .hdr .clock, .hdr .pill { display: none; } }

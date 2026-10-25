@@ -99,6 +99,17 @@ describe("renderBreakdown — the bridge from realized to the P&L", () => {
 });
 
 describe("Trades tab — holding time", () => {
+  test("compact prices and P&L preserve small crypto prices and percent decimals", () => {
+    Object.assign(store.state, { lang: "en" });
+    const html = renderTrades([
+      { status: "closed", symbol: "SPY", side: "buy", entryPrice: 540.24, exitPrice: 525.49, pnl: -1794.42, pnlPct: -0.3 },
+      { status: "closed", symbol: "DOGE/USD", side: "buy", entryPrice: 0.0777, exitPrice: 8.99, pnl: 85.04, pnlPct: 0.3 },
+    ]);
+    for (const value of ["$540<", "$525<", "−$1,794 ", "$0.0777<", "$8.99<", "+$85 ", "−0.3%"])
+      expect(html).toContain(value);
+    expect(html).not.toContain("$1,794.42");
+  });
+
   test("each close shows how long it was open", () => {
     Object.assign(store.state, { lang: "en" });
     const html = renderTrades([{ id: "m", status: "closed", symbol: "META", side: "buy", entryPrice: 607.52, exitPrice: 726.71, pnl: 4767.74, pnlPct: 19.6, entryTime: Date.UTC(2026, 8, 4, 13, 48), exitTime: Date.UTC(2026, 8, 28, 13, 35), strategy: "MOMENTUM", closeReason: "MODEL_CUTOVER" }]);

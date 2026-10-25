@@ -65,7 +65,7 @@ function brokerCard(key, group, bt, stats) {
       <div class="pspark" data-spark="${esc(key)}_main" aria-hidden="true"></div>
       <div class="pcol pcol-r">
         <span class="pall" style="color:${pnlColor(allPct)}" title="${esc(t("Return since the start of the current system", "Rentabilidad desde el inicio del sistema actual"))}">${pctSigned(allPct)} <span class="muted ptot">${t("total", "total")}</span></span>
-        <span class="psub"><span class="broker">${group.length} ${t("sleeves", "sleeves")}</span> <span class="pdet">${t("Details →", "Detalle →")}</span></span>
+        <span class="psub"><span class="pdet">${t("Details →", "Detalle →")}</span></span>
       </div>
     </div>`;
 }

@@ -1303,7 +1303,9 @@ export class AccountManager {
             symbol: trade.symbol, market: trade.market, side: trade.side as any,
             quantity: trade.quantity, avgEntryPrice: trade.entryPrice, currentPrice,
             unrealizedPnl: pnl, unrealizedPnlPct: pnlPct, openedAt: trade.entryTime,
-            stopLoss: trade.stopLoss || undefined,
+            // Portfolio-engine rows carry no stop (the stop machinery skips them):
+            // a leftover stop_loss from the incumbent engine must not read as live.
+            stopLoss: isPortfolioEngineRow(trade) ? undefined : (trade.stopLoss || undefined),
             takeProfit: trade.takeProfit || undefined,
             leverage: acc.profile.leverage || 1,
             durationSeconds: Math.floor((Date.now() - trade.entryTime) / 1000),

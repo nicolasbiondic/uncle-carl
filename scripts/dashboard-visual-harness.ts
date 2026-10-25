@@ -18,7 +18,7 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 
 const ROOT = join(import.meta.dir, "..");
-const PUBLIC_DIR = join(ROOT, "src/dashboard/public/v4");
+const PUBLIC_DIR = process.env.DASHBOARD_PUBLIC_DIR || join(ROOT, "src/dashboard/public/v4");
 const FIXTURES_DIR = process.env.LWC_FIXTURES_DIR || join(ROOT, "lwc-fixtures");
 const PORT = Number(process.env.PORT || 4173);
 // Portfolios panel (F3c/F3d) toggle: PORTFOLIOS_WRITABLE=false simulates a
@@ -42,7 +42,8 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-const server = Bun.serve({
+export const server = Bun.serve({
+  hostname: "127.0.0.1",
   port: PORT,
   async fetch(req) {
     const url = new URL(req.url);
@@ -51,6 +52,13 @@ const server = Bun.serve({
     // ── auth ────────────────────────────────────────────────────────────
     if (pathname === "/api/auth/me") return json({ username: "owner", displayName: "Owner", role: "admin", csrfToken: "harness-csrf-token" });
     if (pathname === "/api/auth/logout") return json({ ok: true });
+
+    // Optional synthetic GET overrides, shared by the layout guard. Existing
+    // captures still work unchanged; /api/activity -> api-activity.json, etc.
+    const override = join(FIXTURES_DIR, pathname.slice(1).replaceAll("/", "-") + ".json");
+    if (req.method === "GET" && pathname.startsWith("/api/") && existsSync(override)) {
+      return json(JSON.parse(readFileSync(override, "utf8")));
+    }
 
     // ── real fixtures ───────────────────────────────────────────────────
     // Fixtures captured before 2026-10-12 lack accounts[].grossCapMult/Base

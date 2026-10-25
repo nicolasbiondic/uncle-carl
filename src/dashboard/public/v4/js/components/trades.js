@@ -1,5 +1,5 @@
 import { t } from "../store.js";
-import { money, moneySigned, pctSigned, pnlColor, etDateTime, dur, n } from "../fmt.js";
+import { moneyCompact, moneySignedCompact, pnlWhole, pctSigned, pnlColor, etDateTime, dur } from "../fmt.js";
 import { esc } from "../ui.js";
 
 // Uses /api/trades (camelCase). Excludes reconcile/sync phantoms so the list
@@ -28,9 +28,9 @@ export function renderTrades(trades) {
       <td>${esc(etDateTime(x.exitTime || x.entryTime))}</td>
       <td><span class="symlink" data-sym="${esc(x.symbol)}" role="button" tabindex="0">${esc(x.symbol)}</span></td>
       ${anyShort ? `<td><span class="badge ${isL ? "l" : "s"}">${isL ? "L" : "S"}</span></td>` : ""}
-      <td class="opt3">${money(x.entryPrice)}</td>
-      <td class="opt3">${x.exitPrice != null ? money(x.exitPrice) : "—"}</td>
-      <td style="color:${pnlColor(x.pnl)}">${moneySigned(x.pnl)} <span class="muted">${pctSigned(x.pnlPct)}</span></td>
+      <td class="opt3">${moneyCompact(x.entryPrice)}</td>
+      <td class="opt3">${x.exitPrice != null ? moneyCompact(x.exitPrice) : "—"}</td>
+      <td style="color:${pnlColor(x.pnl)}">${pnlWhole(x.pnl)} <span class="muted">${pctSigned(x.pnlPct)}</span></td>
       <td class="muted" title="${esc(t("How long the position was open — a gain built over weeks was already in the P&L before it closed", "Cuánto estuvo abierta — una ganancia acumulada en semanas ya estaba en el P&L antes del cierre"))}">${x.exitTime && x.entryTime ? dur(x.exitTime - x.entryTime) : "—"}</td>
       <td class="muted opt4">${esc((x.strategy || "").slice(0, 8))}</td>
     </tr>`;

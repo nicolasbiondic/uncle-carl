@@ -4,6 +4,10 @@
 // 960px; the owner's ~890px window then fell back to page scroll, the
 // analytics card grew past an empty left column, and nothing failed. These
 // pins keep the lock on every desktop window that can show a table row.
+// Browser geometry + screenshots (47 synthetic positions, real scrollbars):
+// TMPDIR=/dev/shm nice -n 5 bun run dashboard:check [--ci] [--sizes 1747x892]
+// Output: reports/dashboard-layout/ (gitignored); --ci checks desktop Overview.
+// Live read-only: --base <url> --login, UC_DASH_USER + UC_DASH_PASSWORD_FILE.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
@@ -30,5 +34,17 @@ describe("header", () => {
     const topbar = html.slice(start, html.indexOf("</div>", start));
     expect(topbar).toContain('id="nav"');
     expect(css).toContain(".nav { order: 2; flex: 1 1 auto; min-width: 0; }");
+  });
+
+  // Owner 2026-10-25: the header balance pills repeat the broker cards, so
+  // they show exactly when the cards are hidden — never anywhere else.
+  test("the balance pills show only in the window that hides the broker cards", () => {
+    expect(css).toMatch(/\.hdr-brokers \{ display: none;/);
+    const hide = css.match(/(@media [^{]+) \{ #profiles \{ display: none; \}( \.hdr-brokers \{ display: flex; \})? \}/);
+    expect(hide).not.toBeNull();
+    expect(hide?.[2]).toBeTruthy(); // same @media block turns the pills on
+    // the only rule that makes #profiles display:none is that block
+    expect(css.match(/#profiles \{ display: none; \}/g)?.length).toBe(1);
+    expect(css.match(/\.hdr-brokers \{ display: flex; \}/g)?.length).toBe(1);
   });
 });

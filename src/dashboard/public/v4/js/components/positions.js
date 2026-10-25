@@ -1,5 +1,5 @@
 import { t } from "../store.js";
-import { money, moneySigned, pctSigned, pnlColor, dur, num, n, pct } from "../fmt.js";
+import { money, moneyCompact, moneySignedCompact, pnlWhole, quantity, pctSigned, pnlColor, dur, num, n, pct } from "../fmt.js";
 import { esc } from "../ui.js";
 import { renderTrades } from "./trades.js";
 import { dotColor } from "./profiles.js";
@@ -60,12 +60,6 @@ export function positionNotional(p, account) {
 export function sleeveBadgeCode(profileId) {
   if (!profileId) return "";
   return String(profileId).split("_").filter(Boolean).map((w) => w.slice(0, 3).toUpperCase()).join("-");
-}
-
-function qtyFmt(v) {
-  const x = Number(v);
-  if (!Number.isFinite(x)) return "—";
-  return Number.isInteger(x) ? String(x) : num(x, 4);
 }
 
 function sleeveBadge(profileId, account) {
@@ -199,18 +193,18 @@ export function renderPositions(state, trades) {
     return `<tr>
       <td><span class="symlink" data-sym="${esc(p.symbol)}" role="button" tabindex="0">${esc(p.symbol)}</span>${sleeveBadge(p.profileId, acc)}</td>
       ${anyShort ? `<td><span class="badge ${isL ? "l" : "s"}">${isL ? "L" : "S"}</span></td>` : ""}
-      <td class="opt3">${qtyFmt(p.quantity)}</td>
-      <td class="opt3">${money(p.avgEntryPrice)}</td>
+      <td class="opt3" title="${esc(String(p.quantity ?? ""))}">${quantity(p.quantity)}</td>
+      <td class="opt3">${moneyCompact(p.avgEntryPrice)}</td>
       <td>${notional != null
-        ? money(notional, 0)
+        ? moneyCompact(notional)
         : `<span class="muted" title="${esc(t("COIN-M quantity is a contract count, not units — notional needs the contract size, not carried in this payload", "En COIN-M la cantidad son contratos, no unidades — el nocional necesita el tamaño de contrato, que este dato no trae"))}">—</span>`}</td>
-      <td class="opt3">${priced(p.currentPrice) ? money(p.currentPrice) : "—"}</td>
+      <td class="opt3">${priced(p.currentPrice) ? moneyCompact(p.currentPrice) : "—"}</td>
       <td>${priced(p.unrealizedPnl)
-        ? `<span style="color:${pnlColor(p.unrealizedPnl)}">${moneySigned(p.unrealizedPnl)} <span class="muted">${pctSigned(p.unrealizedPnlPct)}</span></span>`
+        ? `<span style="color:${pnlColor(p.unrealizedPnl)}">${pnlWhole(p.unrealizedPnl)} <span class="muted">${pctSigned(p.unrealizedPnlPct)}</span></span>`
         : `<span class="muted" title="${esc(t("No price available — not counted in the total", "Sin precio disponible — no cuenta en el total"))}">—</span>`}</td>
       <td class="opt2">${dur(held)}</td>
-      <td class="opt1">${p.stopLoss ? `${money(p.stopLoss)}${slDist != null ? ` <span class="muted">${pct(slDist, 1)}</span>` : ""}` : "—"}</td>
-      ${anyTp ? `<td class="opt1">${p.takeProfit ? money(p.takeProfit) : "—"}</td>` : ""}
+      <td class="opt1">${p.stopLoss ? `${moneyCompact(p.stopLoss)}${slDist != null ? ` <span class="muted">${pct(slDist, 1)}</span>` : ""}` : "—"}</td>
+      ${anyTp ? `<td class="opt1">${p.takeProfit ? moneyCompact(p.takeProfit) : "—"}</td>` : ""}
     </tr>`;
   }).join("");
   return `${renderExposure(pos, accounts)}<div class="scroll"><table class="postbl">
@@ -267,7 +261,7 @@ function renderTotalsRow(positions, anyTp, anyShort = true) {
   return `<tfoot><tr class="totals">
     <td colspan="${anyShort ? 2 : 1}" title="${esc(t("Total unrealized P&L", "P&L no realizado total"))} · ${esc(what)}">${t("Unrealized", "No realizado")} <span class="muted">· ${counted}${note}</span></td>
     <td class="opt3"></td><td class="opt3"></td><td></td><td class="opt3"></td>
-    <td style="color:${pnlColor(total)}">${moneySigned(total)}</td>
+    <td style="color:${pnlColor(total)}">${pnlWhole(total)}</td>
     <td class="opt2"></td><td class="opt1"></td>${anyTp ? `<td class="opt1"></td>` : ""}
   </tr></tfoot>`;
 }

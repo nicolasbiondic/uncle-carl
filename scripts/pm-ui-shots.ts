@@ -36,7 +36,7 @@ const LANGS = ["en", "es"];
 
 async function main() {
   mkdirSync(OUT, { recursive: true });
-  const browser = await chromium.launch({ executablePath: EXE });
+  const browser = await chromium.launch({ executablePath: EXE, ignoreDefaultArgs: ["--hide-scrollbars"] });
   try {
     for (const vp of VIEWPORTS) {
       for (const theme of THEMES) {

@@ -44,6 +44,25 @@ jobs:
       - name: Run tests
         run: bun test
 
+      - name: Dashboard layout guard (visible scrollbars, synthetic fixtures)
+        run: |
+          if command -v google-chrome >/dev/null 2>&1; then
+            PLAYWRIGHT_CHROMIUM=$(command -v google-chrome) TMPDIR=/dev/shm nice -n 5 bun run dashboard:check --ci || {
+              echo "::error::Dashboard layout failed. Download dashboard-layout-${{ github.sha }} for screenshots and report.json (reports/dashboard-layout/)."
+              exit 1
+            }
+          else
+            echo "::notice::Chrome unavailable; skipping dashboard layout guard"
+          fi
+
+      - name: Upload dashboard failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-layout-${{ github.sha }}
+          path: reports/dashboard-layout/
+          retention-days: 14
+
   # ── 3. Dependency security audit ──────────────────────────────────────────
   audit:
     name: Dependency security audit

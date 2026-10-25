@@ -26,6 +26,32 @@ export function moneySigned(v, d = 2) {
   return (x < 0 ? "−" : "+") + "$" + num(Math.abs(x), d);
 }
 
+/** Table money: whole dollars from $100; up to 3 significant digits below. */
+export function moneyCompact(v) {
+  const x = Math.abs(n(v));
+  return "$" + (x >= 100 ? num(x, 0) : x.toLocaleString("en-US", { maximumSignificantDigits: 3 }));
+}
+
+export function moneySignedCompact(v) {
+  return (n(v) < 0 ? "−" : "+") + moneyCompact(v);
+}
+
+/** P&L in a table: whole dollars always (owner, 2026-10-25: "no necesito decimales"). */
+export function pnlWhole(v) {
+  const x = Math.round(n(v));
+  return (x < 0 ? "−" : "+") + "$" + num(Math.abs(x), 0);
+}
+
+/** Table units: whole from 1 (the exact quantity rides in the cell's title);
+ *  3 significant digits below 1, so crypto units like 0.0123 never read 0. */
+export function quantity(v) {
+  if (v == null || v === "") return "—";
+  const x = Number(v);
+  if (!Number.isFinite(x)) return "—";
+  if (Math.abs(x) >= 1) return num(x, 0);
+  return x.toLocaleString("en-US", { maximumSignificantDigits: 3 });
+}
+
 /** 12.3 -> "12.3%" (value is already a percent, 0..100). */
 export function pct(v, d = 1) {
   return num(v, d) + "%";

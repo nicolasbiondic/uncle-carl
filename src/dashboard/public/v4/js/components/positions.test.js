@@ -276,7 +276,7 @@ describe("renderPositions — TP column + SL distance%", () => {
     };
     const html = renderPositions(state, []);
     expect(html).toContain(">TP<");
-    expect(html).toContain("$120.00");
+    expect(html).toContain("$120<");
   });
 
   test("SL cell shows the stop price AND the distance% to it", () => {
@@ -287,7 +287,7 @@ describe("renderPositions — TP column + SL distance%", () => {
       ] } },
     };
     const html = renderPositions(state, []);
-    expect(html).toContain("$96.00");
+    expect(html).toContain("$96 <");
     expect(html).toContain("4.0%"); // (100-96)/100
   });
 
@@ -392,5 +392,29 @@ describe("renderPositions — side column only when a short exists", () => {
     expect(html).toContain("<th>S</th>");
     expect(html).toContain('class="badge s"');
     expect(html).toContain('<td colspan="2"');
+  });
+});
+
+describe("renderPositions — compact numbers", () => {
+  const state = (positions) => ({ view: "consolidated", dashboard: { accounts: [], portfolio: { positions } } });
+
+  test("prices, notional, stops and total lose cents; P&L percent keeps a decimal", () => {
+    const html = renderPositions(state([
+      { symbol: "SPY", side: "buy", quantity: 5.59, avgEntryPrice: 540.1, currentPrice: 525.25, stopLoss: 478.4, unrealizedPnl: -85.04, unrealizedPnlPct: -0.3 },
+      { symbol: "QQQ", side: "buy", quantity: 10, avgEntryPrice: 540.1, unrealizedPnl: -1709.38 },
+    ]), []);
+    for (const value of [">6<", "$540<", "$525<", "$3,019<", "−$85 ", "$478 ", "−$1,794<", "−0.3%"])
+      expect(html).toContain(value);
+    expect(html).not.toContain("$540.10");
+    expect(html).not.toContain("$1,794.42");
+  });
+
+  test("small crypto prices, quantities and notionals remain meaningful", () => {
+    const html = renderPositions(state([
+      { symbol: "DOGE/USD", side: "buy", quantity: 115.7, avgEntryPrice: 0.0777, currentPrice: 0.0789, stopLoss: 0.07, unrealizedPnl: 0.139, unrealizedPnlPct: 1.5 },
+      { symbol: "BTC/USD", side: "buy", quantity: 0.0123, avgEntryPrice: 68000, currentPrice: 68100, unrealizedPnl: 1.23 },
+    ]), []);
+    for (const value of [">116<", ">0.0123<", "$0.0777<", "$0.0789<", "$0.07 ", "$8.99<", "+$0 "])
+      expect(html).toContain(value);
   });
 });

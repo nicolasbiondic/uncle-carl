@@ -5,6 +5,7 @@
 // as the rest of the codebase's DOM-wiring code.
 import { describe, expect, test } from "bun:test";
 import { costCell, monthlyReturnsOptions, resolveMonthlyReturnsProfile, scorecard } from "./analytics.js";
+import { store } from "../store.js";
 
 const ACCOUNTS = [
   { id: "momentum_stocks", label: "Momentum Stocks", broker: "alpaca" },
@@ -55,6 +56,44 @@ describe("resolveMonthlyReturnsProfile", () => {
 });
 
 describe("scorecard table", () => {
+  const entity = (band) => ({
+    id: "momentum_stocks", kind: "sleeve", label: "Momentum Stocks", benchmarkSymbol: "SPY",
+    band, windows: [{ window: "model", nObs: 5, totalReturnPct: 1, benchmark: {} }],
+  });
+
+  test("caveat is only a tooltip on the scorecard heading", () => {
+    const html = scorecard({ entities: [entity({ status: "unavailable" })] });
+    expect(html).toMatch(/class="card-note"[^>]*title="[^"]*(Few weeks|Con pocas semanas)[^"]*">Scorecard/);
+    expect(html.replace(/title="[^"]*"/g, "")).not.toMatch(/Few weeks|Con pocas semanas/);
+    expect(html).toContain('class="fx1"');
+    expect(html).toContain('class="fx2"');
+  });
+
+  test("insufficient data is a muted dash, with the escaped reason in its tooltip", () => {
+    const html = scorecard({ entities: [entity({ status: "insufficient_data", reason: 'Only 5 sessions, need 20 & "complete" days' })] });
+    expect(html).toContain('<span class="muted" title="Only 5 sessions, need 20 &amp; &quot;complete&quot; days">—</span>');
+    expect(html).not.toContain('class="mchip"');
+    expect(html).not.toMatch(/>insufficient data<|>datos insuficientes</);
+  });
+
+  test("missing reason has a localized explanation", () => {
+    const lang = store.state.lang;
+    try {
+      store.state.lang = "en";
+      expect(scorecard({ entities: [entity({ status: "insufficient_data" })] })).toContain('title="Not enough live data to evaluate the band">—');
+      store.state.lang = "es";
+      expect(scorecard({ entities: [entity({ status: "insufficient_data" })] })).toContain('title="Sin datos de vivo suficientes para evaluar la banda">—');
+    } finally { store.state.lang = lang; }
+  });
+
+  test("other band states keep their bordered chips and titles", () => {
+    for (const status of ["below", "within", "above", "unavailable"]) {
+      const html = scorecard({ entities: [entity({ status, reason: "band reason" })] });
+      expect(html).toContain('class="mchip" title="band reason"');
+      expect(html).toContain("border-color:");
+    }
+  });
+
   test("maxDD renders the API's percent value as a percent (11.97 → −12.0%), not divided twice", () => {
     const html = scorecard({ entities: [{
       id: "momentum_crypto_usdc", kind: "sleeve", label: "Momentum Crypto USDC", benchmarkSymbol: "BTC/USD", modelStart: "2026-07-20",

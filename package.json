@@ -12,6 +12,7 @@
     "baseline": "bun run scripts/baseline-report.ts",
     "verify": "bun run scripts/verify-smoke.ts",
     "verify:deploy": "bun run scripts/verify-deploy.ts",
+    "dashboard:check": "bun run scripts/dashboard-layout-check.ts",
     "ops:close-crypto": "bun run scripts/close-crypto-now.ts",
     "ops:close-stocks": "bun run scripts/close-stocks-at-open.ts",
     "backtest:momentum-wf": "bun run scripts/backtest-momentum-wf.ts",
@@ -29,6 +30,7 @@
     "@types/express": "^5.0.6",
     "@types/node": "^24",
     "@types/ws": "^8.18.2",
+    "playwright-core": "1.61.0",
     "typescript": "^7.0.2"
   },
   "private": true,

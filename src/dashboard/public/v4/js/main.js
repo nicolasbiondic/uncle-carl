@@ -1,16 +1,16 @@
 import { api, setCsrf } from "./api.js";
 import { store, t } from "./store.js";
 import { byId, on, esc, icon } from "./ui.js";
-import { renderHeader, renderActions, renderNav, NAV_PAGES, tickClock } from "./components/header.js";
+import { renderHeader, renderActions, renderNav, nextMenuIndex, NAV_PAGES, tickClock } from "./components/header.js";
 import { renderKpis, kpiValues } from "./components/kpis.js";
 import { openPnlBreakdown } from "./components/pnl-breakdown.js";
 import { renderProfiles, loadProfileSparks } from "./components/profiles.js";
 import { renderPositions } from "./components/positions.js";
 import { renderTrades } from "./components/trades.js";
 import { renderAnalyticsShell, loadTab, setMonthlyReturnsProfile } from "./components/analytics.js";
+import { fitTable, fitTablesIn } from "./fit.js";
 import { renderNewsBar, loadNews, toggleNews } from "./components/news.js";
 import { setFunnelDays } from "./components/funnel.js";
-import { loadFng } from "./components/fng.js";
 import { connectWS } from "./ws.js";
 import { bindPalette } from "./components/palette.js";
 import { openCandles } from "./components/candle.js";
@@ -102,6 +102,13 @@ function flashKpis() {
   prevKpi = { equity: k.equity, periodPnl: k.periodPnl };
 }
 
+/** Positions/Trades: columns give way instead of a sideways scroll (fit.js). */
+function fitOps() { fitTable(document.querySelector("#opsBody > .scroll")); }
+let fitResizeT = null;
+window.addEventListener("resize", () => { clearTimeout(fitResizeT); fitResizeT = setTimeout(() => { fitOps(); fitTablesIn(byId("anBody")); }, 150); });
+// Google Fonts load with display=swap: the real face can be wider than the fallback.
+document.fonts?.ready?.then(() => { fitOps(); fitTablesIn(byId("anBody")); });
+
 /** The ops card's scroller: the table box when it scrolls, else the card
  *  body (layouts where the box is capped or not a scroller). */
 function opsScroller() {
@@ -115,6 +122,7 @@ function withOpsScroll(fn) {
   const before = opsScroller();
   const saved = before ? { tab: opsTab, top: before.scrollTop, left: before.scrollLeft } : null;
   fn();
+  fitOps();
   const after = opsScroller();
   if (after && saved && saved.tab === opsTab) {
     after.scrollTop = saved.top;
@@ -155,11 +163,22 @@ function pageShell(iconName, title) {
   return `<div class="card page-card"><h3><span style="display:inline-flex;align-items:center;gap:6px">${icon(iconName, 15)} ${esc(title)}</span></h3><div class="page-body" id="pageBody"><div class="muted">…</div></div></div>`;
 }
 
+/** The user menu's open state outlives the header re-render (a language/theme
+ *  switch, the 30 s refresh, the account id arriving): repaint it open and give
+ *  focus back to the same control. */
+let userMenuOpen = false;
+function paintActions() {
+  const host = byId("hdrActions");
+  const focused = host.contains(document.activeElement) ? document.activeElement.dataset.act : null;
+  host.innerHTML = renderActions(userMenuOpen);
+  if (focused) host.querySelector(`[data-act="${focused}"]`)?.focus();
+}
+
 /** Header + nav + KPI strip — shared by every page. */
 function renderChrome() {
   applyTheme();
   byId("hdr").innerHTML = renderHeader();
-  byId("hdrActions").innerHTML = renderActions();
+  paintActions();
   byId("nav").innerHTML = renderNav();
   byId("kpis").innerHTML = renderKpis();
   renderTicker();
@@ -196,6 +215,7 @@ function renderPage() {
     });
     byId("analyticsCol").innerHTML = `<div class="card" id="analyticsCard">${renderAnalyticsShell()}</div>`;
     byId("newsBar").innerHTML = renderNewsBar();
+    fitOps(); // the whole page is laid out now (the analytics column and news bar arrived after the ops card)
     loadProfileSparks();
     loadTab();
     loadNews();
@@ -224,12 +244,20 @@ async function refresh() {
   } catch (e) { console.error("refresh failed", e); }
 }
 
-function toggleUserMenu(force) {
+const userMenuItems = () => [...document.querySelectorAll("#umenu .umenu-item")];
+
+/** force: true/false, undefined = flip. focus: "first" moves focus into the
+ *  menu (keyboard open), "chip" hands it back to the chip button (Escape). */
+function toggleUserMenu(force, focus) {
   const m = byId("umenu");
   if (!m) return;
-  const open = force !== undefined ? force : m.hidden;
+  const open = force !== undefined ? force : !userMenuOpen;
+  userMenuOpen = open;
   m.hidden = !open;
-  document.querySelector('[data-act="user-menu"]')?.setAttribute("aria-expanded", String(open));
+  const chip = document.querySelector('[data-act="user-menu"]');
+  chip?.setAttribute("aria-expanded", String(open));
+  if (open && focus === "first") userMenuItems()[0]?.focus();
+  else if (focus === "chip") chip?.focus();
 }
 
 function wireEvents() {
@@ -239,7 +267,7 @@ function wireEvents() {
     if (act === "theme") { const seq = ["dark", "terminal", "light"]; store.set({ theme: seq[(seq.indexOf(store.state.theme) + 1) % seq.length] }); render(); }
     else if (act === "lang") { store.set({ lang: store.state.lang === "en" ? "es" : "en" }); render(); }
     else if (act === "logout") { try { await api.logout(); } catch {} location.href = "/login"; }
-    else if (act === "user-menu") toggleUserMenu();
+    else if (act === "user-menu") toggleUserMenu(undefined, !userMenuOpen && e.detail === 0 ? "first" : undefined); // detail 0 = Enter/Space, not a mouse click
     else if (act === "user-menu-close") toggleUserMenu(false);
     else if (act === "news-toggle") toggleNews();
     else if (act === "pnl-why") openPnlBreakdown(+el.dataset.days);
@@ -249,7 +277,18 @@ function wireEvents() {
     const m = byId("umenu");
     if (m && !m.hidden && !e.target.closest(".uchip-wrap")) toggleUserMenu(false);
   });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") toggleUserMenu(false); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && userMenuOpen) toggleUserMenu(false, document.querySelector(".uchip-wrap")?.contains(document.activeElement) ? "chip" : undefined);
+  });
+  // Arrow keys / Home / End move between the menu's items; Tab out closes it.
+  on(app, "keydown", "#umenu", (e) => {
+    const items = userMenuItems();
+    const to = nextMenuIndex(e.key, items.indexOf(document.activeElement), items.length);
+    if (to !== null) { e.preventDefault(); items[to].focus(); }
+  });
+  app.addEventListener("focusout", (e) => {
+    if (userMenuOpen && e.relatedTarget && !e.relatedTarget.closest?.(".uchip-wrap")) toggleUserMenu(false);
+  });
   // Router: back/forward + direct links.
   window.addEventListener("hashchange", () => {
     const alias = isAliasHash(location.hash);
@@ -262,7 +301,7 @@ function wireEvents() {
   on(app, "keydown", "[data-sym]", (e, el) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCandles(el.dataset.sym); } });
   on(app, "click", "[data-broker]", (e, el) => openBrokerModal(el.dataset.broker, (id) => { store.set({ view: id }); refresh().then(render); }));
   on(app, "keydown", "[data-broker]", (e, el) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); el.click(); } });
-  on(app, "click", "[data-opstab]", (e, el) => { opsTab = el.dataset.opstab; byId("opsCard").outerHTML = renderOps(); });
+  on(app, "click", "[data-opstab]", (e, el) => { opsTab = el.dataset.opstab; byId("opsCard").outerHTML = renderOps(); fitOps(); });
   on(app, "click", "[data-atab]", (e, el) => setTab(el.dataset.atab));
   on(app, "click", "[data-period]", (e, el) => { store.set({ period: +el.dataset.period }); refresh().then(render); });
   on(app, "click", "[data-fdays]", (e, el) => setFunnelDays(+el.dataset.fdays));
@@ -327,14 +366,10 @@ async function boot() {
   bindPalette(paletteActions);
   // Identity (account id for the user chip; Ajustes shows the rest). Soft:
   // null until the Phase-3 backend ships / on older servers.
-  api.platformMe().then((pm) => { if (pm) { store.set({ platformMe: pm }); byId("hdrActions").innerHTML = renderActions(); } });
+  api.platformMe().then((pm) => { if (pm) { store.set({ platformMe: pm }); paintActions(); } });
   await refresh();
   render();
   loadTicker();
-  // Fear & Greed lands after the first paint — re-render just the KPI strip.
-  // The index refreshes daily upstream; 30min polling is already generous.
-  const rerenderKpis = () => { const el = byId("kpis"); if (el) el.innerHTML = renderKpis(); };
-  loadFng(rerenderKpis);
   wireWS();
   // OAuth round-trip deep link: the accounts callback redirects to
   // /?accounts_oauth=…; land on Ajustes with the broker-accounts card (and its
@@ -351,7 +386,6 @@ async function boot() {
   // chrome (header/KPIs) — a full repaint would wipe form/scroll state.
   setInterval(async () => { await refresh(); if (store.state.page === "resumen") render(); else renderChrome(); }, 30000);
   setInterval(loadTicker, 60000);
-  setInterval(() => loadFng(rerenderKpis), 1_800_000);
   setInterval(tickClock, 1000);
 }
 

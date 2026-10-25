@@ -3,6 +3,7 @@ import { api } from "../api.js";
 import { moneySigned, pct, pctSigned, pctFrac, pnlColor, n, num, etDateTime } from "../fmt.js";
 import { byId, esc } from "../ui.js";
 import { windowSeg } from "./kpis.js";
+import { fitTablesIn } from "../fit.js";
 
 // Consolidated from 11 → 7. Portfolio dropped (duplicated the Positions card);
 // Hours/Symbols/P&L Source/Tearsheet merged into one "Performance" deep-dive.
@@ -39,7 +40,7 @@ export async function loadTab() {
     // own to clean up after itself).
     const { destroyEquityChart } = await import("./equity.js");
     destroyEquityChart();
-    if (tab === "performance") body.innerHTML = await performance();
+    if (tab === "performance") { body.innerHTML = await performance(); fitTablesIn(body); }
     else if (tab === "volume") {
       const { renderFunnelPanel, loadFunnel } = await import("./funnel.js");
       body.innerHTML = renderFunnelPanel();
@@ -80,12 +81,12 @@ export function scorecardWindow(e) {
 const BAND_LABEL = () => ({
   below: t("BELOW band", "POR DEBAJO"), within: t("within band", "dentro"),
   above: t("above band", "por encima"),
-  insufficient_data: t("insufficient data", "datos insuficientes"),
   unavailable: t("unavailable", "no disponible"),
 });
 
 function bandChip(band) {
   if (!band) return `<span class="muted">—</span>`;
+  if (band.status === "insufficient_data") return `<span class="muted" title="${esc(band.reason || t("Not enough live data to evaluate the band", "Sin datos de vivo suficientes para evaluar la banda"))}">—</span>`;
   const label = BAND_LABEL()[band.status] || band.status;
   const color = band.status === "below" ? "var(--down)" : band.status === "above" ? "var(--up)" : "var(--muted, inherit)";
   const adjusted = band.selectionBias
@@ -130,18 +131,17 @@ export function scorecard(sc) {
       : "";
     return `<tr><td>${esc(e.label)} <span class="muted" style="font-size:var(--t-xs)">${esc(winLabel)}</span>${tsLink}</td>
       <td style="color:${pnlColor(w.totalReturnPct)}">${w.totalReturnPct == null ? "—" : pctSigned(w.totalReturnPct)}</td>
-      <td>${w.benchmark?.totalReturnPct == null ? "—" : `${esc(bench)} ${pctSigned(w.benchmark.totalReturnPct)}`}</td>
+      <td class="fx1">${w.benchmark?.totalReturnPct == null ? "—" : `${esc(bench)} ${pctSigned(w.benchmark.totalReturnPct)}`}</td>
       <td>${w.alphaAnnPct == null ? "—" : pctSigned(w.alphaAnnPct)}</td>
       <td>${w.sharpe == null ? "—" : num(w.sharpe, 2)}</td>
       <td>${w.maxDrawdownPct == null ? "—" : pctSigned(-w.maxDrawdownPct, 1)}</td>
       <td>${bandChip(e.band)}</td>
-      <td>${costCell(costBySleeve[e.id])}</td></tr>`;
+      <td class="fx2">${costCell(costBySleeve[e.id])}</td></tr>`;
   }).join("");
-  return `<div class="card-note" style="margin-bottom:var(--s2)">${t("Scorecard — live vs validated backtest", "Scorecard — vivo vs backtest validado")}</div>
-    <div class="scroll"><table><thead><tr><th>Sleeve</th><th>${t("Return", "Retorno")}</th><th>Benchmark</th><th>α (${t("ann.", "anual")})</th><th>Sharpe</th><th>maxDD</th><th>${t("Band", "Banda")}</th><th>${t("Costs", "Costes")}</th></tr></thead><tbody>${rows}</tbody></table></div>
-    <div class="muted" style="margin-top:var(--s2);font-size:var(--t-xs)">${t(
+  return `<div class="card-note" style="margin-bottom:var(--s2)" title="${esc(t(
       "Few weeks of live data certify nothing; the band detects breakage vs the validated OOS distribution, it does not prove alpha.",
-      "Con pocas semanas de vivo ninguna métrica certifica edge; la banda detecta roturas frente al OOS validado, no prueba alpha.")}</div>`;
+      "Con pocas semanas de vivo ninguna métrica certifica edge; la banda detecta roturas frente al OOS validado, no prueba alpha."))}">${t("Scorecard — live vs validated backtest", "Scorecard — vivo vs backtest validado")}</div>
+    <div class="scroll"><table><thead><tr><th>Sleeve</th><th>${t("Return", "Retorno")}</th><th class="fx1">Benchmark</th><th>α (${t("ann.", "anual")})</th><th>Sharpe</th><th>maxDD</th><th>${t("Band", "Banda")}</th><th class="fx2">${t("Costs", "Costes")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function activity(items) {
