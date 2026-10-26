@@ -118,7 +118,7 @@ describe("openPosition — inverse sizing + persistence", () => {
 });
 
 describe("closePosition — explicit inverse PnL, bypasses closeTrade's linear formula", () => {
-  test.each(["TREND_EXIT", "IDLE_OVERLAY_EXIT", "BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN"])("%s is persisted verbatim", async closeReason => {
+  test.each(["TREND_EXIT", "IDLE_OVERLAY_EXIT", "BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN", "BREAKOUT_SHORT_TIME_STOP"])("%s is persisted verbatim", async closeReason => {
     const id = `coinm-${closeReason}`;
     seedOpenTrade(id, id, {
       symbol: COINM_INTERNAL_SYMBOL, market: "crypto", entryPrice: 50_000, quantity: 10,

@@ -60,6 +60,7 @@ import {
 } from "./lib/portfolioData";
 import { SignalBook, assertSignalCoverage, loadSignalEvents, signalCoverage } from "./lib/signalData";
 import { overlaySymbols, type RegimeMemory } from "../src/portfolio-engine/contingency";
+import { MAX_HOLD_CLOSE_REASON } from "../src/portfolio-engine/types";
 
 // ── kernel injection ──────────────────────────────────────────────────────
 
@@ -101,6 +102,8 @@ export interface PortfolioDiagnostics {
   pnlByAssetClass: Record<string, number>;
   pnlBySymbol: Record<string, number>;
   marginInterest: number;
+  /** Executed forced-renewal legs only (also included in orders/ordersPerSession). Absent = off. */
+  maxHoldStats?: { closes: number; rebuys: number; orders: number };
   /** Only emitted with regimeOverlay. Days = execution sessions, weights = final targets (not fills). */
   regimeOverlay?: {
     riskOffDays: number;
@@ -188,6 +191,8 @@ export function simulatePortfolioWindow(
   const decideFn = opts.decide ?? kernel.decide;
   const loadFrom = fromMs - cfg.warmupDays * DAY_MS;
   const hasStops = strategy.kind === "cryptoTrend" && strategy.stop.mode !== "none";
+  const hasMaxHold = strategy.kind === "volManaged" && strategy.maxHoldSessions !== undefined;
+  const maxHoldStats = { closes: 0, rebuys: 0, orders: 0 };
   const classOf = (sym: string) => opts.assetClasses?.[sym] ?? cfg.sleeve;
 
   const db = new Database(cfg.dbPath, { readonly: true });
@@ -273,7 +278,7 @@ export function simulatePortfolioWindow(
     return i >= 0 ? s.close[i] : undefined;
   };
 
-  const fill = (symbol: string, side: "buy" | "sell", qty: number, refPx: number, t: number, reason: "rebalance" | "stop_loss" | "fold_end") => {
+  const fill = (symbol: string, side: "buy" | "sell", qty: number, refPx: number, t: number, reason: "rebalance" | "stop_loss" | "fold_end" | "MAX_HOLD") => {
     const f = fillCost(side, qty, refPx, costModel);
     cash += f.cashDelta;
     fees += f.commission;
@@ -317,7 +322,8 @@ export function simulatePortfolioWindow(
   };
 
   const currentPositions = (): Position[] =>
-    [...positions].filter(([, p]) => p.qty > 0).map(([symbol, p]) => ({ symbol, qty: p.qty, avgEntryPrice: p.avgEntry }));
+    [...positions].filter(([, p]) => p.qty > 0).map(([symbol, p]) => ({ symbol, qty: p.qty, avgEntryPrice: p.avgEntry,
+      ...(hasMaxHold ? { entrySession: new Date(p.entryAt).toISOString().slice(0, 10) } : {}) }));
 
   // ── sessions ────────────────────────────────────────────────────────────
   for (let i = firstIdx; i < ref.dates.length && ref.timestamps[i] < toMs; i++) {
@@ -366,7 +372,12 @@ export function simulatePortfolioWindow(
       const s = series.get(o.symbol);
       const bi = s ? indexOfDate(s.dates, d) : -1;
       if (bi < 0) { diag.skippedNoBar++; continue; }
-      fill(o.symbol, o.side, o.qty, s!.open[bi], t, "rebalance");
+      if (o.maxHold === "rebuy" && positions.has(o.symbol)) continue;
+      fill(o.symbol, o.side, o.qty, s!.open[bi], t, o.maxHold === "close" ? MAX_HOLD_CLOSE_REASON : "rebalance");
+      if (o.maxHold) {
+        maxHoldStats[o.maxHold === "close" ? "closes" : "rebuys"]++;
+        maxHoldStats.orders++;
+      }
     }
 
     // 5. stops anchored on the actual fills (same view, no fill-day close).
@@ -523,6 +534,7 @@ export function simulatePortfolioWindow(
       pnlByAssetClass,
       pnlBySymbol,
       marginInterest: marginInterestTotal,
+      ...(hasMaxHold ? { maxHoldStats } : {}),
       ...(regime ? { regimeOverlay: regime } : {}),
     },
   };

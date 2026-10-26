@@ -465,33 +465,35 @@ describe("utcDayCloses / heldSymbolsAt / compareDailyHoldings (momentum_crypto's
   });
 });
 
-describe("momentum_crypto parity epoch — RW3 (correlation brake OFF, 2026-10-23)", () => {
+describe("momentum_crypto parity epoch — RW6 120h cap (2026-10-26)", () => {
   test("the epoch is an exact instant not before the current version's `since`: a pass before the deploy would run the brake live while the sim (ceiling 1.01) enters", () => {
     const v = currentModelVersion("momentum_crypto")!;
-    expect(v.id).toBe("momentum_crypto@vt35-corroff");
-    expect(PARITY_EPOCHS.momentum_crypto).toBe("2026-10-23T09:00:00Z");
+    expect(v.id).toBe("momentum_crypto@vt35-corroff-mh120");
+    expect(PARITY_EPOCHS.momentum_crypto).toBe("2026-10-26T13:00:00Z");
     expect(Number.isNaN(Date.parse(PARITY_EPOCHS.momentum_crypto!))).toBe(false);
     expect(Date.parse(PARITY_EPOCHS.momentum_crypto!)).toBeGreaterThanOrEqual(Date.parse(v.since));
   });
   test("the replay the monitor runs for momentum_crypto carries the brake-off regime (live = validated)", () => {
     const cand = liveSleeveConfig("momentum_crypto").candidate;
     expect(cand.regime).toEqual({ correlationCeiling: 1.01 });
+    expect(cand.timeStop).toEqual({ maxHoldHours: 120 });
   });
 });
 
 describe("momentum_crypto_usdc parity — live BASE/USDC vs the replay's BASE/USD proxies", () => {
-  test("RW4a (2026-10-23): the epoch is the first DAILY pass of the exposure-control model — a 00:00:00Z instant equal to the current version's `since`", () => {
+  test("RW6: the parity boundary is the deploy instant; the first DAILY tick is afterwards, not a pre-cap pass", () => {
     const v = currentModelVersion("momentum_crypto_usdc")!;
-    expect(v.id).toBe("momentum_crypto_usdc@daily-d13s5-xc-dd");
-    expect(PARITY_EPOCHS.momentum_crypto_usdc).toBe("2026-10-24T00:00:00Z");
+    expect(v.id).toBe("momentum_crypto_usdc@daily-d13s5-xc-dd-mh120");
+    expect(PARITY_EPOCHS.momentum_crypto_usdc).toBe("2026-10-26T13:00:00Z");
     expect(PARITY_EPOCHS.momentum_crypto_usdc).toBe(v.since);
-    expect(Date.parse(PARITY_EPOCHS.momentum_crypto_usdc!) % 86_400_000).toBe(0);
+    expect(Date.parse(PARITY_EPOCHS.momentum_crypto_usdc!)).toBeLessThan(Date.parse("2026-10-27T00:00:15Z"));
     // (Before: 2026-10-08T00:00:00Z — the owner's UNI realign; AUDITS 2026-10-06.)
   });
 
   test("the replay the monitor runs for momentum_crypto_usdc carries the drawdown exposure control (live = validated)", () => {
     const cand = liveSleeveConfig("momentum_crypto_usdc").candidate;
     expect(cand.exposureControl).toEqual({ drawdown: { startPct: 0.1, endPct: 0.4 }, minScale: 0.25, band: 0.1, minOrderUsd: 100 });
+    expect(cand.timeStop).toEqual({ maxHoldHours: 120 });
   });
 
   test("live USDC symbols are normalized to the proxy universe, so identical decisions match", () => {

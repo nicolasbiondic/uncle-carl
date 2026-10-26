@@ -35,6 +35,7 @@
 import { decide as coreDecide, type CoreDecideInput } from "../decide";
 import { planOrders as corePlanOrders } from "../orders";
 import { overlaySymbols } from "../contingency";
+import { MAX_HOLD_CLOSE_REASON } from "../types";
 import type {
   BookState, MembershipView, OrderIntent, OrderResult, PlanOrders, PortfolioStrategyConfig, Position, PriceView, SessionDate,
   StopLevel, TargetBook, VenueAdapter, VenueRules,
@@ -275,6 +276,10 @@ export class PortfolioEngine {
     return cfg.kind === "cryptoTrend" && cfg.stop.mode !== "none";
   }
 
+  private hasMaxHold(): boolean {
+    return this.opts.config.kind === "volManaged" && this.opts.config.maxHoldSessions !== undefined;
+  }
+
   private async decideAndExecute(window: RunWindow): Promise<PortfolioRunReport> {
     const { session, asOf } = window;
     const live = this.opts.mode === "live";
@@ -337,7 +342,7 @@ export class PortfolioEngine {
     }
     if (drift.length > 0) this.log.warn(`book drift vs venue: ${drift.join("; ")}`);
     const rows = loadSleeveRows(this.opts.accountId);
-    const positions = positionsFromRows(rows);
+    const positions = positionsFromRows(rows, this.hasMaxHold());
     const ledger = computeSleeveLedger(this.opts.capital, sleeveRealizedPnl(this.opts.accountId), rows, s => prices[s] ?? 0);
     if (!Number.isFinite(ledger.equity) || ledger.equity <= 0) {
       throw new Error(`sleeve ledger invalid (equity=${ledger.equity}) — refusing to size on it`);
@@ -351,7 +356,7 @@ export class PortfolioEngine {
 
     // 5. persist BEFORE any order
     const orders: PersistedOrder[] = intents.map(intent => ({
-      intent, clientOrderId: live ? portfolioClientOrderId(this.opts.accountId, session, intent.symbol) : null,
+      intent, clientOrderId: live ? portfolioClientOrderId(this.opts.accountId, session, intent.symbol, intent.maxHold) : null,
       result: null, applied: false, ...(live ? {} : { skipped: "observer" }),
     }));
     const record: PortfolioDecisionRecord = {
@@ -458,7 +463,13 @@ export class PortfolioEngine {
         retrying++; // not submitted, not counted as an attempt: it goes once the sells settle
         continue;
       }
-      const clientOrderId = o.clientOrderId ?? portfolioClientOrderId(key.accountId, key.session, o.intent.symbol);
+      if (o.intent.maxHold === "rebuy" && loadSleeveRows(this.opts.accountId).some(r => r.symbol === o.intent.symbol && r.quantity > 0)) {
+        // Rejected/partial close: never blend a fresh buy into the expired lot or double the exposure.
+        o.skipped = "max_hold_close_incomplete";
+        updatePortfolioDecisionProgress(key, { orders }, this.now());
+        continue;
+      }
+      const clientOrderId = o.clientOrderId ?? portfolioClientOrderId(key.accountId, key.session, o.intent.symbol, o.intent.maxHold);
       o.clientOrderId = clientOrderId;
       let result;
       try {
@@ -486,7 +497,8 @@ export class PortfolioEngine {
       if (result.filledQty > 0) o.filledAt ??= this.now();
       if (result.filledQty > 0 && result.avgPrice !== null && result.avgPrice > 0) {
         if (o.intent.side === "buy") applyBuyFill(this.rows, o.intent.symbol, result.filledQty, result.avgPrice, this.now());
-        else applySellFill(this.rows, o.intent.symbol, result.filledQty, result.avgPrice, { nowMs: this.now() });
+        else applySellFill(this.rows, o.intent.symbol, result.filledQty, result.avgPrice,
+          { nowMs: this.now(), ...(o.intent.maxHold === "close" ? { closeReason: MAX_HOLD_CLOSE_REASON } : {}) });
         if (result.filledQty < o.intent.qty * (1 - (this.opts.qtyTolerance ?? DEFAULT_QTY_TOLERANCE))) {
           this.log.warn(`${o.intent.side} ${o.intent.symbol}: partial fill ${result.filledQty}/${o.intent.qty} (${result.status})`);
         } else {
@@ -498,7 +510,8 @@ export class PortfolioEngine {
         const px = view.lastClose(o.intent.symbol) ?? 0;
         if (px > 0) {
           if (o.intent.side === "buy") applyBuyFill(this.rows, o.intent.symbol, result.filledQty, px, this.now());
-          else applySellFill(this.rows, o.intent.symbol, result.filledQty, px, { nowMs: this.now() });
+          else applySellFill(this.rows, o.intent.symbol, result.filledQty, px,
+            { nowMs: this.now(), ...(o.intent.maxHold === "close" ? { closeReason: MAX_HOLD_CLOSE_REASON } : {}) });
           this.log.error(`${o.intent.side} ${o.intent.symbol}: fill ${result.filledQty} without a price — row marked at last close ${px}`);
         }
       }
@@ -517,7 +530,7 @@ export class PortfolioEngine {
    *  persist THAT memory (stop levels from the real average entry) and make
    *  the venue's stops match. Never a second rebalance. */
   private async refreshStops(key: { accountId: string; strategyVersion: string; session: SessionDate }, view: EnginePriceView, target: TargetBook, equity: number, persistMemory = true): Promise<void> {
-    const positions = positionsFromRows(loadSleeveRows(this.opts.accountId));
+    const positions = positionsFromRows(loadSleeveRows(this.opts.accountId), this.hasMaxHold());
     const refreshed = this.decideFn({
       view, membership: this.opts.membership, config: this.opts.config, executionSession: key.session,
       book: { equity, positions, memory: target.memory },

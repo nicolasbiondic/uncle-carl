@@ -57,7 +57,7 @@ import { MOMENTUM_STOCKS_UNIVERSE, MOMENTUM_CRYPTO_UNIVERSE, RISK_PROFILES } fro
 import { DEFAULT_TSM_CONFIG } from "../strategies/momentum/TimeSeriesMomentum";
 import { DEFAULT_RISK_CONFIG, type RiskGuardConfig } from "../strategies/momentum/RiskGuard";
 import { DEFAULT_MEANREV_CONFIG } from "../strategies/meanrev/MeanRevEngine";
-import type { ExposureControlConfig, TrailStopConfig, VolTargetConfig } from "../strategies/momentum/MomentumEngine";
+import type { ExposureControlConfig, TimeStopConfig, TrailStopConfig, VolTargetConfig } from "../strategies/momentum/MomentumEngine";
 import { MODEL_VERSIONS, currentModelManifests, isPortfolioEngineSleeve } from "../portfolio/modelVersions";
 
 /**
@@ -84,6 +84,7 @@ export interface LiveCandidateConfig {
   tsmTrail?: TrailStopConfig;
   sharpeGate?: { lookbackDays: number; minSharpe: number };
   volTarget?: VolTargetConfig;
+  timeStop?: TimeStopConfig;
   /** RegimeFilter overrides the replay merges over its barMinutes (walk-forward
    *  CandidateConfig.regime). Absent = the filter's default thresholds. */
   regime?: { enabled?: boolean; correlationCeiling?: number };
@@ -122,6 +123,9 @@ export const MOMENTUM_CRYPTO_VOL_TARGET = { annualizedPct: 35, lookbackBars: 720
  *  stays ON. Locked against src/index.ts's source text (the `regime:` literal
  *  of the momentum_crypto plan) by scripts/liveSleeveConfigs.test.ts. */
 export const MOMENTUM_CRYPTO_REGIME = { correlationCeiling: 1.01 };
+
+/** RW6 owner rule on both live crypto sleeves; source-text locked against index.ts. */
+export const MOMENTUM_CRYPTO_TIME_STOP = { maxHoldHours: 120 };
 
 /** Rolling-Sharpe entry gate every live momentum sleeve wires verbatim. */
 export const MOMENTUM_SLEEVE_SHARPE_GATE = { lookbackDays: 30, minSharpe: 0 };
@@ -306,6 +310,7 @@ export function liveMomentumCryptoConfig(): LiveSleeveConfig {
       // runs the engine defaults (14/30), exactly like the manifest.
       volTarget: { ...MOMENTUM_CRYPTO_VOL_TARGET },
       regime: { ...MOMENTUM_CRYPTO_REGIME },
+      timeStop: { ...MOMENTUM_CRYPTO_TIME_STOP },
       sharpeGate: { ...MOMENTUM_SLEEVE_SHARPE_GATE },
       risk: { peakHalfLifeDays: DEFAULT_RISK_CONFIG.peakHalfLifeDays },
       maxGrossExposureMult: MOMENTUM_CRYPTO_MAX_GROSS_EXPOSURE_MULT,
@@ -353,6 +358,7 @@ export function liveMomentumUsdcConfig(): LiveSleeveConfig {
       // RW4a c2: the ONE change vs the control's candidate (locked key by key
       // against the manifest by liveSleeveConfigs.test.ts).
       exposureControl: { ...MOMENTUM_USDC_EXPOSURE_CONTROL, drawdown: { ...MOMENTUM_USDC_EXPOSURE_CONTROL.drawdown! } },
+      timeStop: { ...MOMENTUM_CRYPTO_TIME_STOP },
       maxGrossExposureMult: MOMENTUM_USDC_MAX_GROSS_EXPOSURE_MULT,
     },
     universe: Object.keys(USDC_SYMBOL_MAP).map(s => s.replace("/USDC", "/USD")),

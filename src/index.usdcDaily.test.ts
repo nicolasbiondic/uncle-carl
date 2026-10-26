@@ -19,6 +19,11 @@ import { exposureResizeFactor, exposureScale } from "./strategies/momentum/Momen
 import { evaluateRisk, DEFAULT_RISK_CONFIG, type RiskState } from "./strategies/momentum/RiskGuard";
 
 describe("momentum_crypto_usdc daily-kernel cutover", () => {
+  test("RW6 adds the 120h cap in plan + builtin, retaining the daily RiskState key", () => {
+    expect(momentumUsdcPortfolioPlan().engineConfig.timeStop).toEqual({ maxHoldHours: 120 });
+    expect((builtinPortfolio("momentum_crypto_usdc").params as any).timeStop).toEqual({ maxHoldHours: 120 });
+    expect(momentumUsdcPortfolioPlan().engineConfig.modelVersion).toBe("daily-s5-blend3-2026-09-26");
+  });
   test("model identity is the daily kernel and is wired into the USDC engine", () => {
     expect(MOMENTUM_USDC_MODEL_VERSION).toBe("daily-s5-blend3-2026-09-26");
     const src = readFileSync(join(import.meta.dir, "index.ts"), "utf8");

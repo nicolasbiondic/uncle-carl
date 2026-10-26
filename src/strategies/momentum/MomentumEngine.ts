@@ -563,19 +563,24 @@ export interface BreakoutShortConfig {
   atrDays: number;
   stopN: number;
   riskPerN: number;
+  /** Optional wall-clock cap, checked at each hourly decision. After expiry,
+   * re-entry requires a fresh above-to-below entry-channel crossing. */
+  maxHoldHours?: number;
 }
 export const BREAKOUT_SHORT_EXIT = "BREAKOUT_SHORT_EXIT";
 export const BREAKOUT_SHORT_STOP = "BREAKOUT_SHORT_STOP";
 export const BREAKOUT_SHORT_PRIORITY = "BREAKOUT_SHORT_PRIORITY";
 export const BREAKOUT_SHORT_DRAWDOWN = "BREAKOUT_SHORT_DRAWDOWN";
+export const BREAKOUT_SHORT_TIME_STOP = "BREAKOUT_SHORT_TIME_STOP";
 export interface TurtleDailyState { day: number; n: number; close: number }
 export const breakoutHistoryDays = (c: BreakoutShortConfig): number => Math.max(c.entryDays, c.exitDays, c.atrDays + 1);
 export function validateBreakoutShort(c: any): asserts c is BreakoutShortConfig {
   if (!c || typeof c !== "object" || Array.isArray(c) ||
-      Object.keys(c).sort().join(",") !== "atrDays,entryDays,exitDays,riskPerN,stopN,symbol" || c.symbol !== "BTC/USD" ||
+      Object.keys(c).filter(k => k !== "maxHoldHours").sort().join(",") !== "atrDays,entryDays,exitDays,riskPerN,stopN,symbol" || c.symbol !== "BTC/USD" ||
       ![c.entryDays, c.exitDays, c.atrDays].every(n => Number.isInteger(n) && n >= 2 && n <= 990) ||
-      !Number.isFinite(c.stopN) || c.stopN <= 0 || !Number.isFinite(c.riskPerN) || c.riskPerN <= 0 || c.riskPerN > 0.01) {
-    throw new Error("breakoutShort requires BTC/USD, integer days 2..990, positive stopN and riskPerN in (0,0.01]");
+      !Number.isFinite(c.stopN) || c.stopN <= 0 || !Number.isFinite(c.riskPerN) || c.riskPerN <= 0 || c.riskPerN > 0.01 ||
+      (c.maxHoldHours !== undefined && (!Number.isFinite(c.maxHoldHours) || c.maxHoldHours <= 0))) {
+    throw new Error("breakoutShort requires BTC/USD, integer days 2..990, positive stopN, riskPerN in (0,0.01] and optional positive maxHoldHours");
   }
 }
 /** Initial N: SMA of the first atrDays true ranges in the initial window.
@@ -1008,6 +1013,9 @@ export interface MomentumPersistedState {
    * close. Never shift a month-start entry decision to a later day. */
   idleOverlayExitPending?: boolean;
   turtleDaily?: TurtleDailyState;
+  /** Capped breakout only: preserve age and entry-channel edge across restarts. */
+  breakoutEntryAt?: number;
+  breakoutBelowEntry?: boolean;
 }
 
 export interface MomentumStatePersistence {
@@ -1129,6 +1137,8 @@ export class MomentumEngine {
   private idleOverlayMonth?: string;
   private idleOverlayExitPending = false;
   private turtleDaily?: TurtleDailyState;
+  private breakoutEntryAt?: number;
+  private breakoutBelowEntry?: boolean;
   /** Shadow-equity resume (cfg.risk.shadowResume): symbols the VIRTUAL long
    *  book held at the previous tick, and their last decision closes.
    *  Deliberately EPHEMERAL (not persisted): the monetary anchors live on
@@ -1212,6 +1222,10 @@ export class MomentumEngine {
         }
         this.idleOverlayExitPending = loaded.idleOverlayExitPending === true;
         if (this.cfg.breakoutShort) this.turtleDaily = loaded.turtleDaily;
+        if (this.cfg.breakoutShort?.maxHoldHours !== undefined) {
+          this.breakoutEntryAt = validRiskAnchor(loaded.breakoutEntryAt, this.clock.now()) || undefined;
+          if (typeof loaded.breakoutBelowEntry === "boolean") this.breakoutBelowEntry = loaded.breakoutBelowEntry;
+        }
         this.lastRebalanceAt = validRiskAnchor(loaded.riskAnchorAt, this.clock.now());
       }
     }
@@ -1631,6 +1645,10 @@ export class MomentumEngine {
           if (res.ok) {
             breakoutPositions = breakoutPositions.filter(x => x !== p);
             breakoutClosedThisTick = true;
+            if (this.cfg.breakoutShort?.maxHoldHours !== undefined) {
+              this.breakoutEntryAt = undefined;
+              this.persistState();
+            }
             breakoutActions.push({ type: "close", symbol: p.symbol, side: p.side, closeReason, reason: closeReason });
           } else this.log.warn(`breakout short close failed: ${res.reason}`);
         } catch (e: any) { this.log.error(`breakout short close threw: ${e.message}`); }
@@ -1640,6 +1658,7 @@ export class MomentumEngine {
     const bc = this.cfg.breakoutShort;
     let channel: ReturnType<typeof turtleChannels> = null;
     const breakoutPrice = bc ? candles.get(bc.symbol)?.at(-1)?.close : undefined;
+    const breakoutWasBelow = this.breakoutBelowEntry;
     if (bc) {
       try {
         const days = Math.max(breakoutHistoryDays(bc), this.turtleDaily ? Math.floor(now / 86_400_000) - this.turtleDaily.day / 86_400_000 - 1 : 0);
@@ -1647,10 +1666,21 @@ export class MomentumEngine {
         if (channel) { this.turtleDaily = channel.state; this.persistState(); }
       } catch (e: any) { this.log.warn(`breakout daily fetch failed: ${e.message}`); }
     }
+    if (bc?.maxHoldHours !== undefined) {
+      if (breakoutPositions.length) {
+        const entryTime = positions.find(p => p.role === "breakout-short")?.entryTime;
+        this.breakoutEntryAt ??= validRiskAnchor(entryTime, now) || now;
+      } else this.breakoutEntryAt = undefined;
+      // Missing data never rearms the signal. A sustained breach is ONE
+      // breakout, even after a time stop or a process restart.
+      if (channel && breakoutPrice) this.breakoutBelowEntry = breakoutPrice < channel.low;
+      this.persistState();
+    }
     // Stop remains available even when daily history fails. A row missing its
     // entry/stop is drained rather than inventing a new N after a restart.
     for (const p of breakoutPositions) {
       const reason = hardDrawdown ? BREAKOUT_SHORT_DRAWDOWN
+        : bc?.maxHoldHours !== undefined && this.breakoutEntryAt !== undefined && now - this.breakoutEntryAt >= bc.maxHoldHours * 3_600_000 ? BREAKOUT_SHORT_TIME_STOP
         : !bc || !p.breakoutN || !p.stopLoss || !p.entryPrice ? BREAKOUT_SHORT_EXIT
         : breakoutPrice && breakoutPrice >= p.stopLoss ? BREAKOUT_SHORT_STOP
         : breakoutPrice && channel && breakoutPrice > channel.high ? BREAKOUT_SHORT_EXIT : undefined;
@@ -2128,6 +2158,7 @@ export class MomentumEngine {
     // has priority, other coins may coexist. Risk/maintenance/gross gates
     // apply; hourly regime/trend/sharpe gates belong to the LONG model only.
     if (bc && channel && breakoutPrice && breakoutPrice < channel.low && !breakoutClosedThisTick &&
+        (bc.maxHoldHours === undefined || breakoutWasBelow !== true) &&
         !breakoutPositions.length && equityValid && realisedValid && canOpen && !tradingDisabled && !hardDrawdown && !hasUndecidableHold) {
       const remaining = await this.broker.getOpenPositions();
       const notionalUsd = equity * bc.riskPerN / channel.state.n * breakoutPrice;
@@ -2138,6 +2169,11 @@ export class MomentumEngine {
           const res = await this.broker.openPosition({ symbol: bc.symbol, side: "sell", notionalUsd, role: "breakout-short", breakout: { n: channel.state.n, stopN: bc.stopN, quantity: equity * bc.riskPerN / channel.state.n } });
           intendedOpenUsd += notionalUsd;
           if (res.ok) {
+            if (bc.maxHoldHours !== undefined) {
+              this.breakoutEntryAt = now;
+              this.breakoutBelowEntry = true;
+              this.persistState();
+            }
             liveGrossNotional += notionalUsd;
             executed.push({ type: "open", symbol: bc.symbol, side: "sell", notionalTarget: notionalUsd, reason: "Turtle daily low breakout" });
             if (sleeve) sleeveOutput.recordOpenSuccess(sleeve);
@@ -2515,6 +2551,10 @@ export class MomentumEngine {
         ...(this.cfg.idleOverlay && this.idleOverlayMonth ? { idleOverlayMonth: this.idleOverlayMonth } : {}),
         ...(this.idleOverlayExitPending ? { idleOverlayExitPending: true } : {}),
         ...(this.cfg.breakoutShort && this.turtleDaily ? { turtleDaily: this.turtleDaily } : {}),
+        ...(this.cfg.breakoutShort?.maxHoldHours !== undefined ? {
+          ...(this.breakoutEntryAt !== undefined ? { breakoutEntryAt: this.breakoutEntryAt } : {}),
+          ...(this.breakoutBelowEntry !== undefined ? { breakoutBelowEntry: this.breakoutBelowEntry } : {}),
+        } : {}),
       });
     }
   }

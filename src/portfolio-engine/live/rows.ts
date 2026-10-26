@@ -18,7 +18,7 @@
 
 import {
   getDB, PORTFOLIO_ENGINE_STRATEGY, accumulatePartialCloseLedger, closeTradeExplicit,
-  getTradingStats, insertActivity, pnlOf,
+  getTradingStats, insertActivity, pnlOf, getETDateKey,
 } from "../../db/database";
 import type { Position } from "../types";
 
@@ -77,18 +77,20 @@ export function loadSleeveRows(accountId: string): SleeveRow[] {
  *  symbol by construction; a legacy duplicate is merged qty-weighted so the
  *  book never under-reports exposure). Long-only: sell-side rows are reported
  *  with qty 0 and logged by the caller. */
-export function positionsFromRows(rows: readonly SleeveRow[]): Position[] {
-  const bySymbol = new Map<string, { qty: number; cost: number }>();
+export function positionsFromRows(rows: readonly SleeveRow[], includeEntrySession = false): Position[] {
+  const bySymbol = new Map<string, { qty: number; cost: number; entryTime: number }>();
   for (const r of rows) {
     if (r.side !== "buy") continue;
-    const cur = bySymbol.get(r.symbol) ?? { qty: 0, cost: 0 };
+    const cur = bySymbol.get(r.symbol) ?? { qty: 0, cost: 0, entryTime: r.entryTime };
+    cur.entryTime = Math.min(cur.entryTime, r.entryTime);
     cur.qty += r.quantity;
     cur.cost += r.quantity * r.entryPrice;
     bySymbol.set(r.symbol, cur);
   }
   return [...bySymbol.entries()]
     .filter(([, v]) => v.qty > 0)
-    .map(([symbol, v]) => ({ symbol, qty: v.qty, avgEntryPrice: v.cost / v.qty }))
+    .map(([symbol, v]) => ({ symbol, qty: v.qty, avgEntryPrice: v.cost / v.qty,
+      ...(includeEntrySession ? { entrySession: getETDateKey(v.entryTime) } : {}) }))
     .sort((a, b) => (a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0));
 }
 

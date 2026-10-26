@@ -1,0 +1,51 @@
+{
+  "name": "rw6-e1-lev-vt30-g250-maxhold5-sh50-v1",
+  "sleeve": "stocks",
+  "description": "DRAFT (2026-10-25), dry-run only, NOT executed. RW6 E1 maxhold5 plus existing regimeOverlay.hedge SH fraction=0.5: long inverse ETF in risk-off, half the pre-overlay core gross BEFORE the existing vol/per-asset/gross caps; this is not a native short sale and final SH weight can be lower (perAssetCap=0.25). Cash defense retained, no defensive leg. Both renewal legs pay costs/count orders; no claim that the 30 executed orders/session goal is met. SH history starts 2016-06-27, before the 2017-06-01 window; cov21/fast5 need no 252-bar SH inception guard. Same window/costs/capital as live E1; no activation. Trial reservation 457 -> 458, not consumed by dry-run.",
+  "trialAccounting": { "priorUniqueTrials": 457, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": ["SPY", "QQQ", "IWM", "GLD", "AAPL", "MSFT", "NVDA", "META", "GOOGL", "AMZN", "SMH", "BIL", "SH"],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-24",
+  "window": { "from": "2017-06-01", "to": "2026-09-24", "outerFoldCount": 3, "innerFoldCount": 3, "purgeYears": 0.25, "warmupDays": 420 },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0, "marginInterest": { "annualRate": 0.065 } },
+    "stress": { "slippageBps": 5, "commissionBps": 2, "marginInterest": { "annualRate": 0.065 } }
+  },
+  "ledger": { "initialEquity": 50000 },
+  "candidates": [{
+    "name": "e1-lev-vt30-g250-maxhold5-sh50",
+    "cadenceMin": 1440,
+    "portfolio": {
+      "strategy": {
+        "kind": "volManaged",
+        "universe": ["SPY", "QQQ", "IWM", "GLD", "AAPL", "MSFT", "NVDA", "META", "GOOGL", "AMZN", "SMH"],
+        "inceptionGuardBars": 252,
+        "volLookback": 63,
+        "covLookback": 21,
+        "portfolioVolTarget": 0.3,
+        "annualization": 252,
+        "perAssetCap": 0.25,
+        "maxGross": 2.5,
+        "regimeOverlay": {
+          "signals": [{ "kind": "maTrend", "symbol": "SPY", "period": 200, "sampling": "daily", "bandPct": 1 }],
+          "combine": "any",
+          "coreScale": 0,
+          "hedge": { "symbol": "SH", "fraction": 0.5 }
+        },
+        "fastVolLookback": 5,
+        "maxHoldSessions": 5
+      },
+      "venue": { "venue": "alpaca", "fractional": true, "minOrderNotional": 5, "rebalanceBand": 0.01 }
+    }
+  }],
+  "acceptance": {}
+}

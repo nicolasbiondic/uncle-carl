@@ -87,6 +87,11 @@ export const MODEL_VERSIONS: Readonly<Record<string, readonly ModelVersion[]>> =
       engine: "portfolio",
       manifest: "experiments/rw5-e1-lev-vt30-g250-sma200-fastvol5-cash-v1.json", candidate: "e1-lev-vt30-g250-sma200-fastvol5",
       artifact: { dir: "data/backtests/fb410729eaf8cbe6efd32c0193f2e23b0313af4ceae0514aebdff1109a66e74b", shiftDays: 0 } },
+    { id: "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5", since: "2026-10-26T13:35:01Z", modelStart: "2026-10-27",
+      note: "RW §17.1–17.2, owner 5-day maximum: maxHoldSessions 5, MAX_HOLD close then same-pass rebuy; H passed: CAGR 26.4% vs 30.0%, Sharpe 1.04 vs 1.16, DD 26.6% vs 26.2%, account DD 22.5%; pe-vt30-g250-sma200-fv5 never traded: its first pass is taken by this version (since one second after its predecessor, before the ~13:35:15Z pass); cash defense and account BUY cap 1.9x unchanged",
+      engine: "portfolio",
+      manifest: "experiments/rw6-e1-lev-vt30-g250-maxhold5-v1.json", candidate: "e1-lev-vt30-g250-maxhold5",
+      artifact: { dir: "data/backtests/721d4998f845909c84a0fc35e6dbb44d5fc93cd62de741ff545b1cfd75a8ab03", shiftDays: 0 } },
   ],
   meanrev_stocks: [
     { id: "meanrev_stocks@pre-slot10", since: EPOCH, modelStart: null,
@@ -104,6 +109,11 @@ export const MODEL_VERSIONS: Readonly<Record<string, readonly ModelVersion[]>> =
       // RW2 §9: Sharpe OOS 1.11, +150%, DD 21.0%, PSR 0.997; R1–R7 met.
       manifest: "experiments/rw2-e2-meanrev-volmanaged-v1.json", candidate: "vt15",
       artifact: { dir: "data/backtests/0b088ca320e3521d8bff05b10c1ad7eed2816bc2a1b0b927eb3134e2a3dca4c2", shiftDays: 0 } },
+    { id: "meanrev_stocks@pe-vt15-mh5", since: "2026-10-26T13:00:00Z", modelStart: "2026-10-27",
+      note: "RW §17.1–17.2, owner 5-day maximum: maxHoldSessions 5, MAX_HOLD close then same-pass rebuy; H passed: CAGR 11.4% vs 13.2%, Sharpe 0.94 vs 1.11, DD 18.0% vs 21.0%; same vt15 portfolio kernel, 6.4 trades/session",
+      engine: "portfolio",
+      manifest: "experiments/rw6-e2-meanrev-maxhold5-v1.json", candidate: "vt15-maxhold5",
+      artifact: { dir: "data/backtests/41fdc636f209217bede8220cd4d690000ea4b4e71983dab1f5a6c99a2d5c3ee2", shiftDays: 0 } },
   ],
   momentum_crypto: [
     { id: "momentum_crypto@pre-vt35", since: EPOCH, modelStart: null,
@@ -124,6 +134,10 @@ export const MODEL_VERSIONS: Readonly<Record<string, readonly ModelVersion[]>> =
       // The live candidate must equal this manifest's single candidate (liveSleeveConfigs.test.ts).
       manifest: "experiments/momentum-crypto-rw3-vt-35-corroff-pure-v1.json",
       artifact: { dir: "data/backtests/efc086b47776235749e7013458360f8131cb3d3629b0a143f6c994d2bb16f240", shiftDays: 0 } },
+    { id: "momentum_crypto@vt35-corroff-mh120", since: "2026-10-26T13:00:00Z", modelStart: "2026-10-27",
+      note: "RW §17.1–17.2 criterion H, results §17.3: owner 5-day maximum via timeStop 120h; H passed on common days: CAGR 15.8% vs 55.2%, Sharpe 0.61 vs 1.33, DD 35.3% vs 33.6%, four-sleeve DD 15.9%, 2.1 orders/day; no same-pass re-entry; RiskState key NOT changed/re-anchored",
+      manifest: "experiments/momentum-crypto-rw6-maxhold5-pure-v1.json",
+      artifact: { dir: "data/backtests/b4abce2e6fbca40228f160418331b300c8ed8f9ba75b38cb6e3e4de901aa0f6b", shiftDays: 0 } },
   ],
   momentum_crypto_usdc: [
     { id: "momentum_crypto_usdc@hourly-13b", since: "2026-07-20T00:00:00Z", modelStart: null,
@@ -145,6 +159,10 @@ export const MODEL_VERSIONS: Readonly<Record<string, readonly ModelVersion[]>> =
       // control. The live candidate must equal this manifest's single candidate (liveSleeveConfigs.test.ts).
       manifest: "experiments/momentum-crypto-usdc-daily-s5-rw4a-xc-dd-pure-v1.json",
       artifact: { dir: "data/backtests/8892c1e950818ee724cbd5473ffdb6d207aefc98ae1f054d3bdf08e4eebad607", shiftDays: -1 } },
+    { id: "momentum_crypto_usdc@daily-d13s5-xc-dd-mh120", since: "2026-10-26T13:00:00Z", modelStart: "2026-10-27",
+      note: "RW §17.1–17.2 criterion H, results §17.3: owner 5-day maximum via timeStop 120h at daily decisions; H passed: CAGR 24.7% vs 45.1%, Sharpe 0.76 vs 1.04, DD 48.1% vs 51.9%, four-sleeve DD 16.0%, 0.8 orders/day; no same-pass re-entry; exposure control unchanged, RiskState key NOT changed/re-anchored",
+      manifest: "experiments/momentum-crypto-usdc-daily-s5-rw6-maxhold5-pure-v1.json",
+      artifact: { dir: "data/backtests/74efd64b61a839df9844fbe7039c384cd694a0b4ad2d319762b0d71798bfb783", shiftDays: -1 } },
   ],
   momentum_btc: [
     { id: "momentum_btc@hourly-coinm", since: EPOCH, modelStart: null,

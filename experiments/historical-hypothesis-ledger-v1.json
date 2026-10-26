@@ -1494,8 +1494,172 @@
       "resultsComplete": false,
       "executionReported": true,
       "evidence": "Q5 pregunta 4 / RW SS16.19-16.20: +1, 455->456. #455 copia momentum_crypto vivo con UN mando: breakoutShort BTC, minimo 55 dias completos UTC, salida maximo 20 dias o stop 2N, ATR Wilder20 con semilla 55 dias, una unidad sin piramidar, 1N=1% equity. Adaptaciones: triggers al cierre horario, no stop nativo/intrabar; puede convivir con largos de otras monedas, nunca BTC largo (prioridad momentum); respeta riesgo, bruto y margen. Control +0 efc086b4, E1/E2 33b0ac05/0b088ca3, otro cripto 8892c1e9; --overlay. 726b818d: mismos folds, dataHash 40229b0f distinto por historia diaria extra declarada; 1575 dias comunes. FALLA O1 (+1.5240pp CAGR <3) y T3 (2024 DD 21.2985% vs 16.0470%; FTX empata a precision reportada); PASA T1, O2 (DD 30.9120%), T4 (PSR 0.9979, folds 0.960/0.985/0.774, exclusion 0.675x), T5 (DD libro 14.6139%) y T6. CAGR 56.6796% vs 55.1556%, Sharpe 1.3489 vs 1.3313. Telemetria por fold y total: 26 ordenes, 13 aperturas/cierres, 332.9583 dias en corto, salidas 3 por maximo20 / 5 stop2N / 5 prioridad BTC largo; funding neto cobrado 57.8731 USD. Mejora bajista 2025-26 (20.3509% vs 28.6745%), pero suma perdidas por stops en 2024 y poco retorno. Hipotesis tras ver octubre de 2026, parametros publicados, no evidencia independiente. Balance SS16.20: los dos disenos de cortos Q5 fallan; TSM12 anade retorno con demasiada caida y dependencia de una moneda, ruptura protege bajistas pero anade poco y falla en correcciones. No es prueba universal contra los cortos. NO SE CABLEA; los sleeves siguen con sus versiones vivas, sin pausa ni reasignacion. authoritativeArtifactRw5Q5Breakout; inventario historico incompleto, sin approved=true."
+    },
+    {
+      "id": "rw6-stocks-2026-10-26",
+      "sourceCommit": "863c647 (pre-registro SS17.1 antes de correr); c57e7ba (resultado SS17.2)",
+      "sourcePaths": [
+        "experiments/rw6-e1-lev-vt30-g250-maxhold5-v1.json",
+        "experiments/rw6-e1-lev-vt30-g250-maxhold5-sh50-v1.json",
+        "experiments/rw6-e2-meanrev-maxhold5-v1.json",
+        "scripts/rw3-compare-artifacts.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 3,
+      "priorUniqueTrials": 456,
+      "resultingUniqueTrials": 459,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW6 SS17.1-17.4: +3, 456->459. El limite de 5 dias es una restriccion del dueno, no una mejora validada. #456 E1 vivo mas maxHoldSessions=5: 721d4998 contra fb410729, CAGR 26.3790% vs 29.9738%, Sharpe 1.0447 vs 1.1558, DD 26.6313% vs 26.1691%; coste -3.5947pp de CAGR. #457 anade cobertura SH al 50% del bruto previo a topes, ETF inverso comprado, no venta corta nativa: af69f21f contra 721d4998, CAGR 24.4256% vs 26.3790%, DD 30.3464%; FALLA S por retorno, NO SE CABLEA. #458 E2 vt15 mas 5 sesiones: 41fdc636 contra 0b088ca3, CAGR 11.4438% vs 13.2351%, Sharpe 0.9396 vs 1.1088, DD 18.0178% vs 21.0046%; coste -1.7913pp. Los dos limites PASAN H (CAGR >=0, cuenta DD 22.4870% <=35%) y estan CABLEADOS desde c25a751 como momentum_stocks@pe-vt30-g250-sma200-fv5-mh5 y meanrev_stocks@pe-vt15-mh5. Sesiones NYSE, MAX_HOLD vende y recompra en la misma pasada si sigue en objetivo y el cierre se confirma; ajustes no reinician el reloj. Contadores completos: E1 5.5709 y E2 12.8865 ordenes/sesion, no los proxies 3.4974/12.8277 de ida y vuelta. No se afirma garantia de liquidacion durante fallos ni certificacion; authoritativeArtifactRw6Stocks conserva artefactos y limites de evidencia. Inventario historico incompleto, sin pausa ni reasignacion."
+    },
+    {
+      "id": "rw6-crypto-2026-10-26",
+      "sourceCommit": "c57e7ba (pre-registro SS17.2 antes de correr); 8dceb77 (resultado SS17.3)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-rw6-maxhold5-pure-v1.json",
+        "experiments/momentum-crypto-rw6-maxhold5-breakout55-pure-v1.json",
+        "experiments/momentum-crypto-usdc-daily-s5-rw6-maxhold5-pure-v1.json",
+        "scripts/rw5-crypto-evaluate.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 3,
+      "priorUniqueTrials": 459,
+      "resultingUniqueTrials": 462,
+      "inventoryComplete": false,
+      "resultsComplete": false,
+      "executionReported": true,
+      "evidence": "RW6 SS17.2-17.4: +3, 459->462. #459 cripto horario vivo mas timeStop 120 h: b4abce2e contra efc086b4, CAGR 15.8211% vs 55.1556%, Sharpe 0.6143 vs 1.3313, DD 35.2699% vs 33.5689%, libro DD 15.9287%. #460 anade ruptura BTC 55/20 dias, stop 2N Wilder20, 1N=1% equity y limite propio 120 h: 67ca2144 contra b4abce2e, CAGR 14.7544% vs 15.8211%, DD 31.2000%, FALLA S por retorno aunque DD <=40%; NO SE CABLEA. Historia diaria extra declarada cambia dataHash, no los folds. #461 USDC vivo mas 120 h: 74efd64b contra 8892c1e9, CAGR 24.6902% vs 45.0829%, Sharpe 0.7580 vs 1.0383, DD 48.0918% vs 51.9465%, libro DD 16.0157%. E1/E2 del libro son 721d4998/41fdc636; otro cripto 8892c1e9 para #459/#460 y b4abce2e para #461. Los limites PASAN H: CAGR >=0 y DD del libro <=35%, no del sleeve. Son restriccion del dueno: cuestan 39.3346 y 20.3927pp de CAGR, no ganadores por rentabilidad. Se pierde tendencia larga al exigir 5% para reentrar frente a -2% para permanecer; sin reentrada en la misma pasada, limites a decisiones, no garantia durante fallos. CABLEADOS desde c25a751 como momentum_crypto@vt35-corroff-mh120 y momentum_crypto_usdc@daily-d13s5-xc-dd-mh120. Ni SH ni el corto BTC se cablean: requieren decision explicita del dueno. Se publicaron unas 19 ordenes/dia esperadas frente a meta 30; es estimacion, no tasa conjunta validada: mezcla proxies de acciones sin ajustes y dias calendario cripto. execution conserva contadores completos por sleeve; la meta sigue sin validarse. authoritativeArtifactRw6Crypto; los sleeves siguen operando sin pausa ni reasignacion, inventario historico incompleto y sin approved=true."
     }
   ],
+  "authoritativeArtifactRw6Stocks": {
+    "verdict": "CUMPLEN H los dos limites de 5 sesiones; CABLEADOS por restriccion del dueno, no por mejora de rentabilidad. SH FALLA S; NO SE CABLEA.",
+    "figuresNote": "SS17.1-17.4. Comparacion OOS en dias comunes con rw3-compare-artifacts --ppy 252; CAGR por tiempo calendario, cifras a 4 decimales y Pct en porcentajes. H exige CAGR >=0 y DD de cuenta <=35%; cuenta = 50k E1 RW6 + 50k E2 RW6, capitales fijos y sin reasignacion, en su solapamiento. S exige CAGR >=H y DD del sleeve <=35%. No se aplican K ni T de RW5. Los manifests conservan su texto previo de dry-run: la ejecucion terminada y el cableado constan aqui y en los commits de resultados. Stress/LOO tienen resultados, pero acceptance no declara umbrales: sus gatesFailed con valores nulos son fallos cerrados por umbrales ausentes, NO fallos medidos contra un umbral. Ninguno afirma approved=true; inventario historico incompleto. Ordenes ejecutadas = portfolioDiagnostics.orders + foldEndOrders (el primero excluye los cierres finales); incluye ajustes. 2*trades/sessions es solo proxy de ida y vuelta, no todas las ordenes.",
+    "wiring": { "commit": "c25a751", "wiredAt": "2026-10-26T06:03:00Z" },
+    "candidates": [
+      {
+        "trial": 456,
+        "manifest": "experiments/rw6-e1-lev-vt30-g250-maxhold5-v1.json",
+        "path": "data/backtests/721d4998f845909c84a0fc35e6dbb44d5fc93cd62de741ff545b1cfd75a8ab03/",
+        "control": "fb410729", "partner": "41fdc636", "criterion": "H", "wired": true,
+        "version": "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5",
+        "dataHash": "9162073e948b06bbabb56c3668b0ede1ac5fe4cda7001d924665db94e8f320c1",
+        "controlDataHash": "9162073e948b06bbabb56c3668b0ede1ac5fe4cda7001d924665db94e8f320c1",
+        "figures": {
+          "commonDays": 1755, "from": "2019-09-30", "to": "2026-09-23",
+          "cagrPct": 26.379, "controlCagrPct": 29.9738, "deltaCagrPp": -3.5947,
+          "sharpe": 1.0447, "controlSharpe": 1.1558, "maxDrawdownPct": 26.6313, "controlMaxDrawdownPct": 26.1691, "accountMaxDrawdownPct": 22.487
+        },
+        "execution": { "trades": 3069, "sessions": 1755, "diagnosticOrders": 9755, "foldEndOrders": 22, "adjustmentOrders": 3639, "orders": 9777, "tradesPerSession": 1.7487, "roundTripProxyOrdersPerSession": 3.4974, "ordersPerSession": 5.5709 },
+        "gatesFailed": ["looMaxDrawdown", "looMinSharpe", "looMinTotalReturn", "stressMaxDrawdown", "stressMinSharpe", "stressMinTotalReturn"],
+        "criteriaFailed": [], "criteriaVerdict": "CUMPLE H; CABLEADO"
+      },
+      {
+        "trial": 457,
+        "manifest": "experiments/rw6-e1-lev-vt30-g250-maxhold5-sh50-v1.json",
+        "path": "data/backtests/af69f21f6d8cc4bf9e4a2ac4e2f06b7b6aa6dcaaf4ddea7abc74d007fe376637/",
+        "control": "721d4998", "partner": "41fdc636", "criterion": "S", "wired": false, "version": null,
+        "dataHash": "cf906afa4bae267090b11ad6bc705cc18a2a21d66bd64a09e9326516bc27dcb6",
+        "controlDataHash": "9162073e948b06bbabb56c3668b0ede1ac5fe4cda7001d924665db94e8f320c1",
+        "figures": {
+          "commonDays": 1755, "from": "2019-09-30", "to": "2026-09-23",
+          "cagrPct": 24.4256, "controlCagrPct": 26.379, "deltaCagrPp": -1.9535,
+          "sharpe": 0.9764, "controlSharpe": 1.0447, "maxDrawdownPct": 30.3464, "controlMaxDrawdownPct": 26.6313, "accountMaxDrawdownPct": 23.0097
+        },
+        "execution": { "trades": 3143, "sessions": 1755, "diagnosticOrders": 9917, "foldEndOrders": 23, "adjustmentOrders": 3654, "orders": 9940, "tradesPerSession": 1.7909, "roundTripProxyOrdersPerSession": 3.5818, "ordersPerSession": 5.6638 },
+        "gatesFailed": ["looMaxDrawdown", "looMinSharpe", "looMinTotalReturn", "stressMaxDrawdown", "stressMinSharpe", "stressMinTotalReturn"],
+        "criteriaFailed": ["S_cagr"], "criteriaVerdict": "FALLA S; NO SE CABLEA"
+      },
+      {
+        "trial": 458,
+        "manifest": "experiments/rw6-e2-meanrev-maxhold5-v1.json",
+        "path": "data/backtests/41fdc636f209217bede8220cd4d690000ea4b4e71983dab1f5a6c99a2d5c3ee2/",
+        "control": "0b088ca3", "partner": "721d4998", "criterion": "H", "wired": true, "version": "meanrev_stocks@pe-vt15-mh5",
+        "dataHash": "ad11f76d48e88dc848c4955388c8c86d5ff05aead1d33ee101806f8dbf3acd23",
+        "controlDataHash": "898c5720274c0377de4a001025b979135cfb9a2a11f923cba572cf7518993182",
+        "figures": {
+          "commonDays": 1851, "from": "2019-03-26", "to": "2026-08-05",
+          "cagrPct": 11.4438, "controlCagrPct": 13.2351, "deltaCagrPp": -1.7913,
+          "sharpe": 0.9396, "controlSharpe": 1.1088, "maxDrawdownPct": 18.0178, "controlMaxDrawdownPct": 21.0046, "accountMaxDrawdownPct": 22.487
+        },
+        "execution": { "trades": 11872, "sessions": 1851, "diagnosticOrders": 23661, "foldEndOrders": 192, "adjustmentOrders": 109, "orders": 23853, "tradesPerSession": 6.4138, "roundTripProxyOrdersPerSession": 12.8277, "ordersPerSession": 12.8865 },
+        "gatesFailed": ["looMaxDrawdown", "looMinSharpe", "looMinTotalReturn", "stressMaxDrawdown", "stressMinSharpe", "stressMinTotalReturn"],
+        "criteriaFailed": [], "criteriaVerdict": "CUMPLE H; CABLEADO"
+      }
+    ]
+  },
+  "authoritativeArtifactRw6Crypto": {
+    "verdict": "CUMPLEN H los dos limites de 120 h; CABLEADOS por restriccion del dueno, con gran coste de retorno. El corto BTC FALLA S; NO SE CABLEA. No se cumple la meta de 30 ordenes/dia con la estimacion publicada de unas 19; no es una tasa agregada validada.",
+    "figuresNote": "SS17.2-17.4. rw5-crypto-evaluate --json proporciona cifras sobre dias comunes, anualizacion 365, con E1 721d4998 y E2 41fdc636. H exige CAGR >=0 y DD del libro de cuatro sleeves <=35%, NO DD del sleeve <=35/40%. S exige CAGR >=H y DD del sleeve <=40%. No confundir con el veredicto T1-T6 del evaluador RW5: aqui se juzgan H/S. Libro = 50k E1 + 50k E2 + 5k candidato + 5k otro cripto, capitales fijos, huecos de calendario a retorno cero. Pct en porcentajes, 4 decimales. Ordenes cripto incluyen entradas, salidas, ajustes y cierres de fold; denominador = suma de duraciones OOS en dias calendario, no numero de fechas comunes. Folds iguales al control; breakout cambia dataHash por historia diaria extra declarada. E2 tambien tiene dataHash distinto de su control historico: no se afirma identidad de datos ni replica independiente. Los seis artefactos tienen approved=false; cumplir H no los certifica. Inventario historico incompleto.",
+    "wiring": { "commit": "c25a751", "wiredAt": "2026-10-26T06:03:00Z" },
+    "publishedOrdersEstimate": {
+      "ordersPerDayApprox": 19, "goal": 30,
+      "note": "Estimacion de SS17.3: E1 ~3.5 + E2 ~12.8 + horario ~2.1 + USDC ~0.8. Los dos primeros son proxies 2*trades/sessions, omiten ajustes y mezclan sesiones NYSE con dias calendario de cripto, ademas de ventanas distintas. No demuestra 19 ordenes ejecutadas por dia del libro; los contadores reales por sleeve estan en execution. La meta sigue sin validarse como tasa conjunta."
+    },
+    "candidates": [
+      {
+        "trial": 459,
+        "manifest": "experiments/momentum-crypto-rw6-maxhold5-pure-v1.json",
+        "path": "data/backtests/b4abce2e6fbca40228f160418331b300c8ed8f9ba75b38cb6e3e4de901aa0f6b/",
+        "control": "efc086b4", "e1": "721d4998", "e2": "41fdc636", "otherCrypto": "8892c1e9",
+        "criterion": "H", "wired": true, "version": "momentum_crypto@vt35-corroff-mh120",
+        "dataHash": "77c87d51f19d7799b011ef4e02566f327438ffd9c64ff457fd05c69d6df9bfeb",
+        "controlDataHash": "77c87d51f19d7799b011ef4e02566f327438ffd9c64ff457fd05c69d6df9bfeb",
+        "figures": {
+          "commonDays": 1575, "from": "2022-06-11", "to": "2026-10-02",
+          "cagrPct": 15.8211, "controlCagrPct": 55.1556, "deltaCagrPp": -39.3346,
+          "sharpe": 0.6143, "controlSharpe": 1.3313, "maxDrawdownPct": 35.2699, "controlMaxDrawdownPct": 33.5689, "combinedBookMaxDrawdownPct": 15.9287
+        },
+        "execution": { "trades": 1641, "orders": 3282, "calendarDays": 1575.25, "ordersPerCalendarDay": 2.0835 },
+        "gatesFailed": ["maxDisplacementShare", "minExcessReturnVsBench", "minOuterPsr"],
+        "criteriaFailed": [], "criteriaVerdict": "CUMPLE H; CABLEADO"
+      },
+      {
+        "trial": 460,
+        "manifest": "experiments/momentum-crypto-rw6-maxhold5-breakout55-pure-v1.json",
+        "path": "data/backtests/67ca214434449bc183b16f9636fab0d14edd6460a0125ac524dd07c5672f0948/",
+        "control": "b4abce2e", "e1": "721d4998", "e2": "41fdc636", "otherCrypto": "8892c1e9",
+        "criterion": "S", "wired": false, "version": null,
+        "dataHash": "40229b0f79ee3999c2ab0096251d7a7f8efde750f9421a128f97cc7b70e136c0",
+        "controlDataHash": "77c87d51f19d7799b011ef4e02566f327438ffd9c64ff457fd05c69d6df9bfeb",
+        "figures": {
+          "commonDays": 1575, "from": "2022-06-11", "to": "2026-10-02",
+          "cagrPct": 14.7544, "controlCagrPct": 15.8211, "deltaCagrPp": -1.0666,
+          "sharpe": 0.5843, "controlSharpe": 0.6143, "maxDrawdownPct": 31.2, "controlMaxDrawdownPct": 35.2699, "combinedBookMaxDrawdownPct": 15.9993
+        },
+        "execution": { "trades": 1652, "orders": 3304, "calendarDays": 1575.25, "ordersPerCalendarDay": 2.0974 },
+        "gatesFailed": ["maxDisplacementShare", "minExcessReturnVsBench", "minOuterPsr"],
+        "criteriaFailed": ["S_cagr"], "criteriaVerdict": "FALLA S; NO SE CABLEA"
+      },
+      {
+        "trial": 461,
+        "manifest": "experiments/momentum-crypto-usdc-daily-s5-rw6-maxhold5-pure-v1.json",
+        "path": "data/backtests/74efd64b61a839df9844fbe7039c384cd694a0b4ad2d319762b0d71798bfb783/",
+        "control": "8892c1e9", "e1": "721d4998", "e2": "41fdc636", "otherCrypto": "b4abce2e",
+        "criterion": "H", "wired": true, "version": "momentum_crypto_usdc@daily-d13s5-xc-dd-mh120",
+        "dataHash": "55da03c95f27781623837e81ec504a0e70935eba94da460a4fa2e18f5778b494",
+        "controlDataHash": "55da03c95f27781623837e81ec504a0e70935eba94da460a4fa2e18f5778b494",
+        "figures": {
+          "commonDays": 1410, "from": "2022-11-15", "to": "2026-09-25",
+          "cagrPct": 24.6902, "controlCagrPct": 45.0829, "deltaCagrPp": -20.3927,
+          "sharpe": 0.758, "controlSharpe": 1.0383, "maxDrawdownPct": 48.0918, "controlMaxDrawdownPct": 51.9465, "combinedBookMaxDrawdownPct": 16.0157
+        },
+        "execution": { "trades": 550, "orders": 1152, "calendarDays": 1411.5, "ordersPerCalendarDay": 0.8162 },
+        "gatesFailed": ["maxDrawdown", "minExcessReturnVsBench", "minOuterPsr", "stressMaxDrawdown"],
+        "criteriaFailed": [], "criteriaVerdict": "CUMPLE H; CABLEADO"
+      }
+    ]
+  },
+  "rw6Controls": {
+    "trialsAdded": 0,
+    "note": "Referencias anteriores reutilizadas, no nuevos ensayos. Los controles internos y los partners RW6 se resuelven por los paths completos de sus candidatos; las dos carteras de acciones del libro son las versiones RW6 con limite de 5 sesiones.",
+    "paths": {
+      "fb410729": "data/backtests/fb410729eaf8cbe6efd32c0193f2e23b0313af4ceae0514aebdff1109a66e74b/",
+      "0b088ca3": "data/backtests/0b088ca320e3521d8bff05b10c1ad7eed2816bc2a1b0b927eb3134e2a3dca4c2/",
+      "efc086b4": "data/backtests/efc086b47776235749e7013458360f8131cb3d3629b0a143f6c994d2bb16f240/",
+      "8892c1e9": "data/backtests/8892c1e950818ee724cbd5473ffdb6d207aefc98ae1f054d3bdf08e4eebad607/"
+    }
+  },
   "authoritativeArtifactRw5Q5IdleTsm": {
     "wired": false,
     "verdict": "FALLA O2, T3, T4_loo y T6; NO SE CABLEA. El retorno adicional no compensa la caida ni la dependencia de una moneda; sigue el segundo diseno de Q5.",

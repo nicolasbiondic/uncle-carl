@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SimBroker, dailyBarsFromBars, hashReplayConfig, runWithConfig } from "./backtest-momentum-wf";
-import { candidateToReplayConfig, runWalkForward, validateCandidate, validateManifest, type ExperimentManifest } from "./walk-forward";
+import { candidateToReplayConfig, runWalkForward, stitchedMetrics, validateCandidate, validateManifest, type ExperimentManifest } from "./walk-forward";
 import { MomentumEngine, turtleChannels, type BreakoutShortConfig, type MomentumBrokerAdapter, type MomentumEngineConfig } from "../src/strategies/momentum/MomentumEngine";
 import type { CurrentPosition } from "../src/strategies/momentum/Rebalancer";
 import { MemoryPersistence, silentLogger } from "../src/test-support/momentum";
@@ -117,6 +117,28 @@ describe("Turtle short: synthetic rules, gates and durable state", () => {
     b.longSymbol = "BTC/USD"; clock.set(T + 2 * H); await e.tick();
     expect(b.positions).toHaveLength(1); expect(b.positions[0].side).toBe("buy");
   });
+  test("optional 120h cap survives restart, retries rejection without daily data, requires a NEW channel crossing", async () => {
+    const b = new Broker(), clock = new TestClock(T), store = new MemoryPersistence();
+    const c = { ...cfg, timeStop: { maxHoldHours: 120 }, breakoutShort: { ...knob, maxHoldHours: 120 } };
+    await new MomentumEngine(c, b, silentLogger, store, clock).tick();
+    expect(store.store!.breakoutEntryAt).toBe(T);
+    clock.set(T + 119 * H); b.bars = []; // expiry cannot depend on daily data
+    const e = new MomentumEngine(c, b, silentLogger, store, clock);
+    await e.tick(); expect(b.closes).toHaveLength(0);
+    clock.set(T + 120 * H); b.failClose = true; await e.tick();
+    expect(b.closes.at(-1)!.closeReason).toBe("BREAKOUT_SHORT_TIME_STOP");
+    expect(b.positions).toHaveLength(1);
+    b.failClose = false; clock.set(T + 121 * H); await e.tick();
+    expect(b.positions).toHaveLength(0); expect(b.opens).toHaveLength(1);
+    expect(store.store).not.toHaveProperty("breakoutEntryAt");
+    // Restart while price is STILL below the same 55-day low: no reopening.
+    clock.set(T + 122 * H); b.bars = daily().map(x => ({ ...x, timestamp: x.timestamp + 5 * D }));
+    const restarted = new MomentumEngine(c, b, silentLogger, store, clock);
+    await restarted.tick(); expect(b.opens).toHaveLength(1);
+    b.price = 90; clock.set(T + 123 * H); await restarted.tick(); // rearm on/above low
+    b.price = 89; clock.set(T + 124 * H); await restarted.tick();
+    expect(b.opens).toHaveLength(2); expect(store.store!.breakoutEntryAt).toBe(T + 124 * H);
+  });
   test("missing daily history, maintenance, risk and gross caps cannot create a unit; absent knob never fetches daily data", async () => {
     for (const kind of ["missing", "risk", "cap", "off"] as const) {
       const b = new Broker(); if (kind === "missing") b.bars = [];
@@ -129,6 +151,45 @@ describe("Turtle short: synthetic rules, gates and durable state", () => {
 });
 
 describe("breakout protocol and live/sim parity (synthetic only)", () => {
+  test("execution counter includes resizes and exits, excludes seeds and rejected orders", async () => {
+    const sim = new SimBroker(10000, new Map([["BTC/USD", hours()]]), 0, 0, H, { leverage: 2, maintRate: 0.005 });
+    sim.now = T;
+    expect((await sim.openPosition({ symbol: "BTC/USD", side: "buy", notionalUsd: 0 })).ok).toBe(false);
+    expect(sim.orders).toBe(0);
+    expect((await sim.openPosition({ symbol: "BTC/USD", side: "buy", notionalUsd: 1000 })).ok).toBe(true);
+    expect((await sim.scalePosition({ symbol: "BTC/USD", side: "buy", factor: 0.5 })).ok).toBe(true);
+    expect((await sim.scalePosition({ symbol: "BTC/USD", side: "buy", factor: 2 })).ok).toBe(true);
+    expect((await sim.scalePosition({ symbol: "BTC/USD", side: "buy", factor: 1e9 })).ok).toBe(false);
+    expect((await sim.closePosition({ symbol: "BTC/USD", side: "buy" })).ok).toBe(true);
+    expect((await sim.closePosition({ symbol: "BTC/USD", side: "buy" })).ok).toBe(false);
+    expect(sim.orders).toBe(4); expect(sim.closed).toHaveLength(1);
+    sim.seedPositions([{ symbol: "BTC/USD", side: "buy", qty: 1, entryPrice: 89, entryAt: T - D }]);
+    expect(sim.orders).toBe(4);
+    expect((await sim.closePosition({ symbol: "BTC/USD", side: "buy" })).ok).toBe(true);
+    expect(sim.orders).toBe(5);
+  });
+  test("RW6 manifests are only the declared knobs, prior trials 459..461, and absent cap preserves RW5 identity", () => {
+    const cases = [
+      ["momentum-crypto-rw6-maxhold5-pure-v1", liveName, 459],
+      ["momentum-crypto-rw6-maxhold5-breakout55-pure-v1", liveName, 460],
+      ["momentum-crypto-usdc-daily-s5-rw6-maxhold5-pure-v1", "momentum-crypto-usdc-daily-s5-rw4a-xc-dd-pure-v1", 461],
+    ] as const;
+    for (const [file, baseFile, prior] of cases) {
+      const m = validateManifest(read(file)), base = validateManifest(read(baseFile));
+      const { name: _n, description: _d, trialAccounting: _t, candidates: _c, ...rest } = m;
+      const { name: _bn, description: _bd, trialAccounting: _bt, candidates: _bc, ...baseRest } = base;
+      expect(rest).toEqual(baseRest); expect(m.candidates).toHaveLength(1);
+      const { timeStop, breakoutShort, ...candidate } = m.candidates[0];
+      expect(candidate).toEqual(base.candidates[0]); expect(timeStop).toEqual({ maxHoldHours: 120 });
+      expect(breakoutShort).toEqual(prior === 460 ? { ...knob, maxHoldHours: 120 } : undefined);
+      expect(m.trialAccounting).toEqual({ priorUniqueTrials: prior, complete: false });
+      expect(m.description).toContain("DRY-RUN ONLY");
+    }
+    const m = read(name), off = candidateToReplayConfig(m, m.candidates[0], "base");
+    expect(hashReplayConfig({ ...off, breakoutShort: { ...knob, maxHoldHours: undefined } })).toBe(hashReplayConfig(off));
+    expect(hashReplayConfig({ ...off, breakoutShort: { ...knob, maxHoldHours: 120 } })).not.toBe(hashReplayConfig(off));
+    for (const maxHoldHours of [0, -1, NaN, Infinity, null, "120"]) expect(() => validateCandidate({ ...m.candidates[0], breakoutShort: { ...knob, maxHoldHours } })).toThrow("breakoutShort");
+  });
   test("one candidate, live plus ONLY knob, prior 455, default-off hashes; invalid shapes/venues rejected", () => {
     const m = validateManifest(read(name)), live = validateManifest(read(liveName));
     const { name: _n, description: _d, trialAccounting: _t, candidates: _c, ...rest } = m;
@@ -171,8 +232,8 @@ describe("breakout protocol and live/sim parity (synthetic only)", () => {
       db.exec("CREATE TABLE historical_bars(symbol TEXT, timeframe TEXT, source TEXT, timestamp INTEGER, open REAL, high REAL, low REAL, close REAL, volume REAL); CREATE TABLE funding_rates(symbol TEXT, funding_time INTEGER, rate REAL)");
       const q = db.query("INSERT INTO historical_bars VALUES ('BTC/USD', '1h', 'binance_futures', ?, ?, ?, ?, ?, 1000)");
       db.transaction(() => {
-        for (let t = T - 90 * D; t < T + 4 * D; t += H) { const p = t < T ? 100 : 79; q.run(t, p, t < T ? 110 : 200, t < T ? 80 : 70, p); }
-        for (let t = T; t <= T + 3 * D; t += 8 * H) db.query("INSERT INTO funding_rates VALUES ('BTCUSDT', ?, -0.0001)").run(t);
+        for (let t = T - 90 * D; t < T + 9 * D; t += H) { const p = t < T ? 100 : 79; q.run(t, p, t < T ? 110 : 200, t < T ? 80 : 70, p); }
+        for (let t = T; t <= T + 9 * D; t += 8 * H) db.query("INSERT INTO funding_rates VALUES ('BTCUSDT', ?, -0.0001)").run(t);
       })();
       const m = read(name); m.data = { ...m.data, dbPath: path, universe: ["BTC/USD"] };
       m.window = { ...m.window, from: new Date(T).toISOString(), to: new Date(T + 3 * D).toISOString(), outerFoldCount: 1, innerFoldCount: 0, purgeYears: 0 }; m.asOf = m.window.to;
@@ -182,7 +243,15 @@ describe("breakout protocol and live/sim parity (synthetic only)", () => {
       expect(r).not.toBeNull(); expect(r!.breakoutShortStats).toMatchObject({ opens: 1, closes: 1, orders: 2, exits: { fold_end: 1 } });
       expect(r!.breakoutShortStats!.shortDays).toBeCloseTo(3 - 1 / 24, 8); expect(r!.breakoutShortStats!.fundingPaid).toBeGreaterThan(0);
       expect(r!.breakoutShortStats!.fundingPaid).toBeCloseTo(r!.funding, 8);
+      expect(r!.orders).toBe(2); expect(r!.ordersPerDay).toBeCloseTo(2 / 3, 12);
+      expect(stitchedMetrics(r!.equityHistory, [r!], 365)).toMatchObject({ orders: 2, ordersPerDay: 2 / 3 });
+      const { orders: _orders, ...oldResult } = r!;
+      expect(stitchedMetrics(r!.equityHistory, [oldResult], 365)).not.toHaveProperty("ordersPerDay");
       const off = await runWithConfig({ ...c, breakoutShort: undefined }, win); expect(off!).not.toHaveProperty("breakoutShortStats");
+      const capped = await runWithConfig({ ...c, timeStop: { maxHoldHours: 120 }, breakoutShort: { ...knob, maxHoldHours: 120 } }, { ...win, to: new Date(T + 8 * D).toISOString() });
+      expect(capped!.breakoutShortStats).toMatchObject({ opens: 1, closes: 1, orders: 2, exits: { BREAKOUT_SHORT_TIME_STOP: 1 } });
+      expect(capped!.closedTrades[0].exitAt - capped!.closedTrades[0].entryAt).toBe(120 * H + 1); // fill stamp is decision+1ms
+      expect(capped!.ordersPerDay).toBe(2 / 8);
       const a = await runWalkForward(m, { dryRun: true, codeFiles: [] });
       db.query("UPDATE historical_bars SET high = high + 1 WHERE timestamp = ?").run(T - 65 * D);
       const b = await runWalkForward(m, { dryRun: true, codeFiles: [] });

@@ -4,6 +4,33 @@ import { compareSymbols, overlaySignal, priceHistory, trailingVol, trendSignal }
 import { updateStops, type StopMemory } from "./stops";
 import { decideCopySignal } from "./copySignal";
 import { applyRegimeOverlay, decideRegime, selectPitUniverse, type RegimeMemory, type PitMemory } from "./contingency";
+import { isTradingDay } from "../utils/marketHours";
+
+// The shared live calendar starts Good Fridays in 2024 and applies Juneteenth
+// before its 2022 NYSE adoption. Correct the research era LOCALLY so this opt-in
+// does not change any existing strategy's schedule or identity.
+const EARLIER_NYSE_CLOSURES = new Set(["2016-03-25", "2017-04-14", "2018-03-30", "2018-12-05",
+  "2019-04-19", "2020-04-10", "2021-04-02", "2022-04-15", "2023-04-07"]);
+function maxHoldSession(date: SessionDate): boolean {
+  if (EARLIER_NYSE_CLOSURES.has(date)) return false;
+  const d = new Date(`${date}T12:00:00Z`), year = d.getUTCFullYear(), day = d.getUTCDay();
+  if (day === 0 || day === 6) return false;
+  // NYSE does NOT observe a Saturday New Year on the preceding Friday.
+  if (date.endsWith("-12-31") && day === 5) return true;
+  if (year < 2022 && date.slice(5, 7) === "06" && [18, 19, 20].includes(d.getUTCDate())) return true;
+  return isTradingDay(date);
+}
+
+/** Count session boundaries, excluding entry and including execution. Bounded by N,
+ * not by the age of an adopted row. Use NYSE dates, never elapsed 24-hour days. */
+export function maxHoldExpired(entry: SessionDate, execution: SessionDate, limit: number): boolean {
+  let count = 0;
+  for (let t = Date.parse(`${execution}T00:00:00Z`); t > Date.parse(`${entry}T00:00:00Z`); t -= 86_400_000) {
+    const date = new Date(t).toISOString().slice(0, 10);
+    if (maxHoldSession(date) && ++count >= limit) return true;
+  }
+  return false;
+}
 
 /** Versioned, JSON-only state owned by this kernel; persist TargetBook.memory
  * unchanged. Separate strategy versions must not share this state. */
@@ -88,6 +115,18 @@ export function decide(input: CoreDecideInput): TargetBook {
   }
 
   if (config.kind === "volManaged") {
+    let maxHold: string[] | undefined;
+    if (config.maxHoldSessions !== undefined) {
+      if (!Number.isInteger(config.maxHoldSessions) || config.maxHoldSessions < 1 || config.annualization !== 252) {
+        throw new Error("maxHoldSessions requires a positive integer and NYSE sessions (annualization 252)");
+      }
+      if (!input.executionSession) throw new Error("maxHoldSessions requires executionSession");
+      maxHold = book.positions.filter(p => {
+        if (!(p.qty > 0)) return false;
+        if (!p.entrySession || !/^\d{4}-\d{2}-\d{2}$/.test(p.entrySession)) throw new Error(`maxHoldSessions requires row entrySession: ${p.symbol}`);
+        return maxHoldExpired(p.entrySession, input.executionSession!, config.maxHoldSessions!);
+      }).map(p => p.symbol).sort(compareSymbols);
+    }
     // RW2: every eligible symbol is held — same construction as the trend
     // designs with the signal always on; no memory, no stops.
     const vols: Record<string, number> = {};
@@ -133,6 +172,7 @@ export function decide(input: CoreDecideInput): TargetBook {
       return { slowVol: portfolioVol(base, covariance, config.annualization), fastVol: portfolioVol(base, fastCovariance, config.annualization) };
     })() : {};
     return { asOf: view.asOf, weights: construction.weights, stops: [],
+      ...(maxHold ? { maxHold } : {}),
       memory: { ...book.memory, portfolioCore: { ...memory, signals: {}, stops: {} } },
       diagnostics: { vols, covariance, scale: construction.scale, uncappedVol: construction.uncappedVol, finalVol: construction.finalVol,
         ...brakeDiagnostics, ...fastDiagnostics, ...contingencyDiagnostics } };

@@ -11,7 +11,7 @@ import { getDB, initDatabase } from "../src/db/database";
 import { makeTestDb, seedOpenTrade } from "../src/test-support/db";
 import { initPlatformPortfolios, loadPlatformPortfolioRows, loadPlatformPortfolioDefinitions } from "../src/portfolios/store";
 import { DEFAULT_MEANREV_CONFIG } from "../src/strategies/meanrev/MeanRevEngine";
-import { designHash, resolvePortfolioWiring } from "../src/portfolio-engine/live/cutover";
+import { designHash, resolvePortfolioWiring, resolvePortfolioWiring as resolveHistoricalWiring } from "../src/portfolio-engine/live/cutover";
 import { MODEL_VERSIONS } from "../src/portfolio/modelVersions";
 import { buildPortfolioEngines } from "../src/portfolio-engine/live/wiring";
 import { HistoricalPriceView } from "../src/portfolio-engine/live/priceView";
@@ -24,7 +24,7 @@ import { portfolioUniverse } from "../src/portfolios/validate";
 import { isTreasurySymbol } from "../src/treasury/treasurySymbols";
 import { savePortfolioDecision } from "../src/portfolio-engine/live/persistence";
 import type { PortfolioEngineParams } from "../src/portfolios/types";
-import { applyCutover, main, parseArgs, planCutover, type CutoverArgs } from "./portfolio-engine-cutover";
+import { applyCutover, main, parseArgs, planCutover, planCutover as planHistoricalCutover, type CutoverArgs } from "./portfolio-engine-cutover";
 
 const D1 = "experiments/rw-d1-xasset-etf-trend-v1.json";
 const D2 = "experiments/rw-d2-sp500-core-v1.json";
@@ -235,6 +235,10 @@ describe("live: the same design observed first, the version registered", () => {
 });
 
 describe("Q5 RW5d: pe-vt15 → cash design, without handing the sleeve back to TSM", () => {
+  // Historical rehearsal: keep checking RW5d against the version table of that release.
+  const rw5Versions = { ...MODEL_VERSIONS, momentum_stocks: MODEL_VERSIONS.momentum_stocks.slice(0, -1), meanrev_stocks: MODEL_VERSIONS.meanrev_stocks.slice(0, -1) };
+  const planCutover: typeof planHistoricalCutover = (db, args, opts = {}) => planHistoricalCutover(db, args, { modelVersions: rw5Versions, ...opts });
+  const resolvePortfolioWiring: typeof resolveHistoricalWiring = args => resolveHistoricalWiring({ modelVersions: rw5Versions, ...args });
   const manifest = "experiments/rw5-e1-lev-vt30-g250-sma200-fastvol5-cash-v1.json";
   const candidate = "e1-lev-vt30-g250-sma200-fastvol5";
   const versionName = "pe-vt30-g250-sma200-fv5";
@@ -242,7 +246,7 @@ describe("Q5 RW5d: pe-vt15 → cash design, without handing the sleeve back to T
   const next = (over: Partial<CutoverArgs> = {}) => base({ manifest, candidate, versionName, ...over });
   const ready = { alpaca: null, binance_usdm: null, binance_usdc: null } as const;
   const oldArgs = base({ manifest: "experiments/rw2-e1-stocks-volmanaged-v1.json", candidate: "vt15", versionName: "pe-vt15" });
-  const oldVersions = { ...MODEL_VERSIONS, momentum_stocks: MODEL_VERSIONS.momentum_stocks.slice(0, -1) };
+  const oldVersions = { ...rw5Versions, momentum_stocks: rw5Versions.momentum_stocks.slice(0, -1) };
   function oldLive() {
     applyCutover(getDB(), planCutover(getDB(), oldArgs));
     const plan = planCutover(getDB(), { ...oldArgs, mode: "live", minObserved: 0 }, { modelVersions: oldVersions });
@@ -364,6 +368,62 @@ describe("Q5 RW5d: pe-vt15 → cash design, without handing the sleeve back to T
     expect((peRow()!.params as PortfolioEngineParams).strategy).toEqual(manifestBlock(oldArgs.manifest!, "vt15").strategy);
     const wiring = resolvePortfolioWiring({ defs: loadPlatformPortfolioDefinitions(getDB()), venueReady: ready, modelVersions });
     expect(wiring.problems).toEqual([]); expect(wiring.live[0].params.strategyVersion).toBe(rollbackVersion);
+  });
+});
+
+describe("RW6: both stock sleeves cut over atomically from their previous live definitions", () => {
+  test("CLI live plans pass on a staged COPY; both stored designs equal RW6, original definitions stay untouched", () => {
+    const db = getDB();
+    const sleeves = ["momentum_stocks", "meanrev_stocks"];
+    const beforeVersions = { ...MODEL_VERSIONS,
+      momentum_stocks: MODEL_VERSIONS.momentum_stocks.slice(0, -1),
+      meanrev_stocks: MODEL_VERSIONS.meanrev_stocks.slice(0, -1) };
+    // Synthetic equivalents of the current registry definitions; no prod read.
+    for (const sleeve of sleeves) {
+      const old = beforeVersions[sleeve].at(-1)!;
+      const args = base({ sleeve, manifest: old.manifest!, candidate: old.candidate!, versionName: old.id.split("@")[1], minObserved: 0 });
+      for (const mode of ["observer", "live"] as const) {
+        const plan = planCutover(db, { ...args, mode }, { modelVersions: beforeVersions });
+        expect(plan.errors).toEqual([]); expect(plan.ok).toBe(true); applyCutover(db, plan);
+      }
+    }
+    const before = loadPlatformPortfolioRows(db);
+    const copy = Database.deserialize(db.serialize());
+    try {
+      copy.transaction(() => {
+        for (const sleeve of sleeves) {
+          const v = MODEL_VERSIONS[sleeve].at(-1)!;
+          const args = base({ sleeve, manifest: v.manifest!, candidate: v.candidate!, versionName: v.id.split("@")[1], minObserved: 0 });
+          // --min-observed 0 does NOT bypass the same-design/epoch guard.
+          expect(planCutover(copy, { ...args, mode: "live" }).ok).toBe(false);
+          const observer = planCutover(copy, args);
+          expect(observer.errors).toEqual([]); expect(observer.ok).toBe(true); applyCutover(copy, observer);
+          const live = planCutover(copy, { ...args, mode: "live" });
+          expect(live.errors).toEqual([]); expect(live.ok).toBe(true); applyCutover(copy, live);
+        }
+      })();
+      const wiring = resolvePortfolioWiring({ defs: loadPlatformPortfolioDefinitions(copy), venueReady: { alpaca: null, binance_usdm: null, binance_usdc: null } });
+      expect(wiring.problems).toEqual([]);
+      expect(wiring.live.map(p => p.params.strategyVersion).sort()).toEqual(sleeves.map(s => MODEL_VERSIONS[s].at(-1)!.id).sort());
+      for (const sleeve of sleeves) {
+        const p = loadPlatformPortfolioRows(copy).find(r => r.id === `pe_${sleeve}`)!.params as PortfolioEngineParams;
+        const v = MODEL_VERSIONS[sleeve].at(-1)!, block = manifestBlock(v.manifest!, v.candidate!);
+        // Snapshot AFTER commit: serialize() during the transaction exposes
+        // its old committed image to the separate CLI connection.
+        const path = join(tmp, `rw6-${sleeve}.db`);
+        copy.exec(`VACUUM INTO '${path}'`);
+        const bytes = readFileSync(path);
+        expect(main(["--sleeve", sleeve, "--mode", "live", "--manifest", v.manifest!, "--candidate", v.candidate!,
+          "--version-name", v.id.split("@")[1], "--min-observed", "0", "--db", path])).toBe(0);
+        expect(readFileSync(path)).toEqual(bytes); // CLI dry-run really wrote nothing
+        expect(p.strategy).toEqual(block.strategy);
+        expect((p.strategy as VolManagedConfig).maxHoldSessions).toBe(5);
+        expect(portfolioUniverse("portfolio", p).some(isTreasurySymbol)).toBe(false);
+        expect(p.provenance!.designSha256).toBe(designHash({ strategy: block.strategy, venue: block.venue.venue,
+          minOrderNotional: block.venue.minOrderNotional, rebalanceBand: block.venue.rebalanceBand }));
+      }
+      expect(loadPlatformPortfolioRows(db)).toEqual(before);
+    } finally { copy.close(); }
   });
 });
 

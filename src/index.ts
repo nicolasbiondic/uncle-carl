@@ -668,6 +668,8 @@ export function momentumCryptoPortfolioPlan(): MomentumPortfolioPlan {
       // MOMENTUM_CRYPTO_REGIME (liveSleeveConfigs.ts) by liveSleeveConfigs.test.ts.
       regime: { barMinutes: 60, correlationCeiling: 1.01 },
       scorer: { barMinutes: 60 },
+      // RW6 owner rule: 5-day holds, checked at decisions; keep the RiskState key.
+      timeStop: { maxHoldHours: 120 },
       // tsmTrail intentionally ABSENT on crypto — the 2026-07-12 sweep found it
       // amputates fat-tail trend rides. (That sweep's "+148→+178%/yr" claim for
       // enhanced TSM is pre-nested machinery, not evidence — see above.)
@@ -756,6 +758,8 @@ export function momentumUsdcPortfolioPlan(): MomentumPortfolioPlan {
       },
       regime: { barMinutes: 1440 },
       scorer: { barMinutes: 1440 },
+      // RW6: first daily decision at/after 120h; no same-pass re-entry.
+      timeStop: { maxHoldHours: 120 },
       tsmTrail: { ...MOMENTUM_USDC_DAILY_VOL_STOP },
       // Vol-scaled HARD stop: the engine passes stopLossPct on every open;
       // BinanceMomentumAdapter derives the stop PRICE from the real fill,

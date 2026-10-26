@@ -291,6 +291,47 @@ hedge, it refuses rather than silently retaining that contributor; a
 replacement hypothesis must be pre-registered first. Sensitivity replays
 must never mutate the registered candidate block.
 
+## RW6 optional lot renewal (drafts only)
+
+`volManaged.maxHoldSessions` is absent by default (no changed decisions,
+memory, telemetry or config/candidate hashes). Positive integer, stocks only
+(`annualization: 252`). The book supplies each position's `entrySession`, the
+NYSE date of its OPEN row's `entry_time`; increases, partial sales, weighted
+average-price changes and adoption do not reset it. Duplicate legacy rows use
+the oldest entry. Missing entry dates fail closed rather than inventing age.
+
+At execution-session age >= N (entry session excluded, execution included,
+NYSE weekends/holidays excluded), `decide` marks the lot and `planOrders`
+emits a full sell before any buys, then a fresh buy to the SAME economic
+target if still positive. Mandatory sells bypass the delta band/minimum;
+new buys obey venue minimums/rounding and live entry guards. This is N NYSE
+sessions, NOT N calendar days; closures happen at the daily pass, not intraday.
+Live fills can change exposure through slippage, caps or rejections: a full
+round trip is not guaranteed by a plan. A rejected/partial sell never allows
+a rebuy into the old row. The old lot stays expired for the next pass; held-
+quantity sell retries preserve their existing same-session retry policy.
+
+Close label `MAX_HOLD` goes straight through the portfolio row writer (no
+adapter close-reason whitelist exists on this path). The new row gets the
+current version and a new entry time. Distinct durable client ids for the two
+legs preserve existing ids when the knob is absent. Replay uses the same
+decide/plan path, charges slippage/commission on BOTH legs, includes them in
+`orders` and `ordersPerSession`, and adds opt-in `maxHoldStats` with executed
+`closes`, `rebuys`, `orders` (fold-end liquidation excluded).
+
+The existing inverse-ETF `hedge` composes with renewal, including when
+`coreScale: 0` and `defensive` is absent: its requested weight is h times
+PRE-overlay core gross, then existing risk/asset/gross caps apply. It is a
+long inverse ETF, not a native short sale. The SH50 draft retains E1's 25%
+asset cap, so its final SH weight need not equal 50% of core gross. SH is in
+that draft's data universe (history starts 2016-06-27, before its 2017-06-01
+window and ample for cov21/fast5). The 420-calendar-day warmup starts earlier
+than SH's inception; SH is only required when allocated, not for the core's
+252-bar inception guard. Drafts reserve trials 456, 457, 458; only dry-runs
+are permitted here. The goal of 30 EXECUTED orders/session includes rebalances;
+these drafts measure orders, not claim that goal is met. No live definition
+or model version is changed.
+
 ## copySignal (research only)
 
 A generic copy-trading kind (`CopySignalConfig` in `types.ts`, kernel `copySignal.ts`): events of a

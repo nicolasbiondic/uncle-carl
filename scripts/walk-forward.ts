@@ -670,13 +670,16 @@ function validatePortfolioStrategy(st: unknown, where: string): void {
   const s = st as Record<string, unknown>;
   const trendKeys = ["kind", "universe", "inceptionGuardBars", "volLookback", "covLookback", "portfolioVolTarget", "perAssetCap", "maxGross", "blendHorizons", "maLong", "signalBandPct"];
   if (s.kind === "volManaged") {
-    assertKeys(s, ["kind", "universe", "inceptionGuardBars", "volLookback", "covLookback", "portfolioVolTarget", "annualization", "perAssetCap", "maxGross", "drawdownBrake", "fastVolLookback", "regimeOverlay", "pitUniverse"], where);
+    assertKeys(s, ["kind", "universe", "inceptionGuardBars", "volLookback", "covLookback", "portfolioVolTarget", "annualization", "perAssetCap", "maxGross", "drawdownBrake", "fastVolLookback", "regimeOverlay", "pitUniverse", "maxHoldSessions"], where);
     assertSymbolList(s.universe, `${where}.universe`);
     for (const key of ["inceptionGuardBars", "volLookback", "covLookback"]) {
       if (!posInt(s[key])) throw new Error(`${where}.${key} must be a positive integer`);
     }
     if (!finiteIn(s.portfolioVolTarget, 0, 2, true)) throw new Error(`${where}.portfolioVolTarget must be an annualized FRACTION in (0, 2]`);
     if (s.annualization !== 252 && s.annualization !== 365) throw new Error(`${where}.annualization must be 252 or 365`);
+    if (s.maxHoldSessions !== undefined && (!posInt(s.maxHoldSessions) || s.annualization !== 252)) {
+      throw new Error(`${where}.maxHoldSessions must be a positive integer with annualization 252 (NYSE sessions)`);
+    }
     if (!finiteIn(s.perAssetCap, 0, 1, true)) throw new Error(`${where}.perAssetCap must be a weight FRACTION in (0, 1]`);
     const grossLimit = s.regimeOverlay !== undefined || s.pitUniverse !== undefined ? 2.5 : 2;
     if (!finiteIn(s.maxGross, 0, grossLimit, true)) throw new Error(`${where}.maxGross must be a gross FRACTION in (0, ${grossLimit}]`);
@@ -1233,6 +1236,8 @@ export interface WalkForwardSummary {
     maxDrawdown: number;
     winRate: number;
     trades: number;
+    orders?: number;
+    ordersPerDay?: number;
     expectancy: number;
     fees: number;
     funding: number;
@@ -2241,12 +2246,18 @@ export function stitchedMetrics(history: Array<{ t: number; eq: number }>, resul
   const totalReturn = history.length > 1 ? (history[history.length - 1].eq - history[0].eq) / history[0].eq : 0;
   const allTrades = results.flatMap(r => r.closedTrades);
   const wins = allTrades.filter(t => t.pnl > 0).length;
+  // Never infer executions as 2*trades: partial resizes and seeded holdings
+  // differ. Cached results without counters leave the metric unavailable.
+  const orders = results.length && results.every(r => r.orders !== undefined)
+    ? results.reduce((s, r) => s + r.orders!, 0) : undefined;
+  const days = results.reduce((s, r) => s + (r.toMs - r.fromMs) / 86_400_000, 0);
   return {
     totalReturn,
     sharpe,
     maxDrawdown: maxDd,
     winRate: allTrades.length ? wins / allTrades.length : 0,
     trades: allTrades.length,
+    ...(orders !== undefined && days > 0 ? { orders, ordersPerDay: orders / days } : {}),
     expectancy: allTrades.length ? allTrades.reduce((s, t) => s + t.pnl, 0) / allTrades.length : 0,
     fees: results.reduce((s, r) => s + r.fees, 0),
     funding: results.reduce((s, r) => s + r.funding, 0),
@@ -3190,6 +3201,7 @@ async function main() {
     console.log(`   ⚠ MIXED OOS CHAIN — each outer fold ran its own inner winner: ${chain.map(c => `${c.foldPath}=${c.candidateName}`).join(", ")}. The stitched metrics below belong to this mix, NOT to "${summary.selectedCandidate?.name ?? "?"}" alone.`);
   }
   console.log(`   stitched OOS: ret=${(summary.stitchedOos.totalReturn * 100).toFixed(1)}% sharpe=${summary.stitchedOos.sharpe.toFixed(2)} DD=${(summary.stitchedOos.maxDrawdown * 100).toFixed(1)}% trades=${summary.stitchedOos.trades}`);
+  if (summary.stitchedOos.ordersPerDay !== undefined) console.log(`   executed orders: ${summary.stitchedOos.orders} (${summary.stitchedOos.ordersPerDay.toFixed(2)}/calendar day; goal 30/day; includes resizes and fold-end exits)`);
   if (summary.stitchedOos.marginInterest) {
     console.log(`   margin interest: $${summary.stitchedOos.marginInterest.toFixed(2)} (Reg-T financing, already netted from equity; per-fold values in outerTests[].result.marginInterest)`);
   }

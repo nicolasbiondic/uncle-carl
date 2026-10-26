@@ -1097,6 +1097,30 @@ describe("MomentumEngine timeStop (time barrier — third barrier, OFF by defaul
 
   const HOUR = 3_600_000;
 
+  test.each([60, 1440])("120h caps longs AND momentum shorts at cadence %i, then re-enters next decision", async cadence => {
+    const t0 = Date.parse("2024-01-01T00:00:00Z"), clock = new TestClock(t0), broker = new FakeBroker();
+    for (const [symbol, end] of [["UP1", 150], ["DOWN", 50]] as const) {
+      broker.setCandles(symbol, Array.from({ length: 50 }, (_, i) => {
+        const p = 100 + (end - 100) * i / 49;
+        return { timestamp: t0 - (50 - i) * cadence * 60_000, open: p, high: p, low: p, close: p, volume: 1000 };
+      }));
+    }
+    const engine = new MomentumEngine({
+      universe: ["UP1", "DOWN"], rebalanceMinutes: cadence, notionalPctPerSlot: 0.1,
+      tsm: { barMinutes: cadence, lookbackDays: cadence === 60 ? 1 : 20, maLengthDays: cadence === 60 ? 1 : 20, maxLongs: 1, maxShorts: 1, shortEntryThresholdPct: -5, shortExitThresholdPct: 2 },
+      regime: { enabled: false }, timeStop: { maxHoldHours: 120 },
+    }, broker, silentLogger, undefined, clock);
+    await engine.tick();
+    expect(broker.positions.map(p => p.side).sort()).toEqual(["buy", "sell"]);
+    clock.set(t0 + (120 - cadence / 60) * HOUR); await engine.tick();
+    expect(broker.closed).toHaveLength(0);
+    clock.set(t0 + 120 * HOUR); await engine.tick();
+    expect(broker.closed.map(c => c.closeReason)).toEqual(["TIME_STOP", "TIME_STOP"]);
+    expect(broker.positions).toHaveLength(0); // no fee-churning same-tick reopen
+    clock.set(t0 + (120 + cadence / 60) * HOUR); await engine.tick();
+    expect(broker.positions.map(p => p.side).sort()).toEqual(["buy", "sell"]);
+  });
+
   function withClock<T>(fn: (advanceTo: (t: number) => void) => Promise<T>): Promise<T> {
     const realNow = Date.now;
     const t0 = realNow();

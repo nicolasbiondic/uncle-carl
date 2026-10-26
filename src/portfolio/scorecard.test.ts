@@ -334,7 +334,7 @@ describe("sleeveExpectationArtifacts — the CURRENT model version's artifact, o
   const saved = Object.fromEntries(envKeys.map(k => [k, process.env[k]]));
   const restore = () => { for (const k of envKeys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } };
 
-  test("every live sleeve's band points at its current version's artifact + manifest — RW5d cash-parity E1 and RW2 E2, never the incumbents' (cb516547 / 624d50e9)", () => {
+  test("every live sleeve's band points at its current version's RW6 artifact + manifest, never the incumbents' (cb516547 / 624d50e9)", () => {
     for (const k of envKeys) delete process.env[k];
     try {
       const arts = sleeveExpectationArtifacts();
@@ -342,10 +342,10 @@ describe("sleeveExpectationArtifacts — the CURRENT model version's artifact, o
         const v = currentModelVersion(sleeve)!;
         expect(arts[sleeve]).toEqual({ dir: v.artifact!.dir, shiftDays: v.artifact!.shiftDays, manifest: v.manifest! });
       }
-      expect(arts.momentum_stocks.dir).toBe("data/backtests/fb410729eaf8cbe6efd32c0193f2e23b0313af4ceae0514aebdff1109a66e74b");
-      expect(arts.momentum_stocks.manifest).toBe("experiments/rw5-e1-lev-vt30-g250-sma200-fastvol5-cash-v1.json");
-      expect(arts.meanrev_stocks.dir).toBe("data/backtests/0b088ca320e3521d8bff05b10c1ad7eed2816bc2a1b0b927eb3134e2a3dca4c2");
-      expect(arts.meanrev_stocks.manifest).toBe("experiments/rw2-e2-meanrev-volmanaged-v1.json");
+      expect(arts.momentum_stocks.dir).toBe("data/backtests/721d4998f845909c84a0fc35e6dbb44d5fc93cd62de741ff545b1cfd75a8ab03");
+      expect(arts.momentum_stocks.manifest).toBe("experiments/rw6-e1-lev-vt30-g250-maxhold5-v1.json");
+      expect(arts.meanrev_stocks.dir).toBe("data/backtests/41fdc636f209217bede8220cd4d690000ea4b4e71983dab1f5a6c99a2d5c3ee2");
+      expect(arts.meanrev_stocks.manifest).toBe("experiments/rw6-e2-meanrev-maxhold5-v1.json");
       // Portfolio replays label a session by its date (weekday labels, verified on both artifacts): no −1 shift.
       expect(arts.momentum_stocks.shiftDays).toBe(0);
       expect(arts.meanrev_stocks.shiftDays).toBe(0);
@@ -599,16 +599,15 @@ describe("formatScorecardDigestLines", () => {
 
   test("formats return vs benchmark with the excess in parentheses", () => {
     const db = makeDb();
-    // momentum_crypto marks straddling MODEL_START (2026-10-24: first full
-    // UTC day after the RW3 brake-off cutover of 10-23 09:00), +2% then −1%.
-    snap(db, "momentum_crypto", 100, dayMs("2026-10-23"));
-    snap(db, "momentum_crypto", 102, dayMs("2026-10-24"));
-    snap(db, "momentum_crypto", 100.5, dayMs("2026-10-25"));
-    const sc = computeScorecard({ db, hist: null, now: Date.parse("2026-10-26T12:00:00Z"), artifacts: {} });
+    // First full UTC day after the RW6 cap deploy is 10-27.
+    snap(db, "momentum_crypto", 100, dayMs("2026-10-26"));
+    snap(db, "momentum_crypto", 102, dayMs("2026-10-27"));
+    snap(db, "momentum_crypto", 100.5, dayMs("2026-10-28"));
+    const sc = computeScorecard({ db, hist: null, now: Date.parse("2026-10-29T12:00:00Z"), artifacts: {} });
     const line = formatScorecardDigestLines(sc).find(l => l.startsWith("MOM-CRY"))!;
-    expect(line).toContain("MOM-CRY +0,5%"); // 100.5 / 100 (cierre 10-23) − 1
+    expect(line).toContain("MOM-CRY +0,5%"); // 100.5 / 100 (cierre 10-26) − 1
     expect(line).toContain("banda:");
-    expect(MODEL_START.momentum_crypto).toBe("2026-10-24");
+    expect(MODEL_START.momentum_crypto).toBe("2026-10-27");
   });
 });
 

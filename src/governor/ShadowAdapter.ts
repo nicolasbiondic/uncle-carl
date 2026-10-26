@@ -23,6 +23,7 @@
 // (same bug class as shadow_pairs 2026-07-16, price path instead of candles).
 
 import type { MomentumBrokerAdapter } from "../strategies/momentum/MomentumEngine";
+import { BREAKOUT_SHORT_TIME_STOP } from "../strategies/momentum/MomentumEngine";
 import { BREAKOUT_SHORT_EXIT, BREAKOUT_SHORT_STOP, BREAKOUT_SHORT_PRIORITY, BREAKOUT_SHORT_DRAWDOWN, IDLE_OVERLAY_EXIT_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, TIME_STOP_CLOSE_REASON, TRAIL_STOP_CLOSE_REASON, TREND_EXIT_CLOSE_REASON } from "../strategies/momentum/MomentumEngine";
 import type { CurrentPosition } from "../strategies/momentum/Rebalancer";
 import type { OHLCV } from "../utils/types";
@@ -41,7 +42,7 @@ export const SHADOW_SLIPPAGE = 0.0002;
 // distinguish TRAIL_STOP/TIME_STOP/SLOT_DISPLACED from a signal-flip close.
 // Anything else (or absent) falls back to cfg.closeReason, so free-text can
 // never land in the enum-ish column.
-const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, TREND_EXIT_CLOSE_REASON, IDLE_OVERLAY_EXIT_CLOSE_REASON, BREAKOUT_SHORT_EXIT, BREAKOUT_SHORT_STOP, BREAKOUT_SHORT_PRIORITY, BREAKOUT_SHORT_DRAWDOWN]);
+const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, TREND_EXIT_CLOSE_REASON, IDLE_OVERLAY_EXIT_CLOSE_REASON, BREAKOUT_SHORT_EXIT, BREAKOUT_SHORT_STOP, BREAKOUT_SHORT_PRIORITY, BREAKOUT_SHORT_DRAWDOWN, BREAKOUT_SHORT_TIME_STOP]);
 
 /** Minimal slice of AlpacaExecutor the shadow adapter needs (test-injectable). */
 export interface ShadowPriceSource {

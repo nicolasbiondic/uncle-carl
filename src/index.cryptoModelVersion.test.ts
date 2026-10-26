@@ -20,6 +20,13 @@ describe("momentum_crypto modelVersion wiring", () => {
     expect((src.match(/modelVersion: MOMENTUM_CRYPTO_MODEL_VERSION,/g) ?? []).length).toBe(1);
   });
 
+  test("RW6 adds only the 120h time barrier, without re-anchoring the RiskState", () => {
+    const plan = momentumCryptoPortfolioPlan();
+    expect(plan.engineConfig.timeStop).toEqual({ maxHoldHours: 120 });
+    expect(plan.engineConfig.modelVersion).toBe("vt35-corroff-2026-10-23");
+    expect((builtinPortfolio("momentum_crypto").params as any).timeStop).toEqual(plan.engineConfig.timeStop);
+  });
+
   test("RW3 (2026-10-23): brake OFF wired in the plan AND the builtin row, new governor evidence epoch, same version ids in both", () => {
     const plan = momentumCryptoPortfolioPlan();
     expect(plan.engineConfig.regime).toEqual({ barMinutes: 60, correlationCeiling: 1.01 });

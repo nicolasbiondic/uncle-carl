@@ -198,7 +198,7 @@ describe("BinanceMomentumAdapter close_reason telemetry — TRAIL_STOP vs signal
     cancelAllOrders: async () => {},
   } as any);
 
-  test.each(["TRAIL_STOP", "TREND_EXIT", "IDLE_OVERLAY_EXIT", "BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN"])("engine close persists close_reason=%s", async closeReason => {
+  test.each(["TRAIL_STOP", "TREND_EXIT", "IDLE_OVERLAY_EXIT", "BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN", "BREAKOUT_SHORT_TIME_STOP"])("engine close persists close_reason=%s", async closeReason => {
     const id = `trail-close-binance-${closeReason}`;
     seedOpenTrade(id, "momentum_crypto_trailreason", {
       symbol: "BTC/USD", market: "crypto", quantity: 0.2, entryTime: Date.now(),

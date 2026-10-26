@@ -94,6 +94,25 @@ describe("create from a validated preset", () => {
     }
   });
 
+  test("RW6 timeStop survives presets and rejects non-positive/non-finite hours", () => {
+    const create = (timeStop: unknown) => validateCreatePortfolio(
+      { id: "momentum_crypto_v2", name: "Crypto v2", account: "binance_usdt", capital: 5_000, preset: "momentum_crypto", params: { timeStop } },
+      ctx(archivedCrypto()), NOW,
+    );
+    expect(create({ maxHoldHours: 120 }).ok).toBe(true);
+    for (const bad of [0, -1, Infinity, NaN, "120", undefined]) {
+      const out = create({ maxHoldHours: bad });
+      expect(out.ok).toBe(false);
+      if (!out.ok) expect(out.errors.join(" ")).toContain("params.timeStop.maxHoldHours");
+    }
+    const out = validateCreatePortfolio(
+      { id: "momentum_crypto_v2", name: "Crypto v2", account: "binance_usdt", capital: 5_000, preset: "momentum_crypto" },
+      ctx(archivedCrypto()), NOW,
+    );
+    expect(out.ok).toBe(true);
+    if (out.ok) expect((out.row.params as MomentumTsmParams).timeStop).toEqual({ maxHoldHours: 120 });
+  });
+
   test("ANY param override on a preset leaves the artifact behind → unvalidated", () => {
     const out = validateCreatePortfolio(
       { id: "momentum_crypto_v2", name: "Crypto v2", account: "binance_usdt", capital: 5_000, preset: "momentum_crypto", params: { notionalPctPerSlot: 0.3 } },
@@ -107,8 +126,8 @@ describe("create from a validated preset", () => {
     for (const preset of ["momentum_stocks", "meanrev_stocks"]) {
       expect(VALIDATED_PRESETS[preset].template).toBe("portfolio");
       expect(VALIDATED_PRESETS[preset].portfolioEngine).toEqual(preset === "momentum_stocks"
-        ? { version: "momentum_stocks@pe-vt30-g250-sma200-fv5", candidate: "e1-lev-vt30-g250-sma200-fastvol5" }
-        : { version: "meanrev_stocks@pe-vt15", candidate: "vt15" });
+        ? { version: "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5", candidate: "e1-lev-vt30-g250-maxhold5" }
+        : { version: "meanrev_stocks@pe-vt15-mh5", candidate: "vt15-maxhold5" });
       const rows = seededRows((r) => { const x = r.find((y) => y.id === preset)!; x.status = "archived"; x.enabled = false; });
       const out = validateCreatePortfolio(
         { id: `${preset}_v2`, name: "v2", account: "alpaca_main", capital: 1_000, preset },

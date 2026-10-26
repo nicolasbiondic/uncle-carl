@@ -185,6 +185,9 @@ export function validateMomentumParams(
     if (!isInt(v.lookbackBars, 2, 5000)) errors.push("params.volTarget.lookbackBars: expected integer 2..5000");
     if (!inRange(v.minScale, 0.01, 1) || !inRange(v.maxScale, 1, 3)) errors.push("params.volTarget: expected 0.01 ≤ minScale ≤ 1 ≤ maxScale ≤ 3");
   }
+  if (p.timeStop != null && (typeof p.timeStop !== "object" || !isFiniteNum(p.timeStop.maxHoldHours) || p.timeStop.maxHoldHours <= 0)) {
+    errors.push("params.timeStop.maxHoldHours: expected positive finite calendar hours");
+  }
   if (p.exposureControl != null) {
     const x = p.exposureControl;
     if (x.volCap == null && x.drawdown == null) errors.push("params.exposureControl: needs volCap and/or drawdown");

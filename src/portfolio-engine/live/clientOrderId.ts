@@ -1,6 +1,6 @@
 // ═══ Portfolio engine — deterministic client order ids ═══
 //
-// One order per (sleeve, execution session, symbol): the SAME triple always
+// One order per (sleeve, execution session, symbol[, maxHold leg]): the SAME key always
 // derives the SAME id, so a resubmission after a restart inside the session is
 // rejected by the venue as a duplicate and the engine queries the existing
 // order instead (VenueAdapter.submit contract).
@@ -30,8 +30,9 @@ export function sleeveIdPart(accountId: string): string {
   return cleaned || "x";
 }
 
-export function portfolioClientOrderId(accountId: string, session: SessionDate, symbol: string): string {
-  const hash = createHash("sha256").update(`${accountId}|${session}|${symbol}`).digest("hex").slice(0, HASH_LEN);
+export function portfolioClientOrderId(accountId: string, session: SessionDate, symbol: string, leg?: "close" | "rebuy"): string {
+  // Preserve every default-off id; renewal needs TWO durable identities for the same symbol/session.
+  const hash = createHash("sha256").update(`${accountId}|${session}|${symbol}${leg ? `|maxHold:${leg}` : ""}`).digest("hex").slice(0, HASH_LEN);
   const id = `${PORTFOLIO_CLIENT_ID_PREFIX}-${sleeveIdPart(accountId)}-${PORTFOLIO_CLIENT_ID_MARK}${hash}`;
   if (id.length > PORTFOLIO_CLIENT_ID_MAX_LEN) throw new Error(`client order id too long: ${id}`);
   return id;

@@ -51,6 +51,7 @@ export function builtinPortfolios(): PortfolioDefinition[] {
         // RW3 (2026-10-23): correlation-collapse brake OFF (0.85 → 1.01); the vol-spike check stays ON.
         // Artifact efc086b4… (experiments/momentum-crypto-rw3-vt-35-corroff-pure-v1.json).
         regime: { correlationCeiling: 1.01 },
+        timeStop: { maxHoldHours: 120 }, // RW6 owner rule; RiskState NOT re-anchored
         capacityGuard: { maxAdvPct: 1, lookbackBars: 20, mode: "observe" },
         equitySemantics: EQUITY_SEMANTICS.BINANCE_TOTAL_MARGIN,
         modelVersion: "vt35-corroff-2026-10-23",
@@ -84,6 +85,7 @@ export function builtinPortfolios(): PortfolioDefinition[] {
         // drawdown, band 10 pp, min order 100 USD. Artifact 8892c1e9… (experiments/momentum-crypto-usdc-daily-s5-
         // rw4a-xc-dd-pure-v1.json). Executed by BinanceMomentumAdapter.scalePosition. Soft-DD pause stays ON.
         exposureControl: { drawdown: { startPct: 0.1, endPct: 0.4 }, minScale: 0.25, band: 0.1, minOrderUsd: 100 },
+        timeStop: { maxHoldHours: 120 }, // RW6, same RiskState/drawdown input
         capacityGuard: { maxAdvPct: 1, lookbackBars: 20, mode: "observe" },
         equitySemantics: EQUITY_SEMANTICS.BINANCE_USDC_MARGIN,
         // Not re-anchored for RW4a: the same kernel built the live drawdown the control reads (index.ts docstring).

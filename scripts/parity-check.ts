@@ -122,42 +122,16 @@ export const PARITY_EPOCHS: Partial<Record<LiveSleeveId, string>> = {
   // (09-28..10-06 compared clean apart from GOOGL, AUDITS 2026-10-06).
   momentum_stocks: "2026-10-12",
   meanrev_stocks: "2026-09-29",
-  // First pass after the RW3 deploy (correlation brake OFF, 2026-10-23): the
-  // sleeve is flat there and the RiskState re-anchors on that pass, so the
-  // sim's empty, fresh-risk book at the epoch is a true mirror. PROJECTED
-  // value (09:00 UTC = the hourly pass after the projected deploy, same hour
-  // as `since` of momentum_crypto@vt35-corroff in modelVersions.ts). A pass
-  // BEFORE the real deploy inside this window would run the brake live while
-  // the sim (ceiling 1.01) enters: a false divergence — so after deploying
-  // the director sets the exact instant, in BOTH places, from prod, read-only:
-  //   SELECT datetime(min(ts)/1000,'unixepoch') FROM decision_passes
-  //    WHERE account_id='momentum_crypto' AND ts >= <the restart's epoch ms>;
-  // → write it here as an ISO instant (e.g. "2026-10-23T10:00:15Z") and as
-  // `since` (and, if it crosses 00:00 UTC, modelStart = the next UTC day).
-  // (Replaces the 2026-09-26T19:00:00Z vt-35 re-anchor epoch.)
-  momentum_crypto: "2026-10-23T09:00:00Z",
-  // Re-anchored to the first DAILY pass of the RW4a model (drawdown exposure
-  // control, momentum_crypto_usdc@daily-d13s5-xc-dd): 00:00:15 UTC 10-24 is
-  // the first pass whose replay candidate (exposureControl ON) is what runs
-  // live; a pass BEFORE the deploy inside the window would have the sim
-  // sizing entries at λ and resizing while live did not. PROJECTED value
-  // (same instant as `since` in modelVersions.ts): after deploying, the
-  // director sets the exact first pass, in BOTH places, from prod, read-only:
-  //   SELECT datetime(min(ts)/1000,'unixepoch') FROM decision_passes
-  //    WHERE account_id='momentum_crypto_usdc' AND ts >= <the restart's epoch ms>;
-  // → if the deploy lands AFTER 10-24 00:00:15Z, move this epoch, `since`
-  // and modelStart to that next daily pass (its 00:00:00Z / its date).
-  // The seeded book is the live book at the epoch (SOL/NEAR/UNI/AVAX held at
-  // full size, fraction 1); the sim's RiskState starts fresh (dd 0) while
-  // live carries its 13.8% dd — a KNOWN state difference (OPEN.md): the live
-  // control cuts ~13% on the first pass and the soft-DD pause stays bound,
-  // the sim does neither until its own dd builds. Resizes are not decisions
-  // (no row opens or closes), so they never page here; entries blocked by
-  // the pause can.
-  // (Before: 2026-10-08T00:00:00Z, the owner's UNI realign, AUDITS 2026-10-06.)
+  // RW6: compare only passes under the 120h candidate, never replay the new
+  // time barrier over pre-deploy decisions. This moves the parity window,
+  // NOT the persisted live RiskState key (neither crypto sleeve re-anchors).
+  momentum_crypto: "2026-10-26T13:00:00Z",
+  // Same deploy boundary for DAILY USDC: the first eligible tick is 10-27
+  // 00:00:15Z. The replay still starts fresh risk while live keeps its peak,
+  // drawdown and exposure fractions — the known state difference remains.
   // Live trades are BASE/USDC; the replay runs the BASE/USD USDT-perp proxies
   // (declared in its manifest) — normalizeLiveDecisions.
-  momentum_crypto_usdc: "2026-10-24T00:00:00Z",
+  momentum_crypto_usdc: "2026-10-26T13:00:00Z",
 };
 
 // ── sleeves managed by the portfolio engine (RW2) ─────────────────────────

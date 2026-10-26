@@ -903,6 +903,9 @@ export class SimBroker implements MomentumBrokerAdapter {
    *  included). Feeds ReplayResult.turnoverAnnual via computeTurnoverAnnual;
    *  0 unless positions actually trade — no behavior change on its own. */
   turnoverNotional = 0;
+  /** Successful executions only: entries, closes (including fold-end) and
+   * partial resizes. Seeded holdings and rejected attempts are not orders. */
+  orders = 0;
   /** Exposure-control resizes executed (MomentumBrokerAdapter.scalePosition).
    *  Empty on every run without cfg.exposureControl — the engine never calls
    *  scalePosition then. Output only (ReplayResult.exposureResizes). */
@@ -1058,6 +1061,7 @@ export class SimBroker implements MomentumBrokerAdapter {
       stopFrac = entryStopFraction(this.hardStopSpec, closes, this.barsPerDay);
     }
     this.positions.push({ symbol: a.symbol, side: a.side, qty, entryPrice: slip, entryAt: this.now, entryMargin: need, entryCommission: fee, fundingCashDelta: 0, stopFrac, peakPrice: slip, lockLevel: null, ...(a.role ? { role: a.role } : {}) });
+    this.orders++;
     if (a.role === "breakout-short") {
       Object.assign(this.positions.at(-1)!, { breakoutN: a.breakout!.n, breakoutStop: slip + a.breakout!.n * a.breakout!.stopN });
       this.breakoutShortStats.opens++; this.breakoutShortStats.orders++;
@@ -1139,6 +1143,7 @@ export class SimBroker implements MomentumBrokerAdapter {
       p.entryMargin *= (p.qty - closeQty) / p.qty;
       p.qty -= closeQty;
       this.resizes.push({ t: this.now, symbol: a.symbol, side: a.side, factor: a.factor, qtyDelta: -closeQty, notionalUsd: notional });
+      this.orders++;
       return { ok: true };
     }
     const rawAdd = p.qty * (a.factor - 1);
@@ -1161,6 +1166,7 @@ export class SimBroker implements MomentumBrokerAdapter {
     p.entryMargin += need;
     p.entryCommission = (p.entryCommission ?? 0) + fee;
     this.resizes.push({ t: this.now, symbol: a.symbol, side: a.side, factor: a.factor, qtyDelta: addQty, notionalUsd: notional });
+    this.orders++;
     return { ok: true };
   }
 
@@ -1214,6 +1220,7 @@ export class SimBroker implements MomentumBrokerAdapter {
   closeAt(symbol: string, side: "buy" | "sell", px: number, reason: string, engineCloseReason?: string, exitAt: number = this.now) {
     const idx = this.positions.findIndex(p => p.symbol === symbol && p.side === side);
     if (idx < 0 || !px) return { ok: false, reason: "no position/price" };
+    this.orders++;
     const p = this.positions[idx];
     if (p.role === "idle-overlay") { this.idleOverlayStats.closes++; this.idleOverlayStats.orders++; }
     if (p.role === "breakout-short") {
@@ -1768,6 +1775,10 @@ export interface ReplayResult {
   winRate: number;
   trades: number;
   tradesPerDay: number;
+  /** Optional for older artifacts / other runners. Executed orders include
+   * entries, exits and resizes; denominator is elapsed calendar days. */
+  orders?: number;
+  ordersPerDay?: number;
   expectancy: number;
   fees: number;
   funding: number;
@@ -2663,6 +2674,8 @@ export async function runWithConfig(
       winRate: trades.length ? wins / trades.length : 0,
       trades: trades.length,
       tradesPerDay: trades.length / Math.max(1, days),
+      orders: broker.orders,
+      ordersPerDay: broker.orders / ((toMs - fromMs) / 86_400_000),
       expectancy: trades.length ? trades.reduce((s, t) => s + t.pnl, 0) / trades.length : 0,
       fees: broker.feesPaid,
       funding: broker.fundingPaid,

@@ -29,17 +29,24 @@ export const planOrders: PlanOrders = (target, book, prices, rules) => {
     if (!Number.isFinite(weight) || weight < 0) throw new Error(`Invalid long-only target: ${symbol}`);
     const held = current[symbol] ?? 0;
     const currentWeight = held * price / book.equity;
+    const renew = held > 0 && target.maxHold?.includes(symbol);
+    if (renew) {
+      // A mandatory full lot exit ignores the delta band/minimum: neither may prolong its life.
+      orders.push({ symbol, side: "sell", qty: held, notional: held * price, targetWeight: weight, currentWeight,
+        reduceOnly: true, maxHold: "close" });
+    }
     // Only strictly INSIDE the band skips; .22 - .20 rounds below .02.
     const epsilon = 8 * Number.EPSILON * Math.max(1, weight, currentWeight);
-    if (Math.abs(weight - currentWeight) + epsilon < rules.rebalanceBand) continue;
-    const delta = weight * book.equity / price - held;
+    if (!renew && Math.abs(weight - currentWeight) + epsilon < rules.rebalanceBand) continue;
+    const delta = weight * book.equity / price - (renew ? 0 : held);
     const side = delta > 0 ? "buy" : "sell";
     const maxQty = side === "sell" ? Math.min(held, Math.abs(delta)) : delta;
     const step = rules.qtyStep?.[symbol] ?? (rules.fractional ? null : 1);
     const qty = step === null ? maxQty : roundQtyDown(maxQty, step);
     const notional = qty * price;
     if (!(qty > 0) || !Number.isFinite(notional) || notional < (rules.minNotional?.[symbol] ?? rules.minOrderNotional)) continue;
-    orders.push({ symbol, side, qty, notional, targetWeight: weight, currentWeight, reduceOnly: side === "sell" });
+    orders.push({ symbol, side, qty, notional, targetWeight: weight, currentWeight, reduceOnly: side === "sell",
+      ...(renew ? { maxHold: "rebuy" as const } : {}) });
   }
   return orders.sort((a, b) => (a.side === b.side ? compareSymbols(a.symbol, b.symbol) : a.side === "sell" ? -1 : 1));
 };

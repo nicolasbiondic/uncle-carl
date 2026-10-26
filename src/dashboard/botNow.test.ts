@@ -5,7 +5,7 @@ import { currentModelVersionId } from "../portfolio/modelVersions";
 import { buildBotNow, nextBotDecision, type BotNowDeps, type BotNowRuntime } from "./botNow";
 import type { VolManagedConfig } from "../portfolio-engine/types";
 
-const NOW = Date.parse("2026-10-24T16:00:00Z");
+const NOW = Date.parse("2026-10-31T16:00:00Z"); // after RW6; still a Saturday
 const resources: Database[] = [];
 afterEach(() => { for (const db of resources.splice(0)) db.close(); });
 function fixture(id = "momentum_crypto", engine: BotNowRuntime["engine"] = "momentum") {
@@ -89,7 +89,7 @@ describe("bot now: states and live sources", () => {
     f.deps.positions = [{ profileId: "momentum_stocks", quantity: 9.7, currentPrice: 100, avgEntryPrice: 90 }];
     f.deps.readState = () => ({ risk: { peakEquity: 99999, pausedUntil: NOW + 99999, pauseReason: "hard drawdown" } });
     const p = f.build().portfolios[0];
-    expect(p).toMatchObject({ version: "momentum_stocks@pe-vt30-g250-sma200-fv5", state: "waiting_first_pass", positions: 1, maxGrossX: 2.5, lastDecision: null, drawdownPct: null, nextDecisionAt: Date.parse("2026-10-26T13:35:00Z") });
+    expect(p).toMatchObject({ version: "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5", state: "waiting_first_pass", positions: 1, maxGrossX: 2.5, lastDecision: null, drawdownPct: null, nextDecisionAt: Date.parse("2026-11-02T14:35:00Z") });
     expect(p.grossX).toBeCloseTo(0.97);
     expect(p.blocked?.reason).toBe("market_closed");
   });
@@ -105,7 +105,7 @@ describe("bot now: states and live sources", () => {
     const f = fixture("momentum_stocks", "portfolio");
     const hist = new Database(":memory:"); resources.push(hist);
     hist.exec("CREATE TABLE historical_bars(symbol TEXT,timeframe TEXT,timestamp INTEGER,open REAL,high REAL,low REAL,close REAL,volume REAL)");
-    for (const [i, close] of [100, 100, 115].entries()) hist.query("INSERT INTO historical_bars VALUES ('SPY','1d',?,?,?,?,?,100)").run(Date.parse(`2026-10-${21 + i}T04:00:00Z`), close, close, close, close);
+    for (const [i, close] of [100, 100, 115].entries()) hist.query("INSERT INTO historical_bars VALUES ('SPY','1d',?,?,?,?,?,100)").run(Date.parse(`2026-10-${28 + i}T04:00:00Z`), close, close, close, close);
     f.runtime.strategy = { kind: "volManaged", maxGross: 2.5, regimeOverlay: { signals: [{ kind: "maTrend", symbol: "SPY", period: 3, sampling: "daily", bandPct: 1 }], combine: "all", coreScale: 0 } } as VolManagedConfig;
     f.deps.historical = hist;
     f.pe({ strategy_version: "momentum_stocks@pe-vt15", memory_json: '{"portfolioCore":{"regime":{"riskOff":true,"ready":true}}}' });
@@ -166,13 +166,13 @@ describe("bot now: causal events", () => {
 
 describe("bot now: scheduler", () => {
   test("weekend, NYSE holiday and DST", () => {
-    expect(nextBotDecision(NOW, true, 1440)).toBe(Date.parse("2026-10-26T13:35:00Z"));
+    expect(nextBotDecision(NOW, true, 1440)).toBe(Date.parse("2026-11-02T14:35:00Z"));
     expect(nextBotDecision(Date.parse("2026-11-25T17:00:00Z"), true, 1440)).toBe(Date.parse("2026-11-27T14:35:00Z"));
     expect(nextBotDecision(Date.parse("2026-10-30T17:00:00Z"), true, 1440)).toBe(Date.parse("2026-11-02T14:35:00Z"));
   });
   test("hourly/daily use boundary +15s, including requests in the first fifteen seconds", () => {
     expect(nextBotDecision(Date.parse("2026-10-24T16:00:01Z"), false, 60)).toBe(Date.parse("2026-10-24T16:00:15Z"));
     expect(nextBotDecision(Date.parse("2026-10-24T16:00:15Z"), false, 60)).toBe(Date.parse("2026-10-24T17:00:15Z"));
-    expect(nextBotDecision(NOW, false, 1440)).toBe(Date.parse("2026-10-25T00:00:15Z"));
+    expect(nextBotDecision(NOW, false, 1440)).toBe(Date.parse("2026-11-01T00:00:15Z"));
   });
 });

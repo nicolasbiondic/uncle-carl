@@ -77,8 +77,8 @@ test("Turtle daily OHLC always routes to real data; role/N and every exit label 
     const a = { symbol: "BTC/USD", side: "sell" as const, notionalUsd: 100, role: "breakout-short" as const, breakout: { n: 2, stopN: 2, quantity: 1 } };
     await sw.openPosition(a); expect(opens).toEqual([a]);
     if (mode === "live") seedOpenLiveRow(account, "BTC/USD");
-    for (const closeReason of ["BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN"]) await sw.closePosition({ symbol: "BTC/USD", side: "sell", closeReason });
-    expect(closes.map(c => c.closeReason)).toEqual(["BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN"]);
+    for (const closeReason of ["BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN", "BREAKOUT_SHORT_TIME_STOP"]) await sw.closePosition({ symbol: "BTC/USD", side: "sell", closeReason });
+    expect(closes.map(c => c.closeReason)).toEqual(["BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN", "BREAKOUT_SHORT_TIME_STOP"]);
   }
 });
 

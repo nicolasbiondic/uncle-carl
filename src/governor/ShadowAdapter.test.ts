@@ -75,7 +75,7 @@ describe("ShadowAdapter — simulated opens", () => {
 });
 
 describe("ShadowAdapter — simulated closes and PnL math", () => {
-  test.each(["TREND_EXIT", "IDLE_OVERLAY_EXIT", "BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN"])("%s is persisted verbatim", async closeReason => {
+  test.each(["TREND_EXIT", "IDLE_OVERLAY_EXIT", "BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN", "BREAKOUT_SHORT_TIME_STOP"])("%s is persisted verbatim", async closeReason => {
     const a = makeAdapter(priceSource({ AAPL: 100 }));
     await a.openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 1_000 });
     expect((await a.closePosition({ symbol: "AAPL", side: "buy", closeReason })).ok).toBe(true);

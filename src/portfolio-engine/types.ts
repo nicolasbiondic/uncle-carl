@@ -65,6 +65,8 @@ export interface Position {
   qty: number;
   /** Average entry price of the current position (stops measure from it). */
   avgEntryPrice: number;
+  /** NYSE session of the OPEN row's entry_time; resizes never reset it. Required with maxHoldSessions. */
+  entrySession?: SessionDate;
 }
 
 export interface BookState {
@@ -87,6 +89,8 @@ export interface TargetBook {
   stops: readonly StopLevel[];
   /** Free-form, JSON-serializable diagnostics (signals, vols, scale factor, overlay…). */
   diagnostics: Readonly<Record<string, unknown>>;
+  /** Expired lots: fully sell before sizing a fresh buy to the unchanged target. Absent = off. */
+  maxHold?: readonly string[];
 }
 
 export interface StopLevel {
@@ -182,6 +186,8 @@ export interface VolManagedConfig {
   perAssetCap: number;
   /** Max sum of weights (1 = no margin). */
   maxGross: number;
+  /** Optional NYSE-session lot limit (stocks only). At age >= N, realize and renew at the same target. */
+  maxHoldSessions?: number;
   /** RW4b (optional; absent = RW2/RW3 behavior, same outputs and hashes). The target vol is scaled down
    *  continuously as the sleeve's drawdown from its in-memory equity peak deepens, and restored as it recovers. */
   drawdownBrake?: DrawdownBrakeConfig;
@@ -327,7 +333,11 @@ export interface OrderIntent {
   currentWeight: number;
   /** True for any order that only reduces an existing position. */
   reduceOnly: boolean;
+  /** Paired renewal legs; a rebuy must wait for the full close, including across restarts. */
+  maxHold?: "close" | "rebuy";
 }
+
+export const MAX_HOLD_CLOSE_REASON = "MAX_HOLD";
 
 /** Pure: target weights + current book + reference prices → the orders that move the book to the target. */
 export type PlanOrders = (

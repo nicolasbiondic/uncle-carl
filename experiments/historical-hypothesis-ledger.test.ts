@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { researchDataPath } from "../scripts/lib/researchData";
 import { loadArtifactOuterDailyReturns } from "../scripts/lib/combinedPortfolioReturns";
 import { compareArtifacts } from "../scripts/rw3-compare-artifacts";
+import { combinedBookDrawdown, evaluateCrypto } from "../scripts/rw5-crypto-evaluate";
 
 const root = join(import.meta.dir, "..");
 // The public export drops docs/reports/** (scripts/public-export/exclude.txt),
@@ -2858,6 +2859,176 @@ describe("historical hypothesis ledger", () => {
     expect(batches[1].evidence).toContain("sin pausa ni reasignacion");
     expect(rw5Q5Breakout.verdict).toContain("los dos disenos de cortos Q5 fallan");
   });
+
+  const rw6Stocks = ledger.authoritativeArtifactRw6Stocks;
+  const rw6Crypto = ledger.authoritativeArtifactRw6Crypto;
+  const rw6Rows = [...rw6Stocks.candidates, ...rw6Crypto.candidates];
+  const rw6Paths: Record<string, string> = {
+    ...ledger.rw6Controls.paths,
+    ...Object.fromEntries(rw6Rows.map(r => [r.path.split("/")[2].slice(0, 8), r.path])),
+  };
+  const rw6Designs = [
+    ["rw6-e1-lev-vt30-g250-maxhold5-v1", "721d4998f845909c84a0fc35e6dbb44d5fc93cd62de741ff545b1cfd75a8ab03", "rw5-e1-lev-vt30-g250-sma200-fastvol5-cash-v1", "fb410729", "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5"],
+    ["rw6-e1-lev-vt30-g250-maxhold5-sh50-v1", "af69f21f6d8cc4bf9e4a2ac4e2f06b7b6aa6dcaaf4ddea7abc74d007fe376637", "rw6-e1-lev-vt30-g250-maxhold5-v1", "721d4998", null],
+    ["rw6-e2-meanrev-maxhold5-v1", "41fdc636f209217bede8220cd4d690000ea4b4e71983dab1f5a6c99a2d5c3ee2", "rw2-e2-meanrev-volmanaged-v1", "0b088ca3", "meanrev_stocks@pe-vt15-mh5"],
+    ["momentum-crypto-rw6-maxhold5-pure-v1", "b4abce2e6fbca40228f160418331b300c8ed8f9ba75b38cb6e3e4de901aa0f6b", "momentum-crypto-rw3-vt-35-corroff-pure-v1", "efc086b4", "momentum_crypto@vt35-corroff-mh120"],
+    ["momentum-crypto-rw6-maxhold5-breakout55-pure-v1", "67ca214434449bc183b16f9636fab0d14edd6460a0125ac524dd07c5672f0948", "momentum-crypto-rw6-maxhold5-pure-v1", "b4abce2e", null],
+    ["momentum-crypto-usdc-daily-s5-rw6-maxhold5-pure-v1", "74efd64b61a839df9844fbe7039c384cd694a0b4ad2d319762b0d71798bfb783", "momentum-crypto-usdc-daily-s5-rw4a-xc-dd-pure-v1", "8892c1e9", "momentum_crypto_usdc@daily-d13s5-xc-dd-mh120"],
+  ] as const;
+
+  test("RW6 selects batches by id and pins six finished trials 456→462, owner constraints, costs and wiring", () => {
+    const ids = ["rw6-stocks-2026-10-26", "rw6-crypto-2026-10-26"];
+    const batches = ids.map(id => ledger.batches.find((b: any) => b.id === id));
+    expect(batches.map((b: any) => [b.id, b.priorUniqueTrials, b.hypothesisCount, b.resultingUniqueTrials]))
+      .toEqual([[ids[0], 456, 3, 459], [ids[1], 459, 3, 462]]);
+    expect(ledger.batches.find((b: any) => b.id === "rw5-q5-breakout-2026-10-24").resultingUniqueTrials).toBe(batches[0].priorUniqueTrials);
+    expect(ledger.batches.at(-1).id).toBe(ids[1]);
+    expect(ledger.batches.at(-1).resultingUniqueTrials).toBe(462);
+    expect(batches.map((b: any) => b.sourceCommit)).toEqual([
+      "863c647 (pre-registro SS17.1 antes de correr); c57e7ba (resultado SS17.2)",
+      "c57e7ba (pre-registro SS17.2 antes de correr); 8dceb77 (resultado SS17.3)",
+    ]);
+    expect([rw6Stocks.candidates.length, rw6Crypto.candidates.length]).toEqual([3, 3]);
+    expect(rw6Rows.map(r => r.trial)).toEqual([456, 457, 458, 459, 460, 461]);
+    expect(new Set(rw6Rows.map(r => r.path)).size).toBe(6);
+    expect(ledger.rw6Controls.trialsAdded).toBe(0);
+    expect(ledger.rw6Controls.paths).toEqual({
+      fb410729: ledger.authoritativeArtifactRw5dCash.path,
+      "0b088ca3": ledger.rw5Controls.paths["0b088ca3"],
+      efc086b4: ledger.rw4Controls.controls.cryptoLive.path,
+      "8892c1e9": ledger.authoritativeArtifactRw4aC2.path,
+    });
+    batches.forEach((b: any, i: number) => {
+      expect(b).toMatchObject({ inventoryComplete: false, resultsComplete: false, executionReported: true });
+      for (const p of b.sourcePaths) expect(sourcePathPresent(p)).toBe(true);
+      expect(b.sourcePaths.filter((p: string) => p.startsWith("experiments/"))).toEqual(rw6Rows.slice(i * 3, i * 3 + 3).map(r => r.manifest));
+      expect(b.evidence).toContain("restriccion del dueno");
+      expect(b.evidence).toContain("sin pausa ni reasignacion");
+    });
+    for (const entry of [rw6Stocks, rw6Crypto]) {
+      expect(entry.wiring).toEqual({ commit: "c25a751", wiredAt: "2026-10-26T06:03:00Z" });
+      expect(entry.verdict).toContain("NO SE CABLEA");
+    }
+    expect(rw6Rows.map(r => r.figures.deltaCagrPp)).toEqual([-3.5947, -1.9535, -1.7913, -39.3346, -1.0666, -20.3927]);
+    for (const r of rw6Rows) {
+      const f = r.figures;
+      const pass = r.criterion === "H"
+        ? { H_cagr: f.cagrPct >= 0, H_bookDrawdown: (r.trial < 459 ? f.accountMaxDrawdownPct : f.combinedBookMaxDrawdownPct) <= 35 }
+        : { S_cagr: f.cagrPct >= f.controlCagrPct, S_sleeveDrawdown: f.maxDrawdownPct <= (r.trial < 459 ? 35 : 40) };
+      const failed = Object.entries(pass).filter(([, p]) => !p).map(([id]) => id);
+      expect(r.criteriaFailed).toEqual(failed);
+      expect(r.wired).toBe(failed.length === 0);
+      expect(r.criteriaVerdict).toBe(r.wired ? "CUMPLE H; CABLEADO" : "FALLA S; NO SE CABLEA");
+      expect(f.cagrPct - f.controlCagrPct).toBeCloseTo(f.deltaCagrPp, 3);
+    }
+    // H binds the ACCOUNT/BOOK, not each sleeve: USDC's >40% DD still passes H.
+    expect(rw6Rows[5].figures.maxDrawdownPct).toBeGreaterThan(40);
+    expect(rw6Rows[5].wired).toBe(true);
+    const estimate = rw6Crypto.publishedOrdersEstimate;
+    expect([estimate.ordersPerDayApprox, estimate.goal]).toEqual([19, 30]);
+    expect(estimate.note).toContain("omiten ajustes");
+  });
+
+  test("RW6 manifests preserve every live knob except the preregistered hold/short axes, and versions match wiring", () => {
+    const versions = readFileSync(join(root, "src/portfolio/modelVersions.ts"), "utf8");
+    rw6Designs.forEach(([stem, artifact, baseStem, control, version], i) => {
+      const r = rw6Rows[i];
+      expect([r.manifest, r.path, r.control, r.version]).toEqual([`experiments/${stem}.json`, `data/backtests/${artifact}/`, control, version]);
+      expect(r.criterion).toBe(i === 1 || i === 4 ? "S" : "H");
+      expect(r.wired).toBe(version !== null);
+      expect(rw6Paths[control]).toMatch(new RegExp(`^data/backtests/${control}[0-9a-f]{56}/$`));
+      const m = JSON.parse(readFileSync(join(root, r.manifest), "utf8"));
+      const base = JSON.parse(readFileSync(join(root, `experiments/${baseStem}.json`), "utf8"));
+      expect(m.name).toBe(stem);
+      expect(m.trialAccounting).toEqual({ priorUniqueTrials: r.trial, complete: false });
+      expect(m.candidates).toHaveLength(1);
+      // E2's control manifest also contains vt12, which is NOT this trial's control.
+      if (i === 2) base.candidates = base.candidates.filter((c: any) => c.name === "vt15");
+      expect(base.candidates).toHaveLength(1);
+      const c = m.candidates[0];
+      if (i < 3) {
+        expect(c.portfolio.strategy.maxHoldSessions).toBe(5);
+        expect(r.partner).toBe(i === 2 ? "721d4998" : "41fdc636");
+        if (i === 1) {
+          expect(c.portfolio.strategy.regimeOverlay.hedge).toEqual({ symbol: "SH", fraction: 0.5 });
+          delete c.portfolio.strategy.regimeOverlay.hedge;
+          expect(m.data.universe.pop()).toBe("SH");
+        } else delete c.portfolio.strategy.maxHoldSessions;
+      } else {
+        expect(c.timeStop).toEqual({ maxHoldHours: 120 });
+        expect([r.e1, r.e2, r.otherCrypto]).toEqual(["721d4998", "41fdc636", i === 5 ? "b4abce2e" : "8892c1e9"]);
+        if (i === 4) {
+          expect(c.breakoutShort).toEqual({ symbol: "BTC/USD", entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 });
+          delete c.breakoutShort;
+        } else delete c.timeStop;
+      }
+      c.name = base.candidates[0].name;
+      expect({ ...m, name: base.name, description: base.description, trialAccounting: base.trialAccounting }).toEqual(base);
+      if (version) {
+        const block = versions.slice(versions.indexOf(`{ id: "${version}"`)).split("},")[0];
+        expect(block).toContain(`manifest: "${r.manifest}"`);
+        expect(block).toContain(r.path.replace(/\/$/, ""));
+      }
+    });
+  });
+
+  testWithDb("RW6 artifacts reproduce H/S figures, costs, account/book DD and complete executed-order counters", () => {
+    const r4 = rw5Round;
+    const summary = (p: string) => JSON.parse(readFileSync(join(root, p, "summary.json"), "utf8"));
+    for (const r of rw6Rows) {
+      // Gate on the source DB, NOT artifact presence: missing evidence must fail in a research checkout.
+      const s = summary(r.path), a = summary(rw6Paths[r.control]);
+      const m = JSON.parse(readFileSync(join(root, r.manifest), "utf8"));
+      const resolved = JSON.parse(readFileSync(join(root, r.path, "manifest-resolved.json"), "utf8"));
+      expect(resolved.candidates).toEqual(m.candidates);
+      expect(s.selectedCandidate.name).toBe(m.candidates[0].name);
+      expect([s.dataHash, a.dataHash]).toEqual([r.dataHash, r.controlDataHash]);
+      const folds = (x: any) => x.outerTests.map((t: any) => [t.foldPath, t.result.fromMs, t.result.toMs]);
+      expect(folds(s)).toEqual(folds(a));
+      expect(s.approved).toBe(false);
+      expect(r.gatesFailed).toEqual(Object.values(s.acceptance).filter((g: any) => !g.pass).map((g: any) => g.gate).sort());
+      let cmp, bookDrawdown;
+      if (r.trial < 459) {
+        cmp = compareArtifacts(join(root, r.path), join(root, rw6Paths[r.control]), 252);
+        bookDrawdown = combinedBookDrawdown([r.path, rw6Paths[r.partner]].map(p => new Map(loadArtifactOuterDailyReturns(join(root, p)).map(x => [x.date, x.ret]))), [50_000, 50_000]).maxDrawdown;
+        expect(s.stressTests).toHaveLength(s.outerTests.length);
+        expect(s.loo.length).toBeGreaterThan(0);
+        expect([s._stressSkipReason, s._looSkipReason]).toEqual(["missing stress threshold(s)", "missing LOO threshold(s)"]);
+        for (const gate of r.gatesFailed) expect(s.acceptance[gate]).toMatchObject({ value: null, threshold: null, pass: false });
+      } else {
+        const e = evaluateCrypto({ candidate: join(root, r.path), control: join(root, rw6Paths[r.control]),
+          e1: join(root, rw6Paths[r.e1]), e2: join(root, rw6Paths[r.e2]), otherCrypto: join(root, rw6Paths[r.otherCrypto]) });
+        cmp = { commonDays: e.commonDays, from: e.from, to: e.to, candidate: e.candidateStats, control: e.controlStats };
+        bookDrawdown = e.combinedBook.maxDrawdown;
+        // The RW5 evaluator supplies figures, NOT RW6's owner-constraint verdict.
+        expect(e.verdict).toStartWith("FALLA:");
+      }
+      const c = cmp.candidate, b = cmp.control;
+      expect(r.figures).toEqual({ commonDays: cmp.commonDays, from: cmp.from, to: cmp.to,
+        cagrPct: r4(c.cagr * 100), controlCagrPct: r4(b.cagr * 100), deltaCagrPp: r4((c.cagr - b.cagr) * 100),
+        sharpe: r4(c.sharpe), controlSharpe: r4(b.sharpe), maxDrawdownPct: r4(c.maxDrawdown * 100), controlMaxDrawdownPct: r4(b.maxDrawdown * 100),
+        [r.trial < 459 ? "accountMaxDrawdownPct" : "combinedBookMaxDrawdownPct"]: r4(bookDrawdown * 100) });
+      const results = s.outerTests.map((t: any) => t.result);
+      const trades = results.reduce((n: number, x: any) => n + x.trades, 0);
+      expect(trades).toBe(s.stitchedOos.trades);
+      if (r.trial < 459) {
+        const sum = (key: string) => results.reduce((n: number, x: any) => n + x.portfolioDiagnostics[key], 0);
+        const sessions = sum("sessions"), diagnosticOrders = sum("orders"), foldEndOrders = sum("foldEndOrders");
+        const orders = diagnosticOrders + foldEndOrders;
+        expect(r.execution).toEqual({ trades, sessions, diagnosticOrders, foldEndOrders, adjustmentOrders: sum("adjustmentOrders"), orders,
+          tradesPerSession: r4(trades / sessions), roundTripProxyOrdersPerSession: r4(2 * trades / sessions), ordersPerSession: r4(orders / sessions) });
+        expect(orders).toBe(sum("openingOrders") + sum("closingOrders") + sum("adjustmentOrders") + sum("stopOrders") + foldEndOrders);
+        expect(orders).toBeGreaterThan(2 * trades); // the published ~19/day proxy omits adjustments
+      } else {
+        const orders = results.reduce((n: number, x: any) => n + x.orders, 0);
+        const calendarDays = results.reduce((n: number, x: any) => n + (x.toMs - x.fromMs) / 86_400_000, 0);
+        expect(r.execution).toEqual({ trades, orders, calendarDays: r4(calendarDays), ordersPerCalendarDay: r4(orders / calendarDays) });
+        for (const x of results) expect(x.ordersPerDay).toBeCloseTo(x.orders / ((x.toMs - x.fromMs) / 86_400_000), 10);
+      }
+      const passed = r.criterion === "H" ? c.cagr >= 0 && bookDrawdown <= 0.35 : c.cagr >= b.cagr && c.maxDrawdown <= (r.trial < 459 ? 0.35 : 0.40);
+      expect(r.wired).toBe(passed);
+    }
+  }, 120_000);
 
   testWithDb("RW5d cash reproduces parity against the original RW5d artifact, not a new K7 or independent replication", () => {
     const proc = Bun.spawnSync([process.execPath, "scripts/rw3-compare-artifacts.ts", rw5dCash.path, rw5dCash.parity.controlPath, "--ppy", "252"], { cwd: root });

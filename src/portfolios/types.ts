@@ -19,6 +19,7 @@ import type {
   VolTargetConfig,
   ExposureControlConfig,
   TrailStopConfig,
+  TimeStopConfig,
   SharpeGateConfig,
   CapacityGuardConfig,
 } from "../strategies/momentum/MomentumEngine";
@@ -77,6 +78,7 @@ export interface MomentumTsmParams {
   notionalPctPerSlot: number;
   slotHysteresis?: boolean;
   volTarget?: VolTargetConfig;
+  timeStop?: TimeStopConfig;
   /** Portfolio exposure control (RW4a, 2026-10-23 — MomentumEngineConfig.
    *  exposureControl): resizes the OPEN book toward one sleeve-level scale
    *  from realized book vol and/or drawdown. Research knob: NO built-in
