@@ -2,7 +2,7 @@
 // Persisted keys survive reloads. Components read store.state and subscribe to
 // re-render on change.
 
-const PERSIST = ["view", "period", "lang", "theme", "tab", "newsShown", "page", "posGroups", "botTabSeen"];
+const PERSIST = ["view", "period", "lang", "theme", "tab", "page", "posGroups", "botTabSeen"];
 const load = (k, d) => { try { const v = localStorage.getItem("uc4_" + k); return v == null ? d : JSON.parse(v); } catch { return d; } };
 
 export const store = {
@@ -15,11 +15,6 @@ export const store = {
     // dashboard's job is to say what the bot is doing); see botTabSeen below.
     tab: load("tab", "bot"),
     botTabSeen: load("botTabSeen", false),
-    // Market News card: open by default (owner, 2026-10-07). It was closed by
-    // default since 2026-09-24, and a CSS bug kept showing its "…" placeholder
-    // while closed, so the news never appeared. The key is new (newsShown, not
-    // newsOpen) so every browser starts open once; collapsing persists.
-    newsShown: load("newsShown", true),
     // portfolio-manager navigation (2026-10-06): the active page. The hash
     // (#/resumen…) is the source of truth on load; this remembers the last
     // page for hash-less visits. See router in main.js.

@@ -52,5 +52,9 @@ export const BOT_NOW_FIXTURE = {
     { at: "2026-10-24T00:00:20Z", portfolioId: "momentum_crypto_usdc", kind: "resize", symbol: null, qty: 4, usd: -1250, pnlUsd: null, reason: "drawdown_control", detail: null },
     { at: "2026-10-23T13:41:00Z", portfolioId: "meanrev_stocks", kind: "rebalance", symbol: null, qty: 37, usd: 48200, pnlUsd: null, reason: "daily_rebalance", detail: "32 bought, 5 sold" },
     { at: "2026-10-22T14:05:00Z", portfolioId: "momentum_stocks", kind: "sell", symbol: "NVDA", qty: 12, usd: 2140, pnlUsd: -410, reason: "trailing_stop", detail: null },
+    // One pass at the 5-day limit: two closes, the rebalance that names the rebuys.
+    { at: "2026-10-22T13:35:42Z", portfolioId: "momentum_stocks", kind: "close", symbol: "QQQ", qty: 9, usd: 4100, pnlUsd: -134, reason: "MAX_HOLD", detail: null },
+    { at: "2026-10-22T13:35:40Z", portfolioId: "momentum_stocks", kind: "close", symbol: "SPY", qty: 6, usd: 3980, pnlUsd: -210, reason: "MAX_HOLD", detail: null },
+    { at: "2026-10-22T13:35:00Z", portfolioId: "momentum_stocks", kind: "rebalance", symbol: null, qty: null, usd: 18000, pnlUsd: null, reason: "REBALANCE", detail: null, buys: 3, sells: 2, rebought: ["SPY", "QQQ"], newBuyUsd: 6400 },
   ],
 };

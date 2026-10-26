@@ -207,7 +207,6 @@ async function main() {
       localStorage.setItem("uc4_lang", '"en"');
       localStorage.setItem("uc4_view", '"consolidated"');
       localStorage.setItem("uc4_tab", '"equity"');
-      localStorage.setItem("uc4_newsShown", "true");
     });
     try {
       for (const viewport of SIZES) {

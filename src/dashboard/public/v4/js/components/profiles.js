@@ -93,6 +93,18 @@ function brokerCell(key, group, bt, stats) {
     </div>`;
 }
 
+/** The whole account since the system started: Σ broker-truth equity minus Σ
+ *  their first equity (the same anchors as each broker cell's "total %", so the
+ *  three figures agree). Null while any broker lacks its first anchor. */
+export function sinceStart(state) {
+  const brokers = (state.profiles || []).flatMap((p) => p.brokerAccounts || []);
+  if (!brokers.length || brokers.some((b) => b.equity == null || !(n(b.firstEquity) > 0))) return null;
+  const equity = brokers.reduce((sum, b) => sum + n(b.equity), 0);
+  const first = brokers.reduce((sum, b) => sum + n(b.firstEquity), 0);
+  const starts = brokers.map((b) => Number(b.startedAt)).filter((x) => Number.isFinite(x) && x > 0);
+  return { pnl: equity - first, pct: ((equity - first) / first) * 100, startedAt: starts.length ? Math.min(...starts) : null };
+}
+
 export function renderProfiles() {
   const s = store.state;
   const accounts = s.dashboard?.accounts || [];

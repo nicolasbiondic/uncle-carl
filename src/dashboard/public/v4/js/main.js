@@ -9,7 +9,7 @@ import { renderPositions, togglePositionGroup } from "./components/positions.js"
 import { renderTrades } from "./components/trades.js";
 import { renderAnalyticsShell, loadTab, setMonthlyReturnsProfile } from "./components/analytics.js";
 import { fitTable, fitTablesIn, fitStrip } from "./fit.js";
-import { renderNewsBar, loadNews, toggleNews } from "./components/news.js";
+import { renderNewsBar, loadNews } from "./components/news.js";
 import { setFunnelDays } from "./components/funnel.js";
 import { connectWS } from "./ws.js";
 import { bindPalette } from "./components/palette.js";
@@ -272,7 +272,6 @@ function wireEvents() {
     else if (act === "logout") { try { await api.logout(); } catch {} location.href = "/login"; }
     else if (act === "user-menu") toggleUserMenu(undefined, !userMenuOpen && e.detail === 0 ? "first" : undefined); // detail 0 = Enter/Space, not a mouse click
     else if (act === "user-menu-close") toggleUserMenu(false);
-    else if (act === "news-toggle") toggleNews();
     else if (act === "pnl-why") openPnlBreakdown(+el.dataset.days);
   });
   // Click-away / Escape close the user menu.

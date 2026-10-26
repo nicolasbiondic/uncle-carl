@@ -146,14 +146,29 @@ describe("bot now: causal events", () => {
     expect(result.events.find(e => e.kind === "treasury")).toMatchObject({ reason: "TREASURY_COVER", symbol: "BOXX", usd: 237.5, portfolioId: null });
     expect(result.portfolios[0].lastDecision).toMatchObject({ resizes: 1, orders: 2, rejected: 1 });
   });
-  test("events are newest first, last seven days only, at most forty", () => {
+  test("events are newest first, last seven days only, at most 120", () => {
     const f = fixture();
     f.activity("too old", "error", NOW - 8 * 864e5);
     f.activity("from the future", "error", NOW + 1000);
-    for (let i = 0; i < 45; i++) f.activity(String(i), "error", NOW - i * 1000);
+    for (let i = 0; i < 125; i++) f.activity(String(i), "error", NOW - i * 1000);
     const events = f.build().events;
-    expect(events).toHaveLength(40);
-    expect(events[0].at).toBe(NOW); expect(events.at(-1)?.at).toBe(NOW - 39_000);
+    expect(events).toHaveLength(120);
+    expect(events[0].at).toBe(NOW); expect(events.at(-1)?.at).toBe(NOW - 119_000);
+  });
+  test("a 5-day limit pass: MAX_HOLD closes carry symbol/pnl/reason and the rebalance names the same-pass rebuys", () => {
+    const f = fixture("momentum_stocks", "portfolio");
+    const rebuy = (symbol: string) => ({ ...filled("buy", symbol, 0.1, 0.1), intent: { ...filled("buy", symbol, 0.1, 0.1).intent, maxHold: "rebuy" } });
+    const close = (symbol: string) => ({ ...filled("sell", symbol, 0.1, 0), intent: { ...filled("sell", symbol, 0.1, 0).intent, maxHold: "close" } });
+    f.pe({ orders_json: JSON.stringify([close("SPY"), rebuy("SPY"), close("QQQ"), filled("buy", "NEW", 0, 0.2, 2, 100)]) });
+    for (const symbol of ["SPY", "QQQ"]) {
+      seedOpenTrade(symbol, "momentum_stocks", { symbol });
+      f.db.query("UPDATE trades SET status='closed', exit_time=?, exit_price=99, pnl=-210, close_reason='MAX_HOLD' WHERE id=?").run(NOW - 55_000, symbol);
+    }
+    const events = f.build().events;
+    expect(events.filter(e => e.kind === "close")).toHaveLength(2);
+    expect(events.filter(e => e.kind === "close")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ symbol: "SPY", pnlUsd: -210, reason: "MAX_HOLD", portfolioId: "momentum_stocks" })]));
+    expect(events.find(e => e.kind === "rebalance")).toMatchObject({ buys: 2, sells: 2, rebought: ["SPY"], newBuyUsd: 200 });
   });
   test("a confirmed close and same-minute re-entry are not conflated", () => {
     const f = fixture();

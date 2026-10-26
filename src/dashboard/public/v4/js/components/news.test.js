@@ -1,45 +1,31 @@
-// ── Market News: collapsible, open by default (owner, 2026-10-07) ──────────
-// Closed by default from 2026-09-24, and while closed a CSS rule
-// (.news-scroll's display:flex) overrode the hidden attribute: the card showed
-// its "…" placeholder and never fetched. Now open by default under a new key
-// (newsShown), [hidden] always wins in app.css, and collapsing persists.
+// ── Market news: always shown (owner, 2026-10-26) ──────────────────────────
+// The collapse toggle ("MARKET NEWS ▾") and its persisted newsShown state are
+// gone: the row is always there, under a plain sentence-case label.
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { readFileSync } from "fs";
-import { join } from "path";
 import { store } from "../store.js";
 import { loadNews, renderNewsBar } from "./news.js";
+import * as news from "./news.js";
 
 const original = { ...store.state };
 afterEach(() => Object.assign(store.state, original));
 
 describe("renderNewsBar", () => {
-  test("default state: shown", () => {
-    expect(original.newsShown).toBe(true);
-  });
-
-  test("collapsed: content is hidden, toggle reports aria-expanded=false", () => {
-    Object.assign(store.state, { newsShown: false });
+  test("always shown: no toggle, no hidden attribute, no persisted collapse state", () => {
     const html = renderNewsBar();
-    expect(html).toContain('aria-expanded="false"');
-    expect(html).toMatch(/id="newsScroll"\s+hidden>/);
+    expect(html).not.toContain("<button");
+    expect(html).not.toContain("news-toggle");
+    expect(html).not.toContain("aria-expanded");
+    expect(html).not.toMatch(/\shidden[\s>]/);
+    expect(html).toContain('id="newsScroll"');
+    expect("newsShown" in original).toBe(false);
+    expect("toggleNews" in news).toBe(false);
   });
 
-  test("the hidden attribute always wins over component display rules (app.css)", () => {
-    const css = readFileSync(join(import.meta.dir, "../../css/app.css"), "utf-8").replace(/\s+/g, "");
-    expect(css).toContain("[hidden]{display:none!important;}");
-  });
-
-  test("open: content is visible (no hidden attribute), aria-expanded=true", () => {
-    Object.assign(store.state, { newsShown: true });
-    const html = renderNewsBar();
-    expect(html).toContain('aria-expanded="true"');
-    expect(html).not.toMatch(/id="newsScroll"\s+hidden>/);
-  });
-
-  test("the toggle is a real keyboard-focusable <button>, not a div/span", () => {
-    Object.assign(store.state, { newsShown: false });
-    const html = renderNewsBar();
-    expect(html).toMatch(/<button[^>]*data-act="news-toggle"/);
+  test("the label is plain sentence-case text, in both languages", () => {
+    store.state.lang = "en";
+    expect(renderNewsBar()).toContain("<span>Market news</span>");
+    store.state.lang = "es";
+    expect(renderNewsBar()).toContain("<span>Noticias del mercado</span>");
   });
 });
 
@@ -56,7 +42,7 @@ test("quiet bilingual empty state and escaped plain-text relevance tag replace l
   globalThis.document = { getElementById: () => el };
   globalThis.window = { matchMedia: () => ({ matches: true }) }; // no timers/browser
   try {
-    Object.assign(store.state, { newsShown: true, lang: "en" });
+    Object.assign(store.state, { lang: "en" });
     await loadNews();
     expect(el.innerHTML).toContain("No market-moving news");
     expect(el.innerHTML).toContain('class="muted news-empty"');

@@ -1,5 +1,5 @@
 import { store, t, sleeveLabel } from "../store.js";
-import { money, moneyCompact, pnlWhole, quantity, pctSigned, pnlColor, dur, num, n, pct } from "../fmt.js";
+import { money, moneyCompact, pnlWhole, quantity, pctSigned, pnlColor, dur, num } from "../fmt.js";
 import { esc } from "../ui.js";
 import { renderTrades } from "./trades.js";
 
@@ -10,18 +10,6 @@ import { renderTrades } from "./trades.js";
 function priced(v) {
   if (v === null || v === undefined || v === "") return false;
   return Number.isFinite(Number(v));
-}
-
-/** How far (as a % of the current price) the stop is from here — the thing
- *  an operator scanning the table actually wants ("how much room before this
- *  gets stopped out"), not just the raw stop price. Long: stop sits BELOW
- *  price, so distance = (price − stop) / price. Short: stop sits ABOVE, so
- *  distance = (stop − price) / price. Returns null (never a fabricated %)
- *  when either input isn't a real price — same discipline as positionNotional. */
-export function stopDistancePct(currentPrice, stopLoss, isLong) {
-  if (!priced(currentPrice) || !priced(stopLoss) || Number(currentPrice) <= 0) return null;
-  const price = Number(currentPrice), sl = Number(stopLoss);
-  return isLong ? ((price - sl) / price) * 100 : ((sl - price) / price) * 100;
 }
 
 /** True for the binance_coinm sleeve (momentum_btc today) — the ONLY case
@@ -110,7 +98,8 @@ export function exposureColor(row) {
   if (row.ratio == null) return "var(--muted)";
   if (row.usage != null) {
     const cap = row.cap ?? row.ratio / row.usage;
-    return Math.round(row.ratio * 100) > Math.round(cap * 100) ? "var(--down)" : row.usage >= 0.9 ? "var(--warn)" : "var(--text)";
+    // At the cap is the design size of an always-invested book, not a warning: red only past it.
+    return Math.round(row.ratio * 100) > Math.round(cap * 100) ? "var(--down)" : "var(--text)";
   }
   return row.ratio >= 1 ? "var(--down)" : "var(--text)";
 }
@@ -118,9 +107,10 @@ export function exposureColor(row) {
 // ── Groups: the table is one block per portfolio (owner, 2026-10-25) ───────
 // Until then a row of exposure chips ("● MOM-CRY-USD 0.67× /1.15×") sat above
 // the table and every row carried a sleeve badge; the owner could not read
-// either. Now each portfolio is a block with a header row in plain words —
-// "Momentum Stocks  11 positions, $57,021 invested, 0.97× of its capital
-// −$1,234" — and the rows beneath carry nothing but their own numbers.
+// either. Now each portfolio is a block with a header row — "Momentum Stocks
+// $57,021 · −$1,234 ……… exposure [bar] 0.97× of 2.5×" (since 2026-10-26; the
+// sentence "11 positions, $57,021 invested, 0.97× of its capital" became the
+// title) — and the rows beneath carry nothing but their own numbers.
 
 /** Groups with more than this many positions start collapsed (only when the
  *  table has more than one group — a lone group collapsed is an empty table). */
@@ -168,19 +158,29 @@ export function positionGroups(positions, accounts) {
   return groups.sort((a, b) => (b.invested ?? -1) - (a.invested ?? -1) || (a.id === "" ? 1 : 0) - (b.id === "" ? 1 : 0));
 }
 
-/** The exposure phrase of a group header: "0.97× of its capital", plus the
- *  cap only when it is close ("1.10× of its capital, cap 1.15×"), coloured
- *  only then (exposureColor). null when the ratio is unknown (COIN-M). */
+/** The exposure of a group header as "1.50× of 2.5×" (ratio over the
+ *  engine's base, then the sleeve's cap) with the share of the cap for the
+ *  bar; coloured only past the cap (exposureColor). Without a cap the
+ *  ratio stands alone; null when the ratio is unknown (COIN-M). */
 export function exposurePhrase(x) {
   if (!x || x.ratio == null) return null;
-  const near = x.usage != null ? x.usage >= 0.9 : x.ratio >= 1;
-  const capLabel = x.cap == null ? "" : `, ${t("cap", "tope")} ${+x.cap.toFixed(3)}×`;
-  return { text: `${num(x.ratio, 2)}× ${t("of its capital", "de su capital")}${near ? capLabel : ""}`, color: near ? exposureColor(x) : null };
+  const text = x.cap == null ? `${num(x.ratio, 2)}×` : `${num(x.ratio, 2)}× ${t("of", "de")} ${+x.cap.toFixed(3)}×`;
+  const color = exposureColor(x);
+  return { text, color: color === "var(--down)" ? color : null, usage: x.usage };
+}
+
+/** The header's exposure bar: used share of the cap over a track, filled in
+ *  the phrase's colour (muted while far from the cap), clipped at the cap. */
+export function renderExposureBar(xp) {
+  if (!xp || xp.usage == null) return "";
+  const width = Math.min(100, Math.max(0, xp.usage * 100));
+  return `<span class="xbar" aria-hidden="true"><span class="xbar-fill" style="width:${+width.toFixed(1)}%;background:${xp.color || "var(--muted)"}"></span></span>`;
 }
 
 function groupTitle(g) {
   const x = g.exposure;
-  const parts = [];
+  const count = g.rows.length;
+  const parts = [`${count} ${count === 1 ? t("position", "posición") : t("positions", "posiciones")}.`];
   if (x && x.ratio != null) {
     const baseLabel = x.baseKind === "equity" ? t("current equity", "patrimonio actual") : t("allocation", "asignación");
     parts.push(`${t("Holds", "Tiene")} ${money(x.notional, 0)} ${t("at market against", "a mercado sobre")} ${money(x.base, 0)} ${t("of", "de")} ${baseLabel} (${num(x.ratio, 2)}×).`);
@@ -194,20 +194,117 @@ function groupTitle(g) {
 }
 
 function renderGroupHeader(g, collapsed, cols) {
-  const count = g.rows.length;
-  const bits = [`${count} ${count === 1 ? t("position", "posición") : t("positions", "posiciones")}`];
-  if (g.invested != null) bits.push(`${money(g.invested, 0)} ${t("invested", "invertidos")}`);
+  // Name · $ invested · P&L on the left; the exposure bar on the right. The
+  // count and the long sentence ride in the title (the owner reads numbers).
+  const bits = [];
+  if (g.invested != null) bits.push(esc(money(g.invested, 0)));
+  if (g.pnl.counted) bits.push(`<span class="pg-pnl" style="color:${pnlColor(g.pnl.total)}">${pnlWhole(g.pnl.total)}</span>`);
   const xp = exposurePhrase(g.exposure);
-  if (xp) bits.push(xp.color ? `<span style="color:${xp.color}">${esc(xp.text)}</span>` : esc(xp.text));
-  const pnl = g.pnl.counted
-    ? `<span class="pg-pnl" style="color:${pnlColor(g.pnl.total)}">${pnlWhole(g.pnl.total)}</span>`
+  const exp = xp
+    ? `<span class="pg-exp"><span class="muted">${t("exposure", "exposición")}</span>${renderExposureBar(xp)}<span class="pg-x"${xp.color ? ` style="color:${xp.color}"` : ""}>${esc(xp.text)}</span></span>`
     : "";
   // One cell across the row. Its content is sized width:0/min-width:100%
   // (app.css .pgroup-btn) so the sentence never widens the symbol column
   // the way a label in the first cell would (see renderTotalsRow).
   return `<tr class="pgroup"><td colspan="${cols}"><button type="button" class="pgroup-btn" data-pgroup="${esc(g.id)}" aria-expanded="${!collapsed}" title="${esc(groupTitle(g))}">
-      <span class="pg-chev" aria-hidden="true"></span><span class="pg-name">${esc(g.label)}</span><span class="pg-sum">${bits.join(", ")}</span>${pnl}
+      <span class="pg-chev" aria-hidden="true"></span><span class="pg-name">${esc(g.label)}</span><span class="pg-sum">${bits.join(' <span class="muted">·</span> ')}</span>${exp}
     </button></td></tr>`;
+}
+
+// ── Owner maximum hold (2026-10-26, RW §17): every operation closes at 5 days ─
+// The portfolio engines (the stock sleeves) close after 5 NYSE sessions
+// (maxHoldSessions, src/portfolio-engine/decide.ts maxHoldExpired: sessions
+// strictly AFTER the entry date, closed at the pass of the 5th), the momentum
+// engines (crypto) after 120 calendar hours (timeStop.maxHoldHours). The Time
+// column shows that clock: five dots filling with the position's age and
+// "closes in N days". Weekdays stand in for sessions (holidays ignored — the
+// owner accepted "good enough"); a row past its limit is a pending close.
+
+export const MAX_HOLD_SESSIONS = 5;
+export const MAX_HOLD_HOURS = 120;
+export const HOLD_DOTS = 5;
+
+/** Crypto rows run on hours, stock rows on sessions. Position.market when the
+ *  payload carries it; else the sleeve's broker (binance* = crypto). */
+export function isCryptoRow(p, account) {
+  if (p?.market === "crypto" || p?.market === "stock") return p.market === "crypto";
+  return typeof account?.broker === "string" && account.broker.startsWith("binance");
+}
+
+/** Days since the epoch of a timestamp's ET calendar date. */
+function etDayNumber(ms) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(ms));
+  const get = (type) => Number(parts.find((x) => x.type === type)?.value);
+  return Math.floor(Date.UTC(get("year"), get("month") - 1, get("day")) / 864e5);
+}
+
+/** Weekdays strictly after the entry's ET date, up to and including today's
+ *  (the count maxHoldExpired makes, without the holiday calendar). */
+export function weekdaysSince(openedMs, nowMs) {
+  const from = etDayNumber(openedMs), to = etDayNumber(nowMs);
+  let count = 0;
+  for (let d = from + 1; d <= to; d++) {
+    const dow = (d + 4) % 7; // day 0 (1970-01-01) was a Thursday; 0 = Sunday
+    if (dow >= 1 && dow <= 5) count++;
+  }
+  return count;
+}
+
+/** Pure: where a position stands on the owner's 5-day clock, or null when its
+ *  age is unknown. `dots` (0..5) fill with the age; `remaining` is in the
+ *  row's unit; `closing` once the limit is reached (the close is pending). */
+export function holdProgress(p, account, nowMs = Date.now()) {
+  const opened = priced(p?.openedAt) && Number(p.openedAt) > 0 ? Number(p.openedAt)
+    : priced(p?.durationSeconds) ? nowMs - Number(p.durationSeconds) * 1000 : null;
+  if (opened == null) return null;
+  const heldMs = Math.max(0, nowMs - opened);
+  if (isCryptoRow(p, account)) {
+    const hours = heldMs / 36e5;
+    return { unit: "hours", elapsed: hours, limit: MAX_HOLD_HOURS, remaining: Math.max(0, MAX_HOLD_HOURS - hours), dots: Math.min(HOLD_DOTS, Math.floor(hours / 24)), closing: hours >= MAX_HOLD_HOURS, heldMs };
+  }
+  const sessions = weekdaysSince(opened, nowMs);
+  return { unit: "sessions", elapsed: sessions, limit: MAX_HOLD_SESSIONS, remaining: Math.max(0, MAX_HOLD_SESSIONS - sessions), dots: Math.min(HOLD_DOTS, sessions), closing: sessions >= MAX_HOLD_SESSIONS, heldMs };
+}
+
+/** "closes in 4 days" / "closes in 20 h" (crypto under a day) / "closing".
+ *  Crypto days are rounded UP so dots + days always make 5. */
+export function holdText(h) {
+  if (!h) return "—";
+  if (h.closing) return t("closing", "cerrando");
+  if (h.unit === "hours" && h.remaining < 24) {
+    const hrs = Math.max(1, Math.ceil(h.remaining));
+    return t(`closes in ${hrs} h`, `cierra en ${hrs} h`);
+  }
+  const days = h.unit === "hours" ? Math.ceil(h.remaining / 24) : h.remaining;
+  return days === 1 ? t("closes in 1 day", "cierra en 1 día") : t(`closes in ${days} days`, `cierra en ${days} días`);
+}
+
+function holdTitle(h) {
+  if (!h) return t("Age unknown", "Antigüedad desconocida");
+  const rule = h.unit === "hours" ? `${h.limit} h` : t(`${h.limit} sessions`, `${h.limit} sesiones`);
+  return `${t("Held", "Abierta")} ${dur(h.heldMs)} · ${t("limit", "límite")} ${rule} · ${t("every operation closes at 5 days (owner rule, 2026-10-26)", "toda operación cierra a los 5 días (regla del dueño, 2026-10-26)")}`;
+}
+
+function renderHold(h) {
+  const dots = Array.from({ length: HOLD_DOTS }, (_, i) => `<i${h && i < h.dots ? ' class="on"' : ""}></i>`).join("");
+  return `<span class="hold" title="${esc(holdTitle(h))}"><span class="hdots" aria-hidden="true">${dots}</span><span class="opt2 hold-txt${h?.closing ? "" : " muted"}">${esc(holdText(h))}</span></span>`;
+}
+
+// ── Row P&L bar ─────────────────────────────────────────────────────────────
+/** Fill of a row's P&L bar as a % of its track: |pct| over the largest |pct|
+ *  among the rows shown, floored so a tiny move is still a sliver. 0 for an
+ *  unknown pct, a flat row or an all-flat table. */
+export const PNL_BAR_FLOOR = 8;
+export function pnlBarWidth(pct, maxAbsPct) {
+  if (!priced(pct) || !(maxAbsPct > 0)) return 0;
+  const a = Math.abs(Number(pct));
+  if (a === 0) return 0;
+  return Math.max(PNL_BAR_FLOOR, Math.min(100, (a / maxAbsPct) * 100));
+}
+
+function renderPnlBar(p, maxAbsPct) {
+  const width = pnlBarWidth(p.unrealizedPnlPct, maxAbsPct);
+  return `<span class="pnlbar" aria-hidden="true"><span class="pnlbar-fill" style="width:${+width.toFixed(1)}%;background:${pnlColor(p.unrealizedPnl)}"></span></span>`;
 }
 
 export function renderPositions(state, trades) {
@@ -233,52 +330,56 @@ export function renderPositions(state, trades) {
   // OPEN row actually carries one, so it reappears on its own if that ever
   // changes instead of needing another UI change.
   const anyTp = pos.some((p) => priced(p.takeProfit) && Number(p.takeProfit) > 0);
-  // Same rule for the stop column (2026-10-25): the portfolio-engine rows of
-  // momentum_stocks carry no stop of their own, so "—" filled the column.
-  const anySl = pos.some((p) => priced(p.stopLoss) && Number(p.stopLoss) > 0);
   // Same rule for the side column (2026-10-12): every live strategy is long
   // only, so "L" on every row was dead width that pushed the SL cell onto two
   // lines. It reappears on its own when a short position exists.
   const isLong = (p) => p.side === "buy" || p.side === "long";
   const anyShort = pos.some((p) => !isLong(p));
-  const cols = 7 + (anyShort ? 1 : 0) + (anySl ? 1 : 0) + (anyTp ? 1 : 0);
-  const row = (p) => {
+  // Sym, Notional, Entry, Now, P&L, Time (2026-10-26: the QTY column moved
+  // into the symbol's title and the SL column went away — the owner reads
+  // size, P&L and the 5-day clock; the stop is one click away via the symbol).
+  const cols = 6 + (anyShort ? 1 : 0) + (anyTp ? 1 : 0);
+  const now = Date.now();
+  const row = (p, maxAbsPct) => {
     const isL = isLong(p);
-    const now = Date.now();
-    const held = p.durationSeconds != null ? p.durationSeconds * 1000 : (now - n(p.openedAt, now));
     const acc = accById.get(p.profileId);
     const notional = positionNotional(p, acc);
-    const slDist = stopDistancePct(p.currentPrice, p.stopLoss, isL);
+    const symTitle = [
+      `${t("Qty", "Cant.")} ${quantity(p.quantity)}`,
+      `${t("Entry", "Entrada")} ${priced(p.avgEntryPrice) ? moneyCompact(p.avgEntryPrice) : "—"}`,
+      `${t("Now", "Ahora")} ${priced(p.currentPrice) ? moneyCompact(p.currentPrice) : "—"}`,
+    ].join(" · ");
     return `<tr class="pos">
-      <td><span class="symlink" data-sym="${esc(p.symbol)}" role="button" tabindex="0">${esc(p.symbol)}</span></td>
+      <td><span class="symlink" data-sym="${esc(p.symbol)}" role="button" tabindex="0" title="${esc(symTitle)}">${esc(p.symbol)}</span></td>
       ${anyShort ? `<td><span class="badge ${isL ? "l" : "s"}">${isL ? "L" : "S"}</span></td>` : ""}
-      <td class="opt3" title="${esc(String(p.quantity ?? ""))}">${quantity(p.quantity)}</td>
-      <td class="opt3">${moneyCompact(p.avgEntryPrice)}</td>
       <td>${notional != null
         ? moneyCompact(notional)
         : `<span class="muted" title="${esc(t("COIN-M quantity is a contract count, not units — notional needs the contract size, not carried in this payload", "En COIN-M la cantidad son contratos, no unidades — el nocional necesita el tamaño de contrato, que este dato no trae"))}">—</span>`}</td>
+      <td class="opt3">${priced(p.avgEntryPrice) ? moneyCompact(p.avgEntryPrice) : "—"}</td>
       <td class="opt3">${priced(p.currentPrice) ? moneyCompact(p.currentPrice) : "—"}</td>
       <td>${priced(p.unrealizedPnl)
-        ? `<span style="color:${pnlColor(p.unrealizedPnl)}">${pnlWhole(p.unrealizedPnl)} <span class="muted">${pctSigned(p.unrealizedPnlPct)}</span></span>`
+        ? `${renderPnlBar(p, maxAbsPct)}<span style="color:${pnlColor(p.unrealizedPnl)}">${pnlWhole(p.unrealizedPnl)} <span class="muted">${pctSigned(p.unrealizedPnlPct)}</span></span>`
         : `<span class="muted" title="${esc(t("No price available — not counted in the total", "Sin precio disponible — no cuenta en el total"))}">—</span>`}</td>
-      <td class="opt2">${dur(held)}</td>
-      ${anySl ? `<td class="opt1">${p.stopLoss ? `${moneyCompact(p.stopLoss)}${slDist != null ? ` <span class="muted">${pct(slDist, 1)}</span>` : ""}` : "—"}</td>` : ""}
+      <td>${renderHold(holdProgress(p, acc, now))}</td>
       ${anyTp ? `<td class="opt1">${p.takeProfit ? moneyCompact(p.takeProfit) : "—"}</td>` : ""}
     </tr>`;
   };
   const groups = positionGroups(pos, accounts);
-  const body = groups.map((g) => {
-    const collapsed = isGroupCollapsed(g.id, g.rows.length, groups.length, state.posGroups);
-    return renderGroupHeader(g, collapsed, cols) + (collapsed ? "" : g.rows.map(row).join(""));
-  }).join("");
+  const open = groups.map((g) => ({ g, collapsed: isGroupCollapsed(g.id, g.rows.length, groups.length, state.posGroups) }));
+  // The bar scale is the largest |P&L %| among the rows ON SCREEN (folded
+  // groups do not shrink the visible bars).
+  const maxAbsPct = open.filter((o) => !o.collapsed).flatMap((o) => o.g.rows)
+    .reduce((m, p) => (priced(p.unrealizedPnlPct) ? Math.max(m, Math.abs(Number(p.unrealizedPnlPct))) : m), 0);
+  const body = open.map(({ g, collapsed }) => renderGroupHeader(g, collapsed, cols) + (collapsed ? "" : g.rows.map((p) => row(p, maxAbsPct)).join(""))).join("");
   return `<div class="scroll"><table class="postbl">
-    <thead><tr><th>${t("Sym", "Sím")}</th>${anyShort ? "<th>S</th>" : ""}<th class="opt3">${t("Qty", "Cant.")}</th><th class="opt3">${t("Entry", "Entrada")}</th>
+    <thead><tr><th title="${esc(t("Quantity, entry and current price in each symbol's tooltip", "Cantidad, entrada y precio actual en el tooltip de cada símbolo"))}">${t("Sym", "Sím")}</th>${anyShort ? "<th>S</th>" : ""}
       <th title="${esc(t("Quantity \u00d7 entry price — the $ actually deployed. \u2014 for COIN-M (contracts, not units)", "Cantidad \u00d7 precio de entrada — el $ realmente invertido. \u2014 en COIN-M (contratos, no unidades)"))}">${t("Notional", "Nocional")}</th>
-      <th class="opt3">${t("Now", "Ahora")}</th><th>P&L</th><th class="opt2">${t("Time", "Tiempo")}</th>
-      ${anySl ? `<th class="opt1" title="${esc(t("Stop price · distance from the current price to the stop", "Precio de stop · distancia desde el precio actual al stop"))}">SL</th>` : ""}
+      <th class="opt3">${t("Entry", "Entrada")}</th><th class="opt3">${t("Now", "Ahora")}</th>
+      <th title="${esc(t("Unrealized P&L; the bar is the % move against the largest on screen", "P&L no realizado; la barra es el % frente al mayor en pantalla"))}">P&L</th>
+      <th title="${esc(t("Owner rule: every operation closes at 5 days — 5 NYSE sessions for stocks, 120 h for crypto. The dots fill with the position's age.", "Regla del dueño: toda operación cierra a los 5 días — 5 sesiones NYSE en acciones, 120 h en cripto. Los puntos se llenan con la antigüedad."))}">${t("Time", "Tiempo")}</th>
       ${anyTp ? `<th class="opt1">TP</th>` : ""}</tr></thead>
     <tbody>${body}</tbody>
-    ${renderTotalsRow(pos, anyTp, anyShort, anySl)}</table></div>`;
+    ${renderTotalsRow(pos, anyTp, anyShort)}</table></div>`;
 }
 
 /** Sum of unrealized P&L across the open positions shown above.
@@ -308,13 +409,13 @@ export function positionsTotals(positions) {
   return { total, counted, unpriced };
 }
 
-function renderTotalsRow(positions, anyTp, anyShort = true, anySl = true) {
+function renderTotalsRow(positions, anyTp, anyShort = true) {
   const { total, counted, unpriced } = positionsTotals(positions);
   if (!counted) return "";
   const note = unpriced > 0
     ? ` <span class="muted">· ${unpriced} ${t("unpriced", "sin precio")}</span>`
     : "";
-  // One cell per column (not a colspan over the Qty/Entry/Now columns): on
+  // One cell per column (not a colspan over the Entry/Now columns): on
   // narrow screens those columns are display:none, and a colspan="6" then
   // spilled past the visible columns and pushed the total off-screen.
   // Short label (the long form rides in the title): with the side column
@@ -324,8 +425,8 @@ function renderTotalsRow(positions, anyTp, anyShort = true, anySl = true) {
   const what = `${counted} ${counted === 1 ? t("position", "posición") : t("positions", "posiciones")}`;
   return `<tfoot><tr class="totals">
     <td colspan="${anyShort ? 2 : 1}" title="${esc(t("Total unrealized P&L", "P&L no realizado total"))} · ${esc(what)}">${t("Unrealized", "No realizado")} <span class="muted">· ${counted}${note}</span></td>
-    <td class="opt3"></td><td class="opt3"></td><td></td><td class="opt3"></td>
+    <td></td><td class="opt3"></td><td class="opt3"></td>
     <td style="color:${pnlColor(total)}">${pnlWhole(total)}</td>
-    <td class="opt2"></td>${anySl ? `<td class="opt1"></td>` : ""}${anyTp ? `<td class="opt1"></td>` : ""}
+    <td></td>${anyTp ? `<td class="opt1"></td>` : ""}
   </tr></tfoot>`;
 }

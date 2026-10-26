@@ -5,9 +5,10 @@
 // the table had 1px to spare), a wider font, longer values. fitTable hides the
 // next optional group while the table still overflows its box. The groups are
 // classes on the <table> (fit-1, fit-2, …); app.css maps each to the cells it
-// hides, least important first. Phones (< 981px) keep the sideways scroll:
-// the page scrolls there and the symbol column sticks to the left edge.
-export const FIT_STEPS = ["fit-1", "fit-2", "fit-3"];
+// hides, least important first (positions: TP, trades' strategy, entry/now,
+// the 5-day clock's words — its dots stay). Phones (< 981px) keep the sideways
+// scroll: the page scrolls there and the symbol column sticks to the left edge.
+export const FIT_STEPS = ["fit-1", "fit-2", "fit-3", "fit-4"];
 export const DESKTOP = "(min-width: 981px)";
 
 /** Re-fit one scroll box's table; returns how many groups it hid. */

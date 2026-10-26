@@ -46,7 +46,6 @@ async function main() {
           await page.addInitScript(`
             localStorage.setItem("uc4_theme", ${JSON.stringify(JSON.stringify(theme))});
             localStorage.setItem("uc4_lang", ${JSON.stringify(JSON.stringify(lang))});
-            localStorage.setItem("uc4_newsShown", "true");
             localStorage.setItem("uc4_tab", '"equity"');
           `);
           for (const [name, def] of Object.entries(PAGES)) {

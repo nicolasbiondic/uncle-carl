@@ -1,7 +1,7 @@
 import { store, t, periodLabel } from "../store.js";
 import { money, moneySigned, pct, pctSigned, pnlColor, n, num } from "../fmt.js";
 import { esc } from "../ui.js";
-import { renderProfiles } from "./profiles.js";
+import { renderProfiles, sinceStart } from "./profiles.js";
 
 /** `key` marks the cells main.js flashes when their value moves (data-k). */
 function kpi(label, valueHtml, cls = "", subHtml = "", key = "") {
@@ -93,6 +93,14 @@ function returnKpi(kp) {
   return kpi(t("Return 30D", "Rentab. 30D"), val, "sm", sub);
 }
 
+/** "+$1,234 +1.1% since start" under the total equity (start date in the title). */
+export function sinceStartSub(ss) {
+  if (!ss) return "";
+  const when = ss.startedAt ? new Date(ss.startedAt).toLocaleDateString(store.state.lang === "es" ? "es" : "en-GB", { day: "numeric", month: "short", year: "numeric" }) : "";
+  const title = when ? t(`Since the system started, ${when}`, `Desde que empezó el sistema, ${when}`) : "";
+  return `<span title="${esc(title)}"><b style="color:${pnlColor(ss.pnl)}">${moneySigned(ss.pnl, 0)}</b> ${pctSigned(ss.pct)} ${t("since start", "desde el inicio")}</span>`;
+}
+
 export function renderKpis() {
   const s = store.state;
   const k = consolidated(s);
@@ -131,7 +139,7 @@ export function renderKpis() {
   // One row: equity, the two portfolios (profiles.js), the P&L windows, the
   // goals (return, trades), then the win rate.
   return (
-    kpi(t("Total equity", "Patrimonio"), k.equity == null ? "—" : money(k.equity, 0), "", "", "equity") +
+    kpi(t("Total equity", "Patrimonio"), k.equity == null ? "—" : money(k.equity, 0), "", sinceStartSub(sinceStart(s)), "equity") +
     renderProfiles() +
     kpi(pnlL, pnlValue(k.periodPnl, periodPct, k.periodRealized, s.period), "", realizedSub(k.periodRealized, k.periodRealizedCount), "today") +
     (s.period === 7 ? "" : kpi(t("7D P&L", "P&L 7D"), pnlValue(k.pnl7d, pnl7dPct, k.realized7d, 7), "sm", realizedSub(k.realized7d, k.realized7dCount))) +

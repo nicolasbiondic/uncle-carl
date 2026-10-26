@@ -26,7 +26,11 @@ export function reasonWord(code) {
     trailing_stop: t("trailing stop", "stop dinámico"),
     stop_loss: t("stop-loss", "stop de pérdida"),
     stop: t("stop-loss", "stop de pérdida"),
-    time_stop: t("held too long", "tiempo máximo en cartera"),
+    max_hold: t("5-day limit", "límite de 5 días"),
+    time_stop: t("5-day limit", "límite de 5 días"),
+    breakout_short_time_stop: t("5-day limit", "límite de 5 días"),
+    regime: t("market conditions", "condiciones del mercado"),
+    shadow: t("orders simulated", "órdenes simuladas"),
     slot_displaced: t("a stronger pick took its slot", "otro valor más fuerte ocupó su plaza"),
     signal_exit: t("signal faded", "la señal se apagó"),
     signal_entry: t("new signal", "señal nueva"),
@@ -138,9 +142,15 @@ function onDay(ms, opts) {
 }
 
 // ── one portfolio ───────────────────────────────────────────────────────────
+// A compact card: name + status, 2–3 plain-text chips with the facts that
+// matter, a "last decision … now … next decision" line, and at most ONE short
+// sentence for blocked/waiting states.
 
 const WARN_BLOCKS = ["soft_drawdown", "hard_drawdown", "loss_streak", "maintenance"];
 const trimmed = (p) => p.exposureScale != null && n(p.exposureScale, 1) < 0.995;
+/** 1.5 → "1.5×", 1.0 → "1×". */
+const times = (x) => `${num(n(x), Math.abs(n(x) - Math.round(n(x))) < 0.05 ? 0 : 1)}×`;
+const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 /** The status word and its dot colour. */
 export function statusOf(p) {
@@ -169,106 +179,133 @@ function blockedSentence(p, o) {
       return t(`No new buys${until ? ` until ${until}` : ""}: several losses in a row.`, `Sin compras nuevas${until ? ` hasta ${until}` : ""}: varias pérdidas seguidas.`);
     case "maintenance":
       return t(`Paused for maintenance${until ? ` until ${until}` : ""}.`, `En pausa por mantenimiento${until ? ` hasta ${until}` : ""}.`);
-    case "market_closed":
-      return t("The market is closed.", "El mercado está cerrado.");
-    case "no_signal":
-      return ""; // said by the "none of its N coins…" sentence
+    case "shadow":
+      return t("Orders are simulated; none reach the broker.", "Las órdenes se simulan; ninguna llega al broker.");
     default:
-      return "";
+      return ""; // market_closed, no_signal and unknown gates are said by chips / the time line
   }
 }
 
-function regimeSentence(p) {
+/** "S&P 500 +5% vs its 200-day average". */
+function regimeChip(p) {
   const r = p.regime;
   if (!r || r.distancePct == null) return "";
-  const ref = refName(r.ref), d = pctWord(r.distancePct);
-  if (r.riskOn) return t(`The ${ref} is ${d} above its 200-day average, so it stays invested.`, `El ${ref} está un ${d} por encima de su media de 200 días, así que sigue invertido.`);
-  return t(`The ${ref} is ${d} below its 200-day average, so it stays in cash.`, `El ${ref} está un ${d} por debajo de su media de 200 días, así que se queda en efectivo.`);
+  const sign = n(r.distancePct) < 0 ? "−" : "+";
+  const d = `${sign}${pctWord(r.distancePct)}`;
+  return t(`${refName(r.ref)} ${d} vs its 200-day average`, `${refName(r.ref)} ${d} frente a su media de 200 días`);
 }
 
-function lastDecisionSentence(p, o) {
-  const d = p.lastDecision;
-  if (!d || !Number.isFinite(ts(d.at))) return "";
-  const orders = n(d.orders), rejected = n(d.rejected);
-  const ordersW = orders === 0 ? t("no orders", "sin órdenes") : orders === 1 ? t("1 order", "1 orden") : t(`${orders} orders`, `${orders} órdenes`);
-  const rejW = orders === 0 ? "" : rejected === 0 ? t(", none rejected", ", ninguna rechazada") : t(`, ${rejected} rejected`, `, ${rejected} rechazada${rejected === 1 ? "" : "s"}`);
-  return t(`Last decision ${onDay(ts(d.at), o)}: ${ordersW}${rejW}.`, `Última decisión ${onDay(ts(d.at), o)}: ${ordersW}${rejW}.`);
-}
-
-function nextSentence(p, o) {
-  const market = isCrypto(p) ? null : NY;
-  if (p.cadence?.kind === "hourly") {
-    const last = p.lastDecision?.at;
-    const lastW = Number.isFinite(ts(last)) ? t(` (last check ${sinceWord(last, o.now)})`, ` (última revisión ${sinceWord(last, o.now)})`) : "";
-    return t(`It checks every hour${lastW}.`, `Revisa cada hora${lastW}.`);
-  }
-  if (!Number.isFinite(ts(p.nextDecisionAt))) {
-    return p.cadence?.at ? t(`It decides once a day at ${p.cadence.at}.`, `Decide una vez al día a las ${p.cadence.at}.`) : "";
-  }
-  const when = whenPhrase(p.nextDecisionAt, { ...o, market });
-  const lev = p.maxGrossX != null && n(p.maxGrossX) > 1.05
-    ? t(`; it can use up to ${num(p.maxGrossX, 1)}× leverage`, `; puede usar hasta ${num(p.maxGrossX, 1)}× de apalancamiento`)
-    : "";
-  return t(`Next decision ${when}${lev}.`, `Próxima decisión ${when}${lev}.`);
-}
-
-/** The sentences for one portfolio, in order. Pure. */
-export function describePortfolio(p, o = {}) {
-  const s = [];
+/** The 2–3 key facts of a portfolio as plain strings (the reason, for paused and
+ *  flat states). Pure. */
+export function chipsOf(p) {
   const count = n(p.positions);
   const eq = p.investedUsd != null ? money(p.investedUsd, 0) : p.equityUsd != null ? money(p.equityUsd, 0) : "";
+  const held = count > 0
+    ? t(`Holds ${count} ${assetWord(p, count)}${eq ? ` (${eq})` : ""}`, `Mantiene ${count} ${assetWord(p, count)}${eq ? ` (${eq})` : ""}`)
+    : "";
+  const regime = regimeChip(p);
   switch (p.state) {
     case "error":
-      s.push(p.blocked?.detail || t("Something failed and it is not trading; see the Activity tab.", "Algo falló y no está operando; mira la pestaña Actividad."));
-      break;
+      return [];
     case "paused":
-      s.push(blockedSentence(p, o) || t("Paused; it holds no new positions.", "En pausa; no abre posiciones nuevas."));
-      if (count > 0) s.push(t(`It still holds ${count} ${assetWord(p, count)}${eq ? ` (${eq})` : ""}.`, `Aún mantiene ${count} ${assetWord(p, count)}${eq ? ` (${eq})` : ""}.`));
-      break;
-    case "waiting_first_pass": {
-      s.push(t("A new model version goes live at its next decision.", "Una nueva versión del modelo entra en vigor en su próxima decisión."));
-      if (count > 0) s.push(t(`It holds ${count} ${assetWord(p, count)}${eq ? ` (${eq})` : ""} from the previous version.`, `Mantiene ${count} ${assetWord(p, count)}${eq ? ` (${eq})` : ""} de la versión anterior.`));
-      s.push(regimeSentence(p), nextSentence(p, o));
-      break;
-    }
+      return [p.blocked?.reason ? cap(reasonWord(p.blocked.reason)) : "", held].filter(Boolean);
+    case "waiting_first_pass":
+      return [held, regime].filter(Boolean);
     case "flat": {
-      const uni = p.lastDecision?.universe ?? p.blocked?.universe;
-      const uniW = uni ? `${uni} ${assetWord(p, uni)}` : assetWord(p, 2);
+      const uni = p.lastDecision?.universe;
+      const uniW = uni ? `${uni} ${assetWord(p, uni)}` : null;
       const noSignal = p.blocked?.reason === "no_signal" || (p.lastDecision && n(p.lastDecision.signalsLong, -1) === 0);
-      if (p.regime && !p.regime.riskOn) s.push(regimeSentence(p));
-      else if (noSignal) s.push(p.engine === "meanrev"
-        ? t(`None of its ${uniW} has dropped enough to buy.`, `Ninguna de sus ${uniW} ha caído lo suficiente para comprar.`)
-        : t(`None of its ${uniW} is trending up.`, `Ninguna de sus ${uniW} está en tendencia alcista.`));
-      else s.push(blockedSentence(p, o) || t("It holds no positions.", "No tiene posiciones."));
-      if (p.blocked && p.blocked.reason !== "no_signal") s.push(blockedSentence(p, o));
-      s.push(nextSentence(p, o));
-      break;
+      const chips = [regime];
+      if (!(p.regime && !p.regime.riskOn)) {
+        if (noSignal) chips.push(p.engine === "meanrev"
+          ? (uniW ? t(`None of ${uniW} dropped enough to buy`, `Ninguna de ${uniW} cayó lo suficiente para comprar`) : t("Nothing dropped enough to buy", "Nada cayó lo suficiente para comprar"))
+          : (uniW ? t(`None of ${uniW} is trending up`, `Ninguna de ${uniW} está en tendencia alcista`) : t("Nothing is trending up", "Nada está en tendencia alcista")));
+        else if (p.blocked && p.blocked.reason !== "market_closed") chips.push(cap(reasonWord(p.blocked.reason)));
+      }
+      const out = chips.filter(Boolean);
+      return out.length ? out : [t("Holds no positions", "Sin posiciones")];
     }
     default: { // invested / partly_invested
+      const chips = [eq ? t(`Invested ${eq}`, `Invertido ${eq}`) : `${count} ${assetWord(p, count)}`];
+      if (p.maxGrossX != null && n(p.maxGrossX) > 1.05 && p.grossX != null) {
+        chips.push(t(`Leverage ${times(p.grossX)} of ${times(p.maxGrossX)}`, `Apalancamiento ${times(p.grossX)} de ${times(p.maxGrossX)}`));
+      }
+      chips.push(regime);
       if (trimmed(p)) {
         const scale = Math.round(n(p.exposureScale) * 100);
-        const dd = p.drawdownPct != null ? pctWord(p.drawdownPct) : null;
-        s.push(t(
-          `Holding ${count} ${assetWord(p, count)} at ${scale}% of normal size${eq ? ` (${eq})` : ""}${dd ? `: it is ${dd} below its peak, so it trades smaller` : ""}.`,
-          `Mantiene ${count} ${assetWord(p, count)} al ${scale}% del tamaño normal${eq ? ` (${eq})` : ""}${dd ? `: está un ${dd} por debajo de su máximo, así que opera con menos tamaño` : ""}.`));
-      } else {
-        const g = grossPhrase(p.grossX);
-        const paren = [eq, g].filter(Boolean).join(", ");
-        s.push(t(`Invested in ${count} ${assetWord(p, count)}${paren ? ` (${paren})` : ""}.`, `Invertido en ${count} ${assetWord(p, count)}${paren ? ` (${paren})` : ""}.`));
+        chips.push(t(`${scale}% of normal size`, `${scale}% del tamaño normal`));
+        if (p.drawdownPct != null) chips.push(t(`${pctWord(p.drawdownPct)} below its peak`, `${pctWord(p.drawdownPct)} bajo su máximo`));
       }
-      s.push(regimeSentence(p));
-      if (p.cadence?.kind !== "hourly") s.push(lastDecisionSentence(p, o));
-      s.push(blockedSentence(p, o), nextSentence(p, o));
+      const out = chips.filter(Boolean).slice(0, 3);
+      if (out.length < 2 && eq && count > 0) out.push(`${count} ${assetWord(p, count)}`);
+      return out;
     }
   }
-  return s.filter(Boolean);
+}
+
+/** The ONE short sentence under the time line: only for blocked / waiting /
+ *  failed states ("" otherwise). Pure. */
+export function noteOf(p, o = {}) {
+  switch (p.state) {
+    case "error":
+      return p.blocked?.detail || t("Something failed and it is not trading; see the Activity tab.", "Algo falló y no está operando; mira la pestaña Actividad.");
+    case "paused":
+      return blockedSentence(p, o) || t("Paused; it opens no new positions.", "En pausa; no abre posiciones nuevas.");
+    case "waiting_first_pass":
+      return t("A new model version goes live at its next decision.", "Una nueva versión del modelo entra en vigor en su próxima decisión.");
+    default:
+      return blockedSentence(p, o);
+  }
+}
+
+/** "in 28 min" / "in 3 h" — a coming moment, relative to `now`. */
+export function untilWord(ms, now = Date.now()) {
+  const sec = Math.round((ts(ms) - now) / 1000);
+  if (sec < 60) return t("in under a minute", "en menos de un minuto");
+  const m = Math.round(sec / 60);
+  if (m < 60) return t(`in ${m} min`, `en ${m} min`);
+  const h = Math.round(m / 60);
+  return t(`in ${h} h`, `en ${h} h`);
+}
+
+const SOON = 3 * 3600e3;
+/** A decision moment: relative when it is close, the viewer's clock (+ New York
+ *  for stock sleeves) when it is not. */
+function stamp(ms, p, o, past) {
+  const at = ts(ms), now = o.now ?? Date.now();
+  if (past && now - at < SOON) return sinceWord(at, now);
+  if (!past && at - now < SOON) return untilWord(at, now);
+  return whenPhrase(at, { ...o, market: isCrypto(p) ? null : NY });
+}
+
+/** `last decision ●──── now ────○ next decision`, each end labelled with its
+ *  time. "now" sits where it falls between the two. Pure. */
+export function timeLine(p, o = {}) {
+  const now = o.now ?? Date.now();
+  const last = ts(p.lastDecision?.at), next = ts(p.nextDecisionAt);
+  const hasLast = Number.isFinite(last), hasNext = Number.isFinite(next);
+  if (!hasLast && !hasNext) return "";
+  const kl = t("Last decision", "Última decisión"), kn = t("Next decision", "Próxima decisión");
+  const label = (k, v) => `<span><span class="bn-tl-k">${esc(k)}</span> ${esc(v)}</span>`;
+  if (!hasLast || !hasNext) {
+    return `<div class="bn-tl-solo">${hasNext ? label(kn, stamp(next, p, { ...o, now }, false)) : label(kl, stamp(last, p, { ...o, now }, true))}</div>`;
+  }
+  const f = next > last ? Math.min(0.92, Math.max(0.08, (now - last) / (next - last))) : 0.5;
+  return `<div class="bn-tl">
+    <div class="bn-tl-track" aria-hidden="true"><i class="bn-tl-dot"></i><i class="bn-tl-bar" style="flex-grow:${f.toFixed(3)}"></i><span class="bn-tl-now">${t("now", "ahora")}</span><i class="bn-tl-bar" style="flex-grow:${(1 - f).toFixed(3)}"></i><i class="bn-tl-dot bn-tl-hollow"></i></div>
+    <div class="bn-tl-labels">${label(kl, stamp(last, p, { ...o, now }, true))}${label(kn, stamp(next, p, { ...o, now }, false))}</div>
+  </div>`;
 }
 
 function portfolioBlock(p, o) {
   const st = statusOf(p);
+  const chips = chipsOf(p).map((c) => `<span class="bn-chip">${esc(c)}</span>`).join("");
+  const note = noteOf(p, o);
   return `<div class="bn-row">
     <div class="bn-head"><span class="bn-name">${esc(portfolioName(p.label || p.id))}</span><span class="bn-word" style="color:${st.color}"><span class="bn-dot" style="background:${st.color}"></span>${esc(st.word)}</span></div>
-    <p class="bn-text">${describePortfolio(p, o).map(esc).join(" ")}</p>
+    ${chips ? `<div class="bn-chips">${chips}</div>` : ""}
+    ${timeLine(p, o)}
+    ${note ? `<p class="bn-text">${esc(note)}</p>` : ""}
   </div>`;
 }
 
@@ -276,17 +313,30 @@ function portfolioBlock(p, o) {
 
 /** One event as a sentence (no time; the row shows it). `portfolios` maps id →
  *  the /api/bot/now portfolio (for its label and asset words). Pure. */
-export function eventSentence(ev, portfolios = {}) {
+const LIMIT_REASON = /^(max_hold|time_stop|breakout_short_time_stop)$/i;
+/** A close forced by the owner's 5-day maximum hold, whatever engine wrote it. */
+const isLimitClose = (e) => ["close", "sell", "stop"].includes(e.kind) && LIMIT_REASON.test(e.reason || "");
+
+/** `opts.bare` drops the portfolio name (a line inside an expanded pass);
+ *  `opts.rebought` marks a 5-day close whose symbol was bought again in the pass. */
+export function eventSentence(ev, portfolios = {}, opts = {}) {
   const known = portfolios[ev.portfolioId];
-  const who = portfolioName(known?.label || ev.portfolioId || t("The bot", "El bot"));
+  const who = opts.bare ? "" : portfolioName(known?.label || ev.portfolioId || t("The bot", "El bot"));
   const p = known || { broker: /crypto|binance/i.test(ev.portfolioId || "") ? "binance" : "alpaca", id: ev.portfolioId || "" };
   const qty = n(ev.qty);
   const usd = ev.usd != null ? ` (${money(ev.usd, 0)})` : "";
   const pnl = ev.pnlUsd != null ? `, ${pnlWhole(ev.pnlUsd)}` : "";
   const what = ev.symbol ? esc(ev.symbol) : qty > 0 ? `${qty} ${t(qty === 1 ? "position" : "positions", qty === 1 ? "posición" : "posiciones")}` : t("its positions", "sus posiciones");
   const bought = ev.symbol ? esc(ev.symbol) : qty > 0 ? `${qty} ${assetWord(p, qty)}` : t("positions", "posiciones");
+  const limit = isLimitClose(ev);
   let body;
-  switch (ev.kind) {
+  switch (limit ? "limit" : ev.kind) {
+    case "limit": {
+      const loss = ev.pnlUsd != null ? ` (${pnlWhole(ev.pnlUsd)})` : "";
+      body = t(`${who} closed ${what} at the 5-day limit${loss}${opts.rebought ? " and re-bought it" : ""}`,
+        `${who} cerró ${what} por el límite de 5 días${loss}${opts.rebought ? " y lo volvió a comprar" : ""}`);
+      break;
+    }
     case "buy": body = t(`${who} bought ${bought}${usd}`, `${who} compró ${bought}${usd}`); break;
     case "sell":
     case "close": body = t(`${who} sold ${what}${pnl || usd}`, `${who} vendió ${what}${pnl || usd}`); break;
@@ -313,9 +363,106 @@ export function eventSentence(ev, portfolios = {}) {
     case "error": body = t(`Problem in ${who}`, `Problema en ${who}`); break;
     default: body = `${who} ${esc(String(ev.kind || "").replace(/_/g, " "))}${what === t("its positions", "sus posiciones") ? "" : ` ${what}`}${usd}`;
   }
-  const reason = ev.reason ? ` <span class="bn-why">— ${esc(reasonWord(ev.reason))}</span>` : "";
+  const reason = ev.reason && !limit ? ` <span class="bn-why">— ${esc(reasonWord(ev.reason))}</span>` : "";
   const detail = ev.kind === "error" && ev.detail ? ` <span class="muted">${esc(ev.detail)}</span>` : "";
-  return `${body}${reason}${detail}`;
+  return `${body.trim()}${reason}${detail}`;
+}
+
+// ── passes: one line per portfolio decision ─────────────────────────────────
+
+const PASS_KINDS = new Set(["buy", "sell", "close", "stop", "resize", "rebalance"]);
+
+/** Events (newest first, as groupEventsByDay returns them) → rows. Events of the
+ *  same portfolio less than a minute apart are one pass: [{ portfolioId, events }]
+ *  with `events` still newest first. Pure. */
+export function clusterPasses(items) {
+  const rows = [], open = new Map();
+  for (const e of items || []) {
+    const clusterable = !!e.portfolioId && PASS_KINDS.has(e.kind);
+    const row = clusterable ? open.get(e.portfolioId) : null;
+    if (row && ts(row.events[row.events.length - 1].at) - ts(e.at) <= 60_000) { row.events.push(e); continue; }
+    const fresh = { portfolioId: e.portfolioId, events: [e] };
+    rows.push(fresh);
+    if (clusterable) open.set(e.portfolioId, fresh);
+  }
+  return rows;
+}
+
+const posWord = (c) => t(c === 1 ? "position" : "positions", c === 1 ? "posición" : "posiciones");
+
+/** One pass as a sentence plus its per-symbol lines: { text, lines } (HTML). The
+ *  5-day closes and the buys of the same symbol read as "closed … and re-bought
+ *  …"; a rebalance event brings the pass's totals and its renewal symbols. Pure. */
+export function passSummary(events, portfolios = {}) {
+  const first = events[0];
+  const known = portfolios[first.portfolioId];
+  const who = esc(portfolioName(known?.label || first.portfolioId || t("The bot", "El bot")));
+  const p = known || { broker: /crypto|binance/i.test(first.portfolioId || "") ? "binance" : "alpaca", id: first.portfolioId || "" };
+  const rb = events.find((e) => e.kind === "rebalance");
+  const limits = events.filter(isLimitClose);
+  const buys = events.filter((e) => e.kind === "buy");
+  const rebuy = new Set([...(rb?.rebought || []), ...buys.map((e) => e.symbol).filter((s) => s && limits.some((l) => l.symbol === s))]);
+  const closed = Math.max(limits.length, rebuy.size);
+  const parts = [];
+
+  if (closed > 0) {
+    const single = closed === 1 && limits[0]?.symbol ? esc(limits[0].symbol) : "";
+    const what = single || `${closed} ${posWord(closed)}`;
+    const r = rebuy.size;
+    if (!limits.length) {
+      parts.push(t(`closed and re-bought ${what} at the 5-day limit`, `cerró y volvió a comprar ${what} por el límite de 5 días`));
+    } else {
+      const loss = limits.some((e) => e.pnlUsd != null) ? ` (${pnlWhole(limits.reduce((s, e) => s + n(e.pnlUsd), 0))})` : "";
+      const again = r === 0 ? ""
+        : r < closed ? t(` and re-bought ${r} of them`, ` y volvió a comprar ${r} de ellas`)
+        : closed === 1 ? t(" and re-bought it", single ? " y lo volvió a comprar" : " y la volvió a comprar")
+        : t(" and re-bought them", " y las volvió a comprar");
+      parts.push(t(`closed ${what} at the 5-day limit${loss}${again}`, `cerró ${what} por el límite de 5 días${loss}${again}`));
+    }
+  }
+
+  const sold = events.filter((e) => (e.kind === "sell" || e.kind === "close") && !isLimitClose(e));
+  const soldCount = sold.length + (rb ? Math.max(0, n(rb.sells) - closed) : 0);
+  if (soldCount > 0) {
+    const loss = sold.some((e) => e.pnlUsd != null) ? ` (${pnlWhole(sold.reduce((s, e) => s + n(e.pnlUsd), 0))})` : "";
+    const what = soldCount === 1 && sold[0]?.symbol ? esc(sold[0].symbol) : `${soldCount} ${posWord(soldCount)}`;
+    parts.push(t(`sold ${what}${loss}`, `vendió ${what}${loss}`));
+  }
+  const stops = events.filter((e) => e.kind === "stop" && !isLimitClose(e));
+  if (stops.length) {
+    const loss = stops.some((e) => e.pnlUsd != null) ? ` (${pnlWhole(stops.reduce((s, e) => s + n(e.pnlUsd), 0))})` : "";
+    const what = stops.length === 1 && stops[0].symbol ? esc(stops[0].symbol) : `${stops.length} ${posWord(stops.length)}`;
+    parts.push(t(`stopped out of ${what}${loss}`, `salió de ${what} por stop${loss}`));
+  }
+
+  const fresh = buys.filter((e) => !rebuy.has(e.symbol));
+  const newCount = fresh.length + (rb ? Math.max(0, n(rb.buys) - (rb.rebought?.length || 0)) : 0);
+  if (newCount > 0) {
+    let usd = fresh.reduce((s, e) => s + n(e.usd), 0);
+    usd = rb ? (rb.newBuyUsd != null ? usd + rb.newBuyUsd : null) : usd;
+    const amt = usd != null && usd > 0 ? ` (${money(usd, 0)})` : "";
+    const one = newCount === 1 && !rb && fresh[0]?.symbol ? esc(fresh[0].symbol) : "";
+    parts.push(closed > 0
+      ? t(`${newCount} new buy${newCount === 1 ? "" : "s"}${amt}`, `${newCount} compra${newCount === 1 ? "" : "s"} nueva${newCount === 1 ? "" : "s"}${amt}`)
+      : t(`bought ${one || `${newCount} ${assetWord(p, newCount)}`}${amt}`, `compró ${one || `${newCount} ${assetWord(p, newCount)}`}${amt}`));
+  }
+  const resizes = events.filter((e) => e.kind === "resize");
+  if (resizes.length) parts.push(t(`resized ${resizes.length} ${posWord(resizes.length)}`, `ajustó ${resizes.length} ${posWord(resizes.length)}`));
+
+  const lines = [];
+  for (const e of events) {
+    lines.push(eventSentence(e, portfolios, { bare: true, rebought: isLimitClose(e) && rebuy.has(e.symbol) }));
+    if (e.kind === "rebalance" && e.rebought?.length) lines.push(t(`re-bought ${e.rebought.map(esc).join(", ")}`, `volvió a comprar ${e.rebought.map(esc).join(", ")}`));
+  }
+  return { text: parts.length ? `${who}: ${parts.join(", ")}` : eventSentence(first, portfolios), lines };
+}
+
+function eventRow(row, names) {
+  const e0 = row.events[0], time = row.events[row.events.length - 1].time;
+  const pass = row.events.length > 1 || (e0.kind === "rebalance" && e0.rebought?.length);
+  if (!pass) return `<div class="bn-ev"><span class="bn-time">${esc(time)}</span><span>${eventSentence(e0, names)}</span></div>`;
+  const s = passSummary(row.events, names);
+  return `<div class="bn-ev"><span class="bn-time">${esc(time)}</span><details class="bn-pass"><summary>${s.text}</summary><ul class="bn-lines">${s.lines.map((l) => `<li>${l}</li>`).join("")}</ul></details></div>`;
 }
 
 /** Events newest first, grouped by the viewer's day: [{ label, items }]. Pure. */
@@ -349,7 +496,7 @@ export function renderBotNow(data, o = {}) {
     : `<div class="empty">${t("No portfolios are running.", "No hay portafolios en marcha.")}</div>`;
   const groups = groupEventsByDay(data.events, o);
   const events = groups.length
-    ? groups.map((g) => `<div class="bn-day">${esc(g.label)}</div>${g.items.map((e) => `<div class="bn-ev"><span class="bn-time">${esc(e.time)}</span><span>${eventSentence(e, names)}</span></div>`).join("")}`).join("")
+    ? groups.map((g) => `<div class="bn-day">${esc(g.label)}</div>${clusterPasses(g.items).map((row) => eventRow(row, names)).join("")}`).join("")
     : `<div class="muted" style="font-size:var(--t-xs)">${t("No actions in the last few days.", "Sin acciones en los últimos días.")}</div>`;
   return `<div class="bn-list">${blocks}</div>
     <div class="an-h" style="margin-top:var(--s4)">${t("Recent actions", "Acciones recientes")}</div>

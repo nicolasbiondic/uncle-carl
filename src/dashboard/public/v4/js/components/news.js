@@ -51,7 +51,6 @@ function paint() {
 }
 
 export async function loadNews() {
-  if (!store.state.newsShown) return; // collapsed by the owner — don't fetch what isn't shown
   const lang = store.state.lang === "es" ? "es" : "en";
   paint(); // instant: whatever we already have (never back to "…")
   const slot = memory[lang];
@@ -97,25 +96,11 @@ function startRotation() {
   }, 6000);
 }
 
-/** One row (2026-10-12): the toggle sits LEFT of the headlines instead of on a
- *  line of its own, and the cards are two-line (app.css .news-bar) — the bar
- *  went from ~174px to ~90px of the one-screen Overview. */
+/** One row, always shown (owner, 2026-10-26: the collapse toggle is gone): a
+ *  plain "Market news" label on the left, two-line cards scrolling to its
+ *  right (app.css .news-bar). */
 export function renderNewsBar() {
-  const open = !!store.state.newsShown;
-  return `<div class="card news-bar${open ? "" : " closed"}">
-    <button class="card-note news-h" data-act="news-toggle" aria-expanded="${open}" aria-controls="newsScroll">
-      ${icon("news", 13)} <span>${t("Market News", "Noticias")}</span>
-      <span class="news-caret" aria-hidden="true" style="transform:rotate(${open ? "90deg" : "0deg"})">▸</span>
-    </button>
-    <div class="news-scroll" id="newsScroll" ${open ? "" : "hidden"}><div class="muted" style="padding:var(--s2)">…</div></div></div>`;
-}
-
-/** Flip open/closed, persist it (store.set writes localStorage for
- *  PERSIST-listed keys), re-render just this card, and lazy-load the feeds
- *  the first time it's opened. Wired from main.js's [data-act] delegator. */
-export function toggleNews() {
-  store.set({ newsShown: !store.state.newsShown });
-  const bar = byId("newsBar");
-  if (bar) bar.innerHTML = renderNewsBar();
-  loadNews(); // no-op (early return) when this just closed it
+  return `<div class="card news-bar">
+    <span class="news-h">${icon("news", 13)} <span>${t("Market news", "Noticias del mercado")}</span></span>
+    <div class="news-scroll" id="newsScroll"><div class="muted" style="padding:var(--s2)">…</div></div></div>`;
 }

@@ -4,8 +4,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   positionsTotals, positionNotional, isInverseContractSleeve,
-  sleeveExposure, renderPositions, stopDistancePct, exposureColor,
-  positionGroups, isGroupCollapsed, exposurePhrase, togglePositionGroup, COLLAPSE_OVER,
+  sleeveExposure, renderPositions, exposureColor,
+  positionGroups, isGroupCollapsed, exposurePhrase, renderExposureBar, togglePositionGroup, COLLAPSE_OVER,
+  holdProgress, holdText, weekdaysSince, isCryptoRow, pnlBarWidth, PNL_BAR_FLOOR, MAX_HOLD_SESSIONS, MAX_HOLD_HOURS,
 } from "./positions.js";
 import { store } from "../store.js";
 import { dur } from "../fmt.js";
@@ -108,9 +109,9 @@ describe("positionGroups", () => {
     const accounts = [{ id: "meanrev_stocks", label: "MeanRev Stocks", equity: 53_000, initialEquity: 50_000, grossCapMult: 1, grossCapBase: "equity" }];
     const [g] = positionGroups([{ profileId: "meanrev_stocks", quantity: 100, avgEntryPrice: 540, currentPrice: 530 }], accounts);
     expect(g.exposure.ratio).toBe(1);
-    expect(exposureColor(g.exposure)).toBe("var(--warn)");
-    expect(exposurePhrase(g.exposure).text).toContain("cap 1×");
-    expect(exposureColor({ ratio: 1.0000746, cap: 1, usage: 1.0000746 })).toBe("var(--warn)");
+    expect(exposureColor(g.exposure)).toBe("var(--text)");
+    expect(exposurePhrase(g.exposure).text).toBe("1.00× of 1×");
+    expect(exposureColor({ ratio: 1.0000746, cap: 1, usage: 1.0000746 })).toBe("var(--text)");
     expect(exposureColor({ ratio: 1.01, cap: 1, usage: 1.01 })).toBe("var(--down)");
   });
 
@@ -193,23 +194,110 @@ describe("isGroupCollapsed", () => {
   });
 });
 
-describe("exposurePhrase — plain words, the cap only when it matters", () => {
-  test("far from the cap: ratio only, uncoloured", () => {
-    expect(exposurePhrase({ ratio: 0.97, cap: 2.5, usage: 0.97 / 2.5 })).toEqual({ text: "0.97× of its capital", color: null });
+describe("exposurePhrase + bar — '1.50× of 2.5×', coloured only near the cap (2026-10-26)", () => {
+  test("far from the cap: ratio and cap, uncoloured; the bar fills the used share in muted", () => {
+    const p = exposurePhrase({ ratio: 0.97, cap: 2.5, usage: 0.97 / 2.5 });
+    expect(p).toEqual({ text: "0.97× of 2.5×", color: null, usage: 0.97 / 2.5 });
+    expect(renderExposureBar(p)).toBe('<span class="xbar" aria-hidden="true"><span class="xbar-fill" style="width:38.8%;background:var(--muted)"></span></span>');
   });
-  test("near the cap: the cap is named and the phrase takes the warning colour", () => {
+  test("at or near the cap: no warning colour (an always-invested book's design size)", () => {
     const p = exposurePhrase({ ratio: 1.1, cap: 1.15, usage: 1.1 / 1.15 });
-    expect(p.text).toBe("1.10× of its capital, cap 1.15×");
-    expect(p.color).toBe("var(--warn)");
+    expect(p.text).toBe("1.10× of 1.15×");
+    expect(p.color).toBeNull();
+    expect(renderExposureBar(p)).toContain("width:95.7%;background:var(--muted)");
   });
-  test("over the cap: red; cap precision without float noise", () => {
+  test("over the cap: red, the bar clipped at the track; cap precision without float noise", () => {
     const p = exposurePhrase({ ratio: 1.0, cap: 0.9659999999, usage: 1.0 / 0.966 });
-    expect(p.text).toBe("1.00× of its capital, cap 0.966×");
+    expect(p.text).toBe("1.00× of 0.966×");
     expect(p.color).toBe("var(--down)");
+    expect(renderExposureBar(p)).toContain("width:100%;background:var(--down)");
+  });
+  test("without a cap: the ratio alone, no bar (nothing to fill against)", () => {
+    const p = exposurePhrase({ ratio: 1.59, cap: null, usage: null });
+    expect(p.text).toBe("1.59×");
+    expect(renderExposureBar(p)).toBe("");
   });
   test("unknown ratio (COIN-M) -> null, the header simply omits it", () => {
     expect(exposurePhrase({ ratio: null, cap: 1.15, usage: null })).toBeNull();
     expect(exposurePhrase(null)).toBeNull();
+    expect(renderExposureBar(null)).toBe("");
+  });
+});
+
+// ── The 5-day clock (owner rule 2026-10-26: every operation closes at 5 days) ─
+describe("holdProgress — sessions for stocks, hours for crypto", () => {
+  const alpaca = { id: "momentum_stocks", broker: "alpaca" };
+  const binance = { id: "momentum_crypto_usdc", broker: "binance_usdc" };
+  const mon = Date.UTC(2026, 9, 26, 14, 0); // Mon 2026-10-26 10:00 ET
+  const day = 864e5;
+
+  test("isCryptoRow: Position.market first, the sleeve's broker as fallback", () => {
+    expect(isCryptoRow({ market: "crypto" }, alpaca)).toBe(true);
+    expect(isCryptoRow({ market: "stock" }, binance)).toBe(false);
+    expect(isCryptoRow({}, binance)).toBe(true);
+    expect(isCryptoRow({}, alpaca)).toBe(false);
+    expect(isCryptoRow({}, undefined)).toBe(false);
+  });
+
+  test("weekdaysSince counts the sessions strictly after the entry's ET date (maxHoldExpired's count), skipping weekends", () => {
+    expect(weekdaysSince(mon, mon)).toBe(0);
+    expect(weekdaysSince(mon, mon + day)).toBe(1);
+    expect(weekdaysSince(mon, mon + 4 * day)).toBe(4); // Fri
+    expect(weekdaysSince(mon, mon + 6 * day)).toBe(4); // Sun: the weekend adds nothing
+    expect(weekdaysSince(mon, mon + 7 * day)).toBe(5); // next Mon: the 5th session, the close
+    // Entry at 19:00 ET Monday is still Monday's date in ET even though it is Tuesday in UTC
+    expect(weekdaysSince(Date.UTC(2026, 9, 27, 0, 30), Date.UTC(2026, 9, 27, 14))).toBe(1);
+  });
+
+  test("a stock row: dots = sessions elapsed, 'closes in N days' with N the sessions left", () => {
+    const p = { symbol: "SPY", market: "stock", openedAt: mon };
+    expect(holdProgress(p, alpaca, mon)).toMatchObject({ unit: "sessions", elapsed: 0, limit: MAX_HOLD_SESSIONS, remaining: 5, dots: 0, closing: false });
+    expect(holdText(holdProgress(p, alpaca, mon))).toBe("closes in 5 days");
+    expect(holdText(holdProgress(p, alpaca, mon + day))).toBe("closes in 4 days");
+    expect(holdProgress(p, alpaca, mon + 4 * day)).toMatchObject({ dots: 4, remaining: 1 });
+    expect(holdText(holdProgress(p, alpaca, mon + 4 * day))).toBe("closes in 1 day");
+    expect(holdText(holdProgress(p, alpaca, mon + 6 * day))).toBe("closes in 1 day"); // Sunday: Monday's pass closes it
+  });
+
+  test("past the limit the close is pending: five dots and 'closing'", () => {
+    const h = holdProgress({ market: "stock", openedAt: mon }, alpaca, mon + 7 * day);
+    expect(h).toMatchObject({ dots: 5, remaining: 0, closing: true });
+    expect(holdText(h)).toBe("closing");
+    expect(holdProgress({ market: "stock", openedAt: mon }, alpaca, mon + 20 * day)).toMatchObject({ dots: 5, closing: true });
+  });
+
+  test("a crypto row runs on 120 calendar hours: a dot per day, days rounded up so dots + days = 5, hours under a day", () => {
+    const p = { symbol: "ETH/USDC", openedAt: mon };
+    expect(holdProgress(p, binance, mon)).toMatchObject({ unit: "hours", limit: MAX_HOLD_HOURS, remaining: 120, dots: 0, closing: false });
+    expect(holdText(holdProgress(p, binance, mon + 20 * 36e5))).toBe("closes in 5 days"); // 0 dots + 5
+    expect(holdProgress(p, binance, mon + 50 * 36e5)).toMatchObject({ dots: 2 });
+    expect(holdText(holdProgress(p, binance, mon + 50 * 36e5))).toBe("closes in 3 days"); // 2 dots + 3
+    expect(holdText(holdProgress(p, binance, mon + 100 * 36e5))).toBe("closes in 20 h");
+    expect(holdText(holdProgress(p, binance, mon + 119.5 * 36e5))).toBe("closes in 1 h");
+    expect(holdProgress(p, binance, mon + 120 * 36e5)).toMatchObject({ dots: 5, closing: true });
+    expect(holdText(holdProgress(p, binance, mon + 130 * 36e5))).toBe("closing");
+  });
+
+  test("durationSeconds stands in for a missing openedAt; neither -> null and a dash", () => {
+    expect(holdProgress({ market: "stock", durationSeconds: 2 * 86_400 }, alpaca, mon + 2 * day)).toMatchObject({ dots: 2 });
+    expect(holdProgress({ market: "stock" }, alpaca, mon)).toBeNull();
+    expect(holdText(null)).toBe("—");
+  });
+});
+
+// ── Row P&L bar: |%| against the largest on screen, floored to a sliver ─────
+describe("pnlBarWidth", () => {
+  test("proportional to |pct| over the largest |pct| shown, sign-agnostic", () => {
+    expect(pnlBarWidth(1.3, 1.3)).toBe(100);
+    expect(pnlBarWidth(-1.3, 1.3)).toBe(100);
+    expect(pnlBarWidth(0.65, 1.3)).toBe(50);
+  });
+  test(`a tiny move still shows a sliver (floor ${PNL_BAR_FLOOR}%); a flat row or unknown pct shows none`, () => {
+    expect(pnlBarWidth(0.01, 10)).toBe(PNL_BAR_FLOOR);
+    expect(pnlBarWidth(0, 10)).toBe(0);
+    expect(pnlBarWidth(null, 10)).toBe(0);
+    expect(pnlBarWidth(1, 0)).toBe(0);
+    expect(pnlBarWidth(undefined, undefined)).toBe(0);
   });
 });
 
@@ -294,9 +382,10 @@ describe("renderPositions (partial data)", () => {
     };
     const html = renderPositions(state, []);
     expect(html.match(/class="pgroup"/g)?.length).toBe(2);
-    expect(html).toContain('<span class="pg-name">Momentum Crypto</span><span class="pg-sum">1 position, $2,000 invested, 0.42× of its capital</span>'); // invested at cost, exposure at market
+    // invested at cost and the P&L on the left; the exposure (at market, over the base) on the right; the count in the title
+    expect(html).toContain('<span class="pg-name">Momentum Crypto</span><span class="pg-sum">$2,000 <span class="muted">·</span> <span class="pg-pnl" style="color:var(--up)">+$100</span></span><span class="pg-exp"><span class="muted">exposure</span><span class="pg-x">0.42×</span></span>');
     expect(html).toContain('<span class="pg-name">Momentum Crypto USDC</span>');
-    expect(html).toContain('<span class="pg-pnl" style="color:var(--up)">+$100</span>');
+    expect(html).toMatch(/title="1 position\. Holds \$2,100 at market/);
     expect(html).not.toContain("sbadge");
     expect(html).not.toContain("MOM-CRY");
     expect(html).not.toContain("xchip");
@@ -314,10 +403,12 @@ describe("renderPositions (partial data)", () => {
     };
     const html = renderPositions(state, []);
     const head = html.slice(html.indexOf('class="pgroup"'), html.indexOf("</button>"));
-    expect(head).toContain('<span class="pg-sum">1 position</span>');
+    expect(head).toContain('<span class="pg-sum"><span class="pg-pnl" style="color:var(--up)">+$30</span></span>');
     expect(head).not.toContain("$0");
     expect(head).not.toContain("×");
+    expect(head).not.toContain("pg-exp");
     expect(head).toContain("COIN-M"); // the title explains why
+    expect(head).toContain("1 position."); // the count lives in the title
   });
 
   test("big groups start collapsed (header only, rows hidden) while the totals still count every position", () => {
@@ -334,7 +425,7 @@ describe("renderPositions (partial data)", () => {
     expect(html.match(/<tr class="pos">/g)?.length).toBe(11);
     expect(html).toContain('data-pgroup="meanrev_stocks" aria-expanded="false"');
     expect(html).toContain('data-pgroup="momentum_stocks" aria-expanded="true"');
-    expect(html).toContain("32 positions");
+    expect(html).toContain("32 positions."); // in the header's title
     expect(html).toContain("· 43"); // totals row still counts the folded rows
     // the reader opened it
     html = renderPositions({ ...state, posGroups: { meanrev_stocks: "open" } }, []);
@@ -354,9 +445,40 @@ describe("renderPositions (partial data)", () => {
     const state = { ...baseState, posGroups: {}, dashboard: { ...baseState.dashboard, portfolio: { positions: [
       { symbol: "AAPL", side: "buy", quantity: 10, avgEntryPrice: 100, currentPrice: 101, unrealizedPnl: 10, stopLoss: 96, profileId: "momentum_stocks" },
     ] } } };
-    expect(renderPositions(state, [])).toContain('<tr class="pgroup"><td colspan="8">'); // sym qty entry notional now pnl time sl
-    const noStop = { ...state, dashboard: { ...state.dashboard, portfolio: { positions: [{ ...state.dashboard.portfolio.positions[0], stopLoss: null }] } } };
-    expect(renderPositions(noStop, [])).toContain('<tr class="pgroup"><td colspan="7">');
+    expect(renderPositions(state, [])).toContain('<tr class="pgroup"><td colspan="6">'); // sym notional entry now pnl time — a stop adds no column
+    const tp = { ...state, dashboard: { ...state.dashboard, portfolio: { positions: [{ ...state.dashboard.portfolio.positions[0], takeProfit: 120 }] } } };
+    expect(renderPositions(tp, [])).toContain('<tr class="pgroup"><td colspan="7">');
+  });
+
+  test("the row carries the P&L bar and the 5-day clock; qty/entry/now ride in the symbol's title", () => {
+    const now = Date.now();
+    const state = { ...baseState, posGroups: {}, dashboard: { ...baseState.dashboard, portfolio: { positions: [
+      { symbol: "SPY", side: "buy", market: "stock", quantity: 130, avgEntryPrice: 195.5, currentPrice: 196, unrealizedPnl: 65, unrealizedPnlPct: 0.5, openedAt: now, profileId: "momentum_stocks" },
+      { symbol: "IWM", side: "buy", market: "stock", quantity: 50, avgEntryPrice: 200, currentPrice: 202.6, unrealizedPnl: 130, unrealizedPnlPct: 1.3, openedAt: now, profileId: "momentum_stocks" },
+      { symbol: "ETH/USDC", side: "buy", market: "crypto", quantity: 1, avgEntryPrice: 2000, currentPrice: 1990, unrealizedPnl: -10, unrealizedPnlPct: -0.5, openedAt: now - 50 * 36e5, profileId: "momentum_crypto_usdc" },
+    ] } } };
+    const html = renderPositions(state, []);
+    expect(html).toContain('title="Qty 130 · Entry $196 · Now $196">SPY</span>');
+    expect(html).not.toContain(">Qty<"); expect(html).not.toContain(">SL<"); expect(html).not.toContain('class="opt1"');
+    expect(html).toContain('<span class="pnlbar-fill" style="width:38.5%;background:var(--up)"></span></span><span style="color:var(--up)">+$65 <span class="muted">+0.5%</span>'); // 0.5 / 1.3 of the track
+    expect(html).toContain('style="width:100%;background:var(--up)"></span></span><span style="color:var(--up)">+$130');
+    expect(html).toContain('style="width:38.5%;background:var(--down)"></span></span><span style="color:var(--down)">−$10');
+    expect(html).toContain('<span class="hdots" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="opt2 hold-txt muted">closes in 5 days</span>');
+    expect(html).toContain('<span class="hdots" aria-hidden="true"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span><span class="opt2 hold-txt muted">closes in 3 days</span>');
+    expect(html).toMatch(/class="hold" title="Held 2d · limit 120 h · every operation closes at 5 days/);
+    expect(html).toMatch(/<th title="[^"]*5 NYSE sessions for stocks, 120 h for crypto[^"]*">Time<\/th>/);
+  });
+
+  test("a pending close reads 'closing' in the text colour; folded groups do not set the bar scale", () => {
+    const now = Date.now();
+    const many = Array.from({ length: 13 }, (_, i) => ({ symbol: `MR${i}`, side: "buy", market: "stock", quantity: 1, avgEntryPrice: 100, currentPrice: 110, unrealizedPnl: 10, unrealizedPnlPct: 10, openedAt: now, profileId: "meanrev_stocks" }));
+    const state = { view: "consolidated", posGroups: {}, dashboard: {
+      accounts: [{ id: "meanrev_stocks", label: "MeanRev", broker: "alpaca", initialEquity: 25_000 }, ...baseState.dashboard.accounts],
+      portfolio: { positions: [...many, { symbol: "SPY", side: "buy", market: "stock", quantity: 1, avgEntryPrice: 100, currentPrice: 101, unrealizedPnl: 1, unrealizedPnlPct: 1, openedAt: now - 30 * 864e5, profileId: "momentum_stocks" }] },
+    } };
+    const html = renderPositions(state, []);
+    expect(html).toContain('<span class="opt2 hold-txt">closing</span>');
+    expect(html).toContain('style="width:100%;background:var(--up)"'); // SPY's 1% is the largest ON SCREEN (the 13 folded 10% rows don't count)
   });
 
   test("single-sleeve view: positions with no profileId still resolve exposure/notional from state.view", () => {
@@ -372,29 +494,8 @@ describe("renderPositions (partial data)", () => {
   });
 });
 
-// ── stopDistancePct (2026-09-24 audit fix, item 4) ─────────────────────────
-describe("stopDistancePct", () => {
-  test("long: stop below price -> positive room before it triggers", () => {
-    expect(stopDistancePct(100, 96, true)).toBeCloseTo(4, 6); // (100-96)/100
-  });
-
-  test("short: stop above price -> positive room before it triggers", () => {
-    expect(stopDistancePct(100, 104, false)).toBeCloseTo(4, 6); // (104-100)/100
-  });
-
-  test("price already past the stop -> negative (informational, not clamped)", () => {
-    expect(stopDistancePct(94, 96, true)).toBeCloseTo(-2.127659574, 6);
-  });
-
-  test("missing currentPrice or stopLoss -> null, never a fabricated %", () => {
-    expect(stopDistancePct(null, 96, true)).toBeNull();
-    expect(stopDistancePct(100, null, true)).toBeNull();
-    expect(stopDistancePct(undefined, undefined, true)).toBeNull();
-  });
-});
-
-// ── TP column hides when unused; SL shows distance% (2026-09-24, item 4) ───
-describe("renderPositions — TP column + SL distance%", () => {
+// ── TP column hides when unused; no SL column at all (2026-10-26) ──────────
+describe("renderPositions — TP column, no SL column", () => {
   const baseState2 = {
     view: "consolidated",
     dashboard: {
@@ -427,31 +528,7 @@ describe("renderPositions — TP column + SL distance%", () => {
     expect(html).toContain("$120<");
   });
 
-  test("SL cell shows the stop price AND the distance% to it", () => {
-    const state = {
-      ...baseState2,
-      dashboard: { ...baseState2.dashboard, portfolio: { positions: [
-        { symbol: "AAPL", side: "buy", quantity: 10, avgEntryPrice: 100, currentPrice: 100, unrealizedPnl: 0, stopLoss: 96, profileId: "momentum_stocks" },
-      ] } },
-    };
-    const html = renderPositions(state, []);
-    expect(html).toContain("$96 <");
-    expect(html).toContain("4.0%"); // (100-96)/100
-  });
-
-  test("no stopLoss on any row -> the SL column (header + cells) is entirely absent, like TP", () => {
-    const state = {
-      ...baseState2,
-      dashboard: { ...baseState2.dashboard, portfolio: { positions: [
-        { symbol: "AAPL", side: "buy", quantity: 10, avgEntryPrice: 100, currentPrice: 101, unrealizedPnl: 10, profileId: "momentum_stocks" },
-      ] } },
-    };
-    const html = renderPositions(state, []);
-    expect(html).not.toContain(">SL<");
-    expect(html).not.toContain('class="opt1"');
-  });
-
-  test("one row with a stop brings the column back; the stop-less row shows a dash", () => {
+  test("a row with a stop renders no SL column and no stop price (owner, 2026-10-26: the stop is one click away via the symbol)", () => {
     const state = {
       ...baseState2,
       dashboard: { ...baseState2.dashboard, portfolio: { positions: [
@@ -460,8 +537,10 @@ describe("renderPositions — TP column + SL distance%", () => {
       ] } },
     };
     const html = renderPositions(state, []);
-    expect(html).toContain(">SL</th>");
-    expect(html).toContain('<td class="opt1">—</td>');
+    expect(html).not.toContain(">SL<");
+    expect(html).not.toContain("$96");
+    expect(html).not.toContain('class="opt1"');
+    expect(html.match(/<th[ >]/g)?.length).toBe(6); // sym notional entry now pnl time
   });
 });
 
@@ -512,16 +591,17 @@ describe("sleeveExposure — current equity base and cap usage", () => {
 
   test("the cap shows its real precision, without float noise, and only when the book is near it", () => {
     const html = renderPositions({ view: "consolidated", posGroups: {}, dashboard: { accounts: [acc({ equity: 52_960, grossCapMult: 1.7249999999999999 })], portfolio: { positions: book } } }, []);
-    expect(html).toContain("1.50× of its capital</span>"); // 87% of the cap: the cap stays in the title
-    expect(html).not.toContain("1.725×</span>");
+    expect(html).toContain('<span class="pg-x">1.50× of 1.725×</span>'); // 87% of the cap: uncoloured, muted bar
+    expect(html).toContain("width:87%;background:var(--muted)");
     expect(html).toMatch(/title="[^"]*Cap 1\.725×\./);
     const near = renderPositions({ view: "consolidated", posGroups: {}, dashboard: { accounts: [acc({ equity: 50_000, grossCapMult: 1.7249999999999999 })], portfolio: { positions: book } } }, []);
-    expect(near).toContain('<span style="color:var(--warn)">1.59× of its capital, cap 1.725×</span>');
+    expect(near).toContain('<span class="pg-x">1.59× of 1.725×</span>');
+    expect(near).toContain("width:92.1%;background:var(--muted)"); // at the cap is not a warning
   });
 
   test("colour by share of the cap: normal below 90%, amber from 90%, red past the cap", () => {
     expect(exposureColor({ ratio: 1.5, usage: 1.5 / 1.725 })).toBe("var(--text)");
-    expect(exposureColor({ ratio: 1.6, usage: 1.6 / 1.725 })).toBe("var(--warn)");
+    expect(exposureColor({ ratio: 1.6, usage: 1.6 / 1.725 })).toBe("var(--text)");
     expect(exposureColor({ ratio: 1.8, usage: 1.8 / 1.725 })).toBe("var(--down)");
     expect(exposureColor({ ratio: null, usage: null })).toBe("var(--muted)");
   });
@@ -536,8 +616,8 @@ describe("sleeveExposure — current equity base and cap usage", () => {
   test("the group header says it in words; the $ at market and the base ride in its title", () => {
     const state = { view: "consolidated", posGroups: {}, dashboard: { accounts: [acc({ equity: 52_960, grossCapMult: 1.725 })], portfolio: { positions: book } } };
     const html = renderPositions(state, []);
-    expect(html).toContain('<span class="pg-sum">1 position, $79,441 invested, 1.50× of its capital</span>');
-    expect(html).toMatch(/class="pgroup-btn"[^>]*title="Holds \$79,441 at market against \$52,960 of current equity \(1\.50×\)\. Cap 1\.725×\. Allocation \$50,000\. Click to show or hide its positions\."/);
+    expect(html).toContain('<span class="pg-sum">$79,441</span>'); // no priced P&L on this row: the $ alone
+    expect(html).toMatch(/class="pgroup-btn"[^>]*title="1 position\. Holds \$79,441 at market against \$52,960 of current equity \(1\.50×\)\. Cap 1\.725×\. Allocation \$50,000\. Click to show or hide its positions\."/);
   });
 });
 
@@ -563,13 +643,14 @@ describe("renderPositions — side column only when a short exists", () => {
 describe("renderPositions — compact numbers", () => {
   const state = (positions) => ({ view: "consolidated", dashboard: { accounts: [], portfolio: { positions } } });
 
-  test("prices, notional, stops and total lose cents; P&L percent keeps a decimal", () => {
+  test("prices, notional and total lose cents; P&L percent keeps a decimal; the quantity rides in the symbol's title", () => {
     const html = renderPositions(state([
       { symbol: "SPY", side: "buy", quantity: 5.59, avgEntryPrice: 540.1, currentPrice: 525.25, stopLoss: 478.4, unrealizedPnl: -85.04, unrealizedPnlPct: -0.3 },
       { symbol: "QQQ", side: "buy", quantity: 10, avgEntryPrice: 540.1, unrealizedPnl: -1709.38 },
     ]), []);
-    for (const value of [">6<", "$540<", "$525<", "$3,019<", "−$85 ", "$478 ", "−$1,794<", "−0.3%"])
+    for (const value of ['title="Qty 6 · Entry $540 · Now $525"', "$540<", "$525<", "$3,019<", "−$85 ", "−$1,794<", "−0.3%"])
       expect(html).toContain(value);
+    expect(html).not.toContain("$478");
     expect(html).not.toContain("$540.10");
     expect(html).not.toContain("$1,794.42");
   });
@@ -579,7 +660,7 @@ describe("renderPositions — compact numbers", () => {
       { symbol: "DOGE/USD", side: "buy", quantity: 115.7, avgEntryPrice: 0.0777, currentPrice: 0.0789, stopLoss: 0.07, unrealizedPnl: 0.139, unrealizedPnlPct: 1.5 },
       { symbol: "BTC/USD", side: "buy", quantity: 0.0123, avgEntryPrice: 68000, currentPrice: 68100, unrealizedPnl: 1.23 },
     ]), []);
-    for (const value of [">116<", ">0.0123<", "$0.0777<", "$0.0789<", "$0.07 ", "$8.99<", "+$0 "])
+    for (const value of ["Qty 116 ·", "Qty 0.0123 ·", "$0.0777<", "$0.0789<", "$8.99<", "+$0 "])
       expect(html).toContain(value);
   });
 });

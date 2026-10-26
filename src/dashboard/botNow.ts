@@ -34,6 +34,11 @@ export interface BotNowEvent {
   /** rebalance events only: filled buys/sells of the pass (the UI words them). */
   buys?: number;
   sells?: number;
+  /** rebalance events only: symbols closed at the max-hold limit and bought
+   *  back in the same pass (paired renewal legs); `buys` includes them. */
+  rebought?: string[];
+  /** rebalance events only: USD of the filled buys that are NOT renewals. */
+  newBuyUsd?: number;
 }
 export interface BotNowDecision {
   at: number; entries: number; exits: number; resizes: number; orders: number; rejected: number;
@@ -60,6 +65,9 @@ export interface BotNowDeps {
   readState?: (path: string) => any;
 }
 const DAY = 86_400_000;
+/** The UI folds each pass into one line, and one pass can carry dozens of
+ *  per-symbol closes, so the cap leaves room for several passes. */
+const EVENT_LIMIT = 120;
 const json = (s: string | null | undefined, fallback: any = {}): any => {
   try { return s ? JSON.parse(s) : fallback; } catch { return fallback; }
 };
@@ -219,9 +227,13 @@ function buildEvents(db: Database, now: number, decisions: any[], orders: any[],
     if (d.decided_at < since || d.decided_at > now) continue;
     const counts = portfolioCounts(d);
     const filled = persisted.filter(o => (o.result?.filledQty ?? 0) > 0);
+    const dollars = (o: PersistedOrder) => o.result!.filledQty * (o.result!.avgPrice ?? o.intent.notional / o.intent.qty);
+    const filledBuys = filled.filter(o => o.intent.side === "buy");
     if (filled.length) out.push({ ...base(d.decided_at, d.account_id, "rebalance", "REBALANCE"),
-      usd: filled.reduce((s, o) => s + o.result!.filledQty * (o.result!.avgPrice ?? o.intent.notional / o.intent.qty), 0),
-      buys: filled.filter(o => o.intent.side === "buy").length, sells: filled.filter(o => o.intent.side === "sell").length, detail: null });
+      usd: filled.reduce((s, o) => s + dollars(o), 0),
+      buys: filledBuys.length, sells: filled.filter(o => o.intent.side === "sell").length, detail: null,
+      rebought: filledBuys.filter(o => o.intent.maxHold === "rebuy").map(o => o.intent.symbol),
+      newBuyUsd: filledBuys.filter(o => o.intent.maxHold !== "rebuy").reduce((s, o) => s + dollars(o), 0) });
     if (d.status === "failed" || d.status === "skipped_stale" || counts.rejected) out.push({ ...base(d.updated_at, d.account_id, "error", d.status === "submitted" ? "ORDER_REJECTED" : d.status.toUpperCase()), detail: d.note ?? `${counts.rejected} órdenes rechazadas` });
   }
   const closes = db.query("SELECT * FROM trades WHERE status = 'closed' AND exit_time >= ? AND exit_time <= ? ORDER BY exit_time DESC").all(since, now) as any[];
@@ -265,5 +277,5 @@ function buildEvents(db: Database, now: number, decisions: any[], orders: any[],
       out.push({ ...base(a.created_at, a.account_id, "error", a.event_type.toUpperCase()), detail: msg });
     }
   }
-  return out.filter(e => e.at >= since && e.at <= now && !e.portfolioId?.startsWith("shadow_")).sort((a, b) => b.at - a.at).slice(0, 40);
+  return out.filter(e => e.at >= since && e.at <= now && !e.portfolioId?.startsWith("shadow_")).sort((a, b) => b.at - a.at).slice(0, EVENT_LIMIT);
 }

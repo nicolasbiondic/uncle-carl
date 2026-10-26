@@ -210,9 +210,10 @@ tfoot tr.totals .muted { font-weight: 500; }
 .badge.l { background: var(--up-soft); color: var(--up); } .badge.s { background: var(--down-soft); color: var(--down); }
 /* Positions table: one block per portfolio (2026-10-25; the per-row sleeve
    badges and the exposure chips above the table went away with it) + opt-out
-   columns for narrow layouts. SL/TP go first (defense-in-depth values, still
-   one click away via the symbol) so QTY and NOTIONAL — the columns this table
-   exists for — never hide. */
+   columns for narrow layouts. TP goes first (a defense-in-depth value, still
+   one click away via the symbol), then Entry/Now (in the symbol's title), then
+   the clock's words (its dots stay) so NOTIONAL and P&L — the columns this
+   table exists for — never hide. 2026-10-26: QTY and SL columns are gone. */
 .postbl tr.pgroup td { padding: 0; box-shadow: none; }
 #opsBody tr.pgroup td { padding: 0; }
 /* width:0 + min-width:100%: the sentence takes the row's width without ever
@@ -222,19 +223,36 @@ tfoot tr.totals .muted { font-weight: 500; }
 .pgroup-btn:hover .pg-name { color: var(--accent); }
 .pgroup-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--r1); }
 .pgroup-btn .pg-name { font-weight: 700; flex-shrink: 0; }
-.pgroup-btn .pg-sum { color: var(--text-2); font-size: var(--t-xs); flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.pgroup-btn .pg-pnl { margin-left: auto; flex-shrink: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.pgroup-btn .pg-sum { color: var(--text-2); font-size: var(--t-xs); flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.pgroup-btn .pg-pnl { font-weight: 600; }
+/* The header's exposure: "exposure [bar] 1.50× of 2.5×", right-aligned. The
+   bar is the used share of the sleeve's cap over a track; its fill takes the
+   phrase's colour (amber/red only near or over the cap, else muted). */
+.pgroup-btn .pg-exp { margin-left: auto; flex-shrink: 0; display: inline-flex; align-items: center; gap: var(--s2); font-size: var(--t-xs); font-variant-numeric: tabular-nums; }
+.xbar { display: inline-block; width: 64px; height: 5px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.xbar-fill { display: block; height: 100%; border-radius: 2px; }
+/* Row P&L: a bar before the number, its length |P&L %| against the largest on
+   screen (pnlBarWidth in positions.js), in the row's P&L colour. */
+.pnlbar { display: inline-block; width: 36px; height: 6px; margin-right: 6px; border-radius: 2px; background: var(--border); vertical-align: middle; overflow: hidden; }
+.pnlbar-fill { display: block; height: 100%; border-radius: 2px; }
+/* The 5-day clock: five dots fill with the position's age, then its words
+   ("closes in 4 days" / "closing"). */
+.hold { display: inline-flex; align-items: center; gap: var(--s2); }
+.hdots { display: inline-flex; gap: 3px; }
+.hdots i { width: 6px; height: 6px; border-radius: 50%; background: var(--border); }
+.hdots i.on { background: var(--muted); }
+.hold-txt { font-size: var(--t-xs); }
 .pg-chev { width: 0; height: 0; border: 4px solid transparent; border-left: 5px solid var(--muted); align-self: center; flex-shrink: 0; transition: transform var(--dur); }
 .pgroup-btn[aria-expanded="true"] .pg-chev { transform: rotate(90deg); }
 @media (max-width: 1500px) { .postbl .opt1 { display: none; } }
 @media (max-width: 640px) { .postbl .opt2 { display: none; } }
-/* Mobile (2026-09-24 audit fix): at 640px SL/TP/Time are already hidden, but
-   SYM/S/QTY/ENTRY/NOTIONAL/NOW/P&L still don't fit — P&L (the number that
-   matters most) got clipped off-screen with no way back to it without losing
-   the symbol. QTY/ENTRY (recoverable from the symbol's own detail view) go
-   next so SYM, NOTIONAL, NOW and P&L stay; the symbol column itself sticks
-   to the left edge of the horizontal scroller so it's never scrolled away
-   while reaching P&L. */
+/* Mobile (2026-09-24 audit fix): at 640px TP and the clock's words are already
+   hidden, but SYM/S/ENTRY/NOTIONAL/NOW/P&L still don't fit — P&L (the number
+   that matters most) got clipped off-screen with no way back to it without
+   losing the symbol. ENTRY/NOW (in the symbol's title) go next so SYM,
+   NOTIONAL, P&L and the dots stay; the symbol column itself sticks to the
+   left edge of the horizontal scroller so it's never scrolled away while
+   reaching P&L. */
 @media (max-width: 480px) { .postbl .opt3 { display: none; } }
 .postbl th:first-child, .postbl td:first-child {
   position: sticky; left: 0; z-index: 1; background: var(--card);
@@ -257,8 +275,9 @@ tfoot tr.totals .muted { font-weight: 500; }
 /* Desktop: one line per row (2026-10-12) — the SL cell ("$498.94 15.4%")
    wrapped, so every row was ~56px and the one-screen Overview showed half the
    rows. Columns give way as the two-column layout narrows, so a row never
-   needs a sideways scroll: SL/TP first, then qty/entry/now and trade prices,
-   then the trade's strategy. Phones keep wrapping rows (the page scrolls there). */
+   needs a sideways scroll: TP first, then entry/now and trade prices, then
+   the trade's strategy, last the clock's words. Phones keep wrapping rows
+   (the page scrolls there). */
 @media (min-width: 981px) {
   #opsBody td { white-space: nowrap; padding: 6px var(--s2); }
 }
@@ -271,6 +290,7 @@ tfoot tr.totals .muted { font-weight: 500; }
 #opsBody table.fit-1 .opt1 { display: none; }
 #opsBody table.fit-2 .opt4 { display: none; }
 #opsBody table.fit-3 .opt3 { display: none; }
+#opsBody table.fit-4 .opt2 { display: none; }
 
 /* tabs */
 .tabs { display: flex; gap: var(--s4); flex-wrap: wrap; border-bottom: 1px solid var(--border); margin-bottom: var(--s3); }
@@ -333,8 +353,10 @@ tfoot tr.totals .muted { font-weight: 500; }
 .mr-m .sc-l { min-width: 2.2em; }
 .mr-pick { font: inherit; font-size: var(--t-xs); font-weight: 600; color: var(--text-2); background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r1); padding: 2px var(--s2); max-width: 220px; }
 .mr-pick:focus { outline: none; border-color: var(--accent); }
-/* "Bot" tab (2026-10-25): one block per portfolio — name, a coloured status
-   word, one short paragraph — then the recent actions as a dated list. The
+/* "Bot" tab (2026-10-25/26): one compact card per portfolio — name, a coloured
+   status word, a row of plain-text fact chips, a "last decision ●── now ──○ next
+   decision" line and at most one short sentence — then the recent actions as a
+   dated list (one line per pass, the per-symbol lines behind a disclosure). The
    status word is the only emphasis; the hairlines separate portfolios. */
 .bn-row { padding: var(--s3) 0; border-bottom: 1px solid var(--border); }
 .bn-row:first-child { padding-top: var(--s1); }
@@ -342,7 +364,25 @@ tfoot tr.totals .muted { font-weight: 500; }
 .bn-name { font-weight: 600; }
 .bn-word { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: var(--t-xs); white-space: nowrap; }
 .bn-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.bn-text { margin: var(--s1) 0 0; color: var(--text-2); max-width: 72ch; line-height: 1.55; overflow-wrap: anywhere; }
+.bn-chips { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s2); margin-top: var(--s1); }
+.bn-chip { color: var(--text-2); font-size: var(--t-xs); background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r1); padding: 1px var(--s2); font-variant-numeric: tabular-nums; }
+.bn-tl { margin-top: var(--s2); max-width: 560px; }
+.bn-tl-track { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--t-xs); }
+.bn-tl-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+.bn-tl-hollow { background: none; border: 1.5px solid var(--muted); box-sizing: border-box; }
+.bn-tl-bar { height: 1px; background: var(--border-2); flex-basis: 0; min-width: 12px; }
+.bn-tl-labels { display: flex; justify-content: space-between; gap: var(--s3); margin-top: 3px; color: var(--text-2); font-size: var(--t-xs); }
+.bn-tl-labels > span:last-child { text-align: right; }
+.bn-tl-k { color: var(--muted); }
+.bn-tl-solo { margin-top: var(--s2); color: var(--text-2); font-size: var(--t-xs); }
+.bn-text { margin: var(--s1) 0 0; color: var(--text-2); max-width: 72ch; line-height: 1.45; overflow-wrap: anywhere; }
+.bn-pass > summary { cursor: pointer; list-style: none; }
+.bn-pass > summary::-webkit-details-marker { display: none; }
+.bn-pass > summary::after { content: "▸"; display: inline-block; margin-left: 6px; color: var(--muted); transition: transform var(--dur); }
+.bn-pass[open] > summary::after { transform: rotate(90deg); }
+.bn-lines { margin: var(--s1) 0 var(--s1); padding-left: var(--s4); color: var(--muted); }
+.bn-lines li { padding: 1px 0; }
+.bn-lines li::first-letter { text-transform: uppercase; }
 .bn-day { margin: var(--s3) 0 var(--s1); color: var(--muted); font-size: var(--t-xs); font-weight: 600; }
 .bn-day:first-child { margin-top: 0; }
 .bn-ev { display: grid; grid-template-columns: 3.4em minmax(0, 1fr); gap: var(--s2); padding: 3px 0; color: var(--text-2); overflow-wrap: anywhere; }
@@ -403,14 +443,11 @@ tfoot tr.totals .muted { font-weight: 500; }
 .so-body label { display: block; color: var(--muted); font-size: var(--t-xs); text-transform: uppercase; letter-spacing: .05em; margin: var(--s4) 0 var(--s2); }
 .so-body label:first-child { margin-top: 0; }
 
-/* news — one row: toggle on the left, two-line cards scrolling to the right
-   (2026-10-12; source + age on the first line, the headline on two). */
+/* news — one row, always shown: a plain label on the left, two-line cards
+   scrolling to the right (source + age on the first line, the headline on two). */
 #newsBar { margin-top: var(--s4); }
 .news-bar { display: flex; align-items: stretch; gap: var(--s3); padding: var(--s2) var(--s3); }
-.news-bar.closed { align-items: center; }
-.news-h { appearance: none; background: none; border: none; padding: 0 var(--s1) 0 0; margin: 0; cursor: pointer; font-family: inherit; flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; border-right: 1px solid var(--border); padding-right: var(--s3); }
-.news-h:hover { color: var(--text-2); }
-.news-caret { display: inline-block; transition: transform var(--dur); }
+.news-h { color: var(--muted); font-size: var(--t-xs); flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; border-right: 1px solid var(--border); padding-right: var(--s3); }
 .news-scroll { display: flex; gap: var(--s2); overflow-x: auto; scrollbar-width: none; min-width: 0; flex: 1 1 auto; }
 .news-scroll::-webkit-scrollbar { display: none; }
 .news-card { flex: 0 0 280px; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "src time" "title title"; column-gap: var(--s2); row-gap: 2px; align-content: start; background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r2); padding: 6px var(--s3); transition: border-color var(--dur), transform var(--dur); }
