@@ -188,6 +188,8 @@ export interface VolManagedConfig {
   maxGross: number;
   /** Optional NYSE-session lot limit (stocks only). At age >= N, realize and renew at the same target. */
   maxHoldSessions?: number;
+  /** Also renew the oldest lots up to ceil(held lots / maxHoldSessions) each pass. Off by default. */
+  maxHoldStagger?: boolean;
   /** RW4b (optional; absent = RW2/RW3 behavior, same outputs and hashes). The target vol is scaled down
    *  continuously as the sleeve's drawdown from its in-memory equity peak deepens, and restored as it recovers. */
   drawdownBrake?: DrawdownBrakeConfig;

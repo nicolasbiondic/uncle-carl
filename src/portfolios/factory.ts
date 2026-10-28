@@ -95,8 +95,9 @@ function buildMomentumPlan(def: PortfolioDefinition, nowMs: number): MomentumPor
     ...(p.sharpeGate ? { sharpeGate: { ...p.sharpeGate } } : {}),
     ...(p.volTarget ? { volTarget: { ...p.volTarget } } : {}),
     ...(p.timeStop ? { timeStop: { ...p.timeStop } } : {}),
+    ...(p.allowSameTickReentry !== undefined ? { allowSameTickReentry: p.allowSameTickReentry } : {}),
     ...(p.exposureControl ? { exposureControl: structuredClone(p.exposureControl) } : {}),
-    risk: { equitySemantics: p.equitySemantics },
+    risk: { ...p.risk, equitySemantics: p.equitySemantics },
     ...(p.modelVersion ? { modelVersion: p.modelVersion } : {}),
     // The runtime gross backstop is the slot×count product × measured
     // headroom (G diagnostic, docs/reports/G-gross-cap.md, applied

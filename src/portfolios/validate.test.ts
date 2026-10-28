@@ -76,8 +76,11 @@ describe("create from a validated preset", () => {
     // Strategy params stay byte-identical to the validated sleeve.
     expect(p.volTarget).toEqual({ annualizedPct: 35, lookbackBars: 720, minScale: 0.33, maxScale: 1.5 });
     expect(p.notionalPctPerSlot).toBe(0.375);
-    // RW3 (2026-10-23): the validated sleeve runs the correlation brake OFF.
-    expect(p.regime).toEqual({ correlationCeiling: 1.01 });
+    // RW7: the hourly sleeve removes pauses and entry brakes.
+    expect(p.regime).toEqual({ enabled: false });
+    expect(p.risk).toEqual({ mode: "sizeOnly" });
+    expect(p.allowSameTickReentry).toBe(true);
+    expect(p.sharpeGate).toBeUndefined();
   });
 
   test("params.regime.correlationCeiling is range-checked (0.1..1.01: correlation lives in [-1, 1], 1.01 = brake OFF)", () => {
@@ -113,6 +116,26 @@ describe("create from a validated preset", () => {
     if (out.ok) expect((out.row.params as MomentumTsmParams).timeStop).toEqual({ maxHoldHours: 120 });
   });
 
+  test("RW7 risk mode, regime switch and same-tick reentry validate without allowing arbitrary risk overrides", () => {
+    const create = (params: Record<string, unknown>) => validateCreatePortfolio(
+      { id: "momentum_crypto_v2", name: "Crypto v2", account: "binance_usdt", capital: 5_000, preset: "momentum_crypto", params },
+      ctx(archivedCrypto()), NOW,
+    );
+    for (const enabled of [true, false]) expect(create({ regime: { enabled } }).ok).toBe(true);
+    for (const allowSameTickReentry of [true, false]) expect(create({ allowSameTickReentry }).ok).toBe(true);
+    expect(create({ risk: { mode: "sizeOnly" } }).ok).toBe(true);
+    expect(create({ risk: {} }).ok).toBe(true);
+    for (const risk of [null, "sizeOnly", [], { mode: "pause" }, { mode: false }, { softDrawdownPct: 0.9 }, { equitySemantics: "sleeve_ledger_equity" }]) {
+      const out = create({ risk });
+      expect(out.ok).toBe(false);
+      if (!out.ok) expect(out.errors.join(" ")).toContain("params.risk");
+    }
+    for (const bad of [null, "false", 0]) {
+      expect(create({ allowSameTickReentry: bad }).ok).toBe(false);
+      expect(create({ regime: { enabled: bad } }).ok).toBe(false);
+    }
+  });
+
   test("ANY param override on a preset leaves the artifact behind → unvalidated", () => {
     const out = validateCreatePortfolio(
       { id: "momentum_crypto_v2", name: "Crypto v2", account: "binance_usdt", capital: 5_000, preset: "momentum_crypto", params: { notionalPctPerSlot: 0.3 } },
@@ -126,8 +149,8 @@ describe("create from a validated preset", () => {
     for (const preset of ["momentum_stocks", "meanrev_stocks"]) {
       expect(VALIDATED_PRESETS[preset].template).toBe("portfolio");
       expect(VALIDATED_PRESETS[preset].portfolioEngine).toEqual(preset === "momentum_stocks"
-        ? { version: "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5", candidate: "e1-lev-vt30-g250-maxhold5" }
-        : { version: "meanrev_stocks@pe-vt15-mh5", candidate: "vt15-maxhold5" });
+        ? { version: "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger", candidate: "e1-lev-vt30-g250-maxhold5-stagger" }
+        : { version: "meanrev_stocks@pe-vt15-mh5-stagger", candidate: "vt15-maxhold5-stagger" });
       const rows = seededRows((r) => { const x = r.find((y) => y.id === preset)!; x.status = "archived"; x.enabled = false; });
       const out = validateCreatePortfolio(
         { id: `${preset}_v2`, name: "v2", account: "alpaca_main", capital: 1_000, preset },

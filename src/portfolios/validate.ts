@@ -188,6 +188,13 @@ export function validateMomentumParams(
   if (p.timeStop != null && (typeof p.timeStop !== "object" || !isFiniteNum(p.timeStop.maxHoldHours) || p.timeStop.maxHoldHours <= 0)) {
     errors.push("params.timeStop.maxHoldHours: expected positive finite calendar hours");
   }
+  if (p.allowSameTickReentry !== undefined && typeof p.allowSameTickReentry !== "boolean") {
+    errors.push("params.allowSameTickReentry: expected boolean");
+  }
+  if (p.risk !== undefined && (!p.risk || typeof p.risk !== "object" || Array.isArray(p.risk) ||
+    Object.keys(p.risk).some(k => k !== "mode") || (p.risk.mode !== undefined && p.risk.mode !== "sizeOnly"))) {
+    errors.push("params.risk: expected only mode: sizeOnly (or no override)");
+  }
   if (p.exposureControl != null) {
     const x = p.exposureControl;
     if (x.volCap == null && x.drawdown == null) errors.push("params.exposureControl: needs volCap and/or drawdown");
@@ -205,6 +212,7 @@ export function validateMomentumParams(
     if (!inRange(x.minOrderUsd, 0, 1e9)) errors.push("params.exposureControl.minOrderUsd: expected ≥ 0");
   }
   if (p.regime != null) {
+    if (p.regime.enabled !== undefined && typeof p.regime.enabled !== "boolean") errors.push("params.regime.enabled: expected boolean");
     // Correlation lives in [-1, 1]; 1.01 is the "brake OFF" value (RW3), so the cap sits just above it.
     if (typeof p.regime !== "object" || (p.regime.correlationCeiling !== undefined && !inRange(p.regime.correlationCeiling, 0.1, 1.01))) {
       errors.push("params.regime.correlationCeiling: expected 0.1..1.01");

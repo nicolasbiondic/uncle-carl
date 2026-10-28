@@ -319,6 +319,15 @@ decide/plan path, charges slippage/commission on BOTH legs, includes them in
 `orders` and `ordersPerSession`, and adds opt-in `maxHoldStats` with executed
 `closes`, `rebuys`, `orders` (fold-end liquidation excluded).
 
+RW7 adds `maxHoldStagger: true` (boolean, requires `maxHoldSessions`, off by
+default). Each pass selects every expired lot, then adds the oldest held lots
+until at least `ceil(heldLots / maxHoldSessions)` are selected (minimum one
+for a nonempty book). Entry-session ties break by symbol. Expired lots count
+toward that quota and are never limited by it. Early renewals use the same
+`MAX_HOLD` close/rebuy, costs, incomplete-close guard and `maxHoldStats` as
+expired lots. `ordersPerSession` includes both kinds. No live activation is
+implied; the RW7 E1/E2 drafts reserve priors 462/463, dry-run only.
+
 The existing inverse-ETF `hedge` composes with renewal, including when
 `coreScale: 0` and `defensive` is absent: its requested weight is h times
 PRE-overlay core gross, then existing risk/asset/gross caps apply. It is a

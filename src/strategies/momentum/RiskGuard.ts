@@ -22,6 +22,11 @@
 // This separation prevents the cascading-liquidation antipattern.
 
 export interface RiskGuardConfig {
+  /** RW7 opt-in: measure equity/peaks/daily loss/streak but never pause entries.
+   * Clears inherited pauses without re-anchoring drawdown (exposureControl
+   * still reads it). Sizing belongs to exposureControl/volTarget; do not
+   * combine with ddScale or shadowResume. Absent = legacy breakers. */
+  mode?: "sizeOnly";
   dailyLossCapPct: number;        // -0.03 = -3%
   softDrawdownPct: number;        // -0.10
   hardDrawdownPct: number;        // -0.20
@@ -371,6 +376,13 @@ export function evaluateRisk(
   }
   state.lastEvalAt = now;
   if (currentEquity > state.peakEquity) state.peakEquity = currentEquity;
+
+  if (cfg.mode === "sizeOnly") {
+    state.pausedUntil = 0;
+    state.pauseReason = "";
+    delete state.shadowResume;
+    return { canOpen: true, reason: "size-only risk: measurements retained, pauses disabled", breach: null, state };
+  }
 
   // If pause window is still active, refuse opens.
   //

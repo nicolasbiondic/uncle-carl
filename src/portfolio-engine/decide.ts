@@ -116,6 +116,9 @@ export function decide(input: CoreDecideInput): TargetBook {
 
   if (config.kind === "volManaged") {
     let maxHold: string[] | undefined;
+    if (config.maxHoldStagger !== undefined && (typeof config.maxHoldStagger !== "boolean" || config.maxHoldSessions === undefined)) {
+      throw new Error("maxHoldStagger requires a boolean and maxHoldSessions");
+    }
     if (config.maxHoldSessions !== undefined) {
       if (!Number.isInteger(config.maxHoldSessions) || config.maxHoldSessions < 1 || config.annualization !== 252) {
         throw new Error("maxHoldSessions requires a positive integer and NYSE sessions (annualization 252)");
@@ -126,6 +129,18 @@ export function decide(input: CoreDecideInput): TargetBook {
         if (!p.entrySession || !/^\d{4}-\d{2}-\d{2}$/.test(p.entrySession)) throw new Error(`maxHoldSessions requires row entrySession: ${p.symbol}`);
         return maxHoldExpired(p.entrySession, input.executionSession!, config.maxHoldSessions!);
       }).map(p => p.symbol).sort(compareSymbols);
+      if (config.maxHoldStagger) {
+        const held = book.positions.filter(p => p.qty > 0).sort((a, b) =>
+          compareSymbols(a.entrySession!, b.entrySession!) || compareSymbols(a.symbol, b.symbol));
+        const quota = Math.ceil(held.length / config.maxHoldSessions);
+        const renew = new Set(maxHold);
+        // Expired lots count toward the quota, but the quota never caps mandatory exits.
+        for (const p of held) {
+          if (renew.size >= quota) break;
+          renew.add(p.symbol);
+        }
+        maxHold = held.filter(p => renew.has(p.symbol)).map(p => p.symbol);
+      }
     }
     // RW2: every eligible symbol is held — same construction as the trend
     // designs with the signal always on; no memory, no stops.

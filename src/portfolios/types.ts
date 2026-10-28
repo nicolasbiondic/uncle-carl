@@ -79,16 +79,17 @@ export interface MomentumTsmParams {
   slotHysteresis?: boolean;
   volTarget?: VolTargetConfig;
   timeStop?: TimeStopConfig;
+  allowSameTickReentry?: boolean;
+  /** RW7: only the pause policy is configurable here; equity semantics remain account-owned. */
+  risk?: Pick<NonNullable<MomentumEngineConfig["risk"]>, "mode">;
   /** Portfolio exposure control (RW4a, 2026-10-23 — MomentumEngineConfig.
    *  exposureControl): resizes the OPEN book toward one sleeve-level scale
    *  from realized book vol and/or drawdown. Research knob: NO built-in
    *  definition sets it until a pre-registered candidate passes
    *  (RW-reescritura-rentable.md §13). Absent = OFF. */
   exposureControl?: ExposureControlConfig;
-  /** RegimeFilterConfig overrides on top of `barMinutes` (RW3, 2026-10-23: momentum_crypto
-   *  loosens correlationCeiling 0.85 → 1.01 = correlation-collapse brake OFF, vol-spike check
-   *  stays ON). Absent = the engine's DEFAULT_REGIME_CONFIG thresholds. */
-  regime?: { correlationCeiling?: number };
+  /** RegimeFilterConfig overrides on top of `barMinutes`. Absent = engine defaults. */
+  regime?: { enabled?: boolean; correlationCeiling?: number };
   tsmTrail?: TrailStopConfig;
   volStop?: TrailStopConfig;
   sharpeGate?: SharpeGateConfig;

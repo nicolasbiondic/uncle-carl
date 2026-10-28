@@ -12,6 +12,40 @@ import {
 const HOUR = 60 * 60 * 1000;
 const DAY  = 24 * HOUR;
 
+describe("RW7 size-only risk (default off)", () => {
+  test.each(["soft drawdown", "hard drawdown", "daily loss cap", "5 consecutive losing rebalances"])("clears inherited %s, retaining measured drawdown and streak", reason => {
+    const prev: RiskState = { ...INITIAL_RISK_STATE, peakEquity: 10000, highWaterMark: 11000,
+      dayStartEquity: 10000, dayStartedAt: DAY, lastEvalAt: DAY, consecutiveLosses: 9,
+      pausedUntil: 20 * DAY, pauseReason: reason, shadowResume: { equity: 9000, startEquity: 8000, peakRef: 10000 } };
+    const cfg = { ...DEFAULT_RISK_CONFIG, mode: "sizeOnly" as const };
+    const next = evaluateRisk(prev, 6000, 2 * DAY, cfg);
+    expect(next.canOpen).toBe(true);
+    expect(next.breach).toBeNull();
+    expect(next.state.pausedUntil).toBe(0);
+    expect(next.state.pauseReason).toBe("");
+    expect(next.state.shadowResume).toBeUndefined();
+    expect(next.state.peakEquity).toBeCloseTo(6000 + 4000 * Math.pow(0.5, 1 / 30), 10);
+    expect(next.state.highWaterMark).toBe(11000);
+    expect(next.state.dayStartEquity).toBe(6000);
+    expect(next.state.consecutiveLosses).toBe(9);
+    expect(prev.pausedUntil).toBe(20 * DAY); // no input mutation or peak re-anchor
+    expect(evaluateRisk(prev, 6000, 2 * DAY).canOpen).toBe(false);
+    expect(evaluateRisk(next.state, 1000, 2 * DAY + HOUR, cfg).canOpen).toBe(true); // cannot re-arm
+    expect(detectPauseTransition(prev, next)?.kind).toBe("pause_resolved");
+  });
+
+  test.each([
+    { softDrawdownPct: 0.01 }, { hardDrawdownPct: 0.01 },
+    { dailyLossCapPct: 0.01 }, { consecutiveLossLimit: 0 },
+  ])("does not arm fresh breaches: %j", override => {
+    const prev = { ...INITIAL_RISK_STATE, peakEquity: 10000, dayStartEquity: 10000, dayStartedAt: DAY };
+    const cfg = { ...DEFAULT_RISK_CONFIG, softDrawdownPct: 1, hardDrawdownPct: 1, dailyLossCapPct: 1,
+      consecutiveLossLimit: 999, ...override };
+    expect(evaluateRisk(prev, 9000, DAY + HOUR, cfg).canOpen).toBe(false);
+    expect(evaluateRisk(prev, 9000, DAY + HOUR, { ...cfg, mode: "sizeOnly" }).canOpen).toBe(true);
+  });
+});
+
 describe("non-decaying exposure-control high-water mark", () => {
   test("ratchets at every evaluation, including active pauses, while the breaker peak decays", () => {
     const start = DAY;

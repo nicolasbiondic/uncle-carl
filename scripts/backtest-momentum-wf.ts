@@ -1681,6 +1681,8 @@ export interface ReplayConfig {
   /** Time barrier (engine-level, sweepable). Absent = OFF — production
    *  incumbent behavior; absent keys don't change pre-existing hashes. */
   timeStop?: TimeStopConfig;
+  /** RW7 opt-in; absent/false retain the legacy one-decision stop cooldown. */
+  allowSameTickReentry?: boolean;
   /** Market-trend entry gate (engine-level, sweepable, 2026-09-24): blocks
    *  NEW entries while the gate symbol's last CLOSED UTC daily close is
    *  below its maDays SMA. Daily closes come from the sleeve's own 1h bars
@@ -2410,6 +2412,7 @@ export async function runWithConfig(
         tsmTrail: cfg.tsmTrail,
         sharpeGate: cfg.sharpeGate,
         timeStop: cfg.timeStop,
+        allowSameTickReentry: cfg.allowSameTickReentry,
         // marketTrend: engine-level gate; the SimBroker above already holds
         // the causal daily-close series (absent cfg leaves this undefined —
         // byte-identical legacy engine config).

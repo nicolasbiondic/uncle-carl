@@ -236,7 +236,9 @@ describe("live: the same design observed first, the version registered", () => {
 
 describe("Q5 RW5d: pe-vt15 → cash design, without handing the sleeve back to TSM", () => {
   // Historical rehearsal: keep checking RW5d against the version table of that release.
-  const rw5Versions = { ...MODEL_VERSIONS, momentum_stocks: MODEL_VERSIONS.momentum_stocks.slice(0, -1), meanrev_stocks: MODEL_VERSIONS.meanrev_stocks.slice(0, -1) };
+  const rw5Versions = { ...MODEL_VERSIONS,
+    momentum_stocks: MODEL_VERSIONS.momentum_stocks.slice(0, MODEL_VERSIONS.momentum_stocks.findIndex(v => v.id.endsWith("-mh5"))),
+    meanrev_stocks: MODEL_VERSIONS.meanrev_stocks.slice(0, MODEL_VERSIONS.meanrev_stocks.findIndex(v => v.id.endsWith("-mh5"))) };
   const planCutover: typeof planHistoricalCutover = (db, args, opts = {}) => planHistoricalCutover(db, args, { modelVersions: rw5Versions, ...opts });
   const resolvePortfolioWiring: typeof resolveHistoricalWiring = args => resolveHistoricalWiring({ modelVersions: rw5Versions, ...args });
   const manifest = "experiments/rw5-e1-lev-vt30-g250-sma200-fastvol5-cash-v1.json";
@@ -371,8 +373,8 @@ describe("Q5 RW5d: pe-vt15 → cash design, without handing the sleeve back to T
   });
 });
 
-describe("RW6: both stock sleeves cut over atomically from their previous live definitions", () => {
-  test("CLI live plans pass on a staged COPY; both stored designs equal RW6, original definitions stay untouched", () => {
+describe("RW7: both stock sleeves cut over atomically from their RW6 live definitions", () => {
+  test("CLI live plans pass on a staged COPY; both stored designs equal RW7, original definitions stay untouched", () => {
     const db = getDB();
     const sleeves = ["momentum_stocks", "meanrev_stocks"];
     const beforeVersions = { ...MODEL_VERSIONS,
@@ -410,7 +412,7 @@ describe("RW6: both stock sleeves cut over atomically from their previous live d
         const v = MODEL_VERSIONS[sleeve].at(-1)!, block = manifestBlock(v.manifest!, v.candidate!);
         // Snapshot AFTER commit: serialize() during the transaction exposes
         // its old committed image to the separate CLI connection.
-        const path = join(tmp, `rw6-${sleeve}.db`);
+        const path = join(tmp, `rw7-${sleeve}.db`);
         copy.exec(`VACUUM INTO '${path}'`);
         const bytes = readFileSync(path);
         expect(main(["--sleeve", sleeve, "--mode", "live", "--manifest", v.manifest!, "--candidate", v.candidate!,
@@ -418,6 +420,7 @@ describe("RW6: both stock sleeves cut over atomically from their previous live d
         expect(readFileSync(path)).toEqual(bytes); // CLI dry-run really wrote nothing
         expect(p.strategy).toEqual(block.strategy);
         expect((p.strategy as VolManagedConfig).maxHoldSessions).toBe(5);
+        expect((p.strategy as VolManagedConfig).maxHoldStagger).toBe(true);
         expect(portfolioUniverse("portfolio", p).some(isTreasurySymbol)).toBe(false);
         expect(p.provenance!.designSha256).toBe(designHash({ strategy: block.strategy, venue: block.venue.venue,
           minOrderNotional: block.venue.minOrderNotional, rebalanceBand: block.venue.rebalanceBand }));

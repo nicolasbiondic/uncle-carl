@@ -1,0 +1,33 @@
+{
+  "name": "momentum-crypto-usdc-daily-s5-rw7-nobrakes-pure-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTERED 2026-10-28, DRY-RUN ONLY, NOT EXECUTED. Owner RW7: risk by size, never by pauses. Exact USDC RW6 daily-s5 maxhold5 control except risk.mode=sizeOnly (clears inherited pauses WITHOUT re-anchoring drawdown), regime off, sharpeGate removed and allowSameTickReentry=true after CONFIRMED trail/time closes. ExposureControl is UNCHANGED: drawdown 10..40%, lambda floor 0.25, band 0.1, minimum resize 100 USD. Protective vol-scaled stops/trail, 120h maximum hold at daily decisions, signal thresholds, long-only universe, costs, data, folds, asOf and acceptance unchanged. Trial 465 -> 466. No volTarget added, no maintenance/data-integrity/broker safety bypass, no live wiring or RiskState model-key change. Does not guarantee continuous investment, fills, exact wall-clock closure or 30 orders/day; fresh signals are still required. USDT perpetuals remain the declared historical proxy for USDC contracts.",
+  "trialAccounting": { "priorUniqueTrials": 465, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db", "source": "binance_futures", "timeframe": "1d",
+    "universe": ["ADA/USD", "AVAX/USD", "BCH/USD", "BNB/USD", "BTC/USD", "DOGE/USD", "ETH/USD", "LINK/USD", "LTC/USD", "NEAR/USD", "SOL/USD", "UNI/USD", "XRP/USD"],
+    "refSymbol": "BTC/USD", "rthOnly": false, "funding": true, "barMinutes": 1440, "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-26T00:00:00Z",
+  "window": { "from": "2021-08-01", "to": "2026-09-27", "outerFoldCount": 3, "innerFoldCount": 3, "purgeYears": 0.25, "warmupDays": 420 },
+  "costs": { "base": { "slippageBps": 17, "commissionBps": 3 }, "stress": { "slippageBps": 60, "commissionBps": 5 } },
+  "ledger": { "initialEquity": 5000, "leverage": 2, "hardStopPct": 0.04 },
+  "candidates": [{
+    "name": "d13-s5-xc-dd", "cadenceMin": 1440, "notionalPctPerSlot": 0.2,
+    "entryPct": 5, "exitPct": -2, "maxLongs": 5, "maxShorts": 0,
+    "lookbackDaysList": [63, 126, 252], "maLengthDays": 200, "slotHysteresis": true,
+    "hardStop": { "mode": "volScaled", "kSigma": 8, "lookbackBars": 20, "minPct": 5, "maxPct": 30 },
+    "tsmTrail": { "kSigma": 8, "lookbackBars": 20, "minPct": 5, "maxPct": 30 },
+    "risk": { "peakHalfLifeDays": 30, "mode": "sizeOnly" }, "regime": "off",
+    "exposureControl": { "drawdown": { "startPct": 0.1, "endPct": 0.4 }, "minScale": 0.25, "band": 0.1, "minOrderUsd": 100 },
+    "timeStop": { "maxHoldHours": 120 }, "allowSameTickReentry": true
+  }],
+  "acceptance": {
+    "minSharpe": 0, "maxDrawdown": 0.45, "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0, "maxConcentration": 0.6, "minTrades": 10,
+    "stressMinSharpe": -0.5, "stressMaxDrawdown": 0.55, "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5, "looMaxDrawdown": 0.55, "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95, "minFoldsPsrAbove": { "threshold": 0.5, "count": 2 },
+    "maxTurnoverAnnual": 150, "maxDisplacementShare": 0.35, "minBreakEvenSlippageBps": 20
+  }
+}

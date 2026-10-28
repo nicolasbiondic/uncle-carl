@@ -146,6 +146,8 @@ export interface CandidateConfig {
    *  only (meanrev has its own timeStopDays inside `meanrev`). Absent = OFF
    *  (production incumbent). */
   timeStop?: TimeStopConfig;
+  /** RW7: remove the one-decision trail/time-stop re-entry veto. Default off. */
+  allowSameTickReentry?: boolean;
   /** Market-trend entry gate (MomentumEngine.marketTrend): block NEW
    *  entries while `symbol`'s last CLOSED UTC daily close is below its
    *  `maDays` SMA (e.g. BTC/USD < SMA200). Momentum sleeves only. Absent =
@@ -254,6 +256,7 @@ const VALID_CANDIDATE_KEYS = new Set<keyof CandidateConfig>([
   "tsmTrail",
   "sharpeGate",
   "timeStop",
+  "allowSameTickReentry",
   "marketTrend",
   "risk",
   "exposureControl",
@@ -319,10 +322,14 @@ function validateRisk(r: unknown): void {
   const obj = r as Record<string, unknown>;
   const allowed = [
     "dailyLossCapPct", "softDrawdownPct", "hardDrawdownPct", "consecutiveLossLimit",
-    "softPauseHours", "hardPauseHours", "peakHalfLifeDays", "equitySemantics", "ddScale", "shadowResume",
+    "softPauseHours", "hardPauseHours", "peakHalfLifeDays", "equitySemantics", "ddScale", "shadowResume", "mode",
   ];
   const unknown = Object.keys(obj).filter(k => !allowed.includes(k));
   if (unknown.length > 0) throw new Error(`risk has unknown keys: ${unknown.join(", ")}`);
+  if (obj.mode !== undefined && obj.mode !== "sizeOnly") throw new Error('risk.mode must be "sizeOnly"');
+  if (obj.mode === "sizeOnly" && (obj.ddScale !== undefined || obj.shadowResume !== undefined)) {
+    throw new Error("risk.mode sizeOnly cannot combine with ddScale or shadowResume; use exposureControl for sizing");
+  }
   if (obj.ddScale !== undefined) {
     const dd = obj.ddScale as Record<string, unknown>;
     if (!dd || typeof dd !== "object" || Array.isArray(dd)) throw new Error("risk.ddScale must be an object");
@@ -670,7 +677,7 @@ function validatePortfolioStrategy(st: unknown, where: string): void {
   const s = st as Record<string, unknown>;
   const trendKeys = ["kind", "universe", "inceptionGuardBars", "volLookback", "covLookback", "portfolioVolTarget", "perAssetCap", "maxGross", "blendHorizons", "maLong", "signalBandPct"];
   if (s.kind === "volManaged") {
-    assertKeys(s, ["kind", "universe", "inceptionGuardBars", "volLookback", "covLookback", "portfolioVolTarget", "annualization", "perAssetCap", "maxGross", "drawdownBrake", "fastVolLookback", "regimeOverlay", "pitUniverse", "maxHoldSessions"], where);
+    assertKeys(s, ["kind", "universe", "inceptionGuardBars", "volLookback", "covLookback", "portfolioVolTarget", "annualization", "perAssetCap", "maxGross", "drawdownBrake", "fastVolLookback", "regimeOverlay", "pitUniverse", "maxHoldSessions", "maxHoldStagger"], where);
     assertSymbolList(s.universe, `${where}.universe`);
     for (const key of ["inceptionGuardBars", "volLookback", "covLookback"]) {
       if (!posInt(s[key])) throw new Error(`${where}.${key} must be a positive integer`);
@@ -679,6 +686,9 @@ function validatePortfolioStrategy(st: unknown, where: string): void {
     if (s.annualization !== 252 && s.annualization !== 365) throw new Error(`${where}.annualization must be 252 or 365`);
     if (s.maxHoldSessions !== undefined && (!posInt(s.maxHoldSessions) || s.annualization !== 252)) {
       throw new Error(`${where}.maxHoldSessions must be a positive integer with annualization 252 (NYSE sessions)`);
+    }
+    if (s.maxHoldStagger !== undefined && (typeof s.maxHoldStagger !== "boolean" || s.maxHoldSessions === undefined)) {
+      throw new Error(`${where}.maxHoldStagger requires a boolean and maxHoldSessions`);
     }
     if (!finiteIn(s.perAssetCap, 0, 1, true)) throw new Error(`${where}.perAssetCap must be a weight FRACTION in (0, 1]`);
     const grossLimit = s.regimeOverlay !== undefined || s.pitUniverse !== undefined ? 2.5 : 2;
@@ -838,6 +848,9 @@ export function validateCandidate(c: unknown): CandidateConfig {
   // `risk` is momentum-only (forbidden in the meanrev branch below), but its
   // SHAPE is validated up front like the other structured axes.
   if (obj.risk !== undefined) validateRisk(obj.risk);
+  if (obj.allowSameTickReentry !== undefined && typeof obj.allowSameTickReentry !== "boolean") {
+    throw new Error("allowSameTickReentry must be boolean");
+  }
   // `volSizing` is momentum-only (forbidden below), shape-validated up front.
   if (obj.volSizing !== undefined) validateVolSizing(obj.volSizing);
   // `exposureControl` (RW4a) is momentum-only (forbidden below), shape-validated up front.
@@ -883,7 +896,7 @@ export function validateCandidate(c: unknown): CandidateConfig {
     // maxGrossExposureMult left this list 2026-10-05: runMeanRevReplay now
     // forwards it to MeanRevEngine (it is no longer config that changes
     // nothing on meanrev) — see the G gross-cap diagnostic.
-    const forbidden = ["entryPct", "exitPct", "maxLongs", "maxShorts", "shortEntryPct", "shortExitPct", "shortRegime", "shortUniverse", "shortStop", "notionalPctPerSlot", "volTarget", "volSizing", "tsmTrail", "sharpeGate", "timeStop", "marketTrend", "risk", "exposureControl", "trendExit", "idleOverlay", "breakoutShort", "cooldownBarsAfterStop", "slotHysteresis", "regime", "profitLock", "lookbackDays", "maLengthDays", "lookbackDaysList"]
+    const forbidden = ["entryPct", "exitPct", "maxLongs", "maxShorts", "shortEntryPct", "shortExitPct", "shortRegime", "shortUniverse", "shortStop", "notionalPctPerSlot", "volTarget", "volSizing", "tsmTrail", "sharpeGate", "timeStop", "allowSameTickReentry", "marketTrend", "risk", "exposureControl", "trendExit", "idleOverlay", "breakoutShort", "cooldownBarsAfterStop", "slotHysteresis", "regime", "profitLock", "lookbackDays", "maLengthDays", "lookbackDaysList"]
       .filter(k => obj[k] !== undefined);
     if (forbidden.length > 0) {
       throw new Error(`meanrev CandidateConfig must not set momentum-only keys: ${forbidden.join(", ")}`);
@@ -1910,6 +1923,7 @@ export function candidateToReplayConfig(
     // Inverse-vol entry sizing: absent = legacy sizing AND legacy hash.
     volSizing: c.volSizing,
     timeStop: c.timeStop,
+    allowSameTickReentry: c.allowSameTickReentry || undefined,
     marketTrend: c.marketTrend,
     risk: c.risk,
     // RW4a exposure control: absent = OFF AND the legacy hash.

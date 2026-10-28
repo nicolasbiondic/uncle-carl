@@ -20,6 +20,8 @@ import {
 } from "./store";
 import { builtinPortfolios } from "./builtin";
 import { buildPortfolioPlan } from "./factory";
+import { validateMomentumParams } from "./validate";
+import { momentumCryptoPortfolioPlan, momentumUsdcPortfolioPlan } from "../index";
 
 describe("resolvePortfoliosSource — default code, unknown refuses to start", () => {
   test("absent/empty/'code' → code (prod default, byte-identical wiring)", () => {
@@ -107,7 +109,7 @@ describe("boot seed refreshes untouched builtin rows (2026-10-04)", () => {
   });
 });
 
-describe("RW3 (2026-10-23): prod's untouched momentum_crypto builtin row picks up the brake-off params at boot", () => {
+describe("historical RW3 seed refreshes to the current hourly builtin at boot", () => {
   test("a source='builtin' row seeded with the pre-RW3 params (no regime, vt35-2026-09-23, v8-crypto-no-hard-sl) is refreshed; the same row flipped to 'owner' is frozen", () => {
     const old = (db: Database) => {
       const r = loadPlatformPortfolioRows(db).find((x) => x.id === "momentum_crypto")!;
@@ -122,13 +124,13 @@ describe("RW3 (2026-10-23): prod's untouched momentum_crypto builtin row picks u
     initPlatformPortfolios(db, 2_000);
     const row = loadPlatformPortfolioRows(db).find((x) => x.id === "momentum_crypto")!;
     expect(row.source).toBe("builtin");
-    expect((row.params as any).regime).toEqual({ correlationCeiling: 1.01 });
+    expect((row.params as any).regime).toEqual({ enabled: false });
     expect((row.params as any).modelVersion).toBe("vt35-corroff-2026-10-23");
     expect((row.params as any).governor.evidenceVersion).toBe("v8.5-crypto-corroff");
     expect(row.updatedAt).toBe(2_000);
-    // The engine config the db source builds carries the ceiling.
+    // The engine config the db source builds carries the disabled regime.
     const plan: any = buildPortfolioPlan(loadPlatformPortfolioDefinitions(db).find((d) => d.id === "momentum_crypto")!, 0);
-    expect(plan.engineConfig.regime).toEqual({ barMinutes: 60, correlationCeiling: 1.01 });
+    expect(plan.engineConfig.regime).toEqual({ barMinutes: 60, enabled: false });
 
     const frozen = new Database(":memory:");
     initPlatformPortfolios(frozen, 1_000);
@@ -136,6 +138,61 @@ describe("RW3 (2026-10-23): prod's untouched momentum_crypto builtin row picks u
     frozen.run("UPDATE platform_portfolios SET source = 'owner' WHERE id = 'momentum_crypto'");
     initPlatformPortfolios(frozen, 2_000);
     expect((loadPlatformPortfolioRows(frozen).find((x) => x.id === "momentum_crypto")!.params as any).regime).toBeUndefined();
+  });
+});
+
+describe("RW7 boot: builtin registry rows refresh from RW6 and carry every new key through validation and the factory", () => {
+  test("db-source crypto engines equal code plans; owner rows stay frozen and RiskState keys do not change", () => {
+    const db = new Database(":memory:");
+    try {
+      initPlatformPortfolios(db, 1_000);
+      for (const id of ["momentum_crypto", "momentum_crypto_usdc"]) {
+        const row = loadPlatformPortfolioRows(db).find(r => r.id === id)!;
+        const { risk: _risk, allowSameTickReentry: _reentry, ...params } = row.params as any;
+        if (id === "momentum_crypto") {
+          params.regime = { correlationCeiling: 1.01 };
+          params.sharpeGate = { lookbackDays: 30, minSharpe: 0 };
+        }
+        db.run("UPDATE platform_portfolios SET params_json = ? WHERE id = ?", [JSON.stringify(params), id]);
+      }
+      const oldRows = loadPlatformPortfolioRows(db);
+      const frozen = Database.deserialize(db.serialize());
+      try {
+        frozen.run("UPDATE platform_portfolios SET source = 'owner' WHERE id IN ('momentum_crypto', 'momentum_crypto_usdc')");
+        initPlatformPortfolios(frozen, 2_000);
+        for (const id of ["momentum_crypto", "momentum_crypto_usdc"]) {
+          expect(loadPlatformPortfolioRows(frozen).find(r => r.id === id)!.params).toEqual(oldRows.find(r => r.id === id)!.params);
+        }
+      } finally { frozen.close(); }
+      initPlatformPortfolios(db, 2_000);
+      for (const [id, reference] of [["momentum_crypto", momentumCryptoPortfolioPlan], ["momentum_crypto_usdc", momentumUsdcPortfolioPlan]] as const) {
+        const row = loadPlatformPortfolioRows(db).find(r => r.id === id)!;
+        const params = row.params as any;
+        const errors: string[] = [];
+        validateMomentumParams(params, row.account, errors, { permittedCutover: params.cutover });
+        expect(errors).toEqual([]);
+        expect(row.source).toBe("builtin");
+        expect(row.updatedAt).toBe(2_000);
+        expect(params.modelVersion).toBe((oldRows.find(r => r.id === id)!.params as any).modelVersion);
+        const plan = buildPortfolioPlan(loadPlatformPortfolioDefinitions(db).find(d => d.id === id)!, Date.now());
+        if (plan.template !== "momentum_tsm") throw new Error("expected momentum plan");
+        expect(plan).toEqual(reference());
+        expect(plan.engineConfig.risk?.mode).toBe("sizeOnly");
+        expect(plan.engineConfig.timeStop).toEqual({ maxHoldHours: 120 });
+        if (id === "momentum_crypto") {
+          expect(plan.engineConfig.regime).toEqual({ barMinutes: 60, enabled: false });
+          expect(plan.engineConfig.sharpeGate).toBeUndefined();
+          expect(plan.engineConfig.allowSameTickReentry).toBe(true);
+        } else {
+          expect(plan.engineConfig.regime).toEqual({ barMinutes: 1440 });
+          expect(plan.engineConfig.sharpeGate).toEqual({ lookbackDays: 30, minSharpe: 0 });
+          expect(plan.engineConfig.allowSameTickReentry).toBeUndefined();
+          expect(plan.engineConfig.exposureControl?.minScale).toBe(0.25);
+        }
+      }
+      initPlatformPortfolios(db, 3_000);
+      expect(loadPlatformPortfolioRows(db).find(r => r.id === "momentum_crypto")!.updatedAt).toBe(2_000);
+    } finally { db.close(); }
   });
 });
 

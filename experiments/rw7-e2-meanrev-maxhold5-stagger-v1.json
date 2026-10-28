@@ -1,0 +1,45 @@
+{
+  "name": "rw7-e2-meanrev-maxhold5-stagger-v1",
+  "sleeve": "stocks",
+  "description": "DRAFT (2026-10-27), dry-run only, NOT executed. Exact rw6-e2-meanrev-maxhold5-v1 candidate plus maxHoldStagger=true. Each pass closes every lot at the 5-NYSE-session limit, then the oldest lots until at least ceil(heldLots/5) rotate (minimum one for a nonempty book, ties by symbol). Same MAX_HOLD close and same-pass rebuy if still targeted; resizes never reset age. Both legs pay costs and count in maxHoldStats and ordersPerSession. Same universe/window/costs/capital/caps as RW6. No activation or model-version change. Trial reservation 463 -> 464, not consumed by dry-run. The 30 executed orders/day goal remains unmeasured.",
+  "trialAccounting": { "priorUniqueTrials": 463, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": ["SPY", "ABBV", "AVGO", "BAC", "CAT", "COST", "CVX", "DIS", "GE", "HD", "HON", "JNJ", "JPM", "KO", "LLY", "MA", "MCD", "MRK", "NFLX", "NKE", "ORCL", "PG", "QCOM", "UNH", "V", "WMT", "XLE", "XLF", "XLI", "XLP", "XLV", "XOM", "SLV"],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-10-19T00:00:00Z",
+  "window": { "from": "2018-01-01", "to": "2026-08-06", "outerFoldCount": 6, "innerFoldCount": 3, "purgeYears": 0.25, "warmupDays": 365 },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0 },
+    "stress": { "slippageBps": 5, "commissionBps": 2 }
+  },
+  "ledger": { "initialEquity": 50000 },
+  "candidates": [{
+    "name": "vt15-maxhold5-stagger",
+    "cadenceMin": 1440,
+    "portfolio": {
+      "strategy": {
+        "kind": "volManaged",
+        "universe": ["ABBV", "AVGO", "BAC", "CAT", "COST", "CVX", "DIS", "GE", "HD", "HON", "JNJ", "JPM", "KO", "LLY", "MA", "MCD", "MRK", "NFLX", "NKE", "ORCL", "PG", "QCOM", "UNH", "V", "WMT", "XLE", "XLF", "XLI", "XLP", "XLV", "XOM", "SLV"],
+        "inceptionGuardBars": 252,
+        "volLookback": 63,
+        "covLookback": 21,
+        "portfolioVolTarget": 0.15,
+        "annualization": 252,
+        "perAssetCap": 0.1,
+        "maxGross": 1,
+        "maxHoldSessions": 5,
+        "maxHoldStagger": true
+      },
+      "venue": { "venue": "alpaca", "fractional": true, "minOrderNotional": 5, "rebalanceBand": 0.01 }
+    }
+  }],
+  "acceptance": {}
+}

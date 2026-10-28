@@ -778,6 +778,10 @@ export interface MomentumEngineConfig {
   /** Optional time barrier. Undefined = OFF (current behavior: holds are
    *  unlimited — signal flip/trail/hard stop only). See TimeStopConfig. */
   timeStop?: TimeStopConfig;
+  /** RW7 opt-in: a confirmed trail/time close may re-enter this decision if
+   * the fresh signal and every other gate permit. Stops themselves remain
+   * active; a failed close leaves the holding intact. Absent/false = sit out. */
+  allowSameTickReentry?: boolean;
   /**
    * Optional portfolio-level exposure control that RESIZES open positions
    * (see ExposureControlConfig). Undefined = OFF — byte-identical legacy
@@ -1812,7 +1816,7 @@ export class MomentumEngine {
     // A symbol trail- or time-stopped THIS tick sits out one tick — otherwise
     // the rebalance below would re-open it at the same price (fee churn only;
     // for the time stop it would also reset the barrier's clock for free).
-    if (trailClosedSymbols.size > 0) {
+    if (!this.cfg.allowSameTickReentry && trailClosedSymbols.size > 0) {
       decisions = decisions.map(d =>
         d.action !== "flat" && trailClosedSymbols.has(d.symbol)
           ? { ...d, action: "flat" as const, reason: "protective-stopped this tick" }
@@ -2212,10 +2216,9 @@ export class MomentumEngine {
       }
     }
     executed.push(...overlayActions);
-    // Fractions recorded by this tick's opens (λ < 1) must reach disk this
-    // tick — a restart before the next persist would otherwise read them as
-    // full-size positions and never add back.
-    if (exposure && planOpensOk > 0) this.persistState();
+    // Fractions and RW7 re-entry clocks must reach disk this tick: a restart
+    // must not restore a fresh lot's old expiry (or lose its sizing fraction).
+    if ((exposure || this.cfg.allowSameTickReentry) && planOpensOk > 0) this.persistState();
     // Tick recorded AFTER outputs so a pass that finally produces something
     // resets the silence counter before the check runs (no page on recovery).
     if (sleeve) sleeveOutput.recordTick(sleeve);
@@ -2248,7 +2251,7 @@ export class MomentumEngine {
         const noSlotLong = rawDecisions.filter(d => d.action !== "long" && sideLongRaw(d)).length;
         const sharpeFlat = new Set(postSharpeDecisions.filter(d => d.action === "flat").map(d => d.symbol));
         const sharpeRemoved = rawDecisions.filter(d => d.action === "long" && sharpeFlat.has(d.symbol)).length;
-        const stopRemoved = postSharpeDecisions.filter(d => d.action === "long" && trailClosedSymbols.has(d.symbol)).length;
+        const stopRemoved = this.cfg.allowSameTickReentry ? 0 : postSharpeDecisions.filter(d => d.action === "long" && trailClosedSymbols.has(d.symbol)).length;
         const plannedOpens = plan.actions.filter(a => a.type === "open").length;
         const entriesGated = blocked || hasUndecidableHold;
         const binding: string[] = [];

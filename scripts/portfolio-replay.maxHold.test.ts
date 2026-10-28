@@ -1,4 +1,4 @@
-// RW6: synthetic tapes only. No real-data trials, no broker or live definitions.
+// RW6/RW7: synthetic tapes only. No real-data trials, no broker or live definitions.
 import { tmpdir } from "node:os";
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
@@ -24,7 +24,8 @@ import { usSessionTimestamps, writeDailyFixture } from "./lib/portfolioSynthetic
 const tmp = mkdtempSync(join(tmpdir(), "rw6-synthetic-"));
 const path = join(tmp, "hist.db");
 const dates = usSessionTimestamps("2026-10-01", 24).map(t => new Date(t).toISOString().slice(0, 10));
-const symbols = ["ETF", "SH", "REF"];
+const staggerSymbols = Array.from({ length: 10 }, (_, i) => `LOT${i}`);
+const symbols = ["ETF", "SH", "REF", ...staggerSymbols];
 writeDailyFixture(path, { source: "alpaca_wide", from: dates[0], sessions: dates.length,
   series: symbols.map((symbol, i) => ({ symbol, seed: 10 + i, startPrice: 100, driftAnnual: 0.1, volAnnual: 0.2 })) });
 const db = new Database(path);
@@ -90,6 +91,36 @@ test("expired lot closes/rebuys in one plan even inside band; younger lots/defau
   expect(planOrders({ ...expired, weights: {} }, dust, { ETF: price }, rules).map(o => [o.side, o.qty])).toEqual([["sell", 0.001]]);
 });
 
+test("stagger rotates 2 of 10 same-day lots from day 1, oldest first, never beyond N", () => {
+  const config = { ...strategy, universe: staggerSymbols, maxHoldStagger: true };
+  let positions = [...staggerSymbols].reverse().map(symbol => ({ symbol, qty: 10, avgEntryPrice: 100, entrySession: dates[0] }));
+  for (let day = 1; day <= 15; day++) {
+    const book = { equity: 50_000, positions, memory: {} };
+    const target = decide({ view: hist(dates[day - 1]), book, config, executionSession: dates[day] });
+    const offset = ((day - 1) % 5) * 2;
+    expect(target.maxHold).toEqual(staggerSymbols.slice(offset, offset + 2));
+    // Renewals keep the book held while advancing ONLY those lots' clocks.
+    positions = positions.map(p => target.maxHold!.includes(p.symbol) ? { ...p, entrySession: dates[day] } : p);
+    expect(positions.every(p => !maxHoldExpired(p.entrySession, dates[day], 5))).toBe(true);
+  }
+  const one = positions.slice(0, 1);
+  expect(decide({ view: hist(dates[15]), book: { equity: 50_000, positions: one, memory: {} }, config, executionSession: dates[16] }).maxHold).toEqual([one[0].symbol]);
+  expect(decide({ view: hist(dates[15]), book: { equity: 50_000, positions: [], memory: {} }, config, executionSession: dates[16] }).maxHold).toEqual([]);
+});
+
+test("expired lots count toward the stagger quota, which never caps mandatory closes", () => {
+  const config = { ...strategy, maxHoldStagger: true };
+  const positions = [...staggerSymbols].reverse().map(symbol => ({ symbol, qty: 10, avgEntryPrice: 100,
+    entrySession: symbol === "LOT9" ? dates[0] : dates[5] }));
+  const target = (ps = positions) => decide({ view: hist(dates[5]), book: { equity: 50_000, positions: ps, memory: {} }, config, executionSession: dates[6] });
+  expect(target().maxHold).toEqual(["LOT9", "LOT0"]); // one expired + one oldest nonexpired, not two extras
+  expect(target(positions.map(p => ["LOT8", "LOT9"].includes(p.symbol) ? { ...p, entrySession: dates[0] } : p)).maxHold).toEqual(["LOT8", "LOT9"]);
+  expect(target(positions.map(p => ({ ...p, entrySession: dates[0] }))).maxHold).toEqual(staggerSymbols);
+  expect(target(positions.slice(0, 6).map(p => ({ ...p, entrySession: dates[5] }))).maxHold).toEqual(["LOT4", "LOT5"]); // ceil(6/5), not floor
+  // Zero-quantity positions neither consume quota nor need a clock.
+  expect(target([...positions.slice(0, 1), { symbol: "EMPTY", qty: 0, avgEntryPrice: 100, entrySession: "" }]).maxHold).toEqual(["LOT9"]);
+});
+
 test("row clock survives partial buys/sells; full MAX_HOLD realizes all legs and opens a fresh row", () => {
   const entry = Date.parse(`${dates[6]}T14:00:00Z`), resize = Date.parse(`${dates[10]}T14:00:00Z`);
   applyBuyFill(rowsCfg, "ETF", 10, 100, entry);
@@ -112,8 +143,8 @@ test("row clock survives partial buys/sells; full MAX_HOLD realizes all legs and
   expect(fresh.partialRealized).toBe(0);
 });
 
-for (const hedge of [false, true]) test(`replay/live decide + plan parity, hedge=${hedge}; executed legs and MAX_HOLD labels`, async () => {
-  const s: VolManagedConfig = { ...strategy, ...(hedge ? { regimeOverlay: {
+for (const stagger of [false, true]) for (const hedge of [false, true]) test(`replay/live decide + plan parity, hedge=${hedge}, stagger=${stagger}; executed legs and MAX_HOLD labels`, async () => {
+  const s: VolManagedConfig = { ...strategy, ...(stagger ? { universe: staggerSymbols, maxHoldStagger: true } : {}), ...(hedge ? { regimeOverlay: {
     signals: [{ kind: "maTrend" as const, symbol: "REF", period: 3, sampling: "daily" as const }], combine: "any" as const,
     coreScale: 0, hedge: { symbol: "SH", fraction: 0.5 } } } : {}) };
   const seen = new Map<string, { asOf: string; orders: OrderIntent[]; weights: Readonly<Record<string, number>> }>();
@@ -159,7 +190,7 @@ for (const hedge of [false, true]) test(`replay/live decide + plan parity, hedge
     expect((await live.runSession({ session, asOf: expected.asOf })).status).toBe("already_done");
   }
   const stats = replay.portfolioDiagnostics.maxHoldStats!;
-  expect(stats.closes).toBe(3);
+  expect(stats.closes).toBe(stagger ? (seen.size - 1) * (hedge ? 1 : 2) : 3);
   expect(stats.rebuys).toBe(stats.closes);
   expect(stats.orders).toBe(stats.closes + stats.rebuys);
   expect(replay.closedTrades.filter(t => t.reason === "MAX_HOLD")).toHaveLength(stats.closes);
@@ -205,11 +236,12 @@ for (const kind of ["partial", "reject", "retry", "restart"] as const) test(`ren
   }
 });
 
-test("both renewal legs pay costs; default-off replay has no extra telemetry; default ids stay unchanged", () => {
+for (const stagger of [false, true]) test(`both renewal legs pay costs, stagger=${stagger}; default-off telemetry and ids unchanged`, () => {
   let expectedFees = 0, renewalSellFees = 0, renewalBuyFees = 0;
   const quantities = new Map<string, number>();
   let execution = "";
-  const paid = simulatePortfolioWindow(cfg(strategy, true), win, {
+  const s = { ...strategy, ...(stagger ? { maxHoldStagger: true } : {}) };
+  const paid = simulatePortfolioWindow(cfg(s, true), win, {
     decide: input => { execution = input.executionSession!; return decide(input); },
     planOrders: (...args) => {
       const orders = planOrders(...args);
@@ -234,7 +266,7 @@ test("both renewal legs pay costs; default-off replay has no extra telemetry; de
     const next = paid.closedTrades.find(t => t.entryAt === close.exitAt);
     expect(next!.entryPrice).toBeCloseTo(bar.open * 1.0005, 12);
   }
-  const free = simulatePortfolioWindow(cfg(), win);
+  const free = simulatePortfolioWindow(cfg(s), win);
   expect(paid.fees).toBeGreaterThan(0);
   expect(paid.finalEquity).toBeLessThan(free.finalEquity);
   expect(paid.closedTrades.some(t => t.reason === "MAX_HOLD")).toBe(true);
@@ -277,4 +309,35 @@ test("strict validation and identity: absent unchanged, enabled/limit changes ha
   const { maxHoldSessions: _off, ...plain } = strategy;
   expect(hash()).toBe(hashReplayConfig({ ...c, portfolio: { ...c.portfolio, strategy: plain } }));
   expect(new Set([hash(), hash(5), hash(6)]).size).toBe(3);
+});
+
+test("RW7 validates the opt-in, preserves default-off output/identity and only adds stagger to RW6 drafts", () => {
+  const c = cfg();
+  for (const maxHoldStagger of [null, 0, 1, "true", {}, []]) {
+    const config = { ...strategy, maxHoldStagger } as VolManagedConfig;
+    expect(() => validatePortfolioBlock({ ...c.portfolio, strategy: config })).toThrow("maxHoldStagger");
+    expect(() => decide({ view: hist(dates[10]), book: { equity: 50_000, positions: [], memory: {} }, config, executionSession: dates[11] })).toThrow("maxHoldStagger");
+  }
+  expect(() => validatePortfolioBlock({ ...c.portfolio, strategy: { ...strategy, maxHoldSessions: undefined, maxHoldStagger: true } })).toThrow("maxHoldStagger");
+  expect(() => decide({ view: hist(dates[10]), book: { equity: 50_000, positions: [], memory: {} }, config: { ...strategy, maxHoldSessions: undefined, maxHoldStagger: true }, executionSession: dates[11] })).toThrow("maxHoldStagger");
+  const replay = (maxHoldStagger?: boolean) => cfg({ ...strategy, maxHoldStagger });
+  expect(hashReplayConfig(replay())).toBe(hashReplayConfig(c));
+  expect(hashReplayConfig(replay(true))).not.toBe(hashReplayConfig(c));
+  expect(simulatePortfolioWindow(replay(), win)).toEqual(simulatePortfolioWindow(c, win));
+  const explicitOff = simulatePortfolioWindow(replay(false), win);
+  // The result echoes the raw config and its hash; explicit false still executes identically.
+  expect({ ...explicitOff, config: c, hash: "" }).toEqual({ ...simulatePortfolioWindow(c, win), hash: "" });
+  const dir = join(import.meta.dir, "../experiments");
+  for (const [i, stem] of ["e1-lev-vt30-g250", "e2-meanrev"].entries()) {
+    const m = loadManifest(join(dir, `rw7-${stem}-maxhold5-stagger-v1.json`));
+    const base = loadManifest(join(dir, `rw6-${stem}-maxhold5-v1.json`));
+    expect(() => validateManifest(m)).not.toThrow();
+    expect(rw2DesignOf(m.name)).toBe(i === 0 ? "E1" : "E2");
+    expect(m.trialAccounting).toEqual({ priorUniqueTrials: 462 + i, complete: false });
+    const clone = structuredClone(m);
+    expect((clone.candidates[0].portfolio!.strategy as VolManagedConfig).maxHoldStagger).toBe(true);
+    delete (clone.candidates[0].portfolio!.strategy as VolManagedConfig).maxHoldStagger;
+    clone.candidates[0].name = base.candidates[0].name;
+    expect({ ...clone, name: base.name, description: base.description, trialAccounting: base.trialAccounting }).toEqual(base);
+  }
 });

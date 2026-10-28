@@ -1,0 +1,131 @@
+{
+  "name": "momentum-crypto-usdc-daily-s5-rw7-sizeonly-floor10-pure-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTERED (2026-10-28) BEFORE any run, docs/reports/RW-reescritura-rentable.md §18.4 (owner: never stop trading). Copy of momentum-crypto-usdc-daily-s5-rw6-maxhold5-pure-v1 with risk.mode sizeOnly plus a lower exposure-control floor (minScale 0.25 -> 0.10): it keeps trading, smaller in deep drawdowns. Criterion N against 74efd64b. Trial 467 -> 468.",
+  "trialAccounting": {
+    "priorUniqueTrials": 467,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "binance_futures",
+    "timeframe": "1d",
+    "universe": [
+      "ADA/USD",
+      "AVAX/USD",
+      "BCH/USD",
+      "BNB/USD",
+      "BTC/USD",
+      "DOGE/USD",
+      "ETH/USD",
+      "LINK/USD",
+      "LTC/USD",
+      "NEAR/USD",
+      "SOL/USD",
+      "UNI/USD",
+      "XRP/USD"
+    ],
+    "refSymbol": "BTC/USD",
+    "rthOnly": false,
+    "funding": true,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-26T00:00:00Z",
+  "window": {
+    "from": "2021-08-01",
+    "to": "2026-09-27",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 17,
+      "commissionBps": 3
+    },
+    "stress": {
+      "slippageBps": 60,
+      "commissionBps": 5
+    }
+  },
+  "ledger": {
+    "initialEquity": 5000,
+    "leverage": 2,
+    "hardStopPct": 0.04
+  },
+  "candidates": [
+    {
+      "name": "d13-s5-xc-dd-sizeonly-floor10",
+      "cadenceMin": 1440,
+      "notionalPctPerSlot": 0.2,
+      "entryPct": 5,
+      "exitPct": -2,
+      "maxLongs": 5,
+      "maxShorts": 0,
+      "lookbackDaysList": [
+        63,
+        126,
+        252
+      ],
+      "maLengthDays": 200,
+      "slotHysteresis": true,
+      "hardStop": {
+        "mode": "volScaled",
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "tsmTrail": {
+        "kSigma": 8,
+        "lookbackBars": 20,
+        "minPct": 5,
+        "maxPct": 30
+      },
+      "sharpeGate": {
+        "lookbackDays": 30,
+        "minSharpe": 0
+      },
+      "risk": {
+        "peakHalfLifeDays": 30,
+        "mode": "sizeOnly"
+      },
+      "exposureControl": {
+        "drawdown": {
+          "startPct": 0.1,
+          "endPct": 0.4
+        },
+        "minScale": 0.1,
+        "band": 0.1,
+        "minOrderUsd": 100
+      },
+      "timeStop": {
+        "maxHoldHours": 120
+      }
+    }
+  ],
+  "acceptance": {
+    "minSharpe": 0,
+    "maxDrawdown": 0.45,
+    "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0,
+    "maxConcentration": 0.6,
+    "minTrades": 10,
+    "stressMinSharpe": -0.5,
+    "stressMaxDrawdown": 0.55,
+    "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5,
+    "looMaxDrawdown": 0.55,
+    "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95,
+    "minFoldsPsrAbove": {
+      "threshold": 0.5,
+      "count": 2
+    },
+    "maxTurnoverAnnual": 150,
+    "maxDisplacementShare": 0.35,
+    "minBreakEvenSlippageBps": 20
+  }
+}

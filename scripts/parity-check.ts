@@ -122,16 +122,16 @@ export const PARITY_EPOCHS: Partial<Record<LiveSleeveId, string>> = {
   // (09-28..10-06 compared clean apart from GOOGL, AUDITS 2026-10-06).
   momentum_stocks: "2026-10-12",
   meanrev_stocks: "2026-09-29",
-  // RW6: compare only passes under the 120h candidate, never replay the new
-  // time barrier over pre-deploy decisions. This moves the parity window,
+  // RW7: compare only passes under the no-brakes candidate, never replay the
+  // new entry policy over pre-deploy decisions. This moves the parity window,
   // NOT the persisted live RiskState key (neither crypto sleeve re-anchors).
-  momentum_crypto: "2026-10-26T13:00:00Z",
-  // Same deploy boundary for DAILY USDC: the first eligible tick is 10-27
+  momentum_crypto: "2026-10-28T13:00:00Z",
+  // Same deploy boundary for DAILY USDC: the first eligible tick is 10-29
   // 00:00:15Z. The replay still starts fresh risk while live keeps its peak,
   // drawdown and exposure fractions — the known state difference remains.
   // Live trades are BASE/USDC; the replay runs the BASE/USD USDT-perp proxies
   // (declared in its manifest) — normalizeLiveDecisions.
-  momentum_crypto_usdc: "2026-10-26T13:00:00Z",
+  momentum_crypto_usdc: "2026-10-28T13:00:00Z",
 };
 
 // ── sleeves managed by the portfolio engine (RW2) ─────────────────────────

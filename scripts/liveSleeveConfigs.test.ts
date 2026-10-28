@@ -8,9 +8,9 @@
 //
 //   momentum_stocks ↔ experiments/momentum-stocks-daily-blend3-pure-v1.json
 //   meanrev_stocks  ↔ experiments/meanrev-breadth7-pure-v1.json
-//   momentum_crypto ↔ experiments/momentum-crypto-rw6-maxhold5-pure-v1.json
-//   momentum_crypto_usdc ↔ experiments/momentum-crypto-usdc-daily-s5-rw6-maxhold5-pure-v1.json
-//     (RW6 2026-10-26: 120h cap added to each prior live candidate, owner rule)
+//   momentum_crypto ↔ experiments/momentum-crypto-rw7-nobrakes-pure-v1.json
+//   momentum_crypto_usdc ↔ experiments/momentum-crypto-usdc-daily-s5-rw7-sizeonly-pure-v1.json
+//     (RW7: no risk pauses; hourly removes regime/Sharpe/cooldown, USDC keeps them)
 //
 // RW2 (2026-10-23): momentum_stocks and meanrev_stocks run on the PORTFOLIO
 // ENGINE (MODEL_VERSIONS current version `engine: "portfolio"`). Their
@@ -205,28 +205,28 @@ describe("portfolio-engine sleeves — the version table names manifest, candida
       expect(VALIDATED_PRESETS[id].manifestPath).toBe(current[id]);
     }
   });
-  test("RW6 stock wiring reads the five-session candidates and their artifacts", () => {
+  test("RW7 stock wiring reads the staggered five-session candidates and their artifacts", () => {
     expect(currentModelVersion("momentum_stocks")).toMatchObject({
-      id: "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5", engine: "portfolio", candidate: "e1-lev-vt30-g250-maxhold5",
-      manifest: "experiments/rw6-e1-lev-vt30-g250-maxhold5-v1.json",
-      artifact: { dir: "data/backtests/721d4998f845909c84a0fc35e6dbb44d5fc93cd62de741ff545b1cfd75a8ab03", shiftDays: 0 },
+      id: "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger", engine: "portfolio", candidate: "e1-lev-vt30-g250-maxhold5-stagger",
+      manifest: "experiments/rw7-e1-lev-vt30-g250-maxhold5-stagger-v1.json",
+      artifact: { dir: "data/backtests/ebebfe244b770736cbf268747c348077f00b6718677778f53bb395f15622a17d", shiftDays: 0 },
     });
     expect(currentModelVersion("meanrev_stocks")).toMatchObject({
-      id: "meanrev_stocks@pe-vt15-mh5", engine: "portfolio", candidate: "vt15-maxhold5",
-      manifest: "experiments/rw6-e2-meanrev-maxhold5-v1.json",
-      artifact: { dir: "data/backtests/41fdc636f209217bede8220cd4d690000ea4b4e71983dab1f5a6c99a2d5c3ee2", shiftDays: 0 },
+      id: "meanrev_stocks@pe-vt15-mh5-stagger", engine: "portfolio", candidate: "vt15-maxhold5-stagger",
+      manifest: "experiments/rw7-e2-meanrev-maxhold5-stagger-v1.json",
+      artifact: { dir: "data/backtests/2325210c8c7ad56fbbec9d833f2ae9ef641ed85a25d9af357eb693d43dfbb50f", shiftDays: 0 },
     });
     expect(sleeveManagedBy("momentum_stocks")).toBe("portfolio");
     expect(sleeveManagedBy("meanrev_stocks")).toBe("portfolio");
     expect(sleeveManagedBy("momentum_crypto")).toBe("incumbent");
     expect(sleeveManagedBy("momentum_crypto_usdc")).toBe("incumbent");
   });
-  test("momentum_crypto_usdc RW6: 120h is the ONLY change vs xc-dd; daily replay keeps shiftDays −1 and the exposure control", () => {
+  test("momentum_crypto_usdc RW7: sizeOnly is the ONLY change vs RW6; daily replay keeps shiftDays −1 and the exposure control", () => {
     const v = currentModelVersion("momentum_crypto_usdc")!;
     expect(v).toMatchObject({
-      id: "momentum_crypto_usdc@daily-d13s5-xc-dd-mh120",
-      manifest: "experiments/momentum-crypto-usdc-daily-s5-rw6-maxhold5-pure-v1.json",
-      artifact: { dir: "data/backtests/74efd64b61a839df9844fbe7039c384cd694a0b4ad2d319762b0d71798bfb783", shiftDays: -1 },
+      id: "momentum_crypto_usdc@daily-d13s5-xc-dd-mh120-sizeonly",
+      manifest: "experiments/momentum-crypto-usdc-daily-s5-rw7-sizeonly-pure-v1.json",
+      artifact: { dir: "data/backtests/68181bd662a9462ad79e3802076ad9dd25d6ad3023b363c074255c090c1fa644", shiftDays: -1 },
     });
     expect(v.engine).toBeUndefined();
     expect(LIVE_SLEEVE_MANIFESTS.momentum_crypto_usdc).toBe(v.manifest!);
@@ -239,19 +239,22 @@ describe("portfolio-engine sleeves — the version table names manifest, candida
     const knob = { drawdown: { startPct: 0.1, endPct: 0.4 }, minScale: 0.25, band: 0.1, minOrderUsd: 100 };
     expect(cand.exposureControl).toEqual(knob);
     expect(cand.exposureControl.volCap).toBeUndefined(); // drawdown axis only (the vol and both axes failed R3)
-    expect(cand.risk).toEqual({ peakHalfLifeDays: 30 });   // the soft-DD pause is NOT touched (the no-soft-DD candidate failed everything)
+    expect(cand.risk).toEqual({ peakHalfLifeDays: 30, mode: "sizeOnly" });
+    expect(cand.regime).toBeUndefined(); // defaults retained, unlike hourly crypto
+    expect(cand.sharpeGate).toEqual(MOMENTUM_SLEEVE_SHARPE_GATE);
+    expect(cand.allowSameTickReentry).toBeUndefined();
     expect(liveSleeveConfig("momentum_crypto_usdc").candidate.exposureControl).toEqual(cand.exposureControl);
     expect(MOMENTUM_USDC_EXPOSURE_CONTROL).toEqual(knob);
     expect(cand.timeStop).toEqual({ maxHoldHours: 120 });
-    // The previous candidate is byte-identical apart from the new time barrier.
+    // The previous candidate is byte-identical apart from risk.mode and its label.
     const list = MODEL_VERSIONS.momentum_crypto_usdc;
-    expect(list[list.length - 2].id).toBe("momentum_crypto_usdc@daily-d13s5-xc-dd");
-    expect(list[list.length - 2].manifest).toBe("experiments/momentum-crypto-usdc-daily-s5-rw4a-xc-dd-pure-v1.json");
+    expect(list[list.length - 2].id).toBe("momentum_crypto_usdc@daily-d13s5-xc-dd-mh120");
+    expect(list[list.length - 2].manifest).toBe("experiments/momentum-crypto-usdc-daily-s5-rw6-maxhold5-pure-v1.json");
     const controlManifest: any = JSON.parse(readFileSync(join(ROOT, list[list.length - 2].manifest!), "utf-8"));
     const control: any = controlManifest.candidates[0];
-    expect(control.timeStop).toBeUndefined();
-    const { timeStop: _t, name: _n, ...rest } = cand;
-    const { name: _n2, ...controlRest } = control;
+    expect(control.risk).toEqual({ peakHalfLifeDays: 30 });
+    const { risk: _r, name: _n, ...rest } = cand;
+    const { risk: _r2, name: _n2, ...controlRest } = control;
     expect(rest).toEqual(controlRest);
     expect(controlManifest.asOf).toBe((m as any).asOf);
     expect(controlManifest.data).toEqual(m.data);
@@ -261,12 +264,12 @@ describe("portfolio-engine sleeves — the version table names manifest, candida
     expect((builtinPortfolio("momentum_crypto_usdc").params as any).exposureControl).toEqual(knob);
   });
 
-  test("momentum_crypto RW6: 120h is the ONLY change vs corroff, hourly replay keeps shiftDays 0", () => {
+  test("momentum_crypto RW7: only risk pauses, regime/Sharpe gates and stop cooldown change vs RW6; shiftDays 0", () => {
     const v = currentModelVersion("momentum_crypto")!;
     expect(v).toMatchObject({
-      id: "momentum_crypto@vt35-corroff-mh120",
-      manifest: "experiments/momentum-crypto-rw6-maxhold5-pure-v1.json",
-      artifact: { dir: "data/backtests/b4abce2e6fbca40228f160418331b300c8ed8f9ba75b38cb6e3e4de901aa0f6b", shiftDays: 0 },
+      id: "momentum_crypto@vt35-corroff-mh120-nobrakes",
+      manifest: "experiments/momentum-crypto-rw7-nobrakes-pure-v1.json",
+      artifact: { dir: "data/backtests/2deab5da842e52f51a5346f6231c694c146820cca15f3efee22a9ec60c4e2598", shiftDays: 0 },
     });
     expect(v.engine).toBeUndefined(); // incumbent engine: its config describes what trades
     expect(LIVE_SLEEVE_MANIFESTS.momentum_crypto).toBe(v.manifest!);
@@ -274,19 +277,25 @@ describe("portfolio-engine sleeves — the version table names manifest, candida
     const m = loadManifest("momentum_crypto");
     expect(m.candidates.length).toBe(1);
     const cand: any = m.candidates[0];
-    expect(cand.regime).toEqual({ correlationCeiling: 1.01 }); // brake OFF only: no `enabled:false`, the vol-spike check stays ON
+    expect(cand.regime).toBe("off");
     expect(liveSleeveConfig("momentum_crypto").candidate.regime).toEqual(cand.regime);
-    expect(MOMENTUM_CRYPTO_REGIME).toEqual(cand.regime);
+    expect(MOMENTUM_CRYPTO_REGIME).toEqual({ enabled: false });
+    expect(cand.risk).toEqual({ peakHalfLifeDays: 30, mode: "sizeOnly" });
+    expect(cand.sharpeGate).toBeUndefined();
+    expect(cand.allowSameTickReentry).toBe(true);
     expect(cand.timeStop).toEqual({ maxHoldHours: 120 });
     // The rollback target (the control the artifact was measured against) is the previous version's manifest.
     const list = MODEL_VERSIONS.momentum_crypto;
-    expect(list[list.length - 2].id).toBe("momentum_crypto@vt35-corroff");
-    expect(list[list.length - 2].manifest).toBe("experiments/momentum-crypto-rw3-vt-35-corroff-pure-v1.json");
+    expect(list[list.length - 2].id).toBe("momentum_crypto@vt35-corroff-mh120");
+    expect(list[list.length - 2].manifest).toBe("experiments/momentum-crypto-rw6-maxhold5-pure-v1.json");
     const control: any = JSON.parse(readFileSync(join(ROOT, list[list.length - 2].manifest!), "utf-8")).candidates[0];
-    expect(control.timeStop).toBeUndefined();
-    // Everything else of the candidate is the control's, byte for byte (the experiment's single change).
-    const { timeStop: _t, name: _n, ...rest } = cand;
-    const { name: _n2, ...controlRest } = control;
+    expect(control.risk).toEqual({ peakHalfLifeDays: 30 });
+    expect(control.regime).toEqual({ correlationCeiling: 1.01 });
+    expect(control.sharpeGate).toEqual(MOMENTUM_SLEEVE_SHARPE_GATE);
+    expect(control.allowSameTickReentry).toBeUndefined();
+    // Every other decision-affecting key is still the control's.
+    const { risk: _r, regime: _g, sharpeGate: _s, allowSameTickReentry: _a, ...rest } = cand;
+    const { risk: _r2, regime: _g2, sharpeGate: _s2, ...controlRest } = control;
     expect(rest).toEqual(controlRest);
   });
   for (const sleeve of LIVE_SLEEVE_IDS.filter(s => sleeveManagedBy(s) === "portfolio")) {
@@ -295,10 +304,15 @@ describe("portfolio-engine sleeves — the version table names manifest, candida
       const m: any = loadManifest(sleeve);
       const cand = m.candidates.find((c: any) => c.name === v.candidate);
       expect(cand).toBeTruthy();
+      expect(m.candidates.length).toBe(1);
       expect(cand.portfolio?.strategy?.kind).toBe("volManaged");
       expect(cand.portfolio?.venue?.venue).toBe("alpaca");
       expect(cand.portfolio.strategy.annualization).toBe(252);
       expect(cand.portfolio.strategy.maxHoldSessions).toBe(5);
+      expect(cand.portfolio.strategy.maxHoldStagger).toBe(true);
+      const previous: any = JSON.parse(readFileSync(join(ROOT, MODEL_VERSIONS[sleeve].at(-2)!.manifest!), "utf-8")).candidates[0];
+      const { maxHoldStagger: _stagger, ...strategy } = cand.portfolio.strategy;
+      expect({ ...cand.portfolio, strategy }).toEqual(previous.portfolio);
       expect(cand.portfolio.strategy.regimeOverlay?.defensive).toBeUndefined();
       expect(cand.portfolio.strategy.regimeOverlay?.hedge).toBeUndefined(); // SH failed S
       expect([...cand.portfolio.strategy.universe].sort()).toEqual([...liveSleeveConfig(sleeve).universe].sort());
@@ -357,11 +371,12 @@ describe("index.ts wiring literals ↔ module constants", () => {
     expect(liveSleeveConfig("meanrev_stocks").candidate.exposureControl).toBeUndefined();
   });
 
-  test("crypto regime literal (correlation brake OFF, RW3) matches MOMENTUM_CRYPTO_REGIME — exactly once, on momentum_crypto's plan only", () => {
+  test("RW7 regime disabled literal matches MOMENTUM_CRYPTO_REGIME — hourly crypto only", () => {
     const r = MOMENTUM_CRYPTO_REGIME;
-    expect(r).toEqual({ correlationCeiling: 1.01 });
-    expect(count(`regime: { barMinutes: 60, correlationCeiling: ${r.correlationCeiling} },`)).toBe(1);
-    expect(count("correlationCeiling:")).toBe(1);
+    expect(r).toEqual({ enabled: false });
+    expect(count(`regime: { barMinutes: 60, enabled: ${r.enabled} },`)).toBe(1);
+    expect(count("allowSameTickReentry: true")).toBe(1);
+    expect(count('mode: "sizeOnly"')).toBe(2);
   });
 
   test("meanrev volStop literal matches MEANREV_STOCKS_VOL_STOP — exactly once", () => {
@@ -370,10 +385,10 @@ describe("index.ts wiring literals ↔ module constants", () => {
     expect(count(literal)).toBe(1);
   });
 
-  test("sharpeGate literal matches MOMENTUM_SLEEVE_SHARPE_GATE on every momentum sleeve", () => {
+  test("sharpeGate literal matches MOMENTUM_SLEEVE_SHARPE_GATE on all but hourly crypto", () => {
     const g = MOMENTUM_SLEEVE_SHARPE_GATE;
     const literal = `sharpeGate: { lookbackDays: ${g.lookbackDays}, minSharpe: ${g.minSharpe} }`;
-    expect(count(literal)).toBeGreaterThanOrEqual(2); // stocks + crypto at minimum
+    expect(count(literal)).toBe(3); // stocks + USDC + flag-off COIN-M
     expect(count("sharpeGate: {")).toBe(count(literal)); // no sleeve wires a DIFFERENT gate
   });
 

@@ -655,25 +655,16 @@ export function momentumCryptoPortfolioPlan(): MomentumPortfolioPlan {
       // this sleeve's gross-exposure cap is declared contiguously, not emergent
       // — see the MOMENTUM_CRYPTO_MAX_GROSS_EXPOSURE_MULT block above.
       tsm: { barMinutes: 60, maxLongs: MOMENTUM_CRYPTO_MAX_LONGS },
-      // RW3 (2026-10-23): the correlation-collapse entry brake is OFF —
-      // correlationCeiling 0.85 → 1.01 (an average pairwise correlation never
-      // exceeds 1). The vol-spike check of the regime filter stays ON. In
-      // live the brake was active on 188 of 349 passes since ~2026-10-12 (avg
-      // corr 0.86-0.92) but never bound: no raw long signal coincided with it,
-      // so the sleeve sat flat for lack of signal. Evidence: pure chain
-      // efc086b4… (experiments/momentum-crypto-rw3-vt-35-corroff-pure-v1.json,
-      // docs/reports/RW-reescritura-rentable.md §10.4 c1): Sharpe 1.331 vs
-      // 1.313 for the control on the same days, DD 34.3%, PSR 0.998, passes
-      // every pre-registered criterion. The literal below is locked against
-      // MOMENTUM_CRYPTO_REGIME (liveSleeveConfigs.ts) by liveSleeveConfigs.test.ts.
-      regime: { barMinutes: 60, correlationCeiling: 1.01 },
+      // RW7 owner rule (§18.3–18.5, artifact 2deab5da): no regime/Sharpe
+      // entry filters or stop cooldown; risk only sizes, never pauses.
+      regime: { barMinutes: 60, enabled: false },
       scorer: { barMinutes: 60 },
       // RW6 owner rule: 5-day holds, checked at decisions; keep the RiskState key.
       timeStop: { maxHoldHours: 120 },
+      allowSameTickReentry: true,
       // tsmTrail intentionally ABSENT on crypto — the 2026-07-12 sweep found it
       // amputates fat-tail trend rides. (That sweep's "+148→+178%/yr" claim for
       // enhanced TSM is pre-nested machinery, not evidence — see above.)
-      sharpeGate: { lookbackDays: 30, minSharpe: 0 },
       // volTarget ("vt-35") wired 2026-09-23 — owner-delegated decision after a
       // 3-judge quorum (AUDITS.md 2026-09-20/23). Evidence: PURE 3/3-fold chain
       // (momentum-crypto-vt35-pure-v1, artifact 8b673e8a…, same dataHash/asOf
@@ -690,7 +681,7 @@ export function momentumCryptoPortfolioPlan(): MomentumPortfolioPlan {
       // a clamp (0.33 or 1.5) on >70% of ticks (scale degenerate → no-op or
       // lever-up). Verify what's wired: rg -n 'volTarget: \{' src/index.ts → 1.
       volTarget: { annualizedPct: 35, lookbackBars: 720, minScale: 0.33, maxScale: 1.5 },
-      risk: { equitySemantics: EQUITY_SEMANTICS.BINANCE_TOTAL_MARGIN },
+      risk: { equitySemantics: EQUITY_SEMANTICS.BINANCE_TOTAL_MARGIN, mode: "sizeOnly" },
       // One-shot model-cutover re-anchor (2026-09-26, owner: "resuelve el
       // punto 2" — the sleeve had not opened a position since ~09-10). vt-35
       // was wired on 09-23 while its persisted RiskState still carried the
@@ -767,11 +758,11 @@ export function momentumUsdcPortfolioPlan(): MomentumPortfolioPlan {
       // the row (rowStopPct: row first, profile 4% fallback).
       volStop: { ...MOMENTUM_USDC_DAILY_VOL_STOP },
       sharpeGate: { lookbackDays: 30, minSharpe: 0 },
-      risk: { equitySemantics: EQUITY_SEMANTICS.BINANCE_USDC_MARGIN },
+      risk: { equitySemantics: EQUITY_SEMANTICS.BINANCE_USDC_MARGIN, mode: "sizeOnly" },
       maxGrossExposureMult: MOMENTUM_USDC_MAX_GROSS_EXPOSURE_MULT,
       // RW4a c2 (2026-10-23): the drawdown exposure control resizes the OPEN
-      // book — see MOMENTUM_USDC_EXPOSURE_CONTROL. The 24h soft-DD pause
-      // stays ON (its removal failed every criterion, RW §13.6).
+      // book — see MOMENTUM_USDC_EXPOSURE_CONTROL. RW7 removes risk pauses
+      // only; regime, Sharpe and cooldown stay (full nobrakes failed N).
       exposureControl: { ...MOMENTUM_USDC_EXPOSURE_CONTROL, drawdown: { ...MOMENTUM_USDC_EXPOSURE_CONTROL.drawdown! } },
       // %ADV capacity check, observe-only — see the momentum_crypto block.
       capacityGuard: { maxAdvPct: 1, lookbackBars: 20, mode: "observe" },

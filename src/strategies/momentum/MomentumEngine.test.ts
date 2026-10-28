@@ -1121,6 +1121,36 @@ describe("MomentumEngine timeStop (time barrier — third barrier, OFF by defaul
     expect(broker.positions.map(p => p.side).sort()).toEqual(["buy", "sell"]);
   });
 
+  test.each(["time", "trail", "failed_close"])("RW7 same-tick re-entry: %s close, fresh signal, no duplicate holding", async kind => {
+    const t0 = Date.parse("2024-01-01T00:00:00Z"), clock = new TestClock(t0), broker = new FakeBroker();
+    broker.setCandles("UP1", ramp(100, 150));
+    const store = memoryPersistence();
+    const config = {
+      universe: ["UP1"], notionalPctPerSlot: 0.2, allowSameTickReentry: true,
+      scorer: { topLongs: 1, minLongScore: 0.001 }, regime: { enabled: false }, risk: { mode: "sizeOnly" as const },
+      timeStop: { maxHoldHours: 120 },
+      ...(kind === "trail" ? { tsmTrail: { kSigma: 1, lookbackBars: 20, minPct: 5, maxPct: 5 } } : {}),
+    };
+    let engine = new MomentumEngine(config, broker, silentLogger, store.persistence, clock);
+    await engine.tick();
+    expect(broker.opened).toHaveLength(1);
+    if (kind === "trail") {
+      store.get()!.trailMarks = { "UP1|buy": { mark: 200, lastTs: t0 } };
+      engine = new MomentumEngine(config, broker, silentLogger, store.persistence, clock);
+    }
+    if (kind === "failed_close") broker.closePosition = async () => ({ ok: false });
+    clock.set(t0 + 120 * HOUR);
+    const report = await engine.tick();
+    expect(broker.positions).toHaveLength(1);
+    expect(broker.opened).toHaveLength(kind === "failed_close" ? 1 : 2);
+    if (kind !== "failed_close") {
+      expect(report.actions.map(a => a.type)).toEqual(["close", "open"]);
+      expect(broker.closed[0].closeReason).toBe(kind === "trail" ? TRAIL_STOP_CLOSE_REASON : TIME_STOP_CLOSE_REASON);
+      expect(store.get()?.entryMarks?.["UP1|buy"]).toBe(t0 + 120 * HOUR);
+      expect(report.decisions[0].reason).not.toBe("protective-stopped this tick");
+    }
+  });
+
   function withClock<T>(fn: (advanceTo: (t: number) => void) => Promise<T>): Promise<T> {
     const realNow = Date.now;
     const t0 = realNow();

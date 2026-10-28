@@ -19,10 +19,17 @@ import { exposureResizeFactor, exposureScale } from "./strategies/momentum/Momen
 import { evaluateRisk, DEFAULT_RISK_CONFIG, type RiskState } from "./strategies/momentum/RiskGuard";
 
 describe("momentum_crypto_usdc daily-kernel cutover", () => {
-  test("RW6 adds the 120h cap in plan + builtin, retaining the daily RiskState key", () => {
+  test("RW7 keeps the 120h cap, exposure control and entry filters, but removes risk pauses without changing the RiskState key", () => {
     expect(momentumUsdcPortfolioPlan().engineConfig.timeStop).toEqual({ maxHoldHours: 120 });
     expect((builtinPortfolio("momentum_crypto_usdc").params as any).timeStop).toEqual({ maxHoldHours: 120 });
     expect(momentumUsdcPortfolioPlan().engineConfig.modelVersion).toBe("daily-s5-blend3-2026-09-26");
+    const cfg = momentumUsdcPortfolioPlan().engineConfig;
+    expect(cfg.risk?.mode).toBe("sizeOnly");
+    expect((builtinPortfolio("momentum_crypto_usdc").params as any).risk).toEqual({ mode: "sizeOnly" });
+    expect(cfg.regime).toEqual({ barMinutes: 1440 });
+    expect(cfg.sharpeGate).toEqual({ lookbackDays: 30, minSharpe: 0 });
+    expect(cfg.allowSameTickReentry).toBeUndefined();
+    expect(cfg.exposureControl?.minScale).toBe(0.25);
   });
   test("model identity is the daily kernel and is wired into the USDC engine", () => {
     expect(MOMENTUM_USDC_MODEL_VERSION).toBe("daily-s5-blend3-2026-09-26");
@@ -58,7 +65,7 @@ describe("momentum_crypto_usdc RW4a — drawdown exposure control wired, RiskSta
     expect(row.exposureControl).toEqual(knob);
     expect(row.governor.evidenceVersion).toBe(MOMENTUM_USDC_EVIDENCE_VERSION);
     expect(row.modelVersion).toBe(MOMENTUM_USDC_MODEL_VERSION);
-    // Kernel untouched: 5 × 0.20, blend 63/126/252 / MA200, k8 stops, soft-DD pause ON (no risk.softDrawdownPct override).
+    // Kernel untouched: 5 × 0.20, blend 63/126/252 / MA200, k8 stops; RW7 overrides pause policy only.
     expect(plan.engineConfig.notionalPctPerSlot).toBe(0.2);
     expect(plan.engineConfig.tsm).toMatchObject({ maxLongs: 5, slotHysteresis: true, lookbackDaysList: [63, 126, 252], maLengthDays: 200 });
     expect(plan.engineConfig.volStop).toEqual({ kSigma: 8, lookbackBars: 20, minPct: 5, maxPct: 30 });
@@ -66,7 +73,7 @@ describe("momentum_crypto_usdc RW4a — drawdown exposure control wired, RiskSta
     expect(plan.engineConfig.volTarget).toBeUndefined();
   });
 
-  test("the RiskState key is NOT bumped: the live 13.8% drawdown is the control's input — re-anchoring would blind it (dd → 0) and release the soft-DD pause", () => {
+  test("RW7 retains the RiskState drawdown for exposure sizing, clears the inherited pause, and never re-anchors", () => {
     expect(MOMENTUM_USDC_MODEL_VERSION).toBe("daily-s5-blend3-2026-09-26");
     // data/momentum-state-usdc.json on prod, 2026-10-23 07:44 UTC (read-only): 4 longs held at full size.
     const prod: RiskState = {
@@ -88,15 +95,18 @@ describe("momentum_crypto_usdc RW4a — drawdown exposure control wired, RiskSta
     expect(prod.modelVersion).toBe(MOMENTUM_USDC_MODEL_VERSION); // same key ⇒ the engine constructor arms NO one-shot
     const equity = 6332.34820872;
     const now = Date.UTC(2026, 9, 24, 0, 0, 15);
-    const kept = evaluateRisk({ ...prod }, equity, now, DEFAULT_RISK_CONFIG);
+    const cfg = { ...DEFAULT_RISK_CONFIG, ...momentumUsdcPortfolioPlan().engineConfig.risk };
+    const kept = evaluateRisk({ ...prod }, equity, now, cfg);
     const dd = 1 - equity / kept.state.peakEquity;
-    expect(dd).toBeGreaterThan(0.10); // the control bites and the soft-DD pause re-arms — what the replay does at this dd
+    expect(dd).toBeGreaterThan(0.10); // the control still bites; the pause no longer re-arms
+    expect(kept.canOpen).toBe(true);
+    expect(kept.state.pausedUntil).toBe(0);
     const lambda = exposureScale({ cfg: MOMENTUM_USDC_EXPOSURE_CONTROL, drawdown: dd, book: [], barsPerYear: 365 });
     expect(lambda.scale).toBeCloseTo(1 - (dd - 0.1) / 0.3, 9);
     expect(lambda.scale).toBeLessThan(0.9);
     // Held at fraction 1 with ~1.4-1.6k USD notionals → the first pass cuts every position ×λ (orders ≥ 100 USD).
     expect(exposureResizeFactor(1, lambda.scale, 1400, MOMENTUM_USDC_EXPOSURE_CONTROL)).toBeCloseTo(lambda.scale, 9);
-    // What a re-anchor WOULD do: dd 0 → λ 1 (no cut) and the pause released — the refuted no-soft-DD behaviour.
+    // What a re-anchor WOULD do: dd 0 → λ 1 (no cut), blinding the sizing control.
     const reanchored = evaluateRisk({ ...prod, pendingModelReanchor: true } as RiskState, equity, now, DEFAULT_RISK_CONFIG);
     expect(reanchored.state.peakEquity).toBeCloseTo(equity, 6);
     expect(exposureScale({ cfg: MOMENTUM_USDC_EXPOSURE_CONTROL, drawdown: 0, book: [], barsPerYear: 365 }).scale).toBe(1);

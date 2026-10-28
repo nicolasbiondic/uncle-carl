@@ -1,0 +1,51 @@
+{
+  "name": "rw7-e1-lev-vt30-g250-maxhold5-stagger-v1",
+  "sleeve": "stocks",
+  "description": "DRAFT (2026-10-27), dry-run only, NOT executed. Exact rw6-e1-lev-vt30-g250-maxhold5-v1 candidate plus maxHoldStagger=true. Each pass closes every lot at the 5-NYSE-session limit, then the oldest lots until at least ceil(heldLots/5) rotate (minimum one for a nonempty book, ties by symbol). Same MAX_HOLD close and same-pass rebuy if still targeted; resizes never reset age. Both legs pay costs and count in maxHoldStats and ordersPerSession. Same universe/window/costs/capital/caps as RW6. No activation or model-version change. Trial reservation 462 -> 463, not consumed by dry-run. The 30 executed orders/day goal remains unmeasured.",
+  "trialAccounting": { "priorUniqueTrials": 462, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": ["SPY", "QQQ", "IWM", "GLD", "AAPL", "MSFT", "NVDA", "META", "GOOGL", "AMZN", "SMH", "BIL"],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-24",
+  "window": { "from": "2017-06-01", "to": "2026-09-24", "outerFoldCount": 3, "innerFoldCount": 3, "purgeYears": 0.25, "warmupDays": 420 },
+  "costs": {
+    "base": { "slippageBps": 2, "commissionBps": 0, "marginInterest": { "annualRate": 0.065 } },
+    "stress": { "slippageBps": 5, "commissionBps": 2, "marginInterest": { "annualRate": 0.065 } }
+  },
+  "ledger": { "initialEquity": 50000 },
+  "candidates": [{
+    "name": "e1-lev-vt30-g250-maxhold5-stagger",
+    "cadenceMin": 1440,
+    "portfolio": {
+      "strategy": {
+        "kind": "volManaged",
+        "universe": ["SPY", "QQQ", "IWM", "GLD", "AAPL", "MSFT", "NVDA", "META", "GOOGL", "AMZN", "SMH"],
+        "inceptionGuardBars": 252,
+        "volLookback": 63,
+        "covLookback": 21,
+        "portfolioVolTarget": 0.3,
+        "annualization": 252,
+        "perAssetCap": 0.25,
+        "maxGross": 2.5,
+        "regimeOverlay": {
+          "signals": [{ "kind": "maTrend", "symbol": "SPY", "period": 200, "sampling": "daily", "bandPct": 1 }],
+          "combine": "any",
+          "coreScale": 0
+        },
+        "fastVolLookback": 5,
+        "maxHoldSessions": 5,
+        "maxHoldStagger": true
+      },
+      "venue": { "venue": "alpaca", "fractional": true, "minOrderNotional": 5, "rebalanceBand": 0.01 }
+    }
+  }],
+  "acceptance": {}
+}

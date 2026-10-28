@@ -2882,8 +2882,7 @@ describe("historical hypothesis ledger", () => {
     expect(batches.map((b: any) => [b.id, b.priorUniqueTrials, b.hypothesisCount, b.resultingUniqueTrials]))
       .toEqual([[ids[0], 456, 3, 459], [ids[1], 459, 3, 462]]);
     expect(ledger.batches.find((b: any) => b.id === "rw5-q5-breakout-2026-10-24").resultingUniqueTrials).toBe(batches[0].priorUniqueTrials);
-    expect(ledger.batches.at(-1).id).toBe(ids[1]);
-    expect(ledger.batches.at(-1).resultingUniqueTrials).toBe(462);
+    expect(batches[1].resultingUniqueTrials).toBe(462);
     expect(batches.map((b: any) => b.sourceCommit)).toEqual([
       "863c647 (pre-registro SS17.1 antes de correr); c57e7ba (resultado SS17.2)",
       "c57e7ba (pre-registro SS17.2 antes de correr); 8dceb77 (resultado SS17.3)",
@@ -3028,6 +3027,174 @@ describe("historical hypothesis ledger", () => {
       const passed = r.criterion === "H" ? c.cagr >= 0 && bookDrawdown <= 0.35 : c.cagr >= b.cagr && c.maxDrawdown <= (r.trial < 459 ? 0.35 : 0.40);
       expect(r.wired).toBe(passed);
     }
+  }, 120_000);
+
+  const rw7Stagger = ledger.authoritativeArtifactRw7Stagger;
+  const rw7Nobrakes = ledger.authoritativeArtifactRw7Nobrakes;
+  const rw7Rows = [...rw7Stagger.candidates, ...rw7Nobrakes.candidates];
+  const rw7Paths: Record<string, string> = {
+    ...ledger.rw7Controls.paths,
+    ...Object.fromEntries(rw7Rows.map(r => [r.path.split("/")[2].slice(0, 8), r.path])),
+  };
+  const rw7Designs = [
+    ["rw7-e1-lev-vt30-g250-maxhold5-stagger-v1", "ebebfe244b770736cbf268747c348077f00b6718677778f53bb395f15622a17d", "rw6-e1-lev-vt30-g250-maxhold5-v1", "721d4998", "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger"],
+    ["rw7-e2-meanrev-maxhold5-stagger-v1", "2325210c8c7ad56fbbec9d833f2ae9ef641ed85a25d9af357eb693d43dfbb50f", "rw6-e2-meanrev-maxhold5-v1", "41fdc636", "meanrev_stocks@pe-vt15-mh5-stagger"],
+    ["momentum-crypto-rw7-nobrakes-pure-v1", "2deab5da842e52f51a5346f6231c694c146820cca15f3efee22a9ec60c4e2598", "momentum-crypto-rw6-maxhold5-pure-v1", "b4abce2e", "momentum_crypto@vt35-corroff-mh120-nobrakes"],
+    ["momentum-crypto-usdc-daily-s5-rw7-nobrakes-pure-v1", "533b9a183b852a18e95ea92f9a2ad07b5152b20596380fe4b614b44e11e95544", "momentum-crypto-usdc-daily-s5-rw6-maxhold5-pure-v1", "74efd64b", null],
+    ["momentum-crypto-usdc-daily-s5-rw7-sizeonly-pure-v1", "68181bd662a9462ad79e3802076ad9dd25d6ad3023b363c074255c090c1fa644", "momentum-crypto-usdc-daily-s5-rw6-maxhold5-pure-v1", "74efd64b", "momentum_crypto_usdc@daily-d13s5-xc-dd-mh120-sizeonly"],
+    ["momentum-crypto-usdc-daily-s5-rw7-sizeonly-floor10-pure-v1", "1c42ce862779123df0a7f199c9acafac28cb17ff5cb4abdf79d91946991f04fd", "momentum-crypto-usdc-daily-s5-rw6-maxhold5-pure-v1", "74efd64b", null],
+  ] as const;
+
+  test("RW7 selects batches by id, closes six trials 462→468 and separates passing N from selection", () => {
+    const ids = ["rw7-stagger-2026-10-28", "rw7-nobrakes-2026-10-28"];
+    const batches = ids.map(id => ledger.batches.find((b: any) => b.id === id));
+    expect(batches.map((b: any) => [b.id, b.priorUniqueTrials, b.hypothesisCount, b.resultingUniqueTrials]))
+      .toEqual([[ids[0], 462, 2, 464], [ids[1], 464, 4, 468]]);
+    expect(ledger.batches.find((b: any) => b.id === "rw6-crypto-2026-10-26").resultingUniqueTrials).toBe(batches[0].priorUniqueTrials);
+    expect(ledger.batches.at(-1).id).toBe(ids[1]);
+    expect(ledger.batches.at(-1).resultingUniqueTrials).toBe(468);
+    expect(batches.map((b: any) => b.sourceCommit)).toEqual([
+      "f6ce1b0 (pre-registro SS18.1 antes de correr); 7d2e3bb (resultado SS18.2)",
+      "03c8c9c (pre-registro SS18.3); 3b19c34 (resultados y pre-registro SS18.4); 96bb84c (resultado y seleccion SS18.5)",
+    ]);
+    expect(rw7Rows.map(r => r.trial)).toEqual([462, 463, 464, 465, 466, 467]);
+    expect(new Set(rw7Rows.map(r => r.path)).size).toBe(6);
+    expect(ledger.rw7Controls.trialsAdded).toBe(0);
+    expect(ledger.rw7Controls.paths).toEqual(Object.fromEntries([0, 2, 3, 5].map(i => [rw6Rows[i].path.split("/")[2].slice(0, 8), rw6Rows[i].path])));
+    batches.forEach((b: any, i: number) => {
+      expect(b).toMatchObject({ inventoryComplete: false, resultsComplete: false, executionReported: true });
+      for (const p of b.sourcePaths) expect(sourcePathPresent(p)).toBe(true);
+      expect(b.sourcePaths.filter((p: string) => p.startsWith("experiments/"))).toEqual((i ? rw7Nobrakes : rw7Stagger).candidates.map((r: any) => r.manifest));
+      expect(b.evidence).toContain("nunca dejar de operar");
+      expect(b.evidence).toContain("pausa ni reasignacion");
+    });
+    for (const entry of [rw7Stagger, rw7Nobrakes]) expect(entry.wiring).toEqual({ commit: "477adf8", wiredAt: "2026-10-28T05:33:00Z" });
+    expect(rw7Rows.map(r => r.figures.deltaCagrPp)).toEqual([-0.7994, -0.172, -2.7034, -25.5883, -14.4338, -14.4338]);
+    expect(rw7Rows.map(r => r.wired)).toEqual([true, true, true, false, true, false]);
+    for (const r of rw7Rows) {
+      const f = r.figures, k = r.criterion;
+      const failed = Object.entries({ [`${k}_cagr`]: f.cagrPct >= 0, [`${k}_bookDrawdown`]: (k === "H" ? f.accountMaxDrawdownPct : f.combinedBookMaxDrawdownPct) <= 35 })
+        .filter(([, pass]) => !pass).map(([id]) => id);
+      expect(r.criteriaFailed).toEqual(failed);
+      expect(f.cagrPct - f.controlCagrPct).toBeCloseTo(f.deltaCagrPp, 3);
+      expect(r.criteriaVerdict).toBe(r.trial === 467 ? "CUMPLE N; NO ELEGIDO (empate, cambio minimo sizeonly)" : `${failed.length ? "FALLA" : "CUMPLE"} ${k}; ${r.wired ? "CABLEADO" : "NO SE CABLEA"}`);
+    }
+    expect(rw7Rows[4].figures).toEqual(rw7Rows[5].figures);
+    expect(rw7Rows[4].execution).toEqual(rw7Rows[5].execution);
+    expect(rw7Nobrakes.verdict).toContain("cambio minimo");
+    expect(rw7Stagger.figuresNote).toContain("no las aproximaciones 1.5/4.9");
+    expect(rw7Nobrakes.figuresNote).toContain("no el 16.1% preliminar");
+  });
+
+  test("RW7 manifests change only preregistered axes, preserve costs/safety, and pin the four wired versions", () => {
+    const versions = readFileSync(join(root, "src/portfolio/modelVersions.ts"), "utf8");
+    rw7Designs.forEach(([stem, artifact, baseStem, control, version], i) => {
+      const r = rw7Rows[i];
+      expect([r.manifest, r.path, r.control, r.version, r.wired, r.criterion]).toEqual([
+        `experiments/${stem}.json`, `data/backtests/${artifact}/`, control, version, version !== null, i < 2 ? "H" : "N",
+      ]);
+      expect(rw7Paths[control]).toMatch(new RegExp(`^data/backtests/${control}[0-9a-f]{56}/$`));
+      const m = JSON.parse(readFileSync(join(root, r.manifest), "utf8"));
+      const base = JSON.parse(readFileSync(join(root, `experiments/${baseStem}.json`), "utf8"));
+      expect(m.name).toBe(stem);
+      expect(m.trialAccounting).toEqual({ priorUniqueTrials: r.trial, complete: false });
+      expect(m.candidates).toHaveLength(1);
+      const c = m.candidates[0], a = base.candidates[0];
+      if (i < 2) {
+        expect(c.portfolio.strategy.maxHoldSessions).toBe(5);
+        expect(c.portfolio.strategy.maxHoldStagger).toBe(true);
+        expect(r.partner).toBe(i === 0 ? "2325210c" : "ebebfe24");
+        delete c.portfolio.strategy.maxHoldStagger;
+      } else {
+        expect([r.e1, r.e2, r.otherCrypto]).toEqual(["ebebfe24", "2325210c", i === 2 ? "68181bd6" : "2deab5da"]);
+        expect(c.timeStop).toEqual({ maxHoldHours: 120 });
+        expect(c.risk.mode).toBe("sizeOnly");
+        delete c.risk.mode;
+        if (i < 4) {
+          expect(c.regime).toBe("off");
+          expect(c.sharpeGate).toBeUndefined();
+          expect(c.allowSameTickReentry).toBe(true);
+          if (a.regime === undefined) delete c.regime; else c.regime = a.regime;
+          c.sharpeGate = a.sharpeGate;
+          delete c.allowSameTickReentry;
+        }
+        if (i === 5) {
+          expect(c.exposureControl.minScale).toBe(0.10);
+          c.exposureControl.minScale = 0.25;
+        }
+      }
+      c.name = a.name;
+      expect({ ...m, name: base.name, description: base.description, trialAccounting: base.trialAccounting }).toEqual(base);
+      if (version) {
+        const block = versions.slice(versions.indexOf(`{ id: "${version}"`)).split("},")[0];
+        expect(block).toContain(`manifest: "${r.manifest}"`);
+        expect(block).toContain(r.path.replace(/\/$/, ""));
+      }
+    });
+  });
+
+  testWithDb("RW7 artifacts reproduce H/N costs, selected-partner book DD and complete order/hold counters", () => {
+    const r4 = rw5Round;
+    const summary = (p: string) => JSON.parse(readFileSync(join(root, p, "summary.json"), "utf8"));
+    for (const r of rw7Rows) {
+      // Source-DB gating must fail on lost evidence, not silently skip a missing artifact.
+      const s = summary(r.path), a = summary(rw7Paths[r.control]);
+      const m = JSON.parse(readFileSync(join(root, r.manifest), "utf8"));
+      const resolved = JSON.parse(readFileSync(join(root, r.path, "manifest-resolved.json"), "utf8"));
+      for (const key of ["candidates", "data", "asOf", "window", "costs", "ledger", "acceptance"]) expect(resolved[key]).toEqual(m[key]);
+      expect(s.selectedCandidate.name).toBe(m.candidates[0].name);
+      expect([s.dataHash, a.dataHash]).toEqual([r.dataHash, r.controlDataHash]);
+      const folds = (x: any) => x.outerTests.map((t: any) => [t.foldPath, t.result.fromMs, t.result.toMs]);
+      expect(folds(s)).toEqual(folds(a));
+      expect(s.approved).toBe(false);
+      expect(r.gatesFailed).toEqual(Object.values(s.acceptance).filter((g: any) => !g.pass).map((g: any) => g.gate).sort());
+      let cmp, bookDrawdown;
+      if (r.criterion === "H") {
+        cmp = compareArtifacts(join(root, r.path), join(root, rw7Paths[r.control]), 252);
+        bookDrawdown = combinedBookDrawdown([r.path, rw7Paths[r.partner]].map(p => new Map(loadArtifactOuterDailyReturns(join(root, p)).map(x => [x.date, x.ret]))), [50_000, 50_000]).maxDrawdown;
+        expect(s.stressTests).toHaveLength(s.outerTests.length);
+        expect(s.loo.length).toBeGreaterThan(0);
+        expect([s._stressSkipReason, s._looSkipReason]).toEqual(["missing stress threshold(s)", "missing LOO threshold(s)"]);
+        for (const gate of r.gatesFailed) expect(s.acceptance[gate]).toMatchObject({ value: null, threshold: null, pass: false });
+      } else {
+        const e = evaluateCrypto({ candidate: join(root, r.path), control: join(root, rw7Paths[r.control]),
+          e1: join(root, rw7Paths[r.e1]), e2: join(root, rw7Paths[r.e2]), otherCrypto: join(root, rw7Paths[r.otherCrypto]) });
+        cmp = { commonDays: e.commonDays, from: e.from, to: e.to, candidate: e.candidateStats, control: e.controlStats };
+        bookDrawdown = e.combinedBook.maxDrawdown;
+        expect(e.verdict).toStartWith("FALLA:"); // RW5 T1–T6 is NOT RW7 N.
+      }
+      const c = cmp.candidate, b = cmp.control;
+      expect(r.figures).toEqual({ commonDays: cmp.commonDays, from: cmp.from, to: cmp.to,
+        cagrPct: r4(c.cagr * 100), controlCagrPct: r4(b.cagr * 100), deltaCagrPp: r4((c.cagr - b.cagr) * 100),
+        sharpe: r4(c.sharpe), controlSharpe: r4(b.sharpe), maxDrawdownPct: r4(c.maxDrawdown * 100), controlMaxDrawdownPct: r4(b.maxDrawdown * 100),
+        [r.criterion === "H" ? "accountMaxDrawdownPct" : "combinedBookMaxDrawdownPct"]: r4(bookDrawdown * 100) });
+      const results = s.outerTests.map((t: any) => t.result);
+      const trades = results.reduce((n: number, x: any) => n + x.trades, 0);
+      expect(trades).toBe(s.stitchedOos.trades);
+      if (r.criterion === "H") {
+        const sum = (key: string) => results.reduce((n: number, x: any) => n + x.portfolioDiagnostics[key], 0);
+        const hold = (key: string) => results.reduce((n: number, x: any) => n + x.portfolioDiagnostics.maxHoldStats[key], 0);
+        const sessions = sum("sessions"), diagnosticOrders = sum("orders"), foldEndOrders = sum("foldEndOrders"), orders = diagnosticOrders + foldEndOrders;
+        expect(r.execution).toEqual({ trades, sessions, diagnosticOrders, foldEndOrders, adjustmentOrders: sum("adjustmentOrders"), orders,
+          tradesPerSession: r4(trades / sessions), ordersPerSession: r4(orders / sessions), maxHoldCloses: hold("closes"), maxHoldRebuys: hold("rebuys"),
+          maxHoldOrders: hold("orders"), maxHoldClosesPerSession: r4(hold("closes") / sessions) });
+        expect(orders).toBe(sum("openingOrders") + sum("closingOrders") + sum("adjustmentOrders") + sum("stopOrders") + foldEndOrders);
+        expect(hold("orders")).toBe(hold("closes") + hold("rebuys"));
+      } else {
+        const orders = results.reduce((n: number, x: any) => n + x.orders, 0);
+        const calendarDays = results.reduce((n: number, x: any) => n + (x.toMs - x.fromMs) / 86_400_000, 0);
+        expect(r.execution).toEqual({ trades, orders, calendarDays: r4(calendarDays), ordersPerCalendarDay: r4(orders / calendarDays) });
+        for (const x of results) expect(x.ordersPerDay).toBeCloseTo(x.orders / ((x.toMs - x.fromMs) / 86_400_000), 10);
+      }
+      expect(r.criteriaFailed.length === 0).toBe(c.cagr >= 0 && bookDrawdown <= 0.35);
+    }
+    const sizeonly = summary(rw7Rows[4].path), floor10 = summary(rw7Rows[5].path);
+    const exposure = (s: any) => s.outerTests.map((t: any) => t.result.exposureStats);
+    expect(sizeonly.stitchedOos).toEqual(floor10.stitchedOos);
+    expect(exposure(sizeonly)).toEqual(exposure(floor10));
+    expect(exposure(sizeonly).map((x: any) => r4(x.minScale))).toEqual([0.6948, 0.3674, 0.8433]);
+    for (const x of exposure(sizeonly)) expect(x.minScale).toBeGreaterThan(0.25);
+    expect(loadArtifactOuterDailyReturns(join(root, rw7Rows[4].path))).toEqual(loadArtifactOuterDailyReturns(join(root, rw7Rows[5].path)));
   }, 120_000);
 
   testWithDb("RW5d cash reproduces parity against the original RW5d artifact, not a new K7 or independent replication", () => {

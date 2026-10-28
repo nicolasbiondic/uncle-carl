@@ -45,12 +45,12 @@ export function builtinPortfolios(): PortfolioDefinition[] {
         historyBars: 754, // 31d of 1h bars + warmup margin
         maxLongs: DEFAULT_TSM_CONFIG.maxLongs, // 4 — same source as MOMENTUM_CRYPTO_MAX_LONGS
         notionalPctPerSlot: 0.375,
-        sharpeGate: { lookbackDays: 30, minSharpe: 0 },
         // vt-35 (owner-delegated 2026-09-23, artifact 8b673e8a…).
         volTarget: { annualizedPct: 35, lookbackBars: 720, minScale: 0.33, maxScale: 1.5 },
-        // RW3 (2026-10-23): correlation-collapse brake OFF (0.85 → 1.01); the vol-spike check stays ON.
-        // Artifact efc086b4… (experiments/momentum-crypto-rw3-vt-35-corroff-pure-v1.json).
-        regime: { correlationCeiling: 1.01 },
+        // RW7 (2deab5da): size-only risk, no regime/Sharpe/cooldown entry filters.
+        regime: { enabled: false },
+        risk: { mode: "sizeOnly" },
+        allowSameTickReentry: true,
         timeStop: { maxHoldHours: 120 }, // RW6 owner rule; RiskState NOT re-anchored
         capacityGuard: { maxAdvPct: 1, lookbackBars: 20, mode: "observe" },
         equitySemantics: EQUITY_SEMANTICS.BINANCE_TOTAL_MARGIN,
@@ -83,7 +83,9 @@ export function builtinPortfolios(): PortfolioDefinition[] {
         sharpeGate: { lookbackDays: 30, minSharpe: 0 },
         // RW4a c2 (2026-10-23): drawdown exposure control on the OPEN book — λ 1 down to 10% dd, then the line to 0 at 40% floored at 0.25 (0.67 at 20%)
         // drawdown, band 10 pp, min order 100 USD. Artifact 8892c1e9… (experiments/momentum-crypto-usdc-daily-s5-
-        // rw4a-xc-dd-pure-v1.json). Executed by BinanceMomentumAdapter.scalePosition. Soft-DD pause stays ON.
+        // rw4a-xc-dd-pure-v1.json). Executed by BinanceMomentumAdapter.scalePosition.
+        // RW7 (68181bd6): risk pauses OFF; regime/Sharpe/cooldown stay.
+        risk: { mode: "sizeOnly" },
         exposureControl: { drawdown: { startPct: 0.1, endPct: 0.4 }, minScale: 0.25, band: 0.1, minOrderUsd: 100 },
         timeStop: { maxHoldHours: 120 }, // RW6, same RiskState/drawdown input
         capacityGuard: { maxAdvPct: 1, lookbackBars: 20, mode: "observe" },

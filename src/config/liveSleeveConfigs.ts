@@ -85,9 +85,10 @@ export interface LiveCandidateConfig {
   sharpeGate?: { lookbackDays: number; minSharpe: number };
   volTarget?: VolTargetConfig;
   timeStop?: TimeStopConfig;
+  allowSameTickReentry?: boolean;
   /** RegimeFilter overrides the replay merges over its barMinutes (walk-forward
    *  CandidateConfig.regime). Absent = the filter's default thresholds. */
-  regime?: { enabled?: boolean; correlationCeiling?: number };
+  regime?: "off" | { enabled?: boolean; correlationCeiling?: number };
   risk?: Partial<RiskGuardConfig>;
   /** Portfolio exposure control (RW4a, walk-forward CandidateConfig.exposureControl →
    *  MomentumEngineConfig.exposureControl). Absent = OFF (the legacy envelope). */
@@ -118,16 +119,13 @@ export const MOMENTUM_STOCKS_SLOT_HYSTERESIS = true;
  *  falsifier: `rg 'volTarget: \{' src/index.ts` → 1). */
 export const MOMENTUM_CRYPTO_VOL_TARGET = { annualizedPct: 35, lookbackBars: 720, minScale: 0.33, maxScale: 1.5 };
 
-/** momentum_crypto regime-filter override (RW3, wired 2026-10-23): the
- *  correlation-collapse brake OFF (ceiling 0.85 → 1.01); the vol-spike check
- *  stays ON. Locked against src/index.ts's source text (the `regime:` literal
- *  of the momentum_crypto plan) by scripts/liveSleeveConfigs.test.ts. */
-export const MOMENTUM_CRYPTO_REGIME = { correlationCeiling: 1.01 };
+/** RW7: both regime checks OFF; replay represents enabled:false as "off". */
+export const MOMENTUM_CRYPTO_REGIME = { enabled: false };
 
 /** RW6 owner rule on both live crypto sleeves; source-text locked against index.ts. */
 export const MOMENTUM_CRYPTO_TIME_STOP = { maxHoldHours: 120 };
 
-/** Rolling-Sharpe entry gate every live momentum sleeve wires verbatim. */
+/** Rolling-Sharpe gate on the daily/COIN-M sleeves; hourly crypto omits it. */
 export const MOMENTUM_SLEEVE_SHARPE_GATE = { lookbackDays: 30, minSharpe: 0 };
 
 /** meanrev_stocks vol-scaled hard stop (owner override 2026-08-28,
@@ -292,7 +290,7 @@ export function liveMeanRevStocksConfig(): LiveSleeveConfig {
   };
 }
 
-/** momentum_crypto — 60min TSM on the 8-perp universe, vt-35 sizing, correlation brake OFF (RW3). */
+/** momentum_crypto — 60min TSM, vt-35 sizing, no entry brakes (RW7). */
 export function liveMomentumCryptoConfig(): LiveSleeveConfig {
   return {
     sleeve: "momentum_crypto",
@@ -309,14 +307,14 @@ export function liveMomentumCryptoConfig(): LiveSleeveConfig {
       // lookbackDays/maLengthDays deliberately ABSENT: the crypto sleeve
       // runs the engine defaults (14/30), exactly like the manifest.
       volTarget: { ...MOMENTUM_CRYPTO_VOL_TARGET },
-      regime: { ...MOMENTUM_CRYPTO_REGIME },
+      regime: MOMENTUM_CRYPTO_REGIME.enabled === false ? "off" : { ...MOMENTUM_CRYPTO_REGIME },
       timeStop: { ...MOMENTUM_CRYPTO_TIME_STOP },
-      sharpeGate: { ...MOMENTUM_SLEEVE_SHARPE_GATE },
-      risk: { peakHalfLifeDays: DEFAULT_RISK_CONFIG.peakHalfLifeDays },
+      allowSameTickReentry: true,
+      risk: { peakHalfLifeDays: DEFAULT_RISK_CONFIG.peakHalfLifeDays, mode: "sizeOnly" },
       maxGrossExposureMult: MOMENTUM_CRYPTO_MAX_GROSS_EXPOSURE_MULT,
     },
     universe: [...MOMENTUM_CRYPTO_UNIVERSE],
-    effectiveRisk: effectiveRiskConfig({ peakHalfLifeDays: DEFAULT_RISK_CONFIG.peakHalfLifeDays }),
+    effectiveRisk: effectiveRiskConfig({ peakHalfLifeDays: DEFAULT_RISK_CONFIG.peakHalfLifeDays, mode: "sizeOnly" }),
     initialEquity: RISK_PROFILES.momentum_crypto.initialEquity,
     hardStopFallbackPct: RISK_PROFILES.momentum_crypto.stopLossPct / 100,
   };
@@ -354,15 +352,14 @@ export function liveMomentumUsdcConfig(): LiveSleeveConfig {
       // (artifacts 65500e1e…, e37f99cf…) — the USDT sleeve's volTarget
       // must NOT leak here.
       sharpeGate: { ...MOMENTUM_SLEEVE_SHARPE_GATE },
-      risk: { peakHalfLifeDays: DEFAULT_RISK_CONFIG.peakHalfLifeDays },
-      // RW4a c2: the ONE change vs the control's candidate (locked key by key
-      // against the manifest by liveSleeveConfigs.test.ts).
+      risk: { peakHalfLifeDays: DEFAULT_RISK_CONFIG.peakHalfLifeDays, mode: "sizeOnly" },
+      // RW7 keeps the RW4a drawdown exposure control, including its floor.
       exposureControl: { ...MOMENTUM_USDC_EXPOSURE_CONTROL, drawdown: { ...MOMENTUM_USDC_EXPOSURE_CONTROL.drawdown! } },
       timeStop: { ...MOMENTUM_CRYPTO_TIME_STOP },
       maxGrossExposureMult: MOMENTUM_USDC_MAX_GROSS_EXPOSURE_MULT,
     },
     universe: Object.keys(USDC_SYMBOL_MAP).map(s => s.replace("/USDC", "/USD")),
-    effectiveRisk: effectiveRiskConfig({ peakHalfLifeDays: DEFAULT_RISK_CONFIG.peakHalfLifeDays }),
+    effectiveRisk: effectiveRiskConfig({ peakHalfLifeDays: DEFAULT_RISK_CONFIG.peakHalfLifeDays, mode: "sizeOnly" }),
     initialEquity: RISK_PROFILES.momentum_crypto_usdc.initialEquity,
     hardStopFallbackPct: RISK_PROFILES.momentum_crypto_usdc.stopLossPct / 100,
   };

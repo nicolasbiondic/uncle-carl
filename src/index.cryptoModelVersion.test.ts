@@ -20,26 +20,31 @@ describe("momentum_crypto modelVersion wiring", () => {
     expect((src.match(/modelVersion: MOMENTUM_CRYPTO_MODEL_VERSION,/g) ?? []).length).toBe(1);
   });
 
-  test("RW6 adds only the 120h time barrier, without re-anchoring the RiskState", () => {
+  test("RW7 keeps the 120h time barrier without re-anchoring the RiskState", () => {
     const plan = momentumCryptoPortfolioPlan();
     expect(plan.engineConfig.timeStop).toEqual({ maxHoldHours: 120 });
     expect(plan.engineConfig.modelVersion).toBe("vt35-corroff-2026-10-23");
     expect((builtinPortfolio("momentum_crypto").params as any).timeStop).toEqual(plan.engineConfig.timeStop);
   });
 
-  test("RW3 (2026-10-23): brake OFF wired in the plan AND the builtin row, new governor evidence epoch, same version ids in both", () => {
+  test("RW7: no risk pauses, regime/Sharpe filters or stop cooldown in plan AND builtin; sizing and RiskState identity stay", () => {
     const plan = momentumCryptoPortfolioPlan();
-    expect(plan.engineConfig.regime).toEqual({ barMinutes: 60, correlationCeiling: 1.01 });
+    expect(plan.engineConfig.regime).toEqual({ barMinutes: 60, enabled: false });
+    expect(plan.engineConfig.risk?.mode).toBe("sizeOnly");
+    expect(plan.engineConfig.allowSameTickReentry).toBe(true);
     expect(plan.engineConfig.modelVersion).toBe(MOMENTUM_CRYPTO_MODEL_VERSION);
     expect(plan.governorRegistration.evidenceVersion).toBe(MOMENTUM_CRYPTO_EVIDENCE_VERSION);
     expect(MOMENTUM_CRYPTO_EVIDENCE_VERSION).toBe("v8.5-crypto-corroff");
     const row: any = builtinPortfolio("momentum_crypto").params;
-    expect(row.regime).toEqual({ correlationCeiling: 1.01 });
+    expect(row.regime).toEqual({ enabled: false });
+    expect(row.risk).toEqual({ mode: "sizeOnly" });
+    expect(row.allowSameTickReentry).toBe(true);
+    expect(row.sharpeGate).toBeUndefined();
     expect(row.modelVersion).toBe(MOMENTUM_CRYPTO_MODEL_VERSION);
     expect(row.governor.evidenceVersion).toBe(MOMENTUM_CRYPTO_EVIDENCE_VERSION);
-    // Everything else of the engine config is the live vt-35 one: sizing, gates, vol target untouched.
+    // Sizing and vol target untouched.
     expect(plan.engineConfig.notionalPctPerSlot).toBe(0.375);
-    expect(plan.engineConfig.sharpeGate).toEqual({ lookbackDays: 30, minSharpe: 0 });
+    expect(plan.engineConfig.sharpeGate).toBeUndefined();
     expect(plan.engineConfig.volTarget).toEqual({ annualizedPct: 35, lookbackBars: 720, minScale: 0.33, maxScale: 1.5 });
     // Governor: the old epoch's closes (brake ON) are not evidence against the brake-off band.
     expect(MOMENTUM_CRYPTO_EVIDENCE_VERSION).not.toBe("v8-crypto-no-hard-sl");
