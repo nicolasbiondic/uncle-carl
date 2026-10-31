@@ -10,9 +10,21 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { MOMENTUM_CRYPTO_EVIDENCE_VERSION, MOMENTUM_CRYPTO_MODEL_VERSION, MOMENTUM_STOCKS_MODEL_VERSION, momentumCryptoPortfolioPlan } from "./index";
 import { builtinPortfolio } from "./portfolios/builtin";
+import { currentModelVersion } from "./portfolio/modelVersions";
 import { evaluateRisk, DEFAULT_RISK_CONFIG, type RiskState } from "./strategies/momentum/RiskGuard";
 
 describe("momentum_crypto modelVersion wiring", () => {
+  test("RW8 plan and builtin carry the exact manifest Turtle list/config without changing the RiskState key", () => {
+    const v = currentModelVersion("momentum_crypto")!;
+    expect(v.id).toBe("momentum_crypto@vt35-corroff-mh120-nobrakes-bo8");
+    expect(v.manifest).toBe("experiments/momentum-crypto-rw8-breakout8-pure-v1.json");
+    const manifest = JSON.parse(readFileSync(join(import.meta.dir, "..", v.manifest!), "utf8"));
+    const plan = momentumCryptoPortfolioPlan();
+    expect(plan.engineConfig.breakoutShort).toEqual(manifest.candidates[0].breakoutShort);
+    expect((builtinPortfolio("momentum_crypto").params as any).breakoutShort).toEqual(manifest.candidates[0].breakoutShort);
+    expect(plan.adapter).toEqual({ kind: "binance_usdm", options: { breakoutShortSymbols: manifest.data.universe } });
+    expect(plan.engineConfig.modelVersion).toBe("vt35-corroff-2026-10-23");
+  });
   test("the vt-35 model identity is set and passed to the momentum_crypto engine", () => {
     // Bumped 2026-10-23 (RW3, correlation brake OFF); was "vt35-2026-09-23".
     expect(MOMENTUM_CRYPTO_MODEL_VERSION).toBe("vt35-corroff-2026-10-23");

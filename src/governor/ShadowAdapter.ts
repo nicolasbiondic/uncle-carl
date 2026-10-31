@@ -127,7 +127,7 @@ export class ShadowAdapter implements MomentumBrokerAdapter {
   }
 
   async openPosition(action: Parameters<MomentumBrokerAdapter["openPosition"]>[0]): Promise<{ ok: boolean; reason?: string }> {
-    if (action.role === "breakout-short" && (this.cfg.market !== "crypto" || action.symbol !== "BTC/USD" || action.side !== "sell" || !action.breakout || ![action.breakout.n, action.breakout.stopN, action.breakout.quantity].every(x => Number.isFinite(x) && x > 0))) return { ok: false, reason: "invalid breakout short unit" };
+    if (action.role === "breakout-short" && (this.cfg.market !== "crypto" || !/^[A-Z0-9]+\/USD$/.test(action.symbol) || action.side !== "sell" || !action.breakout || ![action.breakout.n, action.breakout.stopN, action.breakout.quantity].every(x => Number.isFinite(x) && x > 0))) return { ok: false, reason: "invalid breakout short unit" };
     const price = await this.currentPrice(action.symbol);
     if (price <= 0) return { ok: false, reason: `no price for ${action.symbol}` };
 

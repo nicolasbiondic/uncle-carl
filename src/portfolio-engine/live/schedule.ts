@@ -1,13 +1,13 @@
 // ═══ Portfolio engine — when a sleeve decides, and on which data ═══
 //
-// Stocks/ETFs: one pass per ET trading day at ≥ 09:35 ET (the meanrev /
+// Stocks/ETFs: one pass per ET trading day at ≥ 09:35 ET, before the close (the meanrev /
 // daily-momentum discipline: decide on yesterday's COMPLETED session, fill
 // after today's open). Crypto: one pass per UTC day at ≥ 00:00:15 UTC on the
 // just-closed UTC day. Pure functions of the clock — the engine persists the
 // session it ran and never runs twice for the same one.
 
 import { getETDateKey, getETDayStart } from "../../db/database";
-import { getPreviousTradingDay, isTradingDay } from "../../utils/marketHours";
+import { getPreviousTradingDay, isMarketOpen } from "../../utils/marketHours";
 import type { SessionDate } from "../types";
 
 export type Market = "stocks" | "crypto";
@@ -30,11 +30,11 @@ export function previousUtcDay(dateKey: SessionDate): SessionDate {
   return utcDateKey(Date.parse(`${dateKey}T00:00:00Z`) - 86_400_000);
 }
 
-/** null when no pass is due right now (closed day, before the run time). */
+/** null when no pass is due right now (market closed, before the run time). */
 export function runWindow(market: Market, nowMs: number): RunWindow | null {
   if (market === "stocks") {
     const today = getETDateKey(nowMs);
-    if (!isTradingDay(today)) return null;
+    if (!isMarketOpen(nowMs)) return null;
     const minutes = (nowMs - getETDayStart(nowMs)) / 60_000;
     if (minutes < STOCKS_RUN_MINUTES_ET) return null;
     return { session: today, asOf: getPreviousTradingDay(today) };

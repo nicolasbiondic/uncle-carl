@@ -60,6 +60,7 @@ import type { RiskGuardConfig, RiskState } from "../src/strategies/momentum/Risk
 import { getETDateKey } from "../src/db/database";
 import type { PortfolioStrategyConfig, VenueRules } from "../src/portfolio-engine/types";
 import { overlaySymbols } from "../src/portfolio-engine/contingency";
+import { breakoutSymbols } from "../src/strategies/momentum/MomentumEngine";
 
 // ── CLI ───────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -1626,8 +1627,8 @@ export function validateManifest(m: ExperimentManifest): ExperimentManifest {
       validateCandidate(m.candidates[i]);
       const idle = m.candidates[i].idleOverlay;
       const breakout = m.candidates[i].breakoutShort;
-      if (breakout && (m.sleeve !== "crypto" || m.data.source !== "binance_futures" || m.data.timeframe !== "1h" || m.data.barMinutes !== 60 || m.data.barMinutesEq !== 60 || !m.data.funding || m.data.rthOnly || m.data.membership || m.data.perpsMembership || !m.data.universe.includes(breakout.symbol))) {
-        throw new Error("breakoutShort requires fixed-universe hourly Binance crypto perpetuals with funding and BTC in data.universe");
+      if (breakout && (m.sleeve !== "crypto" || m.data.source !== "binance_futures" || m.data.timeframe !== "1h" || m.data.barMinutes !== 60 || m.data.barMinutesEq !== 60 || !m.data.funding || m.data.rthOnly || m.data.membership || m.data.perpsMembership || breakoutSymbols(breakout).some(s => !m.data.universe.includes(s)))) {
+        throw new Error("breakoutShort requires fixed-universe hourly Binance crypto perpetuals with funding and breakout symbols in data.universe");
       }
       if (idle && (m.sleeve !== "crypto" || m.data.source !== "binance_futures" || !m.data.funding || m.data.rthOnly || m.data.membership || m.data.perpsMembership || idle.symbols.some(s => !m.data.universe.includes(s)))) {
         throw new Error("idleOverlay requires fixed-universe Binance crypto perpetuals with funding and overlay symbols in data.universe");
@@ -2495,6 +2496,10 @@ export async function runLoo(
       const cfg = candidateToReplayConfig(m, selected, "base", snapshotPath);
       cfg.universe = remainingUniverse;
       if (cfg.breakoutShort?.symbol === sym) cfg.breakoutShort = undefined;
+      else if (cfg.breakoutShort?.symbols) {
+        const symbols = cfg.breakoutShort.symbols.filter(s => s !== sym);
+        cfg.breakoutShort = symbols.length ? { ...cfg.breakoutShort, symbols } : undefined;
+      }
       if (cfg.idleOverlay) {
         const symbols = cfg.idleOverlay.symbols.filter(s => s !== sym);
         cfg.idleOverlay = symbols.length ? { ...cfg.idleOverlay, symbols } : undefined;

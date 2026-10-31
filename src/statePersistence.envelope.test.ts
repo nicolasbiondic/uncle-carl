@@ -19,6 +19,21 @@ afterAll(() => { rmSync(dir, { recursive: true, force: true }); });
 const store = (path: string) => fileStatePersistence(path, 50_000, 50_000, EQUITY_SEMANTICS.SLEEVE_LEDGER);
 
 describe("fileStatePersistence envelope round-trip", () => {
+  test("breakout ages and channel edges round-trip, both legacy BTC and RW8 per-symbol state", () => {
+    const path = join(dir, "breakout-list.json"), t = Date.parse("2024-01-01");
+    const breakoutBySymbol = {
+      "BTC/USD": { daily: { day: t, n: 123.5, close: 40000 }, entryAt: t - 120 * 3600000, belowEntry: true },
+      "ETH/USD": { daily: { day: t, n: 23, close: 2000 }, entryAt: t - 3600000, belowEntry: false },
+    };
+    store(path).save({ v: 1, risk: INITIAL_RISK_STATE, breakoutBySymbol });
+    expect(store(path).load()!.breakoutBySymbol).toEqual(breakoutBySymbol);
+    store(path).save({ v: 1, risk: INITIAL_RISK_STATE, breakoutEntryAt: t, breakoutBelowEntry: false });
+    expect(store(path).load()).toMatchObject({ breakoutEntryAt: t, breakoutBelowEntry: false });
+    expect(store(path).load()).not.toHaveProperty("breakoutBySymbol");
+    store(path).save({ v: 1, risk: INITIAL_RISK_STATE });
+    expect(store(path).load()).not.toHaveProperty("breakoutEntryAt");
+    expect(store(path).load()).not.toHaveProperty("breakoutBelowEntry");
+  });
   test("Turtle N recurrence survives a fresh atomic-file store; off stays absent", () => {
     const path = join(dir, "turtle.json"), turtleDaily = { day: Date.parse("2024-01-01"), n: 123.5, close: 40000 };
     store(path).save({ v: 1, risk: INITIAL_RISK_STATE, turtleDaily });

@@ -5,6 +5,10 @@ import { stockSymbols, cryptoSymbols } from "./symbols";
 import { SLEEVE_UNIVERSE_BINANCE } from "../sync/BrokerSync";
 import { MOMENTUM_SYMBOLS } from "./wideUniverse";
 import { SYMBOL_MAP } from "../executor/binance-executor";
+import { readFileSync } from "node:fs";
+import { currentModelVersion } from "../portfolio/modelVersions";
+import { portfolioUniverse } from "../portfolios/validate";
+import { isTreasurySymbol } from "../treasury/treasurySymbols";
 
 // The two Alpaca sleeves (momentum_stocks, meanrev_stocks) share ONE wallet.
 // AlpacaExecutor.closePosition(symbol) liquidates the AGGREGATE broker position
@@ -23,6 +27,18 @@ describe("momentum_stocks ∩ meanrev_stocks universes", () => {
     const mr = new Set(MEANREV_UNIVERSE);
     const overlap = MOMENTUM_STOCKS_UNIVERSE.filter(s => mr.has(s));
     expect(overlap).toEqual([]);
+  });
+
+  test("RW8 tradable universe includes the SH overlay, disjoint from meanrev and treasury (not a core asset)", () => {
+    const version = currentModelVersion("momentum_stocks")!;
+    const manifest = JSON.parse(readFileSync(new URL(`../../${version.manifest}`, import.meta.url), "utf8"));
+    const params = manifest.candidates.find((c: any) => c.name === version.candidate).portfolio;
+    const tradable = portfolioUniverse("portfolio", params);
+    expect(params.strategy.universe).toEqual(MOMENTUM_STOCKS_UNIVERSE);
+    expect(tradable.sort()).toEqual([...MOMENTUM_STOCKS_UNIVERSE, "SH"].sort());
+    expect(tradable.filter(s => MEANREV_UNIVERSE.includes(s))).toEqual([]);
+    expect(tradable.filter(isTreasurySymbol)).toEqual([]);
+    expect(isTreasurySymbol("SH")).toBe(false);
   });
 
   test("neither universe has internal duplicates", () => {

@@ -97,6 +97,11 @@ export const MODEL_VERSIONS: Readonly<Record<string, readonly ModelVersion[]>> =
       engine: "portfolio",
       manifest: "experiments/rw7-e1-lev-vt30-g250-maxhold5-stagger-v1.json", candidate: "e1-lev-vt30-g250-maxhold5-stagger",
       artifact: { dir: "data/backtests/ebebfe244b770736cbf268747c348077f00b6718677778f53bb395f15622a17d", shiftDays: 0 } },
+    { id: "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger-sh50", since: "2026-10-29T13:00:00Z", modelStart: "2026-10-29",
+      note: "RW §19–19.1 owner decision: risk-off buys SH (inverse S&P 500) at 0.5 x core gross, limited by perAssetCap 0.25; core to cash, staggered five-session holds and account BUY cap 1.9x unchanged; criterion passed: CAGR 23.2% vs 25.6%, Sharpe 0.94 vs 1.02, sleeve DD 30.8% vs 26.8%, account DD 23.6%; cost -2.4pp CAGR and +4pp sleeve DD",
+      engine: "portfolio",
+      manifest: "experiments/rw8-e1-lev-vt30-g250-maxhold5-stagger-sh50-v1.json", candidate: "e1-lev-vt30-g250-maxhold5-stagger-sh50",
+      artifact: { dir: "data/backtests/0bb06b9d548647410edacd52f86c9f11ff66307bd11f6e734e379f8a7492d5da", shiftDays: 0 } },
   ],
   meanrev_stocks: [
     { id: "meanrev_stocks@pre-slot10", since: EPOCH, modelStart: null,
@@ -152,6 +157,10 @@ export const MODEL_VERSIONS: Readonly<Record<string, readonly ModelVersion[]>> =
       note: "RW §18.3–18.5 owner never-stop rule: sizeOnly risk, regime OFF, no Sharpe gate, allowSameTickReentry; vt35 sizing, protective stops and 120h cap stay; N passed: CAGR 13.1% vs 15.8%, Sharpe 0.51 vs 0.61, DD 50.1% vs 35.3%, four-sleeve DD 16.1%, 3.4 orders/day; RiskState key NOT changed/re-anchored",
       manifest: "experiments/momentum-crypto-rw7-nobrakes-pure-v1.json",
       artifact: { dir: "data/backtests/2deab5da842e52f51a5346f6231c694c146820cca15f3efee22a9ec60c4e2598", shiftDays: 0 } },
+    { id: "momentum_crypto@vt35-corroff-mh120-nobrakes-bo8", since: "2026-10-31T03:00:00Z", modelStart: "2026-11-01",
+      note: "RW §19.3–19.4 criterion C: add Turtle 55/20 shorts on all eight coins, one unit per coin, Wilder ATR20 N, 1N = 1% equity, hourly-close 2N stop and 120h cap; same-symbol long priority; CAGR 12.9% vs 13.1%, DD 45.3% vs 50.1%, four-sleeve DD 17.5%, 3.6 vs 3.4 orders/day; vt35 longs, sizeOnly and shared gross/margin caps unchanged; RiskState key NOT changed/re-anchored",
+      manifest: "experiments/momentum-crypto-rw8-breakout8-pure-v1.json",
+      artifact: { dir: "data/backtests/b37681ff8900d69104a000928d28435b6d637c4401dacf4f444528a4b3a39230", shiftDays: 0 } },
   ],
   momentum_crypto_usdc: [
     { id: "momentum_crypto_usdc@hourly-13b", since: "2026-07-20T00:00:00Z", modelStart: null,

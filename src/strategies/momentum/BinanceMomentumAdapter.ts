@@ -60,6 +60,8 @@ export interface BinanceMomentumAdapterConfig {
    *  venue we execute on — klinesToOHLCV already drops the forming bar, so
    *  the series is causal by construction. */
   candleTimeframe: "1Hour" | "1Day";
+  /** Allowed Turtle short units. USDⓈ-M perpetuals require no borrow. Absent = disabled. */
+  breakoutShortSymbols?: string[];
 }
 
 export const DEFAULT_ADAPTER_CONFIG: BinanceMomentumAdapterConfig = {
@@ -174,8 +176,8 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
   }
 
   async openPosition(action: Parameters<MomentumBrokerAdapter["openPosition"]>[0]): Promise<{ ok: boolean; reason?: string }> {
-    if (action.role === "breakout-short" && (this.cfg.quoteAsset !== "USDT" || action.symbol !== "BTC/USD" || action.side !== "sell" || !action.breakout || ![action.breakout.n, action.breakout.stopN, action.breakout.quantity].every(x => Number.isFinite(x) && x > 0))) {
-      return { ok: false, reason: "breakout short requires BTC USDT sell with positive N/stopN" };
+    if (action.role === "breakout-short" && (this.cfg.quoteAsset !== "USDT" || !this.cfg.breakoutShortSymbols?.includes(action.symbol) || !this.toNative(action.symbol) || action.side !== "sell" || !action.breakout || ![action.breakout.n, action.breakout.stopN, action.breakout.quantity].every(x => Number.isFinite(x) && x > 0))) {
+      return { ok: false, reason: "breakout short requires a configured, mapped USDT sell with positive N/stopN" };
     }
     if (action.role === "idle-overlay" && (this.cfg.quoteAsset !== "USDT" || !["BTC/USD", "ETH/USD"].includes(action.symbol))) {
       return { ok: false, reason: "idle overlay supports BTC/ETH USDT perpetuals only" };

@@ -70,6 +70,15 @@ describe("runWindow", () => {
     expect(runWindow("stocks", Date.parse("2026-11-26T15:00:00Z"))).toBeNull();                    // Thanksgiving
     expect(runWindow("stocks", Date.parse("2026-11-27T15:00:00Z"))).toEqual({ session: "2026-11-27", asOf: "2026-11-25" });
   });
+  test("stocks: excludes the regular close, early closes and after-hours restarts (DST-safe)", () => {
+    expect(runWindow("stocks", Date.parse("2026-10-28T19:59:59Z"))).not.toBeNull(); // 15:59 EDT
+    expect(runWindow("stocks", Date.parse("2026-10-28T20:00:00Z"))).toBeNull();
+    expect(runWindow("stocks", Date.parse("2026-10-28T22:22:00Z"))).toBeNull();
+    expect(runWindow("stocks", Date.parse("2026-11-02T20:59:59Z"))).not.toBeNull(); // 15:59 EST
+    expect(runWindow("stocks", Date.parse("2026-11-02T21:00:00Z"))).toBeNull();
+    expect(runWindow("stocks", Date.parse("2026-11-27T17:59:59Z"))).not.toBeNull(); // 12:59 EST, Black Friday
+    expect(runWindow("stocks", Date.parse("2026-11-27T18:00:00Z"))).toBeNull();
+  });
   test("crypto: every UTC day ≥ 00:00:15", () => {
     expect(runWindow("crypto", Date.parse("2026-10-20T00:00:10Z"))).toBeNull();
     expect(runWindow("crypto", Date.parse("2026-10-20T00:00:15Z"))).toEqual({ session: "2026-10-20", asOf: "2026-10-19" });

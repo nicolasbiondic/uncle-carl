@@ -19,6 +19,7 @@
  *    ever emits RECOMMEND_REDESIGN).
  */
 import { DEFAULT_MEANREV_CONFIG } from "../strategies/meanrev/MeanRevEngine";
+import { breakoutSymbols, validateBreakoutShort } from "../strategies/momentum/MomentumEngine";
 import { EQUITY_SEMANTICS, type EquitySemantics } from "../strategies/momentum/RiskGuard";
 import { currentModelVersion } from "../portfolio/modelVersions";
 import { builtinPortfolio } from "./builtin";
@@ -190,6 +191,15 @@ export function validateMomentumParams(
   }
   if (p.allowSameTickReentry !== undefined && typeof p.allowSameTickReentry !== "boolean") {
     errors.push("params.allowSameTickReentry: expected boolean");
+  }
+  if (p.breakoutShort !== undefined) {
+    try {
+      validateBreakoutShort(p.breakoutShort);
+      if (account !== "binance_usdt" || p.barMinutes !== 60 || p.rebalanceMinutes !== 60 ||
+          !Array.isArray(p.universe) || breakoutSymbols(p.breakoutShort).some(s => !p.universe.includes(s))) {
+        errors.push("params.breakoutShort: requires hourly Binance USDT and symbols in params.universe");
+      }
+    } catch (e: any) { errors.push(`params.breakoutShort: ${e.message}`); }
   }
   if (p.risk !== undefined && (!p.risk || typeof p.risk !== "object" || Array.isArray(p.risk) ||
     Object.keys(p.risk).some(k => k !== "mode") || (p.risk.mode !== undefined && p.risk.mode !== "sizeOnly"))) {

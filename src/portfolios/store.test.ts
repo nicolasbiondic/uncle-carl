@@ -141,14 +141,14 @@ describe("historical RW3 seed refreshes to the current hourly builtin at boot", 
   });
 });
 
-describe("RW7 boot: builtin registry rows refresh from RW6 and carry every new key through validation and the factory", () => {
+describe("RW8 boot: builtin registry rows refresh from RW6/RW7 and carry every new key through validation and the factory", () => {
   test("db-source crypto engines equal code plans; owner rows stay frozen and RiskState keys do not change", () => {
     const db = new Database(":memory:");
     try {
       initPlatformPortfolios(db, 1_000);
       for (const id of ["momentum_crypto", "momentum_crypto_usdc"]) {
         const row = loadPlatformPortfolioRows(db).find(r => r.id === id)!;
-        const { risk: _risk, allowSameTickReentry: _reentry, ...params } = row.params as any;
+        const { risk: _risk, allowSameTickReentry: _reentry, breakoutShort: _breakout, ...params } = row.params as any;
         if (id === "momentum_crypto") {
           params.regime = { correlationCeiling: 1.01 };
           params.sharpeGate = { lookbackDays: 30, minSharpe: 0 };
@@ -183,6 +183,8 @@ describe("RW7 boot: builtin registry rows refresh from RW6 and carry every new k
           expect(plan.engineConfig.regime).toEqual({ barMinutes: 60, enabled: false });
           expect(plan.engineConfig.sharpeGate).toBeUndefined();
           expect(plan.engineConfig.allowSameTickReentry).toBe(true);
+          expect(plan.engineConfig.breakoutShort).toEqual(reference().engineConfig.breakoutShort);
+          expect(plan.adapter).toMatchObject({ options: { breakoutShortSymbols: params.universe } });
         } else {
           expect(plan.engineConfig.regime).toEqual({ barMinutes: 1440 });
           expect(plan.engineConfig.sharpeGate).toEqual({ lookbackDays: 30, minSharpe: 0 });

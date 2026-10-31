@@ -555,9 +555,9 @@ export interface IdleOverlayConfig {
   annualization: number;
 }
 
-/** Single-unit Turtle short; channel and ATR inputs are completed UTC days. */
-export interface BreakoutShortConfig {
-  symbol: "BTC/USD";
+/** One Turtle unit per symbol; channel and ATR inputs are completed UTC days.
+ * `symbol` preserves the original BTC-only protocol and persisted envelope. */
+export type BreakoutShortConfig = ({ symbol: "BTC/USD"; symbols?: never } | { symbols: string[]; symbol?: never }) & {
   entryDays: number;
   exitDays: number;
   atrDays: number;
@@ -566,21 +566,25 @@ export interface BreakoutShortConfig {
   /** Optional wall-clock cap, checked at each hourly decision. After expiry,
    * re-entry requires a fresh above-to-below entry-channel crossing. */
   maxHoldHours?: number;
-}
+};
 export const BREAKOUT_SHORT_EXIT = "BREAKOUT_SHORT_EXIT";
 export const BREAKOUT_SHORT_STOP = "BREAKOUT_SHORT_STOP";
 export const BREAKOUT_SHORT_PRIORITY = "BREAKOUT_SHORT_PRIORITY";
 export const BREAKOUT_SHORT_DRAWDOWN = "BREAKOUT_SHORT_DRAWDOWN";
 export const BREAKOUT_SHORT_TIME_STOP = "BREAKOUT_SHORT_TIME_STOP";
 export interface TurtleDailyState { day: number; n: number; close: number }
+export interface BreakoutSymbolState { daily?: TurtleDailyState; entryAt?: number; belowEntry?: boolean }
+export const breakoutSymbols = (c: BreakoutShortConfig): string[] => c.symbols ?? [c.symbol!];
 export const breakoutHistoryDays = (c: BreakoutShortConfig): number => Math.max(c.entryDays, c.exitDays, c.atrDays + 1);
 export function validateBreakoutShort(c: any): asserts c is BreakoutShortConfig {
   if (!c || typeof c !== "object" || Array.isArray(c) ||
-      Object.keys(c).filter(k => k !== "maxHoldHours").sort().join(",") !== "atrDays,entryDays,exitDays,riskPerN,stopN,symbol" || c.symbol !== "BTC/USD" ||
+      Object.keys(c).filter(k => k !== "maxHoldHours" && k !== "symbol" && k !== "symbols").sort().join(",") !== "atrDays,entryDays,exitDays,riskPerN,stopN" ||
+      (c.symbols === undefined ? c.symbol !== "BTC/USD" : c.symbol !== undefined || !Array.isArray(c.symbols) || !c.symbols.length ||
+        c.symbols.some((s: unknown) => typeof s !== "string" || !/^[A-Z0-9]+\/USD$/.test(s)) || new Set(c.symbols).size !== c.symbols.length) ||
       ![c.entryDays, c.exitDays, c.atrDays].every(n => Number.isInteger(n) && n >= 2 && n <= 990) ||
       !Number.isFinite(c.stopN) || c.stopN <= 0 || !Number.isFinite(c.riskPerN) || c.riskPerN <= 0 || c.riskPerN > 0.01 ||
       (c.maxHoldHours !== undefined && (!Number.isFinite(c.maxHoldHours) || c.maxHoldHours <= 0))) {
-    throw new Error("breakoutShort requires BTC/USD, integer days 2..990, positive stopN, riskPerN in (0,0.01] and optional positive maxHoldHours");
+    throw new Error("breakoutShort requires legacy symbol BTC/USD OR unique symbols (BASE/USD), integer days 2..990, positive stopN, riskPerN in (0,0.01] and optional positive maxHoldHours");
   }
 }
 /** Initial N: SMA of the first atrDays true ranges in the initial window.
@@ -803,9 +807,9 @@ export interface MomentumEngineConfig {
    * is skipped, with no intramonth re-entry after displacement. Hourly longs
    * always retain priority. Own signal/sizing bypass hourly regime/trend/
    * Sharpe/volTarget/exposureControl; RiskGuard and maintenance still gate
-   * opens, and the hard-DD breaker closes overlay inventory immediately. */
+   * opens; the hard-DD breaker closes inventory unless risk.mode=sizeOnly. */
   idleOverlay?: IdleOverlayConfig;
-  /** Independent one-unit BTC short, hourly close triggers; no native stop,
+  /** Independent one-unit shorts (legacy BTC or a list), hourly close triggers; no native stop,
    * no momentum slots/vol scaling/resizes. Absent = byte-identical legacy. */
   breakoutShort?: BreakoutShortConfig;
   scorer: Partial<MomentumScorerConfig>;
@@ -1020,6 +1024,8 @@ export interface MomentumPersistedState {
   /** Capped breakout only: preserve age and entry-channel edge across restarts. */
   breakoutEntryAt?: number;
   breakoutBelowEntry?: boolean;
+  /** List-mode only: independent Wilder recurrence, age and channel edge. */
+  breakoutBySymbol?: Record<string, BreakoutSymbolState>;
 }
 
 export interface MomentumStatePersistence {
@@ -1143,6 +1149,7 @@ export class MomentumEngine {
   private turtleDaily?: TurtleDailyState;
   private breakoutEntryAt?: number;
   private breakoutBelowEntry?: boolean;
+  private breakoutBySymbol: Record<string, BreakoutSymbolState> = {};
   /** Shadow-equity resume (cfg.risk.shadowResume): symbols the VIRTUAL long
    *  book held at the previous tick, and their last decision closes.
    *  Deliberately EPHEMERAL (not persisted): the monetary anchors live on
@@ -1200,8 +1207,8 @@ export class MomentumEngine {
     }
     if (cfg.breakoutShort !== undefined) {
       validateBreakoutShort(cfg.breakoutShort);
-      if (cfg.idleOverlay || (cfg.tsm?.maxShorts ?? 0) !== 0 || cfg.tsm?.barMinutes !== 60 || cfg.rebalanceMinutes !== 60 || !(cfg.universe ?? DEFAULT_ENGINE_CONFIG.universe).includes(cfg.breakoutShort.symbol)) {
-        throw new Error("breakoutShort requires hourly long-only momentum with BTC in universe and no idleOverlay");
+      if (cfg.idleOverlay || (cfg.tsm?.maxShorts ?? 0) !== 0 || cfg.tsm?.barMinutes !== 60 || cfg.rebalanceMinutes !== 60 || breakoutSymbols(cfg.breakoutShort).some(s => !(cfg.universe ?? DEFAULT_ENGINE_CONFIG.universe).includes(s))) {
+        throw new Error("breakoutShort requires hourly long-only momentum with breakout symbols in universe and no idleOverlay");
       }
     }
     this.cfg = {
@@ -1225,8 +1232,17 @@ export class MomentumEngine {
           this.idleOverlayMonth = loaded.idleOverlayMonth;
         }
         this.idleOverlayExitPending = loaded.idleOverlayExitPending === true;
-        if (this.cfg.breakoutShort) this.turtleDaily = loaded.turtleDaily;
-        if (this.cfg.breakoutShort?.maxHoldHours !== undefined) {
+        if (this.cfg.breakoutShort?.symbols) {
+          for (const symbol of this.cfg.breakoutShort.symbols) {
+            const s = loaded.breakoutBySymbol?.[symbol];
+            if (s && typeof s === "object") this.breakoutBySymbol[symbol] = {
+              ...(s.daily ? { daily: s.daily } : {}),
+              ...(validRiskAnchor(s.entryAt, this.clock.now()) ? { entryAt: s.entryAt } : {}),
+              ...(typeof s.belowEntry === "boolean" ? { belowEntry: s.belowEntry } : {}),
+            };
+          }
+        } else if (this.cfg.breakoutShort) this.turtleDaily = loaded.turtleDaily;
+        if (this.cfg.breakoutShort?.maxHoldHours !== undefined && !this.cfg.breakoutShort.symbols) {
           this.breakoutEntryAt = validRiskAnchor(loaded.breakoutEntryAt, this.clock.now()) || undefined;
           if (typeof loaded.breakoutBelowEntry === "boolean") this.breakoutBelowEntry = loaded.breakoutBelowEntry;
         }
@@ -1503,7 +1519,7 @@ export class MomentumEngine {
         try {
           // Turtle entry AND stop must use the executed perpetual's close,
           // never an Alpaca fallback when the Binance feed is unavailable.
-          const c = this.cfg.breakoutShort?.symbol === sym
+          const c = this.cfg.breakoutShort && breakoutSymbols(this.cfg.breakoutShort).includes(sym)
             ? await this.broker.fetchCandles(sym, this.cfg.historyBars, { strictVenue: true })
             : await this.broker.fetchCandles(sym, this.cfg.historyBars);
           return [sym, c];
@@ -1638,57 +1654,61 @@ export class MomentumEngine {
       this.idleOverlayMonth = month;
       this.persistState();
     }
-    const hardDrawdown = equityValid && ((this.riskState.peakEquity - equity) / Math.max(this.riskState.peakEquity, 1) >= this.cfg.risk.hardDrawdownPct! || riskBlockedReason?.startsWith("hard drawdown"));
+    const hardDrawdown = this.cfg.risk.mode !== "sizeOnly" && equityValid && ((this.riskState.peakEquity - equity) / Math.max(this.riskState.peakEquity, 1) >= this.cfg.risk.hardDrawdownPct! || riskBlockedReason?.startsWith("hard drawdown"));
     const breakoutActions: RebalanceAction[] = [];
     let breakoutPositions = positions.filter(p => p.role === "breakout-short");
-    let breakoutClosedThisTick = false;
-    const closeBreakout = async (closeReason: string): Promise<boolean> => {
-      for (const p of [...breakoutPositions]) {
+    const breakoutClosedThisTick = new Set<string>();
+    const closeBreakout = async (closeReason: string, symbol: string): Promise<boolean> => {
+      for (const p of breakoutPositions.filter(p => p.symbol === symbol)) {
         try {
           const res = await this.broker.closePosition({ symbol: p.symbol, side: p.side, closeReason });
           if (res.ok) {
             breakoutPositions = breakoutPositions.filter(x => x !== p);
-            breakoutClosedThisTick = true;
+            breakoutClosedThisTick.add(symbol);
             if (this.cfg.breakoutShort?.maxHoldHours !== undefined) {
-              this.breakoutEntryAt = undefined;
-              this.persistState();
+              const s = this.breakoutStateFor(symbol);
+              delete s.entryAt;
+              this.saveBreakoutState(symbol, s);
             }
             breakoutActions.push({ type: "close", symbol: p.symbol, side: p.side, closeReason, reason: closeReason });
           } else this.log.warn(`breakout short close failed: ${res.reason}`);
         } catch (e: any) { this.log.error(`breakout short close threw: ${e.message}`); }
       }
-      return breakoutPositions.length === 0;
+      return !breakoutPositions.some(p => p.symbol === symbol);
     };
     const bc = this.cfg.breakoutShort;
-    let channel: ReturnType<typeof turtleChannels> = null;
-    const breakoutPrice = bc ? candles.get(bc.symbol)?.at(-1)?.close : undefined;
-    const breakoutWasBelow = this.breakoutBelowEntry;
-    if (bc) {
+    const channels = new Map<string, NonNullable<ReturnType<typeof turtleChannels>>>();
+    const breakoutWasBelow = new Map<string, boolean | undefined>();
+    for (const symbol of bc ? breakoutSymbols(bc) : []) {
+      const s = this.breakoutStateFor(symbol);
+      breakoutWasBelow.set(symbol, s.belowEntry);
+      let channel: ReturnType<typeof turtleChannels> = null;
       try {
-        const days = Math.max(breakoutHistoryDays(bc), this.turtleDaily ? Math.floor(now / 86_400_000) - this.turtleDaily.day / 86_400_000 - 1 : 0);
-        channel = turtleChannels(await this.broker.fetchDailyBars?.(bc.symbol, days) ?? [], bc, now, this.turtleDaily);
-        if (channel) { this.turtleDaily = channel.state; this.persistState(); }
+        const days = Math.max(breakoutHistoryDays(bc!), s.daily ? Math.floor(now / 86_400_000) - s.daily.day / 86_400_000 - 1 : 0);
+        channel = turtleChannels(await this.broker.fetchDailyBars?.(symbol, days) ?? [], bc!, now, s.daily);
+        if (channel) { s.daily = channel.state; channels.set(symbol, channel); this.saveBreakoutState(symbol, s); }
       } catch (e: any) { this.log.warn(`breakout daily fetch failed: ${e.message}`); }
-    }
-    if (bc?.maxHoldHours !== undefined) {
-      if (breakoutPositions.length) {
-        const entryTime = positions.find(p => p.role === "breakout-short")?.entryTime;
-        this.breakoutEntryAt ??= validRiskAnchor(entryTime, now) || now;
-      } else this.breakoutEntryAt = undefined;
-      // Missing data never rearms the signal. A sustained breach is ONE
-      // breakout, even after a time stop or a process restart.
-      if (channel && breakoutPrice) this.breakoutBelowEntry = breakoutPrice < channel.low;
-      this.persistState();
+      if (bc!.maxHoldHours !== undefined) {
+        const held = breakoutPositions.find(p => p.symbol === symbol);
+        if (held) s.entryAt ??= validRiskAnchor(held.entryTime, now) || now;
+        else delete s.entryAt;
+        // Missing data never rearms a sustained breach, even after restart.
+        const price = candles.get(symbol)?.at(-1)?.close;
+        if (channel && price) s.belowEntry = price < channel.low;
+        this.saveBreakoutState(symbol, s);
+      }
     }
     // Stop remains available even when daily history fails. A row missing its
     // entry/stop is drained rather than inventing a new N after a restart.
-    for (const p of breakoutPositions) {
+    for (const p of [...breakoutPositions]) {
+      const s = this.breakoutStateFor(p.symbol), channel = channels.get(p.symbol);
+      const breakoutPrice = candles.get(p.symbol)?.at(-1)?.close;
       const reason = hardDrawdown ? BREAKOUT_SHORT_DRAWDOWN
-        : bc?.maxHoldHours !== undefined && this.breakoutEntryAt !== undefined && now - this.breakoutEntryAt >= bc.maxHoldHours * 3_600_000 ? BREAKOUT_SHORT_TIME_STOP
-        : !bc || !p.breakoutN || !p.stopLoss || !p.entryPrice ? BREAKOUT_SHORT_EXIT
+        : bc?.maxHoldHours !== undefined && s.entryAt !== undefined && now - s.entryAt >= bc.maxHoldHours * 3_600_000 ? BREAKOUT_SHORT_TIME_STOP
+        : !bc || !breakoutSymbols(bc).includes(p.symbol) || !p.breakoutN || !p.stopLoss || !p.entryPrice ? BREAKOUT_SHORT_EXIT
         : breakoutPrice && breakoutPrice >= p.stopLoss ? BREAKOUT_SHORT_STOP
         : breakoutPrice && channel && breakoutPrice > channel.high ? BREAKOUT_SHORT_EXIT : undefined;
-      if (reason) { await closeBreakout(reason); break; }
+      if (reason) await closeBreakout(reason, p.symbol);
     }
     // Removing the knob also drains owned inventory.
     if (overlayMonthDue || this.idleOverlayExitPending || hardDrawdown || universePositions.length > 0 || !this.cfg.idleOverlay) await closeOverlay();
@@ -2062,9 +2082,9 @@ export class MomentumEngine {
           }
           else this.log.warn(`close ${a.symbol} failed: ${res.reason}`);
         } else {
-          if (a.symbol === "BTC/USD" && a.side === "buy" && breakoutPositions.length) {
-            const freed = breakoutPositions.reduce((s, p) => s + Math.abs(p.notional), 0);
-            const closed = await closeBreakout(BREAKOUT_SHORT_PRIORITY);
+          if (a.side === "buy" && breakoutPositions.some(p => p.symbol === a.symbol)) {
+            const freed = breakoutPositions.filter(p => p.symbol === a.symbol).reduce((s, p) => s + Math.abs(p.notional), 0);
+            const closed = await closeBreakout(BREAKOUT_SHORT_PRIORITY, a.symbol);
             executed.push(...breakoutActions.splice(0));
             if (!closed) { bumpBlock("breakout_short_close_failed"); continue; }
             liveGrossNotional -= freed;
@@ -2158,28 +2178,28 @@ export class MomentumEngine {
     // No open this tick (or every open was gated away): the resize phase
     // still runs — reductions must never wait for an entry to happen.
     await runResizePhase();
-    // Independent signal after normal closes/opens and resizes. Momentum BTC
-    // has priority, other coins may coexist. Risk/maintenance/gross gates
+    // Independent units after normal closes/opens and resizes. A momentum
+    // long has priority on its own symbol only. Risk/maintenance/gross gates
     // apply; hourly regime/trend/sharpe gates belong to the LONG model only.
-    if (bc && channel && breakoutPrice && breakoutPrice < channel.low && !breakoutClosedThisTick &&
-        (bc.maxHoldHours === undefined || breakoutWasBelow !== true) &&
-        !breakoutPositions.length && equityValid && realisedValid && canOpen && !tradingDisabled && !hardDrawdown && !hasUndecidableHold) {
+    for (const symbol of bc ? breakoutSymbols(bc) : []) {
+      const channel = channels.get(symbol), breakoutPrice = candles.get(symbol)?.at(-1)?.close;
+      if (!bc || !channel || !breakoutPrice || breakoutPrice >= channel.low || breakoutClosedThisTick.has(symbol) ||
+          (bc.maxHoldHours !== undefined && breakoutWasBelow.get(symbol) === true) ||
+          breakoutPositions.some(p => p.symbol === symbol) || !equityValid || !realisedValid || !canOpen || tradingDisabled || hardDrawdown || hasUndecidableHold) continue;
       const remaining = await this.broker.getOpenPositions();
       const notionalUsd = equity * bc.riskPerN / channel.state.n * breakoutPrice;
       const gross = remaining.reduce((s, p) => s + Math.abs(p.notional), 0);
-      if (!remaining.some(p => p.symbol === bc.symbol) && Number.isFinite(notionalUsd) && notionalUsd > 0 &&
+      if (!remaining.some(p => p.symbol === symbol) && Number.isFinite(notionalUsd) && notionalUsd > 0 &&
           (this.cfg.maxGrossExposureMult === undefined || gross + notionalUsd <= equity * this.cfg.maxGrossExposureMult)) {
         try {
-          const res = await this.broker.openPosition({ symbol: bc.symbol, side: "sell", notionalUsd, role: "breakout-short", breakout: { n: channel.state.n, stopN: bc.stopN, quantity: equity * bc.riskPerN / channel.state.n } });
+          const res = await this.broker.openPosition({ symbol, side: "sell", notionalUsd, role: "breakout-short", breakout: { n: channel.state.n, stopN: bc.stopN, quantity: equity * bc.riskPerN / channel.state.n } });
           intendedOpenUsd += notionalUsd;
           if (res.ok) {
             if (bc.maxHoldHours !== undefined) {
-              this.breakoutEntryAt = now;
-              this.breakoutBelowEntry = true;
-              this.persistState();
+              this.saveBreakoutState(symbol, { ...this.breakoutStateFor(symbol), entryAt: now, belowEntry: true });
             }
             liveGrossNotional += notionalUsd;
-            executed.push({ type: "open", symbol: bc.symbol, side: "sell", notionalTarget: notionalUsd, reason: "Turtle daily low breakout" });
+            executed.push({ type: "open", symbol, side: "sell", notionalTarget: notionalUsd, reason: "Turtle daily low breakout" });
             if (sleeve) sleeveOutput.recordOpenSuccess(sleeve);
           } else this.log.warn(`breakout short open failed: ${res.reason}`);
         } catch (e: any) { this.log.error(`breakout short open threw: ${e.message}`); }
@@ -2534,6 +2554,18 @@ export class MomentumEngine {
     return actions;
   }
 
+  private breakoutStateFor(symbol: string): BreakoutSymbolState {
+    return this.cfg.breakoutShort?.symbols
+      ? { ...this.breakoutBySymbol[symbol] }
+      : { daily: this.turtleDaily, entryAt: this.breakoutEntryAt, belowEntry: this.breakoutBelowEntry };
+  }
+
+  private saveBreakoutState(symbol: string, s: BreakoutSymbolState) {
+    if (this.cfg.breakoutShort?.symbols) this.breakoutBySymbol[symbol] = s;
+    else { this.turtleDaily = s.daily; this.breakoutEntryAt = s.entryAt; this.breakoutBelowEntry = s.belowEntry; }
+    this.persistState();
+  }
+
   private persistState() {
     // RiskState + trail watermarks + time-stop entry anchors in ONE v1
     // envelope, so the store's single atomic tmp+rename write (index.ts)
@@ -2553,6 +2585,7 @@ export class MomentumEngine {
         ...(this.cfg.exposureControl && this.exposureFracs.size > 0 ? { exposureFracs: Object.fromEntries(this.exposureFracs) } : {}),
         ...(this.cfg.idleOverlay && this.idleOverlayMonth ? { idleOverlayMonth: this.idleOverlayMonth } : {}),
         ...(this.idleOverlayExitPending ? { idleOverlayExitPending: true } : {}),
+        ...(this.cfg.breakoutShort?.symbols && Object.keys(this.breakoutBySymbol).length ? { breakoutBySymbol: this.breakoutBySymbol } : {}),
         ...(this.cfg.breakoutShort && this.turtleDaily ? { turtleDaily: this.turtleDaily } : {}),
         ...(this.cfg.breakoutShort?.maxHoldHours !== undefined ? {
           ...(this.breakoutEntryAt !== undefined ? { breakoutEntryAt: this.breakoutEntryAt } : {}),

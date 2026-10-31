@@ -1,0 +1,31 @@
+{
+  "name": "momentum-crypto-rw8-symtsm-pure-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTERED 2026-10-28, DRY-RUN ONLY, NOT EXECUTED. RW8 trial 469 -> 470. Exact live RW7 no-brakes control except ONE design: symmetric TSM on the existing 14-day return / 30-day MA hourly kernel. maxShorts=4, shortEntryPct=-5 with price below own MA, shortExitPct=2 (or loss of below-MA condition), shortStop fixed 0.04 mirrors the long stop. Same vt35 sizing, 120h cap and confirmed same-tick reentry. No shortRegime/shortUniverse gate. Source: Moskowitz, Ooi and Pedersen (2012), Time Series Momentum, https://w4.stern.nyu.edu/facdir/lpederse/papers/TimeSeriesMomentum.pdf (symmetric own-return direction and volatility scaling, NOT a replication of its 12-month/monthly model). Horizons, thresholds, stops and cap are the owner's live-kernel constraints, not parameters fitted here or attributed to that paper. Data/universe/order/asOf/costs/folds/capital/acceptance unchanged. Missing signals/data or physical margin limits can still prevent entries. No backtest, live activation or model-key change.",
+  "trialAccounting": { "priorUniqueTrials": 469, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db", "source": "binance_futures", "timeframe": "1h",
+    "universe": ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"],
+    "refSymbol": "BTC/USD", "rthOnly": false, "funding": true, "barMinutes": 60, "barMinutesEq": 60
+  },
+  "asOf": "2026-10-02T08:00:00Z",
+  "window": { "from": "2021-01-01", "to": "2026-12-31", "outerFoldCount": 3, "innerFoldCount": 3, "purgeYears": 0.25, "warmupDays": 45 },
+  "costs": { "base": { "slippageBps": 5, "commissionBps": 4 }, "stress": { "slippageBps": 10, "commissionBps": 8 } },
+  "ledger": { "initialEquity": 5000, "leverage": 2, "hardStopPct": 0.04 },
+  "candidates": [{
+    "name": "vt-35-corr92", "cadenceMin": 60, "notionalPctPerSlot": 0.375,
+    "entryPct": 5, "exitPct": -2, "maxLongs": 4, "maxShorts": 4,
+    "shortEntryPct": -5, "shortExitPct": 2, "shortStop": { "mode": "fixed", "pct": 0.04 },
+    "volTarget": { "annualizedPct": 35, "lookbackBars": 720, "minScale": 0.33, "maxScale": 1.5 },
+    "risk": { "peakHalfLifeDays": 30, "mode": "sizeOnly" }, "regime": "off",
+    "timeStop": { "maxHoldHours": 120 }, "allowSameTickReentry": true
+  }],
+  "acceptance": {
+    "minSharpe": 0, "maxDrawdown": 0.45, "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0, "maxConcentration": 0.6, "minTrades": 10,
+    "stressMinSharpe": -0.5, "stressMaxDrawdown": 0.55, "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5, "looMaxDrawdown": 0.55, "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95, "minFoldsPsrAbove": { "threshold": 0.5, "count": 2 },
+    "maxTurnoverAnnual": 150, "maxDisplacementShare": 0.35, "minBreakEvenSlippageBps": 20
+  }
+}

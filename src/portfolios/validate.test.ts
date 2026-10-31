@@ -15,6 +15,7 @@ import {
   presetParamsFor,
   validateCreatePortfolio,
   validatePatchPortfolio,
+  validateMomentumParams,
 } from "./validate";
 import { initPlatformPortfolios, loadPlatformPortfolioRows, type PlatformPortfolioRow } from "./store";
 import { LIVE_SLEEVE_MANIFESTS } from "../config/liveSleeveConfigs";
@@ -136,6 +137,30 @@ describe("create from a validated preset", () => {
     }
   });
 
+  test("RW8 breakout symbols validate only on hourly USDT, within the universe, with the engine's Turtle schema", () => {
+    const p = presetParamsFor("momentum_crypto", "test_crypto", 5_000) as MomentumTsmParams;
+    const b = p.breakoutShort!;
+    const check = (params: any, account: any = "binance_usdt") => {
+      const errors: string[] = [];
+      validateMomentumParams(params, account, errors);
+      return errors;
+    };
+    expect(check(p)).toEqual([]);
+    expect(b).toMatchObject({ symbols: p.universe, entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 });
+    for (const breakoutShort of [null, [], {}, { ...b, symbols: [] }, { ...b, symbols: ["BTC/USD", "BTC/USD"] },
+      { ...b, symbols: ["BTC/USDC"] }, { ...b, symbols: ["BNB/USD"] }, { ...b, symbol: "BTC/USD" },
+      { ...b, entryDays: 1 }, { ...b, atrDays: 991 }, { ...b, exitDays: 2.5 }, { ...b, stopN: 0 },
+      { ...b, riskPerN: 0.02 }, { ...b, maxHoldHours: -1 }, { ...b, unknown: true }]) {
+      expect(check({ ...p, breakoutShort }).join(" ")).toContain("params.breakoutShort");
+    }
+    for (const params of [{ ...p, barMinutes: 1440 }, { ...p, rebalanceMinutes: 1440 }, { ...p, universe: null }]) {
+      expect(check(params).join(" ")).toContain("params.breakoutShort");
+    }
+    for (const account of ["alpaca_main", "binance_usdc", "binance_coinm"]) {
+      expect(check(p, account).join(" ")).toContain("params.breakoutShort");
+    }
+  });
+
   test("ANY param override on a preset leaves the artifact behind → unvalidated", () => {
     const out = validateCreatePortfolio(
       { id: "momentum_crypto_v2", name: "Crypto v2", account: "binance_usdt", capital: 5_000, preset: "momentum_crypto", params: { notionalPctPerSlot: 0.3 } },
@@ -149,7 +174,7 @@ describe("create from a validated preset", () => {
     for (const preset of ["momentum_stocks", "meanrev_stocks"]) {
       expect(VALIDATED_PRESETS[preset].template).toBe("portfolio");
       expect(VALIDATED_PRESETS[preset].portfolioEngine).toEqual(preset === "momentum_stocks"
-        ? { version: "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger", candidate: "e1-lev-vt30-g250-maxhold5-stagger" }
+        ? { version: "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger-sh50", candidate: "e1-lev-vt30-g250-maxhold5-stagger-sh50" }
         : { version: "meanrev_stocks@pe-vt15-mh5-stagger", candidate: "vt15-maxhold5-stagger" });
       const rows = seededRows((r) => { const x = r.find((y) => y.id === preset)!; x.status = "archived"; x.enabled = false; });
       const out = validateCreatePortfolio(
@@ -242,6 +267,7 @@ describe("free template — honest by construction", () => {
   const freeParams = (): MomentumTsmParams => ({
     ...(presetParamsFor("momentum_crypto", "free_mom", 1_000) as MomentumTsmParams),
     universe: ["BNB/USD"],
+    breakoutShort: undefined, // free universe does not inherit the eight-coin leg
   });
 
   test("a schema-valid free template is accepted but NEVER validated", () => {

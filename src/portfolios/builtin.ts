@@ -51,6 +51,8 @@ export function builtinPortfolios(): PortfolioDefinition[] {
         regime: { enabled: false },
         risk: { mode: "sizeOnly" },
         allowSameTickReentry: true,
+        // RW8 §19.3–19.4 (b37681ff): one Turtle 55/20 short unit per coin.
+        breakoutShort: { symbols: [...MOMENTUM_CRYPTO_UNIVERSE], entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 },
         timeStop: { maxHoldHours: 120 }, // RW6 owner rule; RiskState NOT re-anchored
         capacityGuard: { maxAdvPct: 1, lookbackBars: 20, mode: "observe" },
         equitySemantics: EQUITY_SEMANTICS.BINANCE_TOTAL_MARGIN,

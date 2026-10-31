@@ -41,6 +41,7 @@
 
 import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
+import { breakoutSymbols } from "../src/strategies/momentum/MomentumEngine";
 import { MomentumEngine, TREND_EXIT_CLOSE_REASON, breakoutHistoryDays, idleOverlayHistoryDays, shortStopDistancePct, trailPctFromVol, type BreakoutShortConfig, type IdleOverlayConfig, type ExposureControlConfig, type MarketTrendGateConfig, type MomentumBrokerAdapter, type MomentumStatePersistence, type ShortStopSpec, type TimeStopConfig, type TrailMark, type TrailStopConfig, type TrendExitConfig, type VolSizingConfig, type VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
 import type { CurrentPosition } from "../src/strategies/momentum/Rebalancer";
 import { DEFAULT_TSM_CONFIG, type TSMConfig } from "../src/strategies/momentum/TimeSeriesMomentum";
@@ -2271,8 +2272,11 @@ export async function runWithConfig(
     }
     if (cfg.breakoutShort) {
       const extraFrom = fromMs - (breakoutHistoryDays(cfg.breakoutShort) + 15) * 86_400_000;
-      const bars = loadBars(cfg.breakoutShort.symbol, cfg.timeframe, cfg.source, cfg.rthOnly, extraFrom, toMs, db);
-      broker.breakoutDaily = new Map([[cfg.breakoutShort.symbol, dailyBarsFromBars(bars, barDurationMs)]]);
+      broker.breakoutDaily = new Map();
+      for (const symbol of breakoutSymbols(cfg.breakoutShort)) {
+        const bars = loadBars(symbol, cfg.timeframe, cfg.source, cfg.rthOnly, extraFrom, toMs, db);
+        broker.breakoutDaily.set(symbol, dailyBarsFromBars(bars, barDurationMs));
+      }
     }
     if (cfg.idleOverlay) {
       broker.idleOverlayDaily = new Map();

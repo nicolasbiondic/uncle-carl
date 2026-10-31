@@ -373,15 +373,14 @@ describe("Q5 RW5d: pe-vt15 → cash design, without handing the sleeve back to T
   });
 });
 
-describe("RW7: both stock sleeves cut over atomically from their RW6 live definitions", () => {
-  test("CLI live plans pass on a staged COPY; both stored designs equal RW7, original definitions stay untouched", () => {
+describe("RW8: momentum_stocks cuts over atomically from RW7; meanrev stays unchanged", () => {
+  test("CLI live plan passes on a staged COPY; SH design replaces only momentum_stocks, original definitions stay untouched", () => {
     const db = getDB();
-    const sleeves = ["momentum_stocks", "meanrev_stocks"];
+    const sleeves = ["momentum_stocks"];
     const beforeVersions = { ...MODEL_VERSIONS,
-      momentum_stocks: MODEL_VERSIONS.momentum_stocks.slice(0, -1),
-      meanrev_stocks: MODEL_VERSIONS.meanrev_stocks.slice(0, -1) };
+      momentum_stocks: MODEL_VERSIONS.momentum_stocks.slice(0, -1) };
     // Synthetic equivalents of the current registry definitions; no prod read.
-    for (const sleeve of sleeves) {
+    for (const sleeve of [...sleeves, "meanrev_stocks"]) {
       const old = beforeVersions[sleeve].at(-1)!;
       const args = base({ sleeve, manifest: old.manifest!, candidate: old.candidate!, versionName: old.id.split("@")[1], minObserved: 0 });
       for (const mode of ["observer", "live"] as const) {
@@ -406,13 +405,15 @@ describe("RW7: both stock sleeves cut over atomically from their RW6 live defini
       })();
       const wiring = resolvePortfolioWiring({ defs: loadPlatformPortfolioDefinitions(copy), venueReady: { alpaca: null, binance_usdm: null, binance_usdc: null } });
       expect(wiring.problems).toEqual([]);
-      expect(wiring.live.map(p => p.params.strategyVersion).sort()).toEqual(sleeves.map(s => MODEL_VERSIONS[s].at(-1)!.id).sort());
+      expect(wiring.live.map(p => p.params.strategyVersion).sort()).toEqual([...sleeves, "meanrev_stocks"].map(s => MODEL_VERSIONS[s].at(-1)!.id).sort());
+      expect(loadPlatformPortfolioRows(copy).filter(r => r.id !== "pe_momentum_stocks"))
+        .toEqual(before.filter(r => r.id !== "pe_momentum_stocks"));
       for (const sleeve of sleeves) {
         const p = loadPlatformPortfolioRows(copy).find(r => r.id === `pe_${sleeve}`)!.params as PortfolioEngineParams;
         const v = MODEL_VERSIONS[sleeve].at(-1)!, block = manifestBlock(v.manifest!, v.candidate!);
         // Snapshot AFTER commit: serialize() during the transaction exposes
         // its old committed image to the separate CLI connection.
-        const path = join(tmp, `rw7-${sleeve}.db`);
+        const path = join(tmp, `rw8-${sleeve}.db`);
         copy.exec(`VACUUM INTO '${path}'`);
         const bytes = readFileSync(path);
         expect(main(["--sleeve", sleeve, "--mode", "live", "--manifest", v.manifest!, "--candidate", v.candidate!,
@@ -421,12 +422,75 @@ describe("RW7: both stock sleeves cut over atomically from their RW6 live defini
         expect(p.strategy).toEqual(block.strategy);
         expect((p.strategy as VolManagedConfig).maxHoldSessions).toBe(5);
         expect((p.strategy as VolManagedConfig).maxHoldStagger).toBe(true);
+        expect((p.strategy as VolManagedConfig).regimeOverlay?.hedge).toEqual({ symbol: "SH", fraction: 0.5 });
+        expect(portfolioUniverse("portfolio", p)).toContain("SH");
         expect(portfolioUniverse("portfolio", p).some(isTreasurySymbol)).toBe(false);
         expect(p.provenance!.designSha256).toBe(designHash({ strategy: block.strategy, venue: block.venue.venue,
           minOrderNotional: block.venue.minOrderNotional, rebalanceBand: block.venue.rebalanceBand }));
       }
       expect(loadPlatformPortfolioRows(db)).toEqual(before);
     } finally { copy.close(); }
+  });
+
+  for (const scenario of ["on", "off", "missing-sh"] as const) test(`RW8 live factory loads overlay bars and buys SH through Alpaca only in risk-off (${scenario})`, async () => {
+    const v = MODEL_VERSIONS.momentum_stocks.at(-1)!;
+    const config = manifestBlock(v.manifest!, v.candidate!).strategy as VolManagedConfig;
+    const symbols = portfolioUniverse("portfolio", { strategy: config } as PortfolioEngineParams);
+    expect(config.universe).not.toContain("SH"); // hedge data must come from overlaySymbols, not the core
+    const asOf = "2026-10-28", session = "2026-10-29";
+    const sessions = weekdaySessions(asOf, 300);
+    const hist = makeHistDb(Object.fromEntries(symbols.filter(s => scenario !== "missing-sh" || s !== "SH").map((s, j) => [s, { sessions,
+      close: (i: number) => s === "SPY" ? (i === 299 ? (scenario === "on" ? 140 : 80) : 100 + Math.sin(i))
+        : 100 + i * 0.04 + 2 * Math.sin(i * (0.3 + j * 0.1)),
+    }])));
+    try {
+      const view = new HistoricalPriceView({ db: hist, asOf, symbols });
+      const prices = Object.fromEntries(symbols.map(s => [s, view.lastClose(s)!]));
+      seedOpenTrade("rw7-spy", "momentum_stocks", { symbol: "SPY", strategy: "PORTFOLIO", strategyVersion: MODEL_VERSIONS.momentum_stocks.at(-2)!.id,
+        quantity: 10, entryPrice: prices.SPY });
+      const sent: any[] = [];
+      const executor: any = { isConnected: () => true,
+        getPositions: async () => [{ symbol: "SPY", market: "stock", side: "buy", quantity: 10, avgEntryPrice: prices.SPY, currentPrice: prices.SPY }],
+        getLatestPrice: async (s: string) => prices[s], getRegTBuyingPower: async () => 1000000,
+        getAccount: async () => ({ equity: "100000", long_market_value: "50000" }),
+        client: { createOrder: async (p: any) => { sent.push(p); return { id: `o${sent.length}`, status: "filled", filled_qty: p.qty, filled_avg_price: String(prices[p.symbol]) }; },
+          getOrderByClientId: async () => { throw Object.assign(new Error("absent"), { status: 404 }); } } };
+      const args = base({ manifest: v.manifest!, candidate: v.candidate!, versionName: v.id.split("@")[1], minObserved: 0 });
+      getDB().transaction(() => {
+        for (const mode of ["observer", "live"] as const) {
+          const plan = planCutover(getDB(), { ...args, mode });
+          if (!plan.ok) throw new Error(plan.errors.join("; "));
+          applyCutover(getDB(), plan);
+        }
+      })();
+      const wiring = resolvePortfolioWiring({ defs: loadPlatformPortfolioDefinitions(getDB()), venueReady: { alpaca: null, binance_usdm: null, binance_usdc: null } });
+      const built = buildPortfolioEngines(wiring, { alpacaExecutor: executor, binanceTransports: {}, historicalDb: () => hist,
+        now: () => Date.parse("2026-10-29T13:35:15Z"), engineOverrides: { tradingEnabled: () => true, alert: () => {} } });
+      expect(built.problems).toEqual([]);
+      const report = await built.live.get("momentum_stocks")!.tick();
+      if (scenario === "missing-sh") {
+        expect(report.status).toBe("skipped_stale");
+        expect(report.note).toContain("SH");
+        expect(sent).toEqual([]);
+        return;
+      }
+      expect(report.status).toBe("submitted"); expect(report.rejected).toBe(0);
+      const stored = getPortfolioDecision("momentum_stocks", v.id, session)!;
+      expect((stored.memory.portfolioCore as any).regime.riskOff).toBe(scenario === "off");
+      if (scenario === "off") {
+        expect(Object.keys(stored.weights)).toEqual(["SH"]);
+        expect(stored.weights.SH).toBeGreaterThan(0);
+        expect(stored.weights.SH).toBeLessThanOrEqual(0.25);
+        expect(sent.map(p => [p.symbol, p.side])).toEqual([["SPY", "sell"], ["SH", "buy"]]);
+        expect(sent[1]).toMatchObject({ type: "market", time_in_force: "day" });
+        expect((getDB().prepare("SELECT strategy_version v FROM trades WHERE account_id = 'momentum_stocks' AND symbol = 'SH' AND status = 'open'").get() as any).v).toBe(v.id);
+      } else {
+        expect(stored.weights.SH).toBeUndefined();
+        expect(sent.some(p => p.symbol === "SH")).toBe(false);
+      }
+      expect(sent.every(p => !isTreasurySymbol(p.symbol))).toBe(true);
+      expect((await built.live.get("momentum_stocks")!.tick()).status).toBe("already_done");
+    } finally { hist.close(); }
   });
 });
 

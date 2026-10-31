@@ -80,6 +80,7 @@ export interface MomentumTsmParams {
   volTarget?: VolTargetConfig;
   timeStop?: TimeStopConfig;
   allowSameTickReentry?: boolean;
+  breakoutShort?: MomentumEngineConfig["breakoutShort"];
   /** RW7: only the pause policy is configurable here; equity semantics remain account-owned. */
   risk?: Pick<NonNullable<MomentumEngineConfig["risk"]>, "mode">;
   /** Portfolio exposure control (RW4a, 2026-10-23 — MomentumEngineConfig.

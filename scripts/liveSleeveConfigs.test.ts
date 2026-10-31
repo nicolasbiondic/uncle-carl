@@ -8,7 +8,7 @@
 //
 //   momentum_stocks ↔ experiments/momentum-stocks-daily-blend3-pure-v1.json
 //   meanrev_stocks  ↔ experiments/meanrev-breadth7-pure-v1.json
-//   momentum_crypto ↔ experiments/momentum-crypto-rw7-nobrakes-pure-v1.json
+//   momentum_crypto ↔ experiments/momentum-crypto-rw8-breakout8-pure-v1.json
 //   momentum_crypto_usdc ↔ experiments/momentum-crypto-usdc-daily-s5-rw7-sizeonly-pure-v1.json
 //     (RW7: no risk pauses; hourly removes regime/Sharpe/cooldown, USDC keeps them)
 //
@@ -49,7 +49,7 @@ import { MODEL_VERSIONS, currentModelVersion, currentModelManifests } from "../s
 import { VALIDATED_PRESETS } from "../src/portfolios/validate";
 import { validateCandidate, type CandidateConfig, type ExperimentManifest } from "./walk-forward";
 import { DEFAULT_MEANREV_CONFIG } from "../src/strategies/meanrev/MeanRevEngine";
-import { MOMENTUM_STOCKS_DAILY_HORIZON, MOMENTUM_STOCKS_DAILY_VOL_STOP, MOMENTUM_USDC_EXPOSURE_CONTROL, dailyHorizonMaxLookback, momentumUsdcPortfolioPlan } from "../src/index";
+import { MOMENTUM_STOCKS_DAILY_HORIZON, MOMENTUM_STOCKS_DAILY_VOL_STOP, MOMENTUM_USDC_EXPOSURE_CONTROL, dailyHorizonMaxLookback, momentumCryptoPortfolioPlan, momentumUsdcPortfolioPlan } from "../src/index";
 import { builtinPortfolio } from "../src/portfolios/builtin";
 import { GROSS_CAP_HEADROOM } from "../src/config/grossCap";
 import { DEFAULT_TSM_CONFIG } from "../src/strategies/momentum/TimeSeriesMomentum";
@@ -205,11 +205,11 @@ describe("portfolio-engine sleeves — the version table names manifest, candida
       expect(VALIDATED_PRESETS[id].manifestPath).toBe(current[id]);
     }
   });
-  test("RW7 stock wiring reads the staggered five-session candidates and their artifacts", () => {
+  test("RW8 stock wiring adds SH only to momentum_stocks; meanrev keeps RW7", () => {
     expect(currentModelVersion("momentum_stocks")).toMatchObject({
-      id: "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger", engine: "portfolio", candidate: "e1-lev-vt30-g250-maxhold5-stagger",
-      manifest: "experiments/rw7-e1-lev-vt30-g250-maxhold5-stagger-v1.json",
-      artifact: { dir: "data/backtests/ebebfe244b770736cbf268747c348077f00b6718677778f53bb395f15622a17d", shiftDays: 0 },
+      id: "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger-sh50", engine: "portfolio", candidate: "e1-lev-vt30-g250-maxhold5-stagger-sh50",
+      manifest: "experiments/rw8-e1-lev-vt30-g250-maxhold5-stagger-sh50-v1.json",
+      artifact: { dir: "data/backtests/0bb06b9d548647410edacd52f86c9f11ff66307bd11f6e734e379f8a7492d5da", shiftDays: 0 },
     });
     expect(currentModelVersion("meanrev_stocks")).toMatchObject({
       id: "meanrev_stocks@pe-vt15-mh5-stagger", engine: "portfolio", candidate: "vt15-maxhold5-stagger",
@@ -264,12 +264,12 @@ describe("portfolio-engine sleeves — the version table names manifest, candida
     expect((builtinPortfolio("momentum_crypto_usdc").params as any).exposureControl).toEqual(knob);
   });
 
-  test("momentum_crypto RW7: only risk pauses, regime/Sharpe gates and stop cooldown change vs RW6; shiftDays 0", () => {
+  test("momentum_crypto RW8: only eight-coin Turtle shorts change vs RW7; shiftDays 0", () => {
     const v = currentModelVersion("momentum_crypto")!;
     expect(v).toMatchObject({
-      id: "momentum_crypto@vt35-corroff-mh120-nobrakes",
-      manifest: "experiments/momentum-crypto-rw7-nobrakes-pure-v1.json",
-      artifact: { dir: "data/backtests/2deab5da842e52f51a5346f6231c694c146820cca15f3efee22a9ec60c4e2598", shiftDays: 0 },
+      id: "momentum_crypto@vt35-corroff-mh120-nobrakes-bo8",
+      manifest: "experiments/momentum-crypto-rw8-breakout8-pure-v1.json",
+      artifact: { dir: "data/backtests/b37681ff8900d69104a000928d28435b6d637c4401dacf4f444528a4b3a39230", shiftDays: 0 },
     });
     expect(v.engine).toBeUndefined(); // incumbent engine: its config describes what trades
     expect(LIVE_SLEEVE_MANIFESTS.momentum_crypto).toBe(v.manifest!);
@@ -286,17 +286,21 @@ describe("portfolio-engine sleeves — the version table names manifest, candida
     expect(cand.timeStop).toEqual({ maxHoldHours: 120 });
     // The rollback target (the control the artifact was measured against) is the previous version's manifest.
     const list = MODEL_VERSIONS.momentum_crypto;
-    expect(list[list.length - 2].id).toBe("momentum_crypto@vt35-corroff-mh120");
-    expect(list[list.length - 2].manifest).toBe("experiments/momentum-crypto-rw6-maxhold5-pure-v1.json");
-    const control: any = JSON.parse(readFileSync(join(ROOT, list[list.length - 2].manifest!), "utf-8")).candidates[0];
-    expect(control.risk).toEqual({ peakHalfLifeDays: 30 });
-    expect(control.regime).toEqual({ correlationCeiling: 1.01 });
-    expect(control.sharpeGate).toEqual(MOMENTUM_SLEEVE_SHARPE_GATE);
-    expect(control.allowSameTickReentry).toBeUndefined();
+    expect(list[list.length - 2].id).toBe("momentum_crypto@vt35-corroff-mh120-nobrakes");
+    expect(list[list.length - 2].manifest).toBe("experiments/momentum-crypto-rw7-nobrakes-pure-v1.json");
+    const controlManifest: any = JSON.parse(readFileSync(join(ROOT, list[list.length - 2].manifest!), "utf-8"));
+    const control = controlManifest.candidates[0];
+    expect(cand.breakoutShort).toEqual({ symbols: m.data.universe, entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 });
+    expect(control.breakoutShort).toBeUndefined();
     // Every other decision-affecting key is still the control's.
-    const { risk: _r, regime: _g, sharpeGate: _s, allowSameTickReentry: _a, ...rest } = cand;
-    const { risk: _r2, regime: _g2, sharpeGate: _s2, ...controlRest } = control;
-    expect(rest).toEqual(controlRest);
+    const { breakoutShort, ...rest } = cand;
+    expect(rest).toEqual(control);
+    expect(controlManifest.asOf).toBe((m as any).asOf);
+    expect(controlManifest.data).toEqual(m.data);
+    expect(controlManifest.costs).toEqual(m.costs);
+    expect(momentumCryptoPortfolioPlan().engineConfig.breakoutShort).toEqual(breakoutShort);
+    expect((builtinPortfolio("momentum_crypto").params as any).breakoutShort).toEqual(breakoutShort);
+    expect(liveSleeveConfig("momentum_crypto").candidate.breakoutShort).toEqual(breakoutShort);
   });
   for (const sleeve of LIVE_SLEEVE_IDS.filter(s => sleeveManagedBy(s) === "portfolio")) {
     test(`${sleeve}: the named manifest holds the named candidate with a volManaged portfolio block on the sleeve's venue, same universe as the incumbent (universes stay disjoint)`, () => {
@@ -311,10 +315,18 @@ describe("portfolio-engine sleeves — the version table names manifest, candida
       expect(cand.portfolio.strategy.maxHoldSessions).toBe(5);
       expect(cand.portfolio.strategy.maxHoldStagger).toBe(true);
       const previous: any = JSON.parse(readFileSync(join(ROOT, MODEL_VERSIONS[sleeve].at(-2)!.manifest!), "utf-8")).candidates[0];
-      const { maxHoldStagger: _stagger, ...strategy } = cand.portfolio.strategy;
-      expect({ ...cand.portfolio, strategy }).toEqual(previous.portfolio);
+      if (sleeve === "momentum_stocks") {
+        const { hedge, ...regimeOverlay } = cand.portfolio.strategy.regimeOverlay;
+        expect(hedge).toEqual({ symbol: "SH", fraction: 0.5 });
+        expect(cand.portfolio.strategy.perAssetCap).toBe(0.25);
+        expect({ ...cand.portfolio, strategy: { ...cand.portfolio.strategy, regimeOverlay } }).toEqual(previous.portfolio);
+        expect(m.data.universe).toContain("SH");
+      } else {
+        const { maxHoldStagger: _stagger, ...strategy } = cand.portfolio.strategy;
+        expect({ ...cand.portfolio, strategy }).toEqual(previous.portfolio);
+        expect(cand.portfolio.strategy.regimeOverlay?.hedge).toBeUndefined();
+      }
       expect(cand.portfolio.strategy.regimeOverlay?.defensive).toBeUndefined();
-      expect(cand.portfolio.strategy.regimeOverlay?.hedge).toBeUndefined(); // SH failed S
       expect([...cand.portfolio.strategy.universe].sort()).toEqual([...liveSleeveConfig(sleeve).universe].sort());
       // Same data plumbing as the incumbent: the band and the parity proposal compare like with like.
       expect({ source: m.data.source, timeframe: m.data.timeframe, barMinutes: m.data.barMinutes })

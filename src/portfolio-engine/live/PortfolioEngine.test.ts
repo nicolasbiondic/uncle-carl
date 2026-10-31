@@ -8,7 +8,7 @@ import { getDB, PORTFOLIO_ENGINE_STRATEGY } from "../../db/database";
 import { makeTestDb, seedOpenTrade } from "../../test-support/db";
 import { PortfolioEngine, type PortfolioEngineOptions } from "./PortfolioEngine";
 import { HistoricalPriceView } from "./priceView";
-import { getPortfolioDecision, latestPortfolioMemory, listPortfolioDecisions } from "./persistence";
+import { getPortfolioDecision, latestPortfolioMemory, listPortfolioDecisions, savePortfolioDecision } from "./persistence";
 import { portfolioClientOrderId } from "./clientOrderId";
 import { PORTFOLIO_REBALANCE_CLOSE_REASON, PORTFOLIO_RECONCILED_CLOSE_REASON, loadSleeveRows } from "./rows";
 import { FakeVenue, XASSET, CRYPTO_STOP, fixedDecide, makeHistDb, weekdaySessions } from "./testSupport";
@@ -275,6 +275,57 @@ describe("observer mode", () => {
 });
 
 describe("idempotency across a restart within a session", () => {
+  for (const status of ["submitted", "decided", "observed"] as const) test(`a cutover after a ${status} pass waits for the next session, without inheriting memory`, async () => {
+    const venue = new FakeVenue();
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    await engine(venue).tick();
+    const prior = getPortfolioDecision(SLEEVE, VERSION, SESSION)!;
+    savePortfolioDecision({ ...prior, status });
+    const submits = venue.submits.length;
+    const decide = fixedDecide({ GLD: 0.2 });
+    let now = Date.parse("2026-10-20T15:00:00Z"); // cutover during regular hours
+    const next = engine(venue, { strategyVersion: "new-version", decide, now: () => now }, histDb(SESSION));
+    expect((await next.tick()).status).toBe("already_done");
+    expect(venue.submits).toHaveLength(submits);
+    expect(decide.calls).toHaveLength(0);
+    expect(getPortfolioDecision(SLEEVE, "new-version", SESSION)).toBeNull();
+    expect(getPortfolioDecision(SLEEVE, VERSION, SESSION)).toEqual({ ...prior, status });
+    now = Date.parse("2026-10-21T13:35:00Z");
+    expect((await next.tick()).status).toBe("submitted");
+    expect(decide.calls[0].book.memory).toEqual({});
+    expect(getPortfolioDecision(SLEEVE, "new-version", "2026-10-21")!.status).toBe("submitted");
+  });
+
+  test("a cutover before the day's pass decides with the new version; another sleeve does not block it", async () => {
+    const venue = new FakeVenue();
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    await engine(venue, { accountId: "meanrev_stocks", decide: fixedDecide({}) }).tick();
+    const decide = fixedDecide({ GLD: 0.2 });
+    expect((await engine(venue, { strategyVersion: "new-version", decide }).tick()).status).toBe("submitted");
+    expect(decide.calls[0].book.memory).toEqual({});
+    expect(getPortfolioDecision(SLEEVE, VERSION, SESSION)).toBeNull();
+    expect(getPortfolioDecision(SLEEVE, "new-version", SESSION)!.status).toBe("submitted");
+  });
+
+  test("a stale skip by the previous version did not decide and does not block the new version", async () => {
+    const venue = new FakeVenue();
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    expect((await engine(venue, {}, histDb("2026-10-16")).tick()).status).toBe("skipped_stale");
+    expect((await engine(venue, { strategyVersion: "new-version" }).tick()).status).toBe("submitted");
+  });
+
+  test("overlapping versions recheck the session after awaiting venue data", async () => {
+    const venue = new FakeVenue();
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    const reports = await Promise.all([
+      engine(venue).tick(),
+      engine(venue, { strategyVersion: "new-version" }).tick(),
+    ]);
+    expect(reports.map(r => r.status).sort()).toEqual(["already_done", "submitted"]);
+    expect(listPortfolioDecisions(SLEEVE)).toHaveLength(1);
+    expect(venue.submits).toHaveLength(2);
+  });
+
   test("a completed session is not re-run; a crash mid-submission resumes only the unapplied orders with the same ids", async () => {
     const venue = new FakeVenue();
     venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
@@ -373,6 +424,51 @@ describe("trading kill-switch and stops", () => {
 });
 
 describe("tick() scheduling", () => {
+  test("an after-hours restart neither decides nor submits, even when runSession is called directly", async () => {
+    const venue = new FakeVenue();
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    const decide = fixedDecide({ SPY: 0.5 });
+    const e = engine(venue, { decide, now: () => Date.parse("2026-10-20T22:22:00Z") });
+    expect((await e.tick()).status).toBe("not_due");
+    expect((await e.runSession(WINDOW)).status).toBe("not_due");
+    expect(decide.calls).toHaveLength(0);
+    expect(venue.submits).toHaveLength(0);
+    expect(listPortfolioDecisions(SLEEVE)).toHaveLength(0);
+  });
+
+  test("an after-hours restart does not resume pending orders", async () => {
+    const venue = new FakeVenue();
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    venue.behavior.TLT = { kind: "throw", error: "socket hang up" };
+    expect((await engine(venue).tick()).status).toBe("failed");
+    const prior = getPortfolioDecision(SLEEVE, VERSION, SESSION)!;
+    venue.behavior = {};
+    const submits = venue.submits.length;
+    const e = engine(venue, { now: () => Date.parse("2026-10-20T22:22:00Z") });
+    expect((await e.tick()).status).toBe("not_due");
+    expect((await e.runSession(WINDOW)).status).toBe("not_due");
+    expect(venue.submits).toHaveLength(submits);
+    expect(getPortfolioDecision(SLEEVE, VERSION, SESSION)).toEqual(prior);
+  });
+
+  test("a pass crossing the market close leaves remaining orders pending, not submitted", async () => {
+    const venue = new FakeVenue();
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    let now = Date.parse("2026-10-20T19:59:59Z");
+    const submit = venue.submit.bind(venue);
+    venue.submit = async (order, id) => {
+      const result = await submit(order, id);
+      now = Date.parse("2026-10-20T20:00:00Z");
+      return result;
+    };
+    expect((await engine(venue, { now: () => now }).tick()).status).toBe("not_due");
+    expect(venue.submits.map(s => s.order.symbol)).toEqual(["SPY"]);
+    const prior = getPortfolioDecision(SLEEVE, VERSION, SESSION)!;
+    expect(prior.status).toBe("decided");
+    expect(prior.orders.map(o => o.applied)).toEqual([true, false]);
+    expect(prior.note).toContain("market closed");
+  });
+
   test("not due → beats and does nothing; due → runs once per session, later ticks are already_done", async () => {
     const venue = new FakeVenue();
     venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };

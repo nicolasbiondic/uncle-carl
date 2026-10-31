@@ -8,6 +8,7 @@ import { describe, test, expect, beforeAll } from "bun:test";
 import { getDB, updateTradeCloseReason } from "../../db/database";
 import { BinanceMomentumAdapter } from "./BinanceMomentumAdapter";
 import { makeTestDb, seedOpenTrade } from "../../test-support/db";
+import { momentumCryptoPortfolioPlan } from "../../index";
 
 beforeAll(() => {
   makeTestDb();
@@ -149,19 +150,34 @@ describe("BinanceMomentumAdapter ownership boundary — the DB, not the broker, 
 });
 
 describe("BinanceMomentumAdapter close_reason telemetry — TRAIL_STOP vs signal-flip (P2)", () => {
-  test("Turtle gets consecutive completed venue OHLC only, and its hourly source never falls back to Alpaca", async () => {
+  test("Turtle gets consecutive completed venue OHLC for every configured coin, and never falls back to Alpaca", async () => {
     const saved = globalThis.fetch, day = Math.floor(Date.now() / 86400000) * 86400000;
     let alpacaReads = 0;
     const raw = Array.from({ length: 56 }, (_, i) => {
       const t = day - (55 - i) * 86400000;
       return [t, "100", i === 55 ? "1000000000" : "110", "90", "100", "1", t + 86400000 - 1];
     });
-    const a = new BinanceMomentumAdapter({ getBars: async () => { alpacaReads++; return []; } } as any, {} as any);
+    const plan = momentumCryptoPortfolioPlan();
+    if (plan.adapter.kind !== "binance_usdm") throw new Error("expected USDM");
+    const symbols = plan.adapter.options.breakoutShortSymbols!;
+    expect(symbols).toHaveLength(8);
+    const a = new BinanceMomentumAdapter({ getBars: async () => { alpacaReads++; return []; } } as any, {} as any, plan.adapter.options);
     try {
-      globalThis.fetch = (async () => new Response(JSON.stringify(raw))) as any;
-      const bars = await a.fetchDailyBars("BTC/USD", 55);
-      expect(bars).toHaveLength(55); expect(bars.at(-1)!.timestamp).toBe(day - 86400000);
-      expect(Math.max(...bars.map(b => b.high))).toBe(110);
+      const reads: string[] = [];
+      globalThis.fetch = (async (url: any) => {
+        const u = new URL(String(url));
+        expect(u.pathname).toBe("/fapi/v1/klines");
+        expect(u.searchParams.get("interval")).toBe("1d");
+        reads.push(u.searchParams.get("symbol")!);
+        return new Response(JSON.stringify(raw));
+      }) as any;
+      for (const symbol of symbols) {
+        const bars = await a.fetchDailyBars(symbol, 55);
+        expect(bars).toHaveLength(55); expect(bars.at(-1)!.timestamp).toBe(day - 86400000);
+        expect(Math.max(...bars.map(b => b.high))).toBe(110);
+        expect(await a.fetchDailyBars(symbol, 55)).toBe(bars); // per-coin UTC-day cache
+      }
+      expect(reads).toEqual(symbols.map(s => s.replace("/USD", "USDT")));
       raw.splice(10, 1);
       expect(await new BinanceMomentumAdapter({} as any, {} as any).fetchDailyBars("BTC/USD", 55)).toEqual([]);
       globalThis.fetch = (async () => new Response("[]")) as any;
@@ -212,23 +228,36 @@ describe("BinanceMomentumAdapter close_reason telemetry — TRAIL_STOP vs signal
     expect(row).toEqual({ status: "closed", close_reason: closeReason });
   });
 
-  test("Turtle entry stores N, fill and 2N stop atomically; restart recovers ownership, no native stop", async () => {
-    const accountId = "breakout-persistence";
+  test.each(["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"])("Turtle %s stores N, fill and 2N stop atomically; restart recovers ownership, no native stop", async symbol => {
+    const accountId = `breakout-persistence-${symbol}`;
     let stops = 0, submittedQty = 0;
     const bin = {
       isConnected: () => true, getPrice: async () => 100,
-      getPositions: async () => [{ symbol: "BTCUSDT", positionAmt: -0.2, entryPrice: 99, unrealizedProfit: 0 }],
-      placeOrder: async (_s: any, qty: number) => { submittedQty = qty; return { id: "breakout-fill", quantity: 0.2, status: "filled", filledPrice: 99, filledAt: Date.now(), createdAt: Date.now(), updatedAt: Date.now() }; },
+      getPositions: async () => [{ symbol: symbol.replace("/USD", "USDT"), positionAmt: -0.2, entryPrice: 99, unrealizedProfit: 0 }],
+      placeOrder: async (_s: any, qty: number) => { submittedQty = qty; return { id: `breakout-fill-${symbol}`, quantity: 0.2, status: "filled", filledPrice: 99, filledAt: Date.now(), createdAt: Date.now(), updatedAt: Date.now() }; },
       placeStopMarketClose: async () => { stops++; return true; },
       closePosition: async () => ({ success: true, filledPrice: 105, commission: 0, realizedPnl: -1.2 }), cancelAllOrders: async () => {},
     } as any;
-    const a = new BinanceMomentumAdapter({} as any, bin, { accountId });
-    expect(await a.openPosition({ symbol: "BTC/USD", side: "sell", notionalUsd: 20, role: "breakout-short", breakout: { n: 3, stopN: 2, quantity: 0.2 } })).toEqual({ ok: true });
+    const plan = momentumCryptoPortfolioPlan();
+    if (plan.adapter.kind !== "binance_usdm") throw new Error("expected USDM");
+    const a = new BinanceMomentumAdapter({} as any, bin, { ...plan.adapter.options, accountId });
+    expect(await a.openPosition({ symbol, side: "sell", notionalUsd: 20, role: "breakout-short", breakout: { n: 3, stopN: 2, quantity: 0.2 } })).toEqual({ ok: true });
     expect(stops).toBe(0); expect(submittedQty).toBe(0.2);
     const restarted = new BinanceMomentumAdapter({} as any, bin, { accountId });
-    expect(await restarted.getOpenPositions()).toMatchObject([{ role: "breakout-short", entryPrice: 99, breakoutN: 3, stopLoss: 105, quantity: 0.2 }]);
-    expect(await restarted.closePosition({ symbol: "BTC/USD", side: "sell", closeReason: "BREAKOUT_SHORT_STOP" })).toEqual({ ok: true });
+    expect(await restarted.getOpenPositions()).toMatchObject([{ symbol, role: "breakout-short", entryPrice: 99, breakoutN: 3, stopLoss: 105, quantity: 0.2 }]);
+    expect(await restarted.closePosition({ symbol, side: "sell", closeReason: "BREAKOUT_SHORT_STOP" })).toEqual({ ok: true });
     expect(await restarted.getRealisedPnlSince(0)).toBeCloseTo(-1.2);
+  });
+
+  test("Turtle rejects unconfigured/unmapped symbols, wrong wallet/side and malformed units before broker access", async () => {
+    const action = { symbol: "ETH/USD", side: "sell" as const, notionalUsd: 20, role: "breakout-short" as const, breakout: { n: 3, stopN: 2, quantity: 0.2 } };
+    const a = new BinanceMomentumAdapter({} as any, {} as any, { breakoutShortSymbols: ["BTC/USD", "UNKNOWN/USD"] });
+    for (const input of [action, { ...action, symbol: "UNKNOWN/USD" }, { ...action, symbol: "BTC/USD", side: "buy" as const },
+      { ...action, symbol: "BTC/USD", breakout: { ...action.breakout, n: 0 } }, { ...action, symbol: "BTC/USD", breakout: undefined }]) {
+      expect((await a.openPosition(input)).reason).toContain("configured, mapped USDT sell");
+    }
+    expect((await new BinanceMomentumAdapter({} as any, {} as any).openPosition(action)).ok).toBe(false);
+    expect((await new BinanceMomentumAdapter({} as any, {} as any, { quoteAsset: "USDC", breakoutShortSymbols: [action.symbol] }).openPosition(action)).ok).toBe(false);
   });
 
   test("signal-flip close (no closeReason) still persists MOMENTUM_REBALANCE; free text falls back too", async () => {

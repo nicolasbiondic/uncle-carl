@@ -14,6 +14,7 @@
  * back-edge would hit the TDZ on index's exported consts at module eval).
  */
 import type { MomentumEngineConfig } from "../strategies/momentum/MomentumEngine";
+import { breakoutSymbols } from "../strategies/momentum/MomentumEngine";
 import { DEFAULT_MEANREV_CONFIG } from "../strategies/meanrev/MeanRevEngine";
 // Neutral module (no index.ts back-edge): the same measured headroom both
 // wiring paths multiply into the gross backstop — see its docstring.
@@ -96,6 +97,7 @@ function buildMomentumPlan(def: PortfolioDefinition, nowMs: number): MomentumPor
     ...(p.volTarget ? { volTarget: { ...p.volTarget } } : {}),
     ...(p.timeStop ? { timeStop: { ...p.timeStop } } : {}),
     ...(p.allowSameTickReentry !== undefined ? { allowSameTickReentry: p.allowSameTickReentry } : {}),
+    ...(p.breakoutShort ? { breakoutShort: structuredClone(p.breakoutShort) } : {}),
     ...(p.exposureControl ? { exposureControl: structuredClone(p.exposureControl) } : {}),
     risk: { ...p.risk, equitySemantics: p.equitySemantics },
     ...(p.modelVersion ? { modelVersion: p.modelVersion } : {}),
@@ -138,7 +140,10 @@ function buildMomentumPlan(def: PortfolioDefinition, nowMs: number): MomentumPor
     case "binance_usdt":
       adapter = {
         kind: "binance_usdm",
-        options: { ...(def.id !== DEFAULT_BINANCE_ADAPTER_CONFIG.accountId ? { accountId: def.id } : {}) },
+        options: {
+          ...(def.id !== DEFAULT_BINANCE_ADAPTER_CONFIG.accountId ? { accountId: def.id } : {}),
+          ...(p.breakoutShort ? { breakoutShortSymbols: [...breakoutSymbols(p.breakoutShort)] } : {}),
+        },
       };
       shadowTimeframe = p.barMinutes === 1440 ? "1Day" : "1Hour";
       scheduler = { kind: "engine-start" };

@@ -161,7 +161,10 @@ export function fileStatePersistence(path: string, currentBase: number, legacyBa
           ...(exposureFracs ? { exposureFracs } : {}),
           ...(isEnvelope && typeof parsed.idleOverlayMonth === "string" ? { idleOverlayMonth: parsed.idleOverlayMonth } : {}),
           ...(isEnvelope && parsed.idleOverlayExitPending === true ? { idleOverlayExitPending: true } : {}),
-          ...(isEnvelope && parsed.turtleDaily ? { turtleDaily: parsed.turtleDaily } : {}) };
+          ...(isEnvelope && parsed.turtleDaily ? { turtleDaily: parsed.turtleDaily } : {}),
+          ...(isEnvelope && typeof parsed.breakoutEntryAt === "number" ? { breakoutEntryAt: parsed.breakoutEntryAt } : {}),
+          ...(isEnvelope && typeof parsed.breakoutBelowEntry === "boolean" ? { breakoutBelowEntry: parsed.breakoutBelowEntry } : {}),
+          ...(isEnvelope && parsed.breakoutBySymbol && typeof parsed.breakoutBySymbol === "object" && !Array.isArray(parsed.breakoutBySymbol) ? { breakoutBySymbol: parsed.breakoutBySymbol } : {}) };
       } catch (e: any) {
         if (e?.code === "ENOENT") {
           // File vanished between existsSync and the read — same contract as
@@ -199,6 +202,9 @@ export function fileStatePersistence(path: string, currentBase: number, legacyBa
           ...(state.idleOverlayMonth ? { idleOverlayMonth: state.idleOverlayMonth } : {}),
           ...(state.idleOverlayExitPending ? { idleOverlayExitPending: true } : {}),
           ...(state.turtleDaily ? { turtleDaily: state.turtleDaily } : {}),
+          ...(state.breakoutEntryAt !== undefined ? { breakoutEntryAt: state.breakoutEntryAt } : {}),
+          ...(state.breakoutBelowEntry !== undefined ? { breakoutBelowEntry: state.breakoutBelowEntry } : {}),
+          ...(state.breakoutBySymbol && Object.keys(state.breakoutBySymbol).length ? { breakoutBySymbol: state.breakoutBySymbol } : {}),
         }));
         renameSync(tmp, path);
       } catch (e: any) {
@@ -630,7 +636,7 @@ export function momentumCryptoPortfolioPlan(): MomentumPortfolioPlan {
     template: "momentum_tsm",
     portfolioId: "momentum_crypto",
     governorRegistration: { sleeve: "momentum_crypto", kind: "live", promotionEligible: false, evidenceVersion: MOMENTUM_CRYPTO_EVIDENCE_VERSION },
-    adapter: { kind: "binance_usdm", options: {} },
+    adapter: { kind: "binance_usdm", options: { breakoutShortSymbols: [...MOMENTUM_CRYPTO_UNIVERSE] } },
     shadow: { strategy: "MOMENTUM", closeReason: "MOMENTUM_REBALANCE", timeframe: "1Hour", market: "crypto" },
     loggerContext: "Momentum:crypto",
     engineConfig: {
@@ -662,6 +668,8 @@ export function momentumCryptoPortfolioPlan(): MomentumPortfolioPlan {
       // RW6 owner rule: 5-day holds, checked at decisions; keep the RiskState key.
       timeStop: { maxHoldHours: 120 },
       allowSameTickReentry: true,
+      // RW8 §19.3–19.4, artifact b37681ff: Turtle shorts, independent of vt35 longs.
+      breakoutShort: { symbols: [...MOMENTUM_CRYPTO_UNIVERSE], entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 },
       // tsmTrail intentionally ABSENT on crypto — the 2026-07-12 sweep found it
       // amputates fat-tail trend rides. (That sweep's "+148→+178%/yr" claim for
       // enhanced TSM is pre-nested machinery, not evidence — see above.)

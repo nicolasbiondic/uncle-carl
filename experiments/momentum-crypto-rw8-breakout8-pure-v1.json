@@ -1,0 +1,34 @@
+{
+  "name": "momentum-crypto-rw8-breakout8-pure-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTERED 2026-10-28, DRY-RUN ONLY, NOT EXECUTED. RW8 trial 470 -> 471. Exact live RW7 no-brakes control except ONE design: add Turtle System 2 short units across all eight coins in the same fixed universe/order. Source: Curtis Faith, Original Turtle Trading Rules, sections Volatility/Units/Entries/Stops/Exits, https://www.tradingwithrayner.com/wp-content/uploads/2014/11/OriginalTurtleRules.pdf. Short below the prior 55 completed UTC daily lows; cover above the prior 20 daily highs or at fill+2N; Wilder ATR20, 1N=1% sleeve equity, one unit per coin, no pyramiding. Adaptations retained from RW5/RW6: hourly-close evaluation (not intraday stop orders), hourly engine-only 2N stop (no native stop), 55-day N seed window, 120h cap and fresh above-to-below crossing required after expiry, same-symbol momentum long takes priority. Other longs can coexist. The original Turtle six-unit correlated-market cap is NOT replicated: eight single units remain subject to unchanged shared gross/margin caps; correlated squeezes may lose about 16% before gaps/costs if all eight units stop. RW7 sizeOnly forbids a separate drawdown veto/liquidation of this leg. Long vt35 remains unchanged; Turtle units use published N-sizing, not vt35 again. Extra completed daily OHLC history is required and hashed, but data source/cuts/asOf/universe/costs/folds/capital/acceptance unchanged. No tuning, backtest, live activation or model-key change.",
+  "trialAccounting": { "priorUniqueTrials": 470, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db", "source": "binance_futures", "timeframe": "1h",
+    "universe": ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"],
+    "refSymbol": "BTC/USD", "rthOnly": false, "funding": true, "barMinutes": 60, "barMinutesEq": 60
+  },
+  "asOf": "2026-10-02T08:00:00Z",
+  "window": { "from": "2021-01-01", "to": "2026-12-31", "outerFoldCount": 3, "innerFoldCount": 3, "purgeYears": 0.25, "warmupDays": 45 },
+  "costs": { "base": { "slippageBps": 5, "commissionBps": 4 }, "stress": { "slippageBps": 10, "commissionBps": 8 } },
+  "ledger": { "initialEquity": 5000, "leverage": 2, "hardStopPct": 0.04 },
+  "candidates": [{
+    "name": "vt-35-corr92", "cadenceMin": 60, "notionalPctPerSlot": 0.375,
+    "entryPct": 5, "exitPct": -2, "maxLongs": 4, "maxShorts": 0,
+    "volTarget": { "annualizedPct": 35, "lookbackBars": 720, "minScale": 0.33, "maxScale": 1.5 },
+    "risk": { "peakHalfLifeDays": 30, "mode": "sizeOnly" }, "regime": "off",
+    "timeStop": { "maxHoldHours": 120 }, "allowSameTickReentry": true,
+    "breakoutShort": {
+      "symbols": ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"],
+      "entryDays": 55, "exitDays": 20, "atrDays": 20, "stopN": 2, "riskPerN": 0.01, "maxHoldHours": 120
+    }
+  }],
+  "acceptance": {
+    "minSharpe": 0, "maxDrawdown": 0.45, "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0, "maxConcentration": 0.6, "minTrades": 10,
+    "stressMinSharpe": -0.5, "stressMaxDrawdown": 0.55, "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5, "looMaxDrawdown": 0.55, "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95, "minFoldsPsrAbove": { "threshold": 0.5, "count": 2 },
+    "maxTurnoverAnnual": 150, "maxDisplacementShare": 0.35, "minBreakEvenSlippageBps": 20
+  }
+}

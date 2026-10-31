@@ -89,7 +89,7 @@ describe("bot now: states and live sources", () => {
     f.deps.positions = [{ profileId: "momentum_stocks", quantity: 9.7, currentPrice: 100, avgEntryPrice: 90 }];
     f.deps.readState = () => ({ risk: { peakEquity: 99999, pausedUntil: NOW + 99999, pauseReason: "hard drawdown" } });
     const p = f.build().portfolios[0];
-    expect(p).toMatchObject({ version: "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger", state: "waiting_first_pass", positions: 1, maxGrossX: 2.5, lastDecision: null, drawdownPct: null, nextDecisionAt: Date.parse("2026-11-02T14:35:00Z") });
+    expect(p).toMatchObject({ version: "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger-sh50", state: "waiting_first_pass", positions: 1, maxGrossX: 2.5, lastDecision: null, drawdownPct: null, nextDecisionAt: Date.parse("2026-11-02T14:35:00Z") });
     expect(p.grossX).toBeCloseTo(0.97);
     expect(p.blocked?.reason).toBe("market_closed");
   });

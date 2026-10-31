@@ -78,7 +78,8 @@ test("both knobs compose: every replay target equals live decide(), signal-only 
     accountId: "momentum_stocks", strategyVersion: "rw5-parity", config: strategy, capital: 50_000,
     market: "stocks", rowMarket: "stock", quoteAsset: "USD", venue, mode: "live", membership,
     openPriceView: (asOf, requested) => new HistoricalPriceView({ db, asOf, symbols: requested }),
-    tradingEnabled: () => true, now: () => Date.parse(dates[39]),
+    // A fixed instant inside regular hours (the market-hours gate); midnight UTC is closed.
+    tradingEnabled: () => true, now: () => Date.parse(`${dates[39]}T15:00:00Z`),
     alert: (_context, message) => { throw new Error(message); },
     heartbeats: { register: () => {}, beat: () => {} },
   });

@@ -2,7 +2,8 @@
 //
 // One row per (sleeve, strategy version, execution session). The table is
 // created by src/db/database.ts (createTables). This module is the only
-// writer/reader. Memory is per strategy version: the next decision of version
+// writer/reader. Session deduplication spans ALL versions of a sleeve.
+// Memory is per strategy version: the next decision of version
 // V reads the memory persisted by the latest decision of V, never another
 // version's.
 
@@ -115,6 +116,16 @@ export function getPortfolioDecision(accountId: string, strategyVersion: string,
   const r = getDB().prepare(
     `SELECT * FROM portfolio_decisions WHERE account_id = ? AND strategy_version = ? AND session = ?`,
   ).get(accountId, strategyVersion, session) as any;
+  return r ? toRecord(r) : null;
+}
+
+/** A session belongs to the sleeve, not the model version. Stale/failed attempts
+ *  that never produced a decision may retry; every actual decision blocks a new one. */
+export function getPortfolioSessionDecision(accountId: string, session: SessionDate): PortfolioDecisionRecord | null {
+  const r = getDB().prepare(
+    `SELECT * FROM portfolio_decisions WHERE account_id = ? AND session = ?
+     AND status NOT IN ('skipped_stale', 'failed') ORDER BY id DESC LIMIT 1`,
+  ).get(accountId, session) as any;
   return r ? toRecord(r) : null;
 }
 

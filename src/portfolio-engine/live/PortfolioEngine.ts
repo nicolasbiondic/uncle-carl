@@ -44,12 +44,13 @@ import { computeSleeveLedger } from "../../account/EquityTracker";
 import { isTradingEnabled } from "../../config";
 import { insertActivity } from "../../db/database";
 import { createLogger } from "../../utils/logger";
+import { isMarketOpen } from "../../utils/marketHours";
 import { eventBus, EVENTS } from "../../utils/events";
 import { heartbeats as defaultHeartbeats } from "../../ops/heartbeat";
 import { portfolioClientOrderId } from "./clientOrderId";
 import type { FreshnessReport } from "./priceView";
 import {
-  getPortfolioDecision, latestPortfolioMemory, savePortfolioDecision, updatePortfolioDecisionProgress,
+  getPortfolioDecision, getPortfolioSessionDecision, latestPortfolioMemory, savePortfolioDecision, updatePortfolioDecisionProgress,
   type DecisionMode, type PersistedOrder, type PortfolioDecisionRecord,
 } from "./persistence";
 import {
@@ -136,6 +137,8 @@ interface SubmitOutcome {
   rejected: PersistedOrder[];
   /** Orders left unapplied for the next tick: retryable sells and the buys deferred behind them. */
   retrying: number;
+  /** Market closed while the pass was awaiting data or an earlier order. */
+  marketClosed?: boolean;
 }
 
 export class PortfolioEngine {
@@ -195,7 +198,7 @@ export class PortfolioEngine {
    *  stale and pages after `failPageAfter` consecutive failures. */
   async tick(): Promise<PortfolioRunReport> {
     const hb = this.opts.heartbeats ?? defaultHeartbeats;
-    const window = runWindow(this.opts.market, this.now());
+    const window = this.stockMarketClosed() ? null : runWindow(this.opts.market, this.now());
     if (!window) { hb.beat(this.heartbeatName); return { status: "not_due", orders: [], rejected: 0 }; }
     if (this.running) return { status: "not_due", orders: [], rejected: 0, note: "pass in progress" };
     this.running = true;
@@ -221,8 +224,15 @@ export class PortfolioEngine {
 
   // ── one session ────────────────────────────────────────────────────────
 
+  private stockMarketClosed(): boolean {
+    if (this.opts.market !== "stocks" || isMarketOpen(this.now())) return false;
+    this.log.info("skip: stock market closed (outside regular market hours)");
+    return true;
+  }
+
   async runSession(window: RunWindow): Promise<PortfolioRunReport> {
     const { session, asOf } = window;
+    if (this.stockMarketClosed()) return { status: "not_due", session, asOf, orders: [], rejected: 0, note: "stock market closed" };
     const key = { accountId: this.opts.accountId, strategyVersion: this.opts.strategyVersion, session };
     try {
       const existing = getPortfolioDecision(key.accountId, key.strategyVersion, session);
@@ -280,7 +290,17 @@ export class PortfolioEngine {
     return this.opts.config.kind === "volManaged" && this.opts.config.maxHoldSessions !== undefined;
   }
 
+  private alreadyDecided({ session, asOf }: RunWindow): PortfolioRunReport | null {
+    const existing = getPortfolioSessionDecision(this.opts.accountId, session);
+    return existing ? {
+      status: "already_done", session, asOf, orders: existing.orders, rejected: 0,
+      note: `session already decided by ${existing.strategyVersion} (${existing.status})`,
+    } : null;
+  }
+
   private async decideAndExecute(window: RunWindow): Promise<PortfolioRunReport> {
+    const prior = this.alreadyDecided(window);
+    if (prior) return prior;
     const { session, asOf } = window;
     const live = this.opts.mode === "live";
     const key = { accountId: this.opts.accountId, strategyVersion: this.opts.strategyVersion, session };
@@ -355,6 +375,10 @@ export class PortfolioEngine {
     const intents: OrderIntent[] = this.planFn(target, book, prices, rules);
 
     // 5. persist BEFORE any order
+    // Venue reads above await: another version may have claimed this session meanwhile.
+    // No await between this check and the synchronous decision write.
+    const claimed = this.alreadyDecided(window);
+    if (claimed) return claimed;
     const orders: PersistedOrder[] = intents.map(intent => ({
       intent, clientOrderId: live ? portfolioClientOrderId(this.opts.accountId, session, intent.symbol, intent.maxHold) : null,
       result: null, applied: false, ...(live ? {} : { skipped: "observer" }),
@@ -383,6 +407,9 @@ export class PortfolioEngine {
     doneStatus: "submitted" | "resumed", doneNote: string | null,
   ): Promise<PortfolioRunReport> {
     const outcome = await this.submitAll(key, orders, view);
+    if (outcome.marketClosed) return {
+      status: "not_due", session: key.session, asOf, orders, rejected: outcome.rejected.length, note: "stock market closed",
+    };
     const retrying = outcome.retrying > 0;
     await this.refreshStops(key, view, target, equity, !retrying);
     if (retrying) {
@@ -471,6 +498,10 @@ export class PortfolioEngine {
       }
       const clientOrderId = o.clientOrderId ?? portfolioClientOrderId(key.accountId, key.session, o.intent.symbol, o.intent.maxHold);
       o.clientOrderId = clientOrderId;
+      if (this.stockMarketClosed()) {
+        updatePortfolioDecisionProgress(key, { orders, note: "stock market closed; pending orders not submitted" }, this.now());
+        return { rejected, retrying, marketClosed: true };
+      }
       let result;
       try {
         result = await this.opts.venue.submit(o.intent, clientOrderId);

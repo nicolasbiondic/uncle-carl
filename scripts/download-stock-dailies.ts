@@ -53,7 +53,8 @@ function currentSP500Members(db: Database, date: string): string[] {
 }
 
 export function stockRefreshUniverse(db: Database, date: string): string[] {
-  return [...new Set([...WIDE_UNIVERSE, ...MOMENTUM_SYMBOLS, ...RW_D1_ETFS, ...currentSP500Members(db, date)])];
+  // RW8: SH is the live risk-off hedge, separate from the momentum core universe.
+  return [...new Set([...WIDE_UNIVERSE, ...MOMENTUM_SYMBOLS, ...RW_D1_ETFS, "SH", ...currentSP500Members(db, date)])];
 }
 
 export async function refreshStockDailies(opts: {

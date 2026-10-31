@@ -35,6 +35,11 @@ function kline(close: number, ageMs: number): OHLCV {
 }
 
 describe("ShadowAdapter — simulated opens", () => {
+  test.each(["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"])("Turtle unit in %s retains exact quantity and fill-anchored 2N stop", async symbol => {
+    const a = makeAdapter(priceSource({ [symbol]: 100 }), { market: "crypto" });
+    expect((await a.openPosition({ symbol, side: "sell", notionalUsd: 20, role: "breakout-short", breakout: { n: 3, stopN: 2, quantity: 0.2 } })).ok).toBe(true);
+    expect(await a.getOpenPositions()).toMatchObject([{ symbol, side: "sell", role: "breakout-short", quantity: 0.2, breakoutN: 3, stopLoss: 100 * (1 - SHADOW_SLIPPAGE) + 6 }]);
+  });
   test("buy fills at cached price + 2bps adverse, whole shares for stocks", async () => {
     const a = makeAdapter(priceSource({ AAPL: 100 }));
     const res = await a.openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 5_000 });

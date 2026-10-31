@@ -1097,6 +1097,32 @@ describe("MomentumEngine timeStop (time barrier — third barrier, OFF by defaul
 
   const HOUR = 3_600_000;
 
+  test("RW8 symmetric short carries mirror 4% stop/vt35 sizing and renews at 120h, with persisted fresh age", async () => {
+    const t0 = Date.parse("2024-01-01T00:00:00Z"), clock = new TestClock(t0), broker = new FakeBroker();
+    broker.setCandles("DOWN", Array.from({ length: 800 }, (_, i) => {
+      const p = 200 - i / 8 + Math.sin(i) * 0.1;
+      return { timestamp: t0 - (800 - i) * HOUR, open: p, high: p, low: p, close: p, volume: 1000 };
+    }));
+    const store = memoryPersistence();
+    const c = { universe: ["DOWN"], rebalanceMinutes: 60, notionalPctPerSlot: 0.375,
+      tsm: { barMinutes: 60, lookbackDays: 14, maLengthDays: 30, maxLongs: 4, maxShorts: 4, shortEntryThresholdPct: -5, shortExitThresholdPct: 2 },
+      shortStop: { mode: "fixed" as const, pct: 0.04 }, volTarget: { annualizedPct: 35, lookbackBars: 720, minScale: 0.33, maxScale: 1.5 },
+      regime: { enabled: false }, risk: { mode: "sizeOnly" as const }, timeStop: { maxHoldHours: 120 }, allowSameTickReentry: true };
+    await new MomentumEngine(c, broker, silentLogger, store.persistence, clock).tick();
+    expect(broker.opened).toHaveLength(1);
+    expect(broker.opened[0]).toMatchObject({ symbol: "DOWN", side: "sell", stopLossPct: 4 });
+    expect(broker.opened[0].notionalUsd).toBeGreaterThanOrEqual(10000 * 0.375 * 0.33);
+    expect(broker.opened[0].notionalUsd).toBeLessThanOrEqual(10000 * 0.375 * 1.5);
+    clock.set(t0 + 120 * HOUR);
+    const report = await new MomentumEngine(c, broker, silentLogger, store.persistence, clock).tick();
+    expect(report.actions.map(a => a.type)).toEqual(["close", "open"]);
+    expect(broker.closed[0]).toMatchObject({ side: "sell", closeReason: "TIME_STOP" });
+    expect(store.get()!.entryMarks!["DOWN|sell"]).toBe(t0 + 120 * HOUR);
+    clock.set(t0 + 121 * HOUR);
+    await new MomentumEngine(c, broker, silentLogger, store.persistence, clock).tick();
+    expect(broker.closed).toHaveLength(1); expect(broker.positions).toHaveLength(1);
+  });
+
   test.each([60, 1440])("120h caps longs AND momentum shorts at cadence %i, then re-enters next decision", async cadence => {
     const t0 = Date.parse("2024-01-01T00:00:00Z"), clock = new TestClock(t0), broker = new FakeBroker();
     for (const [symbol, end] of [["UP1", 150], ["DOWN", 50]] as const) {

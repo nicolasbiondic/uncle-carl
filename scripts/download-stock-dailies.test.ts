@@ -65,6 +65,7 @@ describe("RW daily stock refresh", () => {
       const symbols = stockRefreshUniverse(db, "2026-10-19");
       expect(RW_D1_ETFS).toHaveLength(18);
       for (const s of RW_D1_ETFS) expect(symbols).toContain(s);
+      expect(symbols).toContain("SH"); // RW8 risk-off hedge must stay fresh for the live portfolio engine
       const members = db.query("SELECT ticker FROM index_membership WHERE end_date IS NULL").all() as Array<{ ticker: string }>;
       expect(members.length).toBeGreaterThan(490);
       for (const { ticker } of members) expect(symbols).toContain(ticker);

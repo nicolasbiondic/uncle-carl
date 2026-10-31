@@ -1558,8 +1558,144 @@
       "hypothesisCount": 4, "priorUniqueTrials": 464, "resultingUniqueTrials": 468,
       "inventoryComplete": false, "resultsComplete": false, "executionReported": true,
       "evidence": "RW7 SS18.3-18.6: +4, 464->468. Regla del dueno: nunca dejar de operar, riesgo por tamano, no por pausas. #464 2deab5da vs b4abce2e: risk sizeOnly, regimen off, sin Sharpe/cooldown y con reentrada confirmada en la misma pasada; CAGR 13.1177% vs 15.8211% (-2.7034pp), DD 50.0914% vs 35.2699% (+14.8215pp), 3.3607 ordenes/dia. #465 USDC sin todos los frenos 533b9a18 vs 74efd64b: CAGR -0.8981% vs 24.6902%, DD 73.2295%, FALLA N por retorno, NO SE CABLEA. #466 solo sizeOnly 68181bd6: CAGR 10.2564% (-14.4338pp), DD 57.2045% (+9.1127pp), 1.0152 ordenes/dia; #467 suelo 0.10 1c42ce86 identico, suelo nunca vinculante (escala minima OOS 0.3674 >0.25). Ambos CUMPLEN N, se elige #466 por cambio minimo: Sharpe/regimen/cooldown se quedan. N exige CAGR >=0 y DD libro <=35%, no limite de DD individual ni T1-T6 RW5. Libro con E1/E2 ebebfe24/2325210c y otro cripto CABLEADO: 16.9184% horario/sizeonly/floor10, 17.0144% USDC sin frenos; difiere de las cifras preliminares SS18.4 (16.1/17.1%). Los elegidos estan CABLEADOS desde 477adf8 como momentum_crypto@vt35-corroff-mh120-nobrakes y momentum_crypto_usdc@daily-d13s5-xc-dd-mh120-sizeonly; floor10 PASA pero NO ELEGIDO, no se inventa fracaso. Costes/funding y limites de posiciones, 120h, bruto/margen y seguridad se mantienen. Sin pausa ni reasignacion no significa siempre invertidos: ausencia de senales/datos seguros puede impedir ordenes. authoritativeArtifactRw7Nobrakes conserva cifras, costes y limites, no valida meta 30/dia ni certifica los artefactos (approved=false); inventario historico incompleto."
+    },
+    {
+      "id": "rw8-sh-2026-10-28",
+      "sourceCommit": "f21fa78 (pre-registro SS19 antes de correr); 1cee162 (resultado SS19.1); ae13e51 (cableado); ef12c87 (corte SS19.2)",
+      "sourcePaths": [
+        "experiments/rw8-e1-lev-vt30-g250-maxhold5-stagger-sh50-v1.json",
+        "scripts/rw3-compare-artifacts.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 1, "priorUniqueTrials": 468, "resultingUniqueTrials": 469,
+      "inventoryComplete": false, "resultsComplete": false, "executionReported": true,
+      "evidence": "RW8 SS19-19.2: +1, 468->469. #468 0bb06b9d vs ebebfe24: SH al 0.5 del bruto en riesgo apagado, limitado por cap por activo 0.25; CAGR 23.1846% vs 25.5796% (-2.3950pp), Sharpe 0.9377 vs 1.0200, DD sleeve 30.7943% vs 26.7565%, cuenta con E2 2325210c DD 23.6261%. CUMPLE criterio del dueno (CAGR >=0, DD cuenta <=35%) y CABLEADO por ae13e51, corte reportado 2026-10-28 22:21 UTC, como momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger-sh50. No mejora de retorno ni cobertura total del libro. authoritativeArtifactRw8Stocks conserva costes, datos y contadores completos; approved=false e inventario historico incompleto. Regla nunca dejar de operar, sin pausa ni reasignacion; no garantia de ordenes constantes. Numeracion base cero, manifest ya alineado."
+    },
+    {
+      "id": "rw8-crypto-shorts-2026-10-28",
+      "sourceCommit": "3eea24f (disenos pre-registrados); 53ff2a2 (pre-registro SS19.3 antes de correr); 3d23541 (resultado SS19.4); 5a7b0da (version y cableado, integrado por 82be40e)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-rw8-symtsm-pure-v1.json",
+        "experiments/momentum-crypto-rw8-breakout8-pure-v1.json",
+        "scripts/rw5-crypto-evaluate.ts",
+        "docs/reports/rw8-crypto-candidatos.md",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 2, "priorUniqueTrials": 469, "resultingUniqueTrials": 471,
+      "inventoryComplete": false, "resultsComplete": false, "executionReported": true,
+      "evidence": "RW8 SS19.3-19.4: +2, 469->471. #469 simetrico bf3e43a5 vs 2deab5da: CAGR -0.1710% vs 13.1177%, DD 52.2458% vs 50.0914%, libro 16.5340%, 6.5983 vs 3.3607 ordenes/dia; FALLA C por CAGR negativo, NO SE CABLEA. #470 Turtle ocho monedas b37681ff: CAGR 12.8905% (-0.2271pp), DD 45.3293% (-4.7621pp), libro 17.5496%, 3.5982 ordenes/dia; CUMPLE C (CAGR >=0, mas ordenes/dia que control, DD libro <=35%) y CABLEADO como momentum_crypto@vt35-corroff-mh120-nobrakes-bo8 por 5a7b0da. Libro usa E1 SH 0bb06b9d, E2 2325210c y USDC 68181bd6, capitales fijos. authoritativeArtifactRw8Crypto distingue C de T1-T6, historia diaria extra y costes/funding, ventana acaba 2-oct, no evidencia de la caida posterior. Mantiene regla nunca dejar de operar, sin pausa ni reasignacion, vt35 largos, stops, 120h y limites bruto/margen; no promesa de 30 ordenes/dia. approved=false e inventario historico incompleto; manifests 469/470 ya alineados."
+    },
+    {
+      "id": "rw8-usdc-nosharpe-2026-10-31",
+      "sourceCommit": "9e387fc (pre-registro SS19.5 antes de correr); 8ecd0a4 (resultado SS19.6 y decision pendiente)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-usdc-daily-s5-rw8-sizeonly-nosharpe-pure-v1.json",
+        "scripts/rw5-crypto-evaluate.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 1, "priorUniqueTrials": 471, "resultingUniqueTrials": 472,
+      "inventoryComplete": false, "resultsComplete": false, "executionReported": true,
+      "evidence": "RW8 SS19.5-19.6: +1, 471->472. #471 347fd7f0 vs 68181bd6: solo elimina sharpeGate, CAGR 2.2623% vs 10.2564% (-7.9941pp), Sharpe 0.2832 vs 0.4435, DD sleeve 69.5928% vs 57.2045%, libro 17.7414%, 861 vs 668 operaciones. CUMPLE N formalmente (CAGR >=0 y DD libro <=35%), pero DD sleeve supera linea del dueno de 40%: NO SE CABLEA, PENDIENTE decision explicita, no fracaso N ni aprobado. Libro E1 SH 0bb06b9d, E2 2325210c y horario elegido b37681ff, capitales fijos. authoritativeArtifactRw8Usdc conserva cifras/costes y control; vivo sigue daily-d13s5-xc-dd-mh120-sizeonly. Regla nunca dejar de operar, sin pausa ni reasignacion; regimen/cooldown, exposureControl suelo 0.25 y 120h se mantienen. approved=false, inventario historico incompleto; manifest 471 ya alineado, total 472. Fecha 31-oct es la del pre-registro/reporte."
     }
   ],
+  "authoritativeArtifactRw8Stocks": {
+    "verdict": "CUMPLE el criterio del dueno y CABLEADO: SH en riesgo apagado en lugar de solo efectivo. No mejora de retorno: -2.3950pp CAGR, +4.0378pp DD del sleeve; cuenta DD 23.6261%.",
+    "figuresNote": "SS19-19.2. Dias OOS comunes con rw3-compare-artifacts --ppy 252; CAGR por tiempo calendario, Pct en porcentajes, 4 decimales. Criterio del dueno: CAGR >=0 y DD de cuenta <=35%; cuenta = 50k E1 SH + 50k E2 escalonado 2325210c, capitales fijos sin reasignacion. SH es inverso del S&P 500, no del libro: fraction 0.5 del bruto limitada por perAssetCap 0.25 (22-25% del patrimonio en riesgo apagado), no cobertura total. Mantiene cap 5 sesiones y escalonado. Base 2 bps slippage, 0 comision e interes 6.5% anual; stress 5+2 bps e igual interes. Ordenes = portfolioDiagnostics.orders + foldEndOrders, incluidos ajustes. SH anadido a data.universe cambia dataHash; mismos folds, no identidad de snapshot. Stress/LOO tienen resultados pero faltan umbrales: gatesFailed nulos fallan cerrados, no son limites medidos incumplidos. approved=false, inventario historico incompleto. Se conserva el pre-registro del manifest; este ledger registra ejecucion y cableado, no certificacion ni garantia de ordenes continuas o cierres durante fallos.",
+    "wiring": { "commit": "ae13e51", "wiredAt": "2026-10-28T22:21:00Z" },
+    "candidates": [
+      {
+        "trial": 468,
+        "manifest": "experiments/rw8-e1-lev-vt30-g250-maxhold5-stagger-sh50-v1.json",
+        "path": "data/backtests/0bb06b9d548647410edacd52f86c9f11ff66307bd11f6e734e379f8a7492d5da/",
+        "control": "ebebfe24", "partner": "2325210c", "criterion": "owner", "wired": true,
+        "version": "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger-sh50",
+        "dataHash": "cf906afa4bae267090b11ad6bc705cc18a2a21d66bd64a09e9326516bc27dcb6",
+        "controlDataHash": "9162073e948b06bbabb56c3668b0ede1ac5fe4cda7001d924665db94e8f320c1",
+        "figures": {
+          "commonDays": 1755, "from": "2019-09-30", "to": "2026-09-23",
+          "cagrPct": 23.1846, "controlCagrPct": 25.5796, "deltaCagrPp": -2.395,
+          "sharpe": 0.9377, "controlSharpe": 1.02, "maxDrawdownPct": 30.7943, "controlMaxDrawdownPct": 26.7565, "accountMaxDrawdownPct": 23.6261
+        },
+        "execution": { "trades": 4255, "sessions": 1755, "diagnosticOrders": 11830, "foldEndOrders": 23, "adjustmentOrders": 3343, "orders": 11853, "tradesPerSession": 2.4245, "ordersPerSession": 6.7538, "maxHoldCloses": 4144, "maxHoldRebuys": 4102, "maxHoldOrders": 8246, "maxHoldClosesPerSession": 2.3613 },
+        "gatesFailed": ["looMaxDrawdown", "looMinSharpe", "looMinTotalReturn", "stressMaxDrawdown", "stressMinSharpe", "stressMinTotalReturn"],
+        "criteriaFailed": [], "criteriaVerdict": "CUMPLE criterio del dueno; CABLEADO"
+      }
+    ]
+  },
+  "authoritativeArtifactRw8Crypto": {
+    "verdict": "TSM simetrico FALLA C por CAGR negativo, NO SE CABLEA. Turtle en ocho monedas CUMPLE C y CABLEADO como momentum_crypto@vt35-corroff-mh120-nobrakes-bo8; -0.2271pp CAGR, -4.7621pp DD y mas ordenes que el control.",
+    "figuresNote": "SS19.3-19.4. C exige CAGR >=0, ordenes/dia > control y DD libro <=35%; no exige mejorar CAGR ni DD sleeve <=40%, ni es el protocolo T1-T6 RW5. Cifras de rw5-crypto-evaluate sobre dias comunes, 365; libro = 50k E1 SH 0bb06b9d + 50k E2 2325210c + 5k candidato + 5k USDC vivo 68181bd6, sin reasignacion y huecos a retorno cero. Ordenes incluyen entradas/salidas/ajustes/cierres de fold, denominador = duraciones OOS calendario, no fechas comunes. Base/stress 5+4/10+8 bps mas funding; mismos folds y asOf 2026-10-02, sin la caida posterior al 12-oct. Simetrico conserva dataHash; Turtle anade historia diaria completada y cambia dataHash, no se afirma mismo snapshot. Turtle usa 55/20 dias, Wilder ATR20, 1N=1% equity, una unidad por moneda y stop 2N al cierre horario; adaptaciones: sin piramides ni cap original de seis unidades correlacionadas, prioridad al largo del mismo simbolo, cruce fresco tras 120h. Ocho stops correlacionados pueden costar ~16% antes de gaps/costes. Los largos conservan vt35; risk sizeOnly, sin frenos de pausa, cap 120h y limites compartidos de bruto/margen siguen. Pct en porcentajes, 4 decimales; approved=false e inventario historico incompleto. El commit de version/cableado es 5a7b0da (integrado por 82be40e), no se infiere una hora de ejecucion en prod ni se promete inversion constante o 30 ordenes/dia. Los manifests conservan texto previo DRY-RUN; ejecucion y seleccion constan aqui.",
+    "wiring": { "commit": "5a7b0da" },
+    "candidates": [
+      {
+        "trial": 469,
+        "manifest": "experiments/momentum-crypto-rw8-symtsm-pure-v1.json",
+        "path": "data/backtests/bf3e43a533d48e85fa72a9652302579f7362488b77241b9888256d111e00d78e/",
+        "control": "2deab5da", "e1": "0bb06b9d", "e2": "2325210c", "otherCrypto": "68181bd6",
+        "criterion": "C", "wired": false, "version": null,
+        "dataHash": "77c87d51f19d7799b011ef4e02566f327438ffd9c64ff457fd05c69d6df9bfeb",
+        "controlDataHash": "77c87d51f19d7799b011ef4e02566f327438ffd9c64ff457fd05c69d6df9bfeb",
+        "figures": {
+          "commonDays": 1575, "from": "2022-06-11", "to": "2026-10-02",
+          "cagrPct": -0.171, "controlCagrPct": 13.1177, "deltaCagrPp": -13.2886,
+          "sharpe": 0.2238, "controlSharpe": 0.5135, "maxDrawdownPct": 52.2458, "controlMaxDrawdownPct": 50.0914, "combinedBookMaxDrawdownPct": 16.534
+        },
+        "execution": { "trades": 5197, "orders": 10394, "calendarDays": 1575.25, "ordersPerCalendarDay": 6.5983, "controlOrdersPerCalendarDay": 3.3607 },
+        "gatesFailed": ["maxDrawdown", "maxTurnoverAnnual", "minBreakEvenSlippageBps", "minExcessReturnVsBench", "minOuterPsr", "stressMaxDrawdown", "stressMinSharpe", "stressMinTotalReturn"],
+        "criteriaFailed": ["C_cagr"], "criteriaVerdict": "FALLA C; NO SE CABLEA"
+      },
+      {
+        "trial": 470,
+        "manifest": "experiments/momentum-crypto-rw8-breakout8-pure-v1.json",
+        "path": "data/backtests/b37681ff8900d69104a000928d28435b6d637c4401dacf4f444528a4b3a39230/",
+        "control": "2deab5da", "e1": "0bb06b9d", "e2": "2325210c", "otherCrypto": "68181bd6",
+        "criterion": "C", "wired": true, "version": "momentum_crypto@vt35-corroff-mh120-nobrakes-bo8",
+        "dataHash": "40229b0f79ee3999c2ab0096251d7a7f8efde750f9421a128f97cc7b70e136c0",
+        "controlDataHash": "77c87d51f19d7799b011ef4e02566f327438ffd9c64ff457fd05c69d6df9bfeb",
+        "figures": {
+          "commonDays": 1575, "from": "2022-06-11", "to": "2026-10-02",
+          "cagrPct": 12.8905, "controlCagrPct": 13.1177, "deltaCagrPp": -0.2271,
+          "sharpe": 0.4939, "controlSharpe": 0.5135, "maxDrawdownPct": 45.3293, "controlMaxDrawdownPct": 50.0914, "combinedBookMaxDrawdownPct": 17.5496
+        },
+        "execution": { "trades": 2834, "orders": 5668, "calendarDays": 1575.25, "ordersPerCalendarDay": 3.5982, "controlOrdersPerCalendarDay": 3.3607 },
+        "gatesFailed": ["maxDisplacementShare", "maxDrawdown", "maxTurnoverAnnual", "minBreakEvenSlippageBps", "minExcessReturnVsBench", "minOuterPsr", "stressMaxDrawdown", "stressMinTotalReturn"],
+        "criteriaFailed": [], "criteriaVerdict": "CUMPLE C; CABLEADO"
+      }
+    ]
+  },
+  "authoritativeArtifactRw8Usdc": {
+    "verdict": "CUMPLE N formalmente, pero NO SE CABLEA: DD sleeve 69.5928% supera la linea del dueno de 40%. PENDIENTE decision explicita del dueno, no se inventa fracaso N ni aprobacion de despliegue.",
+    "figuresNote": "SS19.5-19.6 (fechadas 2026-10-31 en el pre-registro y reporte). N exige CAGR >=0 y DD libro <=35%, no un limite individual: pasa con 2.2623% y 17.7414%, pero cuesta -7.9941pp CAGR y +12.3883pp DD sleeve frente a 68181bd6. Libro = 50k E1 SH 0bb06b9d + 50k E2 2325210c + 5k candidato + 5k horario elegido b37681ff, capitales fijos, huecos a retorno cero. rw5-crypto-evaluate reproduce cifras sobre dias comunes (365), no el veredicto N. Pct en porcentajes, 4 decimales; ordenes completas / duraciones OOS calendario. Solo elimina sharpeGate: mantiene regimen/cooldown por defecto, risk sizeOnly, exposureControl suelo 0.25 y cap 120h. Base/stress 17+3/60+5 bps mas funding; USDT es proxy historico declarado de USDC. Mismos folds y dataHash; approved=false, inventario historico incompleto. La version viva sigue daily-d13s5-xc-dd-mh120-sizeonly. No pausa ni reasignacion; senales, datos seguros y limites de ejecucion aun condicionan las ordenes.",
+    "candidates": [
+      {
+        "trial": 471,
+        "manifest": "experiments/momentum-crypto-usdc-daily-s5-rw8-sizeonly-nosharpe-pure-v1.json",
+        "path": "data/backtests/347fd7f068fbf94f0f367664e554149d3b0b8e742b9569330d60ddcf903e4180/",
+        "control": "68181bd6", "e1": "0bb06b9d", "e2": "2325210c", "otherCrypto": "b37681ff",
+        "criterion": "N", "wired": false, "version": null, "pendingOwnerDecision": true, "ownerLine40Passed": false,
+        "dataHash": "55da03c95f27781623837e81ec504a0e70935eba94da460a4fa2e18f5778b494",
+        "controlDataHash": "55da03c95f27781623837e81ec504a0e70935eba94da460a4fa2e18f5778b494",
+        "figures": {
+          "commonDays": 1410, "from": "2022-11-15", "to": "2026-09-25",
+          "cagrPct": 2.2623, "controlCagrPct": 10.2564, "deltaCagrPp": -7.9941,
+          "sharpe": 0.2832, "controlSharpe": 0.4435, "maxDrawdownPct": 69.5928, "controlMaxDrawdownPct": 57.2045, "combinedBookMaxDrawdownPct": 17.7414
+        },
+        "execution": { "trades": 861, "orders": 1899, "calendarDays": 1411.5, "ordersPerCalendarDay": 1.3454, "controlOrdersPerCalendarDay": 1.0152 },
+        "gatesFailed": ["looMaxDrawdown", "maxDrawdown", "minExcessReturnVsBench", "minOuterPsr", "stressMaxDrawdown", "stressMinTotalReturn"],
+        "criteriaFailed": [], "criteriaVerdict": "CUMPLE N; NO SE CABLEA (DD sleeve >40%, pendiente del dueno)"
+      }
+    ]
+  },
+  "rw8Controls": {
+    "trialsAdded": 0,
+    "note": "Cuatro artefactos RW7 ya contados, reutilizados sin ensayos nuevos. E1 SH y el otro cripto Turtle se resuelven por los candidatos RW8; libro con capitales fijos, sin reasignacion. Trial = priorUniqueTrials (base cero): #468-471 dejan el total en 472, igual que los cuatro manifests; complete=false no se cambia.",
+    "paths": {
+      "ebebfe24": "data/backtests/ebebfe244b770736cbf268747c348077f00b6718677778f53bb395f15622a17d/",
+      "2325210c": "data/backtests/2325210c8c7ad56fbbec9d833f2ae9ef641ed85a25d9af357eb693d43dfbb50f/",
+      "2deab5da": "data/backtests/2deab5da842e52f51a5346f6231c694c146820cca15f3efee22a9ec60c4e2598/",
+      "68181bd6": "data/backtests/68181bd662a9462ad79e3802076ad9dd25d6ad3023b363c074255c090c1fa644/"
+    }
+  },
   "authoritativeArtifactRw7Stagger": {
     "verdict": "CUMPLEN H; ambos CABLEADOS por la regla del dueno de nunca dejar de operar, no por mejorar rentabilidad. Coste de CAGR -0.7994pp E1 y -0.1720pp E2; cuenta DD 22.8532%.",
     "figuresNote": "SS18.1-18.2 y 18.6. Dias OOS comunes con rw3-compare-artifacts --ppy 252; CAGR por tiempo calendario, Pct en porcentajes, 4 decimales. H exige CAGR >=0 y DD de cuenta <=35%, no DD individual: cuenta = 50k E1 escalonado + 50k E2 escalonado, sin reasignacion. Ordenes completas = portfolioDiagnostics.orders + foldEndOrders, incluidos ajustes. maxHoldClosesPerSession usa sesiones NYSE: 2.1692/6.9622, no las aproximaciones 1.5/4.9 de SS18.2; no se confunden sesiones con dias calendario. E2 cambia dataHash frente a RW6 pese a mantener manifest de datos y folds: no se afirma identidad de snapshot ni replica independiente. Los manifests conservan texto previo de dry-run; ejecucion y cableado constan aqui. Stress/LOO tienen resultados pero sin umbrales de acceptance: gatesFailed nulos fallan cerrados por umbrales ausentes, no por medicion contra un limite. approved=false, inventario historico incompleto. El escalonado no garantiza cierres durante fallos ni operacion cuando la contingencia SPY exige efectivo; esa restriccion queda pendiente del dueno.",

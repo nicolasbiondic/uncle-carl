@@ -57,7 +57,7 @@ import { MOMENTUM_STOCKS_UNIVERSE, MOMENTUM_CRYPTO_UNIVERSE, RISK_PROFILES } fro
 import { DEFAULT_TSM_CONFIG } from "../strategies/momentum/TimeSeriesMomentum";
 import { DEFAULT_RISK_CONFIG, type RiskGuardConfig } from "../strategies/momentum/RiskGuard";
 import { DEFAULT_MEANREV_CONFIG } from "../strategies/meanrev/MeanRevEngine";
-import type { ExposureControlConfig, TimeStopConfig, TrailStopConfig, VolTargetConfig } from "../strategies/momentum/MomentumEngine";
+import type { BreakoutShortConfig, ExposureControlConfig, TimeStopConfig, TrailStopConfig, VolTargetConfig } from "../strategies/momentum/MomentumEngine";
 import { MODEL_VERSIONS, currentModelManifests, isPortfolioEngineSleeve } from "../portfolio/modelVersions";
 
 /**
@@ -86,6 +86,7 @@ export interface LiveCandidateConfig {
   volTarget?: VolTargetConfig;
   timeStop?: TimeStopConfig;
   allowSameTickReentry?: boolean;
+  breakoutShort?: BreakoutShortConfig;
   /** RegimeFilter overrides the replay merges over its barMinutes (walk-forward
    *  CandidateConfig.regime). Absent = the filter's default thresholds. */
   regime?: "off" | { enabled?: boolean; correlationCeiling?: number };
@@ -290,7 +291,7 @@ export function liveMeanRevStocksConfig(): LiveSleeveConfig {
   };
 }
 
-/** momentum_crypto — 60min TSM, vt-35 sizing, no entry brakes (RW7). */
+/** momentum_crypto — 60min TSM, vt-35 sizing, no entry brakes + Turtle shorts (RW8). */
 export function liveMomentumCryptoConfig(): LiveSleeveConfig {
   return {
     sleeve: "momentum_crypto",
@@ -310,6 +311,7 @@ export function liveMomentumCryptoConfig(): LiveSleeveConfig {
       regime: MOMENTUM_CRYPTO_REGIME.enabled === false ? "off" : { ...MOMENTUM_CRYPTO_REGIME },
       timeStop: { ...MOMENTUM_CRYPTO_TIME_STOP },
       allowSameTickReentry: true,
+      breakoutShort: { symbols: [...MOMENTUM_CRYPTO_UNIVERSE], entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 },
       risk: { peakHalfLifeDays: DEFAULT_RISK_CONFIG.peakHalfLifeDays, mode: "sizeOnly" },
       maxGrossExposureMult: MOMENTUM_CRYPTO_MAX_GROSS_EXPOSURE_MULT,
     },

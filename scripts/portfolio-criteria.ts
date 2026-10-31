@@ -99,7 +99,7 @@ export const RW2_CRITERIA = {
  *  leveraged volManaged families, so the `rw3-e?-` prefix maps the same way;
  *  RW4b (§14) maps `rw4b-e1-` to E1 and adds its own criteria on top. */
 export function rw2DesignOf(name: string): RW2DesignId {
-  const match = /^(?:rw[23567]|rw4b)-(e[123])-/.exec(name);
+  const match = /^(?:rw[235678]|rw4b)-(e[123])-/.exec(name);
   if (!match) throw new Error("volManaged manifest name must start with rw2-e1-, rw2-e2-, rw2-e3- (or the rw3- / rw4b- / rw5- / rw6- / rw7- equivalents)");
   return match[1].toUpperCase() as RW2DesignId;
 }

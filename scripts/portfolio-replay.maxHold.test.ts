@@ -171,7 +171,7 @@ for (const stagger of [false, true]) for (const hedge of [false, true]) test(`re
     tradingEnabled: () => true, now: () => now,
     alert: (_context, message) => { throw new Error(message); }, heartbeats: { register: () => {}, beat: () => {} } });
   for (const [session, expected] of seen) {
-    now = Date.parse(`${session}T14:00:00Z`);
+    now = Date.parse(`${session}T15:00:00Z`); // regular hours in EDT and EST (the market-hours gate)
     venue.prices_ = Object.fromEntries(symbols.map(sym => [sym, hist(expected.asOf).lastClose(sym)!]));
     const report = await live.runSession({ session, asOf: expected.asOf });
     expect(report.status).toBe("submitted");

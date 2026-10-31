@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SimBroker, dailyBarsFromBars, hashReplayConfig, runWithConfig } from "./backtest-momentum-wf";
-import { candidateToReplayConfig, runWalkForward, stitchedMetrics, validateCandidate, validateManifest, type ExperimentManifest } from "./walk-forward";
+import { candidateToReplayConfig, generateFolds, runLoo, runWalkForward, stitchedMetrics, validateCandidate, validateManifest, type ExperimentManifest } from "./walk-forward";
 import { MomentumEngine, turtleChannels, type BreakoutShortConfig, type MomentumBrokerAdapter, type MomentumEngineConfig } from "../src/strategies/momentum/MomentumEngine";
 import type { CurrentPosition } from "../src/strategies/momentum/Rebalancer";
 import { MemoryPersistence, silentLogger } from "../src/test-support/momentum";
@@ -26,23 +26,30 @@ class Broker implements MomentumBrokerAdapter {
   closes: Parameters<MomentumBrokerAdapter["closePosition"]>[0][] = [];
   events: string[] = [];
   bars = daily(); price = 89; longSymbol = ""; equity = 10000; failClose = false; dailyReads = 0;
+  prices = new Map<string, number>();
+  dailyBySymbol = new Map<string, OHLCV[]>();
+  strictReads: string[] = [];
+  failCloseSymbol = "";
   async getOpenPositions() { return this.positions.map(p => ({ ...p })); }
   async getEquity() { return this.equity; }
   async getRealisedPnlSince() { return 0; }
-  async fetchDailyBars() { this.dailyReads++; return this.bars; }
-  async fetchCandles(s: string) {
-    return hours().slice(0, 50).map((b, i) => ({ ...b, close: s === this.longSymbol ? this.price * (0.5 + 0.5 * i / 49) : this.price }));
+  async fetchDailyBars(s: string) { this.dailyReads++; return this.dailyBySymbol.get(s) ?? this.bars; }
+  async fetchCandles(s: string, _bars?: number, opts?: { strictVenue?: boolean }) {
+    if (opts?.strictVenue) this.strictReads.push(s);
+    const price = this.prices.get(s) ?? this.price;
+    return hours().slice(0, 50).map((b, i) => ({ ...b, close: s === this.longSymbol ? price * (0.5 + 0.5 * i / 49) : price }));
   }
   async openPosition(a: Parameters<MomentumBrokerAdapter["openPosition"]>[0]) {
     expect(this.positions.some(p => p.symbol === a.symbol && p.side !== a.side)).toBe(false);
     this.opens.push(a); this.events.push(`open:${a.role ?? "momentum"}`);
-    this.positions.push({ symbol: a.symbol, side: a.side, quantity: a.breakout?.quantity ?? a.notionalUsd / this.price, notional: a.notionalUsd,
-      ...(a.role ? { role: a.role, entryPrice: this.price, breakoutN: a.breakout?.n, stopLoss: this.price + a.breakout!.n * a.breakout!.stopN } : {}) });
+    const price = this.prices.get(a.symbol) ?? this.price;
+    this.positions.push({ symbol: a.symbol, side: a.side, quantity: a.breakout?.quantity ?? a.notionalUsd / price, notional: a.notionalUsd,
+      ...(a.role ? { role: a.role, entryPrice: price, breakoutN: a.breakout?.n, stopLoss: price + a.breakout!.n * a.breakout!.stopN } : {}) });
     return { ok: true };
   }
   async closePosition(a: Parameters<MomentumBrokerAdapter["closePosition"]>[0]) {
     this.closes.push(a);
-    if (this.failClose) return { ok: false, reason: "synthetic rejection" };
+    if (this.failClose || a.symbol === this.failCloseSymbol) return { ok: false, reason: "synthetic rejection" };
     this.events.push(`close:${a.closeReason}`);
     this.positions = this.positions.filter(p => p.symbol !== a.symbol || p.side !== a.side);
     return { ok: true };
@@ -52,6 +59,75 @@ const read = (name: string): ExperimentManifest => JSON.parse(readFileSync(join(
 const name = "momentum-crypto-rw5-btc-breakout55-pure-v1", liveName = "momentum-crypto-rw3-vt-35-corroff-pure-v1";
 
 describe("Turtle short: synthetic rules, gates and durable state", () => {
+  test("RW8 list: eight independent units/N/stops, no pyramiding, strict venue; same-symbol priority only", async () => {
+    const symbols = read("momentum-crypto-rw8-breakout8-pure-v1").data.universe;
+    const b = new Broker(), clock = new TestClock(T), store = new MemoryPersistence();
+    for (const [i, s] of symbols.entries()) {
+      const scale = i + 1;
+      b.prices.set(s, 89 * scale);
+      b.dailyBySymbol.set(s, daily().map(x => ({ ...x, open: 100 * scale, high: 110 * scale, low: 90 * scale, close: 100 * scale })));
+    }
+    const c = { ...cfg, universe: symbols, breakoutShort: { symbols, entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 }, risk: { ...risk, mode: "sizeOnly" as const } };
+    await new MomentumEngine(c, b, silentLogger, store, clock).tick();
+    expect(b.opens.map(a => a.symbol)).toEqual(symbols);
+    expect(b.strictReads).toEqual(symbols);
+    for (const [i, s] of symbols.entries()) {
+      expect(b.positions[i]).toMatchObject({ symbol: s, breakoutN: 20 * (i + 1), stopLoss: 129 * (i + 1) });
+      expect(b.positions[i].quantity * b.positions[i].breakoutN!).toBeCloseTo(b.equity * 0.01, 12);
+      expect(store.store!.breakoutBySymbol![s]).toMatchObject({ entryAt: T, belowEntry: true, daily: { n: 20 * (i + 1) } });
+    }
+    expect(store.store).not.toHaveProperty("turtleDaily");
+    const restarted = new MomentumEngine(c, b, silentLogger, store, clock);
+    clock.set(T + H); await restarted.tick(); expect(b.opens).toHaveLength(8);
+    b.longSymbol = "ETH/USD"; b.failCloseSymbol = "ETH/USD";
+    clock.set(T + 2 * H); await restarted.tick();
+    expect(b.opens).toHaveLength(8); expect(b.positions).toHaveLength(8);
+    b.failCloseSymbol = ""; clock.set(T + 3 * H); await restarted.tick();
+    expect(b.closes.every(a => a.symbol === "ETH/USD" && a.closeReason === "BREAKOUT_SHORT_PRIORITY")).toBe(true);
+    expect(b.positions.filter(p => p.role === "breakout-short")).toHaveLength(7);
+    expect(b.positions.find(p => p.symbol === "ETH/USD")!.side).toBe("buy");
+    expect(store.store!.breakoutBySymbol!["BTC/USD"].entryAt).toBe(T);
+    expect(store.store!.breakoutBySymbol!["ETH/USD"]).not.toHaveProperty("entryAt");
+  });
+  test("RW8 per-symbol 120h age/edge survives restart; failed/missing-data close does not reset siblings", async () => {
+    const b = new Broker(), clock = new TestClock(T), store = new MemoryPersistence(), symbols = ["BTC/USD", "ETH/USD"];
+    const c = { ...cfg, risk: { ...risk, mode: "sizeOnly" as const }, breakoutShort: { symbols, entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 } };
+    b.prices.set("ETH/USD", 90); await new MomentumEngine(c, b, silentLogger, store, clock).tick();
+    b.prices.set("ETH/USD", 89); clock.set(T + H);
+    await new MomentumEngine(c, b, silentLogger, store, clock).tick();
+    b.bars = []; b.failCloseSymbol = "BTC/USD"; clock.set(T + 120 * H);
+    const restarted = new MomentumEngine(c, b, silentLogger, store, clock);
+    await restarted.tick();
+    expect(b.positions).toHaveLength(2);
+    expect(store.store!.breakoutBySymbol!["BTC/USD"].entryAt).toBe(T);
+    expect(store.store!.breakoutBySymbol!["ETH/USD"].entryAt).toBe(T + H);
+    b.failCloseSymbol = ""; clock.set(T + 121 * H); await restarted.tick();
+    expect(b.positions).toHaveLength(0); expect(b.opens).toHaveLength(2);
+    expect(b.closes.map(a => a.closeReason)).toEqual(Array(3).fill("BREAKOUT_SHORT_TIME_STOP"));
+    b.bars = daily().map(x => ({ ...x, timestamp: x.timestamp + 5 * D })); clock.set(T + 122 * H);
+    const again = new MomentumEngine(c, b, silentLogger, store, clock);
+    await again.tick(); expect(b.opens).toHaveLength(2);
+    b.prices.set("ETH/USD", 90); clock.set(T + 123 * H); await again.tick();
+    b.prices.set("ETH/USD", 89); clock.set(T + 124 * H); await again.tick();
+    expect(b.opens.map(a => a.symbol)).toEqual(["BTC/USD", "ETH/USD", "ETH/USD"]);
+  });
+  test("RW7 sizeOnly never drawdown-liquidates/vetoes the independent short leg, even past inherited hard DD", async () => {
+    const b = new Broker(), clock = new TestClock(T), store = new MemoryPersistence();
+    const c = { ...cfg, risk: { ...risk, mode: "sizeOnly" as const, hardDrawdownPct: 0.2, peakHalfLifeDays: 0 }, breakoutShort: { symbols: ["BTC/USD", "ETH/USD"], entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 } };
+    b.prices.set("ETH/USD", 90); await new MomentumEngine(c, b, silentLogger, store, clock).tick();
+    b.equity = 6000; b.prices.set("ETH/USD", 89); clock.set(T + H);
+    await new MomentumEngine(c, b, silentLogger, store, clock).tick();
+    expect(b.closes).toEqual([]); expect(b.positions.map(p => p.symbol)).toEqual(["BTC/USD", "ETH/USD"]);
+    expect(store.store!.risk.peakEquity).toBe(10000);
+  });
+  test("RW8 exits are local: a 2N stop still runs without daily data and never closes another unit", async () => {
+    const b = new Broker(), clock = new TestClock(T), symbols = ["BTC/USD", "ETH/USD"];
+    const c = { ...cfg, breakoutShort: { symbols, entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 } };
+    const e = new MomentumEngine(c, b, silentLogger, undefined, clock);
+    await e.tick(); b.bars = []; b.prices.set("ETH/USD", 129); clock.set(T + H); await e.tick();
+    expect(b.closes).toEqual([{ symbol: "ETH/USD", side: "sell", closeReason: "BREAKOUT_SHORT_STOP" }]);
+    expect(b.positions.map(p => p.symbol)).toEqual(["BTC/USD"]); expect(b.opens).toHaveLength(2);
+  });
   test("55 previous completed lows, strict breach, one unit (1N = 1%, 2N = 2%), no pyramiding", async () => {
     const b = new Broker(), clock = new TestClock(T), e = new MomentumEngine(cfg, b, silentLogger, undefined, clock);
     b.price = 90; await e.tick(); expect(b.opens).toEqual([]);
@@ -151,6 +227,67 @@ describe("Turtle short: synthetic rules, gates and durable state", () => {
 });
 
 describe("breakout protocol and live/sim parity (synthetic only)", () => {
+  test("RW8 manifests change ONLY their declared design from live RW7; immutable inputs and reserved trials", () => {
+    const live = validateManifest(read("momentum-crypto-rw7-nobrakes-pure-v1"));
+    for (const [file, prior] of [["momentum-crypto-rw8-symtsm-pure-v1", 469], ["momentum-crypto-rw8-breakout8-pure-v1", 470]] as const) {
+      const m = validateManifest(read(file));
+      const { name: _n, description: _d, trialAccounting: _t, candidates: _c, ...rest } = m;
+      const { name: _ln, description: _ld, trialAccounting: _lt, candidates: _lc, ...base } = live;
+      expect(rest).toEqual(base); expect(m.candidates).toHaveLength(1);
+      expect(m.trialAccounting).toEqual({ priorUniqueTrials: prior, complete: false });
+      expect(m.description).toContain("DRY-RUN ONLY, NOT EXECUTED");
+      const { breakoutShort, shortEntryPct, shortExitPct, shortStop, maxShorts, ...candidate } = m.candidates[0];
+      const { maxShorts: _ms, ...baseCandidate } = live.candidates[0];
+      expect(candidate).toEqual(baseCandidate);
+      if (prior === 469) {
+        expect({ maxShorts, shortEntryPct, shortExitPct, shortStop }).toEqual({ maxShorts: 4, shortEntryPct: -5, shortExitPct: 2, shortStop: { mode: "fixed", pct: 0.04 } });
+        expect(breakoutShort).toBeUndefined();
+      } else {
+        expect(maxShorts).toBe(0);
+        expect(breakoutShort).toEqual({ symbols: m.data.universe, entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 });
+      }
+      const replay = candidateToReplayConfig(m, m.candidates[0], "base");
+      expect(replay).toMatchObject({ risk: { mode: "sizeOnly" }, timeStop: { maxHoldHours: 120 }, allowSameTickReentry: true });
+      expect(replay.breakoutShort).toEqual(breakoutShort);
+      expect(hashReplayConfig(replay)).not.toBe(hashReplayConfig(candidateToReplayConfig(live, live.candidates[0], "base")));
+    }
+  });
+  test("RW8 list validation rejects empty/duplicate/mixed selectors, unknown symbols and malformed state inputs", () => {
+    const m = read("momentum-crypto-rw8-breakout8-pure-v1"), c = m.candidates[0], b = c.breakoutShort!;
+    for (const bad of [[], ["BTC/USD", "BTC/USD"], [""], [null], ["ETH/USDC"], "BTC/USD", null]) {
+      expect(() => validateCandidate({ ...c, breakoutShort: { ...b, symbols: bad } })).toThrow("breakoutShort");
+    }
+    expect(() => validateCandidate({ ...c, breakoutShort: { ...b, symbol: "BTC/USD" } })).toThrow("breakoutShort");
+    expect(() => validateManifest({ ...m, data: { ...m.data, universe: ["BTC/USD"] } })).toThrow("breakoutShort");
+    expect(() => new MomentumEngine({ ...cfg, breakoutShort: b }, new Broker(), silentLogger)).toThrow("breakoutShort");
+  });
+  test("RW8 LOO removes only the excluded coin from breakout history/signals, or disables an empty leg", async () => {
+    const m = read("momentum-crypto-rw8-breakout8-pure-v1"), folds = generateFolds(m.window, Date.parse(m.asOf));
+    for (const onlyExcluded of [false, true]) {
+      const candidate = { ...m.candidates[0], breakoutShort: onlyExcluded ? { symbols: ["ETH/USD"], entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 } : m.candidates[0].breakoutShort };
+      let called = false;
+      await expect(runLoo(m, new Map(folds.map(f => [f.path, candidate])), folds, undefined, async cfg => {
+        called = true;
+        expect(cfg.universe).not.toContain("ETH/USD");
+        expect(cfg.breakoutShort).toEqual(onlyExcluded ? undefined : { ...candidate.breakoutShort, symbols: m.data.universe.filter(s => s !== "ETH/USD") });
+        return null; // stop at config seam, never execute historical trials
+      }, ["ETH/USD"])).rejects.toThrow("incomplete LOO replay");
+      expect(called).toBe(true);
+      expect(m.candidates[0].breakoutShort!.symbols).toContain("ETH/USD");
+    }
+  });
+  test("RW8 list uses the same live-like/sim decisions for two units, stops and symbol-local priority", async () => {
+    const symbols = ["BTC/USD", "ETH/USD"], c = { ...cfg, breakoutShort: { symbols, entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 } };
+    const live = new Broker(), clock = new TestClock(T), sim = new SimBroker(10000, new Map(symbols.map(s => [s, hours()])), 0, 0, H, { leverage: 2, maintRate: 0.005 });
+    sim.breakoutDaily = new Map(symbols.map(s => [s, daily()])); sim.fetchCandles = s => live.fetchCandles(s);
+    const le = new MomentumEngine(c, live, silentLogger, undefined, clock), se = new MomentumEngine(c, sim, silentLogger, undefined, clock);
+    for (const t of [T, T + H, T + 2 * H]) {
+      sim.now = t; clock.set(t); live.equity = sim.equityNow(); if (t === T + 2 * H) live.longSymbol = "ETH/USD";
+      expect((await se.tick()).actions).toEqual((await le.tick()).actions);
+    }
+    expect(sim.breakoutShortStats).toMatchObject({ opens: 2, closes: 1, exits: { BREAKOUT_SHORT_PRIORITY: 1 } });
+    expect((await sim.getOpenPositions()).filter(p => p.role === "breakout-short").map(p => p.symbol)).toEqual(["BTC/USD"]);
+  });
   test("execution counter includes resizes and exits, excludes seeds and rejected orders", async () => {
     const sim = new SimBroker(10000, new Map([["BTC/USD", hours()]]), 0, 0, H, { leverage: 2, maintRate: 0.005 });
     sim.now = T;
@@ -234,6 +371,7 @@ describe("breakout protocol and live/sim parity (synthetic only)", () => {
       db.transaction(() => {
         for (let t = T - 90 * D; t < T + 9 * D; t += H) { const p = t < T ? 100 : 79; q.run(t, p, t < T ? 110 : 200, t < T ? 80 : 70, p); }
         for (let t = T; t <= T + 9 * D; t += 8 * H) db.query("INSERT INTO funding_rates VALUES ('BTCUSDT', ?, -0.0001)").run(t);
+        db.exec("INSERT INTO historical_bars SELECT 'ETH/USD', timeframe, source, timestamp, open*2, high*2, low*2, close*2, volume FROM historical_bars WHERE symbol='BTC/USD'; INSERT INTO funding_rates SELECT 'ETHUSDT', funding_time, rate FROM funding_rates WHERE symbol='BTCUSDT'");
       })();
       const m = read(name); m.data = { ...m.data, dbPath: path, universe: ["BTC/USD"] };
       m.window = { ...m.window, from: new Date(T).toISOString(), to: new Date(T + 3 * D).toISOString(), outerFoldCount: 1, innerFoldCount: 0, purgeYears: 0 }; m.asOf = m.window.to;
@@ -252,6 +390,11 @@ describe("breakout protocol and live/sim parity (synthetic only)", () => {
       expect(capped!.breakoutShortStats).toMatchObject({ opens: 1, closes: 1, orders: 2, exits: { BREAKOUT_SHORT_TIME_STOP: 1 } });
       expect(capped!.closedTrades[0].exitAt - capped!.closedTrades[0].entryAt).toBe(120 * H + 1); // fill stamp is decision+1ms
       expect(capped!.ordersPerDay).toBe(2 / 8);
+      const multi = await runWithConfig({ ...c, universe: ["BTC/USD", "ETH/USD"], breakoutShort: { symbols: ["BTC/USD", "ETH/USD"], entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 } }, { ...win, to: new Date(T + 8 * D).toISOString() });
+      expect(multi!.breakoutShortStats).toMatchObject({ opens: 2, closes: 2, orders: 4, exits: { BREAKOUT_SHORT_TIME_STOP: 2 } });
+      expect(multi!.closedTrades.map(t => t.symbol).sort()).toEqual(["BTC/USD", "ETH/USD"]);
+      expect(multi!.closedTrades.every(t => t.exitAt - t.entryAt === 120 * H + 1)).toBe(true);
+      expect(multi!.funding).toBeGreaterThan(capped!.funding);
       const a = await runWalkForward(m, { dryRun: true, codeFiles: [] });
       db.query("UPDATE historical_bars SET high = high + 1 WHERE timestamp = ?").run(T - 65 * D);
       const b = await runWalkForward(m, { dryRun: true, codeFiles: [] });

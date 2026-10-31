@@ -3051,8 +3051,7 @@ describe("historical hypothesis ledger", () => {
     expect(batches.map((b: any) => [b.id, b.priorUniqueTrials, b.hypothesisCount, b.resultingUniqueTrials]))
       .toEqual([[ids[0], 462, 2, 464], [ids[1], 464, 4, 468]]);
     expect(ledger.batches.find((b: any) => b.id === "rw6-crypto-2026-10-26").resultingUniqueTrials).toBe(batches[0].priorUniqueTrials);
-    expect(ledger.batches.at(-1).id).toBe(ids[1]);
-    expect(ledger.batches.at(-1).resultingUniqueTrials).toBe(468);
+    expect(batches[1].resultingUniqueTrials).toBe(468);
     expect(batches.map((b: any) => b.sourceCommit)).toEqual([
       "f6ce1b0 (pre-registro SS18.1 antes de correr); 7d2e3bb (resultado SS18.2)",
       "03c8c9c (pre-registro SS18.3); 3b19c34 (resultados y pre-registro SS18.4); 96bb84c (resultado y seleccion SS18.5)",
@@ -3195,6 +3194,183 @@ describe("historical hypothesis ledger", () => {
     expect(exposure(sizeonly).map((x: any) => r4(x.minScale))).toEqual([0.6948, 0.3674, 0.8433]);
     for (const x of exposure(sizeonly)) expect(x.minScale).toBeGreaterThan(0.25);
     expect(loadArtifactOuterDailyReturns(join(root, rw7Rows[4].path))).toEqual(loadArtifactOuterDailyReturns(join(root, rw7Rows[5].path)));
+  }, 120_000);
+
+  const rw8Stocks = ledger.authoritativeArtifactRw8Stocks;
+  const rw8Crypto = ledger.authoritativeArtifactRw8Crypto;
+  const rw8Usdc = ledger.authoritativeArtifactRw8Usdc;
+  const rw8Rows = [...rw8Stocks.candidates, ...rw8Crypto.candidates, ...rw8Usdc.candidates];
+  const rw8Paths: Record<string, string> = {
+    ...ledger.rw8Controls.paths,
+    ...Object.fromEntries(rw8Rows.map(r => [r.path.split("/")[2].slice(0, 8), r.path])),
+  };
+  const rw8Designs = [
+    ["rw8-e1-lev-vt30-g250-maxhold5-stagger-sh50-v1", "0bb06b9d548647410edacd52f86c9f11ff66307bd11f6e734e379f8a7492d5da", "rw7-e1-lev-vt30-g250-maxhold5-stagger-v1", "ebebfe24", "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger-sh50"],
+    ["momentum-crypto-rw8-symtsm-pure-v1", "bf3e43a533d48e85fa72a9652302579f7362488b77241b9888256d111e00d78e", "momentum-crypto-rw7-nobrakes-pure-v1", "2deab5da", null],
+    ["momentum-crypto-rw8-breakout8-pure-v1", "b37681ff8900d69104a000928d28435b6d637c4401dacf4f444528a4b3a39230", "momentum-crypto-rw7-nobrakes-pure-v1", "2deab5da", "momentum_crypto@vt35-corroff-mh120-nobrakes-bo8"],
+    ["momentum-crypto-usdc-daily-s5-rw8-sizeonly-nosharpe-pure-v1", "347fd7f068fbf94f0f367664e554149d3b0b8e742b9569330d60ddcf903e4180", "momentum-crypto-usdc-daily-s5-rw7-sizeonly-pure-v1", "68181bd6", null],
+  ] as const;
+
+  test("RW8 closes four preregistered trials 468→472 and separates formal N from the pending owner decision", () => {
+    const ids = ["rw8-sh-2026-10-28", "rw8-crypto-shorts-2026-10-28", "rw8-usdc-nosharpe-2026-10-31"];
+    const batches = ids.map(id => ledger.batches.find((b: any) => b.id === id));
+    expect(batches.map((b: any) => [b.id, b.priorUniqueTrials, b.hypothesisCount, b.resultingUniqueTrials]))
+      .toEqual([[ids[0], 468, 1, 469], [ids[1], 469, 2, 471], [ids[2], 471, 1, 472]]);
+    expect(ledger.batches.find((b: any) => b.id === "rw7-nobrakes-2026-10-28").resultingUniqueTrials).toBe(batches[0].priorUniqueTrials);
+    expect(ledger.batches.at(-1).id).toBe(ids[2]);
+    expect(ledger.batches.at(-1).resultingUniqueTrials).toBe(472);
+    expect(batches.map((b: any) => b.sourceCommit)).toEqual([
+      "f21fa78 (pre-registro SS19 antes de correr); 1cee162 (resultado SS19.1); ae13e51 (cableado); ef12c87 (corte SS19.2)",
+      "3eea24f (disenos pre-registrados); 53ff2a2 (pre-registro SS19.3 antes de correr); 3d23541 (resultado SS19.4); 5a7b0da (version y cableado, integrado por 82be40e)",
+      "9e387fc (pre-registro SS19.5 antes de correr); 8ecd0a4 (resultado SS19.6 y decision pendiente)",
+    ]);
+    expect(rw8Rows.map(r => r.trial)).toEqual([468, 469, 470, 471]);
+    expect(new Set(rw8Rows.map(r => r.path)).size).toBe(4);
+    expect(ledger.rw8Controls.trialsAdded).toBe(0);
+    expect(ledger.rw8Controls.paths).toEqual(Object.fromEntries([0, 1, 2, 4].map(i => [rw7Rows[i].path.split("/")[2].slice(0, 8), rw7Rows[i].path])));
+    batches.forEach((b: any, i: number) => {
+      expect(b).toMatchObject({ inventoryComplete: false, resultsComplete: false, executionReported: true });
+      for (const p of b.sourcePaths) expect(sourcePathPresent(p)).toBe(true);
+      expect(b.sourcePaths.filter((p: string) => p.startsWith("experiments/"))).toEqual([rw8Stocks, rw8Crypto, rw8Usdc][i].candidates.map((r: any) => r.manifest));
+      expect(b.evidence).toContain("nunca dejar de operar");
+      expect(b.evidence).toContain("pausa ni reasignacion");
+    });
+    expect(rw8Stocks.wiring).toEqual({ commit: "ae13e51", wiredAt: "2026-10-28T22:21:00Z" });
+    expect(rw8Crypto.wiring).toEqual({ commit: "5a7b0da" });
+    expect(rw8Rows.map(r => r.wired)).toEqual([true, false, true, false]);
+    expect(rw8Rows.map(r => r.figures.deltaCagrPp)).toEqual([-2.395, -13.2886, -0.2271, -7.9941]);
+    expect(rw8Rows.map(r => r.criteriaVerdict)).toEqual([
+      "CUMPLE criterio del dueno; CABLEADO", "FALLA C; NO SE CABLEA", "CUMPLE C; CABLEADO",
+      "CUMPLE N; NO SE CABLEA (DD sleeve >40%, pendiente del dueno)",
+    ]);
+    for (const r of rw8Rows) {
+      const f = r.figures, k = r.criterion;
+      const checks = { [`${k}_cagr`]: f.cagrPct >= 0, [`${k}_bookDrawdown`]: (k === "owner" ? f.accountMaxDrawdownPct : f.combinedBookMaxDrawdownPct) <= 35,
+        ...(k === "C" ? { C_orders: r.execution.ordersPerCalendarDay > r.execution.controlOrdersPerCalendarDay } : {}) };
+      expect(r.criteriaFailed).toEqual(Object.entries(checks).filter(([, pass]) => !pass).map(([id]) => id));
+      expect(f.cagrPct - f.controlCagrPct).toBeCloseTo(f.deltaCagrPp, 3);
+    }
+    expect(rw8Usdc.candidates[0]).toMatchObject({ criteriaFailed: [], wired: false, version: null, pendingOwnerDecision: true, ownerLine40Passed: false });
+    expect(rw8Usdc.candidates[0].figures.maxDrawdownPct).toBeGreaterThan(40);
+    expect(rw8Usdc.verdict).toContain("PENDIENTE");
+    expect(rw8Crypto.figuresNote).toContain("sin la caida posterior al 12-oct");
+  });
+
+  test("RW8 manifests retain trial accounting, change only preregistered axes, and pin the two wired versions", () => {
+    const versions = readFileSync(join(root, "src/portfolio/modelVersions.ts"), "utf8");
+    rw8Designs.forEach(([stem, artifact, baseStem, control, version], i) => {
+      const r = rw8Rows[i];
+      expect([r.manifest, r.path, r.control, r.version, r.wired, r.criterion]).toEqual([
+        `experiments/${stem}.json`, `data/backtests/${artifact}/`, control, version, version !== null, i === 0 ? "owner" : i < 3 ? "C" : "N",
+      ]);
+      const m = JSON.parse(readFileSync(join(root, r.manifest), "utf8"));
+      const base = JSON.parse(readFileSync(join(root, `experiments/${baseStem}.json`), "utf8"));
+      expect(m.name).toBe(stem);
+      expect(m.trialAccounting).toEqual({ priorUniqueTrials: r.trial, complete: false });
+      expect(m.description.toLowerCase()).toContain(`trial ${r.trial} -> ${r.trial + 1}`);
+      expect(m.candidates).toHaveLength(1);
+      expect(rw8Paths[control]).toMatch(new RegExp(`^data/backtests/${control}[0-9a-f]{56}/$`));
+      const c = m.candidates[0], a = base.candidates[0];
+      if (i === 0) {
+        expect(c.portfolio.strategy.regimeOverlay.hedge).toEqual({ symbol: "SH", fraction: 0.5 });
+        expect(m.data.universe).toEqual([...base.data.universe, "SH"]);
+        expect(r.partner).toBe("2325210c");
+        delete c.portfolio.strategy.regimeOverlay.hedge;
+        m.data.universe = base.data.universe;
+      } else {
+        expect([r.e1, r.e2, r.otherCrypto]).toEqual(["0bb06b9d", "2325210c", i === 3 ? "b37681ff" : "68181bd6"]);
+        expect(c.risk.mode).toBe("sizeOnly");
+        expect(c.timeStop).toEqual({ maxHoldHours: 120 });
+        if (i === 1) {
+          expect([c.maxShorts, c.shortEntryPct, c.shortExitPct, c.shortStop]).toEqual([4, -5, 2, { mode: "fixed", pct: 0.04 }]);
+          c.maxShorts = a.maxShorts;
+          delete c.shortEntryPct; delete c.shortExitPct; delete c.shortStop;
+        } else if (i === 2) {
+          expect(c.breakoutShort).toEqual({ symbols: m.data.universe, entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 });
+          delete c.breakoutShort;
+        } else {
+          expect(c.sharpeGate).toBeUndefined();
+          expect(a.sharpeGate).toEqual({ lookbackDays: 30, minSharpe: 0 });
+          c.sharpeGate = a.sharpeGate;
+          expect(c.exposureControl.minScale).toBe(0.25);
+        }
+      }
+      c.name = a.name;
+      expect({ ...m, name: base.name, description: base.description, trialAccounting: base.trialAccounting }).toEqual(base);
+      if (version) {
+        const block = versions.slice(versions.indexOf(`{ id: "${version}"`)).split("},")[0];
+        expect(block).toContain(`manifest: "${r.manifest}"`);
+        expect(block).toContain(r.path.replace(/\/$/, ""));
+      } else expect(versions).not.toContain(`manifest: "${r.manifest}"`);
+    });
+  });
+
+  testWithDb("RW8 artifacts reproduce owner/C/N figures, costs, partner books and complete order/hold counters", () => {
+    const r4 = rw5Round;
+    const summary = (p: string) => JSON.parse(readFileSync(join(root, p, "summary.json"), "utf8"));
+    for (const r of rw8Rows) {
+      // Gate on the source DB: missing artifact evidence must fail, never silently skip.
+      const s = summary(r.path), a = summary(rw8Paths[r.control]);
+      const m = JSON.parse(readFileSync(join(root, r.manifest), "utf8"));
+      const resolved = JSON.parse(readFileSync(join(root, r.path, "manifest-resolved.json"), "utf8"));
+      for (const key of ["name", "trialAccounting", "candidates", "data", "asOf", "window", "costs", "ledger", "acceptance"]) expect(resolved[key]).toEqual(m[key]);
+      expect(s.selectedCandidate.name).toBe(m.candidates[0].name);
+      expect([s.dataHash, a.dataHash]).toEqual([r.dataHash, r.controlDataHash]);
+      const folds = (x: any) => x.outerTests.map((t: any) => [t.foldPath, t.result.fromMs, t.result.toMs]);
+      expect(folds(s)).toEqual(folds(a));
+      expect(s.approved).toBe(false);
+      expect(r.gatesFailed).toEqual(Object.values(s.acceptance).filter((g: any) => !g.pass).map((g: any) => g.gate).sort());
+      let cmp, bookDrawdown;
+      if (r.criterion === "owner") {
+        cmp = compareArtifacts(join(root, r.path), join(root, rw8Paths[r.control]), 252);
+        bookDrawdown = combinedBookDrawdown([r.path, rw8Paths[r.partner]].map(p => new Map(loadArtifactOuterDailyReturns(join(root, p)).map(x => [x.date, x.ret]))), [50_000, 50_000]).maxDrawdown;
+        expect(s.stressTests).toHaveLength(s.outerTests.length);
+        expect(s.loo.length).toBeGreaterThan(0);
+        expect([s._stressSkipReason, s._looSkipReason]).toEqual(["missing stress threshold(s)", "missing LOO threshold(s)"]);
+        for (const gate of r.gatesFailed) expect(s.acceptance[gate]).toMatchObject({ value: null, threshold: null, pass: false });
+      } else {
+        const e = evaluateCrypto({ candidate: join(root, r.path), control: join(root, rw8Paths[r.control]),
+          e1: join(root, rw8Paths[r.e1]), e2: join(root, rw8Paths[r.e2]), otherCrypto: join(root, rw8Paths[r.otherCrypto]) });
+        cmp = { commonDays: e.commonDays, from: e.from, to: e.to, candidate: e.candidateStats, control: e.controlStats };
+        bookDrawdown = e.combinedBook.maxDrawdown;
+        expect(e.verdict).toStartWith("FALLA:"); // RW5 T1–T6 is NOT RW8 C/N.
+      }
+      const c = cmp.candidate, b = cmp.control;
+      expect(r.figures).toEqual({ commonDays: cmp.commonDays, from: cmp.from, to: cmp.to,
+        cagrPct: r4(c.cagr * 100), controlCagrPct: r4(b.cagr * 100), deltaCagrPp: r4((c.cagr - b.cagr) * 100),
+        sharpe: r4(c.sharpe), controlSharpe: r4(b.sharpe), maxDrawdownPct: r4(c.maxDrawdown * 100), controlMaxDrawdownPct: r4(b.maxDrawdown * 100),
+        [r.criterion === "owner" ? "accountMaxDrawdownPct" : "combinedBookMaxDrawdownPct"]: r4(bookDrawdown * 100) });
+      const results = s.outerTests.map((t: any) => t.result);
+      const trades = results.reduce((n: number, x: any) => n + x.trades, 0);
+      expect(trades).toBe(s.stitchedOos.trades);
+      let moreOrders = true;
+      if (r.criterion === "owner") {
+        const sum = (key: string) => results.reduce((n: number, x: any) => n + x.portfolioDiagnostics[key], 0);
+        const hold = (key: string) => results.reduce((n: number, x: any) => n + x.portfolioDiagnostics.maxHoldStats[key], 0);
+        const sessions = sum("sessions"), diagnosticOrders = sum("orders"), foldEndOrders = sum("foldEndOrders"), orders = diagnosticOrders + foldEndOrders;
+        expect(r.execution).toEqual({ trades, sessions, diagnosticOrders, foldEndOrders, adjustmentOrders: sum("adjustmentOrders"), orders,
+          tradesPerSession: r4(trades / sessions), ordersPerSession: r4(orders / sessions), maxHoldCloses: hold("closes"), maxHoldRebuys: hold("rebuys"),
+          maxHoldOrders: hold("orders"), maxHoldClosesPerSession: r4(hold("closes") / sessions) });
+        expect(orders).toBe(sum("openingOrders") + sum("closingOrders") + sum("adjustmentOrders") + sum("stopOrders") + foldEndOrders);
+        expect(hold("orders")).toBe(hold("closes") + hold("rebuys"));
+      } else {
+        const rate = (s: any) => {
+          const orders = s.outerTests.reduce((n: number, t: any) => n + t.result.orders, 0);
+          const calendarDays = s.outerTests.reduce((n: number, t: any) => n + (t.result.toMs - t.result.fromMs) / 86_400_000, 0);
+          return { orders, calendarDays, perDay: orders / calendarDays };
+        };
+        const x = rate(s), y = rate(a);
+        expect(r.execution).toEqual({ trades, orders: x.orders, calendarDays: r4(x.calendarDays), ordersPerCalendarDay: r4(x.perDay), controlOrdersPerCalendarDay: r4(y.perDay) });
+        for (const t of results) expect(t.ordersPerDay).toBeCloseTo(t.orders / ((t.toMs - t.fromMs) / 86_400_000), 10);
+        moreOrders = r.criterion !== "C" || x.perDay > y.perDay;
+      }
+      expect(r.criteriaFailed.length === 0).toBe(c.cagr >= 0 && bookDrawdown <= 0.35 && moreOrders);
+      if (r.pendingOwnerDecision) {
+        expect(r.ownerLine40Passed).toBe(c.maxDrawdown <= 0.40);
+        expect(r.wired).toBe(false);
+      }
+    }
+    expect(summary(rw8Rows[2].path).outerTests.map((t: any) => t.result.breakoutShortStats.opens)).toEqual([69, 58, 60]);
   }, 120_000);
 
   testWithDb("RW5d cash reproduces parity against the original RW5d artifact, not a new K7 or independent replication", () => {

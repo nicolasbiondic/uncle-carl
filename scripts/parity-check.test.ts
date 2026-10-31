@@ -465,11 +465,11 @@ describe("utcDayCloses / heldSymbolsAt / compareDailyHoldings (momentum_crypto's
   });
 });
 
-describe("momentum_crypto parity epoch — RW7 no brakes (2026-10-28)", () => {
+describe("momentum_crypto parity epoch — RW8 Turtle shorts (2026-10-31)", () => {
   test("the epoch is an exact instant not before the current version's `since`: never replay the new entry policy over an old pass", () => {
     const v = currentModelVersion("momentum_crypto")!;
-    expect(v.id).toBe("momentum_crypto@vt35-corroff-mh120-nobrakes");
-    expect(PARITY_EPOCHS.momentum_crypto).toBe("2026-10-28T13:00:00Z");
+    expect(v.id).toBe("momentum_crypto@vt35-corroff-mh120-nobrakes-bo8");
+    expect(PARITY_EPOCHS.momentum_crypto).toBe("2026-10-31T03:00:00Z");
     expect(Number.isNaN(Date.parse(PARITY_EPOCHS.momentum_crypto!))).toBe(false);
     expect(Date.parse(PARITY_EPOCHS.momentum_crypto!)).toBeGreaterThanOrEqual(Date.parse(v.since));
   });
@@ -480,6 +480,7 @@ describe("momentum_crypto parity epoch — RW7 no brakes (2026-10-28)", () => {
     expect(cand.sharpeGate).toBeUndefined();
     expect(cand.allowSameTickReentry).toBe(true);
     expect(cand.timeStop).toEqual({ maxHoldHours: 120 });
+    expect(cand.breakoutShort).toMatchObject({ symbols: liveSleeveConfig("momentum_crypto").universe, entryDays: 55, exitDays: 20, maxHoldHours: 120 });
   });
 });
 
