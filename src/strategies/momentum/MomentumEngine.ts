@@ -563,7 +563,7 @@ export type BreakoutShortConfig = ({ symbol: "BTC/USD"; symbols?: never } | { sy
   atrDays: number;
   stopN: number;
   riskPerN: number;
-  /** Optional wall-clock cap, checked at each hourly decision. After expiry,
+  /** Optional wall-clock cap, checked at each hourly/daily decision. After expiry,
    * re-entry requires a fresh above-to-below entry-channel crossing. */
   maxHoldHours?: number;
 };
@@ -580,19 +580,21 @@ export function validateBreakoutShort(c: any): asserts c is BreakoutShortConfig 
   if (!c || typeof c !== "object" || Array.isArray(c) ||
       Object.keys(c).filter(k => k !== "maxHoldHours" && k !== "symbol" && k !== "symbols").sort().join(",") !== "atrDays,entryDays,exitDays,riskPerN,stopN" ||
       (c.symbols === undefined ? c.symbol !== "BTC/USD" : c.symbol !== undefined || !Array.isArray(c.symbols) || !c.symbols.length ||
-        c.symbols.some((s: unknown) => typeof s !== "string" || !/^[A-Z0-9]+\/USD$/.test(s)) || new Set(c.symbols).size !== c.symbols.length) ||
+        c.symbols.some((s: unknown) => typeof s !== "string" || !/^[A-Z0-9]+\/USD(C)?$/.test(s)) || new Set(c.symbols).size !== c.symbols.length) ||
       ![c.entryDays, c.exitDays, c.atrDays].every(n => Number.isInteger(n) && n >= 2 && n <= 990) ||
       !Number.isFinite(c.stopN) || c.stopN <= 0 || !Number.isFinite(c.riskPerN) || c.riskPerN <= 0 || c.riskPerN > 0.01 ||
       (c.maxHoldHours !== undefined && (!Number.isFinite(c.maxHoldHours) || c.maxHoldHours <= 0))) {
-    throw new Error("breakoutShort requires legacy symbol BTC/USD OR unique symbols (BASE/USD), integer days 2..990, positive stopN, riskPerN in (0,0.01] and optional positive maxHoldHours");
+    throw new Error("breakoutShort requires legacy symbol BTC/USD OR unique symbols (BASE/USD or BASE/USDC), integer days 2..990, positive stopN, riskPerN in (0,0.01] and optional positive maxHoldHours");
   }
 }
 /** Initial N: SMA of the first atrDays true ranges in the initial window.
  * Thereafter continue Wilder's recurrence, never reseed a rolling window.
- * Strict UTC continuity is checked here as well as at the adapter seam. */
-export function turtleChannels(bars: OHLCV[], c: BreakoutShortConfig, now: number, previous?: TurtleDailyState): { low: number; high: number; state: TurtleDailyState } | null {
+ * Strict UTC continuity is checked here as well as at the adapter seam.
+ * Daily decisions compare D's close with channels through D-1; N still uses
+ * every completed day through D, the same information set as hourly N. */
+export function turtleChannels(bars: OHLCV[], c: BreakoutShortConfig, now: number, previous?: TurtleDailyState, excludeDecisionDay = false): { low: number; high: number; state: TurtleDailyState } | null {
   const D = 86_400_000, end = Math.floor(now / D) * D;
-  if (bars.length < breakoutHistoryDays(c) || bars.at(-1)!.timestamp !== end - D ||
+  if (bars.length < breakoutHistoryDays(c) + (excludeDecisionDay ? 1 : 0) || bars.at(-1)!.timestamp !== end - D ||
       bars.some((b, i) => b.timestamp !== end - (bars.length - i) * D ||
         ![b.high, b.low, b.close].every(x => Number.isFinite(x) && x > 0) || b.high < b.low || b.close < b.low || b.close > b.high)) return null;
   let state = previous;
@@ -607,7 +609,8 @@ export function turtleChannels(bars: OHLCV[], c: BreakoutShortConfig, now: numbe
     state = { day: b.timestamp, n: ((c.atrDays - 1) * state.n + tr(b, state.close)) / c.atrDays, close: b.close };
   }
   if (!(state.n > 0)) return null;
-  return { low: Math.min(...bars.slice(-c.entryDays).map(b => b.low)), high: Math.max(...bars.slice(-c.exitDays).map(b => b.high)), state };
+  const channelBars = excludeDecisionDay ? bars.slice(0, -1) : bars;
+  return { low: Math.min(...channelBars.slice(-c.entryDays).map(b => b.low)), high: Math.max(...channelBars.slice(-c.exitDays).map(b => b.high)), state };
 }
 
 /** Fixed research safety bounds, not fitted to prices. Caps apply at entry;
@@ -809,7 +812,7 @@ export interface MomentumEngineConfig {
    * Sharpe/volTarget/exposureControl; RiskGuard and maintenance still gate
    * opens; the hard-DD breaker closes inventory unless risk.mode=sizeOnly. */
   idleOverlay?: IdleOverlayConfig;
-  /** Independent one-unit shorts (legacy BTC or a list), hourly close triggers; no native stop,
+  /** Independent one-unit shorts (legacy BTC or a list), hourly/daily close triggers; no native stop,
    * no momentum slots/vol scaling/resizes. Absent = byte-identical legacy. */
   breakoutShort?: BreakoutShortConfig;
   scorer: Partial<MomentumScorerConfig>;
@@ -1207,8 +1210,8 @@ export class MomentumEngine {
     }
     if (cfg.breakoutShort !== undefined) {
       validateBreakoutShort(cfg.breakoutShort);
-      if (cfg.idleOverlay || (cfg.tsm?.maxShorts ?? 0) !== 0 || cfg.tsm?.barMinutes !== 60 || cfg.rebalanceMinutes !== 60 || breakoutSymbols(cfg.breakoutShort).some(s => !(cfg.universe ?? DEFAULT_ENGINE_CONFIG.universe).includes(s))) {
-        throw new Error("breakoutShort requires hourly long-only momentum with breakout symbols in universe and no idleOverlay");
+      if (cfg.idleOverlay || (cfg.tsm?.maxShorts ?? 0) !== 0 || ![60, 1440].includes(cfg.rebalanceMinutes!) || cfg.tsm?.barMinutes !== cfg.rebalanceMinutes || breakoutSymbols(cfg.breakoutShort).some(s => !(cfg.universe ?? DEFAULT_ENGINE_CONFIG.universe).includes(s))) {
+        throw new Error("breakoutShort requires hourly/daily long-only momentum with matching bars/cadence, breakout symbols in universe and no idleOverlay");
       }
     }
     this.cfg = {
@@ -1684,8 +1687,9 @@ export class MomentumEngine {
       breakoutWasBelow.set(symbol, s.belowEntry);
       let channel: ReturnType<typeof turtleChannels> = null;
       try {
-        const days = Math.max(breakoutHistoryDays(bc!), s.daily ? Math.floor(now / 86_400_000) - s.daily.day / 86_400_000 - 1 : 0);
-        channel = turtleChannels(await this.broker.fetchDailyBars?.(symbol, days) ?? [], bc!, now, s.daily);
+        const dailyDecision = this.cfg.rebalanceMinutes === 1440;
+        const days = Math.max(breakoutHistoryDays(bc!) + (dailyDecision ? 1 : 0), s.daily ? Math.floor(now / 86_400_000) - s.daily.day / 86_400_000 - 1 : 0);
+        channel = turtleChannels(await this.broker.fetchDailyBars?.(symbol, days) ?? [], bc!, now, s.daily, dailyDecision);
         if (channel) { s.daily = channel.state; channels.set(symbol, channel); this.saveBreakoutState(symbol, s); }
       } catch (e: any) { this.log.warn(`breakout daily fetch failed: ${e.message}`); }
       if (bc!.maxHoldHours !== undefined) {

@@ -2271,7 +2271,8 @@ export async function runWithConfig(
       }
     }
     if (cfg.breakoutShort) {
-      const extraFrom = fromMs - (breakoutHistoryDays(cfg.breakoutShort) + 15) * 86_400_000;
+      // Daily channels exclude the decision day; retain one extra prior day.
+      const extraFrom = fromMs - (breakoutHistoryDays(cfg.breakoutShort) + (cfg.cadenceMin === 1440 ? 1 : 0) + 15) * 86_400_000;
       broker.breakoutDaily = new Map();
       for (const symbol of breakoutSymbols(cfg.breakoutShort)) {
         const bars = loadBars(symbol, cfg.timeframe, cfg.source, cfg.rthOnly, extraFrom, toMs, db);

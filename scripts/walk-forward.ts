@@ -931,7 +931,7 @@ export function validateCandidate(c: unknown): CandidateConfig {
   if (!Number.isInteger(obj.maxLongs) || (obj.maxLongs as number) < 0) throw new Error("CandidateConfig.maxLongs must be a non-negative integer");
   if (!Number.isInteger(obj.maxShorts) || (obj.maxShorts as number) < 0) throw new Error("CandidateConfig.maxShorts must be a non-negative integer");
   if (obj.idleOverlay !== undefined && obj.maxShorts !== 0) throw new Error("idleOverlay requires maxShorts=0 in the normal momentum book");
-  if (obj.breakoutShort !== undefined && (obj.maxShorts !== 0 || obj.cadenceMin !== 60 || obj.idleOverlay !== undefined)) throw new Error("breakoutShort requires hourly long-only momentum and no idleOverlay");
+  if (obj.breakoutShort !== undefined && (obj.maxShorts !== 0 || ![60, 1440].includes(obj.cadenceMin) || obj.idleOverlay !== undefined)) throw new Error("breakoutShort requires hourly/daily long-only momentum and no idleOverlay");
   if ((obj.maxLongs as number) + (obj.maxShorts as number) === 0) throw new Error("CandidateConfig must allow at least one position");
   // Line-S short axes: every short knob is INERT unless the candidate can
   // actually short (maxShorts >= 1) — config that changes nothing is the
@@ -1627,8 +1627,8 @@ export function validateManifest(m: ExperimentManifest): ExperimentManifest {
       validateCandidate(m.candidates[i]);
       const idle = m.candidates[i].idleOverlay;
       const breakout = m.candidates[i].breakoutShort;
-      if (breakout && (m.sleeve !== "crypto" || m.data.source !== "binance_futures" || m.data.timeframe !== "1h" || m.data.barMinutes !== 60 || m.data.barMinutesEq !== 60 || !m.data.funding || m.data.rthOnly || m.data.membership || m.data.perpsMembership || breakoutSymbols(breakout).some(s => !m.data.universe.includes(s)))) {
-        throw new Error("breakoutShort requires fixed-universe hourly Binance crypto perpetuals with funding and breakout symbols in data.universe");
+      if (breakout && (m.sleeve !== "crypto" || m.data.source !== "binance_futures" || m.data.timeframe !== (m.candidates[i].cadenceMin === 1440 ? "1d" : "1h") || m.data.barMinutes !== m.candidates[i].cadenceMin || m.data.barMinutesEq !== m.candidates[i].cadenceMin || !m.data.funding || m.data.rthOnly || m.data.membership || m.data.perpsMembership || breakoutSymbols(breakout).some(s => !m.data.universe.includes(s)))) {
+        throw new Error("breakoutShort requires fixed-universe hourly/daily Binance crypto perpetuals with matching bars/cadence, funding and breakout symbols in data.universe");
       }
       if (idle && (m.sleeve !== "crypto" || m.data.source !== "binance_futures" || !m.data.funding || m.data.rthOnly || m.data.membership || m.data.perpsMembership || idle.symbols.some(s => !m.data.universe.includes(s)))) {
         throw new Error("idleOverlay requires fixed-universe Binance crypto perpetuals with funding and overlay symbols in data.universe");
@@ -2837,7 +2837,7 @@ export async function runWalkForward(
       // every consumed daily-source bar in the immutable data identity.
       Math.max(m.window.warmupDays, ...m.candidates.map(c => c.trendExit ? c.trendExit.smaDays * 2 + 15 : 0),
         ...m.candidates.map(c => c.idleOverlay ? idleOverlayHistoryDays(c.idleOverlay) + 15 : 0),
-        ...m.candidates.map(c => c.breakoutShort ? breakoutHistoryDays(c.breakoutShort) + 15 : 0)),
+        ...m.candidates.map(c => c.breakoutShort ? breakoutHistoryDays(c.breakoutShort) + (c.cadenceMin === 1440 ? 1 : 0) + 15 : 0)),
       m.data.membership,
     );
     // §12-septies G0: the 15:45-slice rows are consumed data, so they are
