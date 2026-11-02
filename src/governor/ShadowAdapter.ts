@@ -24,6 +24,7 @@
 
 import type { MomentumBrokerAdapter } from "../strategies/momentum/MomentumEngine";
 import { BREAKOUT_SHORT_TIME_STOP } from "../strategies/momentum/MomentumEngine";
+import { BREAKOUT_LONG_EXIT, BREAKOUT_LONG_STOP, BREAKOUT_LONG_PRIORITY, BREAKOUT_LONG_DRAWDOWN, BREAKOUT_LONG_TIME_STOP } from "../strategies/momentum/MomentumEngine";
 import { BREAKOUT_SHORT_EXIT, BREAKOUT_SHORT_STOP, BREAKOUT_SHORT_PRIORITY, BREAKOUT_SHORT_DRAWDOWN, IDLE_OVERLAY_EXIT_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, TIME_STOP_CLOSE_REASON, TRAIL_STOP_CLOSE_REASON, TREND_EXIT_CLOSE_REASON } from "../strategies/momentum/MomentumEngine";
 import type { CurrentPosition } from "../strategies/momentum/Rebalancer";
 import type { OHLCV } from "../utils/types";
@@ -42,7 +43,7 @@ export const SHADOW_SLIPPAGE = 0.0002;
 // distinguish TRAIL_STOP/TIME_STOP/SLOT_DISPLACED from a signal-flip close.
 // Anything else (or absent) falls back to cfg.closeReason, so free-text can
 // never land in the enum-ish column.
-const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, TREND_EXIT_CLOSE_REASON, IDLE_OVERLAY_EXIT_CLOSE_REASON, BREAKOUT_SHORT_EXIT, BREAKOUT_SHORT_STOP, BREAKOUT_SHORT_PRIORITY, BREAKOUT_SHORT_DRAWDOWN, BREAKOUT_SHORT_TIME_STOP]);
+const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, TREND_EXIT_CLOSE_REASON, IDLE_OVERLAY_EXIT_CLOSE_REASON, BREAKOUT_SHORT_EXIT, BREAKOUT_SHORT_STOP, BREAKOUT_SHORT_PRIORITY, BREAKOUT_SHORT_DRAWDOWN, BREAKOUT_SHORT_TIME_STOP, BREAKOUT_LONG_EXIT, BREAKOUT_LONG_STOP, BREAKOUT_LONG_PRIORITY, BREAKOUT_LONG_DRAWDOWN, BREAKOUT_LONG_TIME_STOP]);
 
 /** Minimal slice of AlpacaExecutor the shadow adapter needs (test-injectable). */
 export interface ShadowPriceSource {
@@ -107,6 +108,7 @@ export class ShadowAdapter implements MomentumBrokerAdapter {
         entryTime: t.entryTime,
         ...(t.strategy === "IDLE_OVERLAY" ? { role: "idle-overlay" as const } : {}),
         ...(t.strategy === "BREAKOUT_SHORT" ? { role: "breakout-short" as const, entryPrice: t.entryPrice, stopLoss: t.stopLoss, breakoutN: t.breakoutN } : {}),
+        ...(t.strategy === "BREAKOUT_LONG" ? { role: "breakout-long" as const, entryPrice: t.entryPrice, stopLoss: t.stopLoss, breakoutN: t.breakoutN } : {}),
       };
     });
   }
@@ -127,13 +129,14 @@ export class ShadowAdapter implements MomentumBrokerAdapter {
   }
 
   async openPosition(action: Parameters<MomentumBrokerAdapter["openPosition"]>[0]): Promise<{ ok: boolean; reason?: string }> {
+    if (action.role === "breakout-long" && (this.cfg.market !== "crypto" || !/^[A-Z0-9]+\/USD(C)?$/.test(action.symbol) || action.side !== "buy" || !action.breakout || ![action.breakout.n, action.breakout.stopN, action.breakout.quantity].every(x => Number.isFinite(x) && x > 0))) return { ok: false, reason: "invalid breakout long unit" };
     if (action.role === "breakout-short" && (this.cfg.market !== "crypto" || !/^[A-Z0-9]+\/USD$/.test(action.symbol) || action.side !== "sell" || !action.breakout || ![action.breakout.n, action.breakout.stopN, action.breakout.quantity].every(x => Number.isFinite(x) && x > 0))) return { ok: false, reason: "invalid breakout short unit" };
     const price = await this.currentPrice(action.symbol);
     if (price <= 0) return { ok: false, reason: `no price for ${action.symbol}` };
 
     // Adverse fill: buying pays up, shorting sells down.
     const fill = action.side === "buy" ? price * (1 + SHADOW_SLIPPAGE) : price * (1 - SHADOW_SLIPPAGE);
-    const qty = action.role === "breakout-short" ? action.breakout!.quantity : this.cfg.market === "stock"
+    const qty = action.role === "breakout-short" || action.role === "breakout-long" ? action.breakout!.quantity : this.cfg.market === "stock"
       ? Math.floor(action.notionalUsd / fill)
       : action.notionalUsd / fill;
     if (qty <= 0) return { ok: false, reason: "computed qty <= 0" };
@@ -143,7 +146,7 @@ export class ShadowAdapter implements MomentumBrokerAdapter {
     // simulated FILL, side-aware. Absent → undefined → NULL (legacy fixed
     // distance, unaffected — checkAllStopLoss's rowStopPct falls back to
     // the profile's fixed pct).
-    const stopLoss = action.role === "breakout-short" ? fill + action.breakout!.n * action.breakout!.stopN : action.stopLossPct !== undefined && action.stopLossPct > 0
+    const stopLoss = action.role === "breakout-long" ? fill - action.breakout!.n * action.breakout!.stopN : action.role === "breakout-short" ? fill + action.breakout!.n * action.breakout!.stopN : action.stopLossPct !== undefined && action.stopLossPct > 0
       ? (action.side === "buy"
         ? fill * (1 - action.stopLossPct / 100)
         : fill * (1 + action.stopLossPct / 100))
@@ -154,8 +157,8 @@ export class ShadowAdapter implements MomentumBrokerAdapter {
       symbol: action.symbol,
       market: this.cfg.market,
       side: action.side,
-      strategy: action.role === "breakout-short" ? "BREAKOUT_SHORT" : action.role === "idle-overlay" ? "IDLE_OVERLAY" : this.cfg.strategy as any,
-      breakoutN: action.role === "breakout-short" ? action.breakout!.n : undefined,
+      strategy: action.role === "breakout-long" ? "BREAKOUT_LONG" : action.role === "breakout-short" ? "BREAKOUT_SHORT" : action.role === "idle-overlay" ? "IDLE_OVERLAY" : this.cfg.strategy as any,
+      breakoutN: action.role === "breakout-short" || action.role === "breakout-long" ? action.breakout!.n : undefined,
       entryPrice: fill,
       quantity: qty,
       entryTime: Date.now(),

@@ -162,7 +162,7 @@ describe("create from a validated preset", () => {
       return errors;
     };
     expect(check(p)).toEqual([]);
-    expect(b).toMatchObject({ symbols: p.universe, entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 });
+    expect(b).toMatchObject({ symbols: p.universe, entryDays: 20, exitDays: 10, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 });
     for (const breakoutShort of [null, [], {}, { ...b, symbols: [] }, { ...b, symbols: ["BTC/USD", "BTC/USD"] },
       { ...b, symbols: ["BTC/USDC"] }, { ...b, symbols: ["BNB/USD"] }, { ...b, symbol: "BTC/USD" },
       { ...b, entryDays: 1 }, { ...b, atrDays: 991 }, { ...b, exitDays: 2.5 }, { ...b, stopN: 0 },

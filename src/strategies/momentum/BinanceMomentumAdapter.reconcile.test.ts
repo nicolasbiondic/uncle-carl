@@ -220,7 +220,7 @@ describe("BinanceMomentumAdapter close_reason telemetry — TRAIL_STOP vs signal
     cancelAllOrders: async () => {},
   } as any);
 
-  test.each(["TRAIL_STOP", "TREND_EXIT", "IDLE_OVERLAY_EXIT", "BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN", "BREAKOUT_SHORT_TIME_STOP"])("engine close persists close_reason=%s", async closeReason => {
+  test.each(["TRAIL_STOP", "TREND_EXIT", "IDLE_OVERLAY_EXIT", "BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN", "BREAKOUT_SHORT_TIME_STOP", "BREAKOUT_LONG_EXIT", "BREAKOUT_LONG_STOP", "BREAKOUT_LONG_PRIORITY", "BREAKOUT_LONG_DRAWDOWN", "BREAKOUT_LONG_TIME_STOP"])("engine close persists close_reason=%s", async closeReason => {
     const id = `trail-close-binance-${closeReason}`;
     seedOpenTrade(id, "momentum_crypto_trailreason", {
       symbol: "BTC/USD", market: "crypto", quantity: 0.2, entryTime: Date.now(),
@@ -259,6 +259,31 @@ describe("BinanceMomentumAdapter close_reason telemetry — TRAIL_STOP vs signal
     expect(await restarted.getRealisedPnlSince(0)).toBeCloseTo(-1.2);
   });
 
+  test.each(["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"])("Turtle LONG %s persists fill-minus-2N, exact quantity and role across restart, without a native stop", async symbol => {
+    const accountId = `breakout-long-${symbol}`; let stops = 0, submittedQty = 0;
+    const bin = {
+      isConnected: () => true, getPrice: async () => 100,
+      getPositions: async () => [{ symbol: symbol.split("/")[0] + "USDT", positionAmt: 0.2, entryPrice: 101, unrealizedProfit: 0 }],
+      placeOrder: async (s: any, qty: number) => { expect(s).toMatchObject({ symbol, side: "buy" }); submittedQty = qty; return { id: `breakout-long-fill-${symbol}`, quantity: 0.2, status: "filled", filledPrice: 101, filledAt: Date.now(), createdAt: Date.now(), updatedAt: Date.now() }; },
+      placeStopMarketClose: async () => { stops++; return true; },
+      closePosition: async () => ({ success: true, filledPrice: 95, commission: 0, realizedPnl: -1.2 }), cancelAllOrders: async () => {},
+    } as any;
+    const a = new BinanceMomentumAdapter({} as any, bin, { accountId, breakoutLongSymbols: [symbol] });
+    expect(await a.openPosition({ symbol, side: "buy", notionalUsd: 20, role: "breakout-long", breakout: { n: 3, stopN: 2, quantity: 0.2 } })).toEqual({ ok: true });
+    expect(stops).toBe(0); expect(submittedQty).toBe(0.2);
+    const restarted = new BinanceMomentumAdapter({} as any, bin, { accountId });
+    expect(await restarted.getOpenPositions()).toMatchObject([{ symbol, side: "buy", role: "breakout-long", entryPrice: 101, breakoutN: 3, stopLoss: 95, quantity: 0.2 }]);
+    expect(await restarted.closePosition({ symbol, side: "buy", closeReason: "BREAKOUT_LONG_STOP" })).toEqual({ ok: true });
+    expect(await restarted.getRealisedPnlSince(0)).toBeCloseTo(-1.2);
+  });
+  test("Turtle LONG rejects unconfigured/unmapped symbols, wrong side and malformed units before broker access", async () => {
+    const action = { symbol: "BTC/USD", side: "buy" as const, notionalUsd: 20, role: "breakout-long" as const, breakout: { n: 3, stopN: 2, quantity: 0.2 } };
+    expect((await new BinanceMomentumAdapter({} as any, {} as any).openPosition(action)).ok).toBe(false);
+    const a = new BinanceMomentumAdapter({} as any, {} as any, { breakoutLongSymbols: ["BTC/USD", "UNKNOWN/USD"] });
+    for (const bad of [{ ...action, symbol: "ETH/USD" }, { ...action, symbol: "UNKNOWN/USD" }, { ...action, side: "sell" as const }, { ...action, breakout: undefined }, { ...action, breakout: { ...action.breakout, quantity: NaN } }]) {
+      expect((await a.openPosition(bad)).reason).toContain("configured, mapped USDT buy");
+    }
+  });
   test("Turtle rejects unconfigured/unmapped symbols, wrong wallet/side and malformed units before broker access", async () => {
     const action = { symbol: "ETH/USD", side: "sell" as const, notionalUsd: 20, role: "breakout-short" as const, breakout: { n: 3, stopN: 2, quantity: 0.2 } };
     const a = new BinanceMomentumAdapter({} as any, {} as any, { breakoutShortSymbols: ["BTC/USD", "UNKNOWN/USD"] });

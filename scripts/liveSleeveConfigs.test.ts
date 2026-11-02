@@ -8,7 +8,7 @@
 //
 //   momentum_stocks ↔ experiments/momentum-stocks-daily-blend3-pure-v1.json
 //   meanrev_stocks  ↔ experiments/meanrev-breadth7-pure-v1.json
-//   momentum_crypto ↔ experiments/momentum-crypto-rw8-breakout8-pure-v1.json
+//   momentum_crypto ↔ experiments/momentum-crypto-rw10-turtle-s1-short-pure-v1.json
 //   momentum_crypto_usdc ↔ experiments/momentum-crypto-usdc-daily-s5-rw7-sizeonly-pure-v1.json
 //     (RW7: no risk pauses; hourly removes regime/Sharpe/cooldown, USDC keeps them)
 //
@@ -264,12 +264,12 @@ describe("portfolio-engine sleeves — the version table names manifest, candida
     expect((builtinPortfolio("momentum_crypto_usdc").params as any).exposureControl).toEqual(knob);
   });
 
-  test("momentum_crypto RW8: only eight-coin Turtle shorts change vs RW7; shiftDays 0", () => {
+  test("momentum_crypto RW10: only Turtle entry/exit channels change 55/20 → 20/10 vs RW8; shiftDays 0", () => {
     const v = currentModelVersion("momentum_crypto")!;
     expect(v).toMatchObject({
-      id: "momentum_crypto@vt35-corroff-mh120-nobrakes-bo8",
-      manifest: "experiments/momentum-crypto-rw8-breakout8-pure-v1.json",
-      artifact: { dir: "data/backtests/b37681ff8900d69104a000928d28435b6d637c4401dacf4f444528a4b3a39230", shiftDays: 0 },
+      id: "momentum_crypto@vt35-corroff-mh120-nobrakes-bo8s1",
+      manifest: "experiments/momentum-crypto-rw10-turtle-s1-short-pure-v1.json",
+      artifact: { dir: "data/backtests/4aca18035a259fac4bfbba41696c6ee19d750dab1cb8fd3d084e47193e4c0f33", shiftDays: 0 },
     });
     expect(v.engine).toBeUndefined(); // incumbent engine: its config describes what trades
     expect(LIVE_SLEEVE_MANIFESTS.momentum_crypto).toBe(v.manifest!);
@@ -286,15 +286,16 @@ describe("portfolio-engine sleeves — the version table names manifest, candida
     expect(cand.timeStop).toEqual({ maxHoldHours: 120 });
     // The rollback target (the control the artifact was measured against) is the previous version's manifest.
     const list = MODEL_VERSIONS.momentum_crypto;
-    expect(list[list.length - 2].id).toBe("momentum_crypto@vt35-corroff-mh120-nobrakes");
-    expect(list[list.length - 2].manifest).toBe("experiments/momentum-crypto-rw7-nobrakes-pure-v1.json");
+    expect(list[list.length - 2].id).toBe("momentum_crypto@vt35-corroff-mh120-nobrakes-bo8");
+    expect(list[list.length - 2].manifest).toBe("experiments/momentum-crypto-rw8-breakout8-pure-v1.json");
     const controlManifest: any = JSON.parse(readFileSync(join(ROOT, list[list.length - 2].manifest!), "utf-8"));
     const control = controlManifest.candidates[0];
-    expect(cand.breakoutShort).toEqual({ symbols: m.data.universe, entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 });
-    expect(control.breakoutShort).toBeUndefined();
+    expect(cand.breakoutShort).toEqual({ symbols: m.data.universe, entryDays: 20, exitDays: 10, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 });
+    expect(control.breakoutShort).toEqual({ ...cand.breakoutShort, entryDays: 55, exitDays: 20 });
     // Every other decision-affecting key is still the control's.
-    const { breakoutShort, ...rest } = cand;
-    expect(rest).toEqual(control);
+    const { breakoutShort, name: _name, ...rest } = cand;
+    const { breakoutShort: _controlBreakout, name: _controlName, ...controlRest } = control;
+    expect(rest).toEqual(controlRest);
     expect(controlManifest.asOf).toBe((m as any).asOf);
     expect(controlManifest.data).toEqual(m.data);
     expect(controlManifest.costs).toEqual(m.costs);

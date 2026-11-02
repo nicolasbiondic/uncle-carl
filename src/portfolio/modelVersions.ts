@@ -161,6 +161,10 @@ export const MODEL_VERSIONS: Readonly<Record<string, readonly ModelVersion[]>> =
       note: "RW §19.3–19.4 criterion C: add Turtle 55/20 shorts on all eight coins, one unit per coin, Wilder ATR20 N, 1N = 1% equity, hourly-close 2N stop and 120h cap; same-symbol long priority; CAGR 12.9% vs 13.1%, DD 45.3% vs 50.1%, four-sleeve DD 17.5%, 3.6 vs 3.4 orders/day; vt35 longs, sizeOnly and shared gross/margin caps unchanged; RiskState key NOT changed/re-anchored",
       manifest: "experiments/momentum-crypto-rw8-breakout8-pure-v1.json",
       artifact: { dir: "data/backtests/b37681ff8900d69104a000928d28435b6d637c4401dacf4f444528a4b3a39230", shiftDays: 0 } },
+    { id: "momentum_crypto@vt35-corroff-mh120-nobrakes-bo8s1", since: "2026-11-03T03:00:00Z", modelStart: "2026-11-03",
+      note: "RW §21–21.1 criterion C: switch eight-coin Turtle shorts from System 2 55/20 to System 1 20/10, without skip-after-winner; CAGR 16.8% vs 12.9%, Sharpe 0.56 vs 0.49, sleeve DD 42.9% vs 45.3%, four-sleeve DD 17.0% vs 17.5%, 3025 vs 2834 trades; ATR20 N, one unit per coin, 1N = 1% equity, hourly-close 2N stop, 120h cap, vt35 longs and shared gross/margin caps unchanged; RiskState key NOT changed/re-anchored; modelStart is the requested cutover UTC date",
+      manifest: "experiments/momentum-crypto-rw10-turtle-s1-short-pure-v1.json",
+      artifact: { dir: "data/backtests/4aca18035a259fac4bfbba41696c6ee19d750dab1cb8fd3d084e47193e4c0f33", shiftDays: 0 } },
   ],
   momentum_crypto_usdc: [
     { id: "momentum_crypto_usdc@hourly-13b", since: "2026-07-20T00:00:00Z", modelStart: null,

@@ -17,7 +17,7 @@ import { SLOT_DISPLACED_CLOSE_REASON } from "./MomentumEngine";
 export interface CurrentPosition {
   symbol: string;
   /** Durable ownership tag; idle inventory never participates in hourly ranking. */
-  role?: "idle-overlay" | "breakout-short";
+  role?: "idle-overlay" | "breakout-short" | "breakout-long";
   entryPrice?: number;
   stopLoss?: number;
   breakoutN?: number;

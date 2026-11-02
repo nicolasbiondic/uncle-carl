@@ -76,9 +76,13 @@ test("Turtle daily OHLC always routes to real data; role/N and every exit label 
     target.closePosition = async a => { closes.push(a); return { ok: true }; };
     const a = { symbol: "BTC/USD", side: "sell" as const, notionalUsd: 100, role: "breakout-short" as const, breakout: { n: 2, stopN: 2, quantity: 1 } };
     await sw.openPosition(a); expect(opens).toEqual([a]);
+    const long = { ...a, side: "buy" as const, role: "breakout-long" as const };
+    await sw.openPosition(long); expect(opens).toEqual([a, long]);
     if (mode === "live") seedOpenLiveRow(account, "BTC/USD");
     for (const closeReason of ["BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN", "BREAKOUT_SHORT_TIME_STOP"]) await sw.closePosition({ symbol: "BTC/USD", side: "sell", closeReason });
     expect(closes.map(c => c.closeReason)).toEqual(["BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN", "BREAKOUT_SHORT_TIME_STOP"]);
+    for (const closeReason of ["BREAKOUT_LONG_EXIT", "BREAKOUT_LONG_STOP", "BREAKOUT_LONG_PRIORITY", "BREAKOUT_LONG_DRAWDOWN", "BREAKOUT_LONG_TIME_STOP"]) await sw.closePosition({ symbol: "BTC/USD", side: "buy", closeReason });
+    expect(closes.slice(5).map(c => c.closeReason)).toEqual(["BREAKOUT_LONG_EXIT", "BREAKOUT_LONG_STOP", "BREAKOUT_LONG_PRIORITY", "BREAKOUT_LONG_DRAWDOWN", "BREAKOUT_LONG_TIME_STOP"]);
   }
 });
 

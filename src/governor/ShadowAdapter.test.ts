@@ -35,6 +35,11 @@ function kline(close: number, ageMs: number): OHLCV {
 }
 
 describe("ShadowAdapter — simulated opens", () => {
+  test.each(["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"])("Turtle LONG %s keeps exact quantity, ownership and fill-minus-2N", async symbol => {
+    const a = makeAdapter(priceSource({ [symbol]: 100 }), { market: "crypto" });
+    expect(await a.openPosition({ symbol, side: "buy", notionalUsd: 20, role: "breakout-long", breakout: { n: 3, stopN: 2, quantity: 0.2 } })).toEqual({ ok: true });
+    expect(await a.getOpenPositions()).toMatchObject([{ symbol, side: "buy", role: "breakout-long", quantity: 0.2, breakoutN: 3, stopLoss: 100 * (1 + SHADOW_SLIPPAGE) - 6 }]);
+  });
   test.each(["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"])("Turtle unit in %s retains exact quantity and fill-anchored 2N stop", async symbol => {
     const a = makeAdapter(priceSource({ [symbol]: 100 }), { market: "crypto" });
     expect((await a.openPosition({ symbol, side: "sell", notionalUsd: 20, role: "breakout-short", breakout: { n: 3, stopN: 2, quantity: 0.2 } })).ok).toBe(true);
@@ -80,7 +85,7 @@ describe("ShadowAdapter — simulated opens", () => {
 });
 
 describe("ShadowAdapter — simulated closes and PnL math", () => {
-  test.each(["TREND_EXIT", "IDLE_OVERLAY_EXIT", "BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN", "BREAKOUT_SHORT_TIME_STOP"])("%s is persisted verbatim", async closeReason => {
+  test.each(["TREND_EXIT", "IDLE_OVERLAY_EXIT", "BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN", "BREAKOUT_SHORT_TIME_STOP", "BREAKOUT_LONG_EXIT", "BREAKOUT_LONG_STOP", "BREAKOUT_LONG_PRIORITY", "BREAKOUT_LONG_DRAWDOWN", "BREAKOUT_LONG_TIME_STOP"])("%s is persisted verbatim", async closeReason => {
     const a = makeAdapter(priceSource({ AAPL: 100 }));
     await a.openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 1_000 });
     expect((await a.closePosition({ symbol: "AAPL", side: "buy", closeReason })).ok).toBe(true);

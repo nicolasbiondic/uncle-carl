@@ -248,7 +248,7 @@ test("all 116 pre-RW2 walk-forward manifests retain config/candidate identities 
   // RW2 (`rw2-*`), RW3 (`rw3-*`, `momentum-crypto*-rw3-*`), RW4b (`rw4b-*`), RW5–RW9 and copy-trading
   // (`copy-*`) manifests were written after this lock; they are pre-registered
   // on their own (§8, §10, §11, §20).
-  const records = readdirSync(dir).filter(f => f.endsWith(".json") && !/^rw[2-9]-|^rw4b-|-rw3-|-rw4a-|-rw[5-9]-|^copy-/.test(f)).sort().flatMap(file => {
+  const records = readdirSync(dir).filter(f => f.endsWith(".json") && !/^rw(?:[2-9]|1[0-9])-|^rw4b-|-rw3-|-rw4a-|-rw(?:[5-9]|1[0-9])-|^copy-/.test(f)).sort().flatMap(file => {
     const raw = JSON.parse(readFileSync(join(dir, file), "utf8"));
     // Other protocols (intraday, streversal, hypothesis ledger) have no WF identity.
     if (!["stocks", "crypto", "meanrev"].includes(raw.sleeve)) return [];

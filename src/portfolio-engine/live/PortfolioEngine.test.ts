@@ -4,7 +4,7 @@
 // in-memory historical.db. No broker, no network.
 
 import { describe, test, expect, beforeAll, beforeEach } from "bun:test";
-import { getDB, PORTFOLIO_ENGINE_STRATEGY } from "../../db/database";
+import { countExecutedOrders, getDB, PORTFOLIO_ENGINE_STRATEGY } from "../../db/database";
 import { makeTestDb, seedOpenTrade } from "../../test-support/db";
 import { PortfolioEngine, type PortfolioEngineOptions } from "./PortfolioEngine";
 import { HistoricalPriceView } from "./priceView";
@@ -12,6 +12,9 @@ import { getPortfolioDecision, latestPortfolioMemory, listPortfolioDecisions, sa
 import { portfolioClientOrderId } from "./clientOrderId";
 import { PORTFOLIO_REBALANCE_CLOSE_REASON, PORTFOLIO_RECONCILED_CLOSE_REASON, loadSleeveRows } from "./rows";
 import { FakeVenue, XASSET, CRYPTO_STOP, fixedDecide, makeHistDb, weekdaySessions } from "./testSupport";
+import { decide as coreDecide } from "../decide";
+import type { VolManagedConfig } from "../types";
+import { AlpacaVenue } from "./venues/alpaca";
 
 const SLEEVE = "momentum_stocks";
 const VERSION = "d1-xasset-v1";
@@ -184,6 +187,114 @@ describe("partial fills, rejections, decreases", () => {
     expect(r.pnl).toBeCloseTo(1000, 6);
     expect(r.exit_price).toBe(500);
     expect(rows()).toHaveLength(0);
+  });
+});
+
+describe("MAX_HOLD with the real Alpaca venue", () => {
+  const qty = 2.733856978;
+  const entryTime = Date.parse("2026-10-12T14:00:00Z");
+  const config: VolManagedConfig = { kind: "volManaged", universe: ["SPY"], inceptionGuardBars: 20,
+    volLookback: 20, covLookback: 20, portfolioVolTarget: 0.15, annualization: 252,
+    perAssetCap: 1, maxGross: 1, maxHoldSessions: 5, maxHoldStagger: true };
+
+  function setup(mode: "partial" | "unfilled" | "partial_unfilled" | "pending" | "zero") {
+    seedOpenTrade("expired", SLEEVE, { symbol: "SPY", strategy: PORTFOLIO_ENGINE_STRATEGY, entryPrice: 500, quantity: qty, entryTime });
+    // Even aggregate excess at the broker is NOT this sleeve's to sell.
+    seedOpenTrade("other-sleeve", "meanrev_stocks", { symbol: "SPY", strategy: "MOMENTUM", entryPrice: 500, quantity: 7 });
+    const venue = new FakeVenue();
+    venue.positions_ = [{ symbol: "SPY", qty: qty + 7, avgEntryPrice: 500 }];
+    venue.prices_ = { SPY: 500 };
+    const sent: any[] = [], book = new Map<string, any>();
+    const state = { mode, t: 0, session: SESSION, ambiguousRemainder: false, lookupFails: false };
+    const real = new AlpacaVenue({ isConnected: () => true, getPositions: async () => [], getLatestPrice: async () => 500,
+      getOpenStopOrders: async () => { throw Error("must not touch the stop book"); },
+      cancelOrderById: async () => { throw Error("must not cancel another sleeve's stop"); } }, {
+      createOrder: async p => {
+        const id = String(p.client_order_id);
+        if (book.has(id)) throw Object.assign(Error("duplicate client_order_id"), { status: 422 });
+        sent.push(p);
+        const o = { id, status: "filled", filled_qty: String(p.qty), filled_avg_price: id.endsWith("-r1") ? "502" : "500" };
+        if (p.side === "sell" && (state.mode === "unfilled" || (state.mode === "partial_unfilled" && id.endsWith("-r1")))) Object.assign(o, { status: "canceled", filled_qty: "0" });
+        else if (p.side === "sell" && !id.endsWith("-r1")) Object.assign(o, { status: "canceled", filled_qty: state.mode === "zero" ? "0" : "1" });
+        else if (p.side === "sell" && state.mode === "pending") Object.assign(o, { status: "pending_cancel", filled_qty: "0" });
+        book.set(id, o);
+        if (id.endsWith("-r1")) {
+          const journal = getPortfolioDecision(SLEEVE, VERSION, state.session)!;
+          expect(journal.orders.find(o => o.clientOrderId === id)).toMatchObject({ applied: false, result: null });
+          expect(journal.orders[0].applied).toBe(true);
+          if (state.ambiguousRemainder) throw Error("response lost after fill");
+        }
+        return o;
+      },
+      getOrder: async id => book.get(id),
+      getOrderByClientId: async id => { if (id.endsWith("-r1") && state.lookupFails) throw Object.assign(Error("unknown"), { status: 503 }); return book.get(id); },
+      cancelOrder: async () => {},
+    }, { fillTimeoutMs: 1_000, pollIntervalMs: 1_000, releaseConfirmTimeoutMs: 2_000,
+      sleep: async ms => { state.t += ms; }, now: () => state.t });
+    venue.submit = async (order, id) => { venue.submits.push({ order, clientOrderId: id }); return real.submit(order, id); };
+    return { venue, state, sent, book };
+  }
+
+  for (const mode of ["partial", "zero"] as const) test(`${mode} close → confirmed remainder → only THEN rebuy; separate executions, MAX_HOLD ledger and other sleeve intact`, async () => {
+    const { venue, sent } = setup(mode);
+    const rep = await engine(venue, { config, decide: coreDecide }).runSession(WINDOW);
+    expect(rep.status).toBe("submitted");
+    expect(rep.rejected).toBe(1); // first broker order really was canceled; the retry filled
+    expect(sent.map(p => p.side)).toEqual(["sell", "sell", "buy"]);
+    const remainder = mode === "partial" ? 1.733856978 : qty;
+    expect(sent.slice(0, 2).map(p => p.qty)).toEqual([String(qty), String(remainder)]);
+    expect(sent[1].client_order_id).toBe(`${sent[0].client_order_id}-r1`);
+    expect(getDB().query("SELECT status, close_reason FROM trades WHERE id='expired'").get()).toEqual({ status: "closed", close_reason: "MAX_HOLD" });
+    expect((getDB().query("SELECT pnl FROM trades WHERE id='expired'").get() as any).pnl).toBeCloseTo(remainder * 2, 8);
+    expect(row("SPY").entry_time).toBe(NOW);
+    expect(countExecutedOrders(NOW - 1, NOW, SLEEVE)).toBe(mode === "partial" ? 3 : 2);
+    expect(getDB().query("SELECT quantity, status FROM trades WHERE id='other-sleeve'").get()).toEqual({ quantity: 7, status: "open" });
+  });
+
+  test("still-working remainder defers rebuy and row application; restart recovers cumulative fills exactly once", async () => {
+    const { venue, sent, book } = setup("pending");
+    const e = engine(venue, { config, decide: coreDecide });
+    expect((await e.runSession(WINDOW)).status).toBe("failed");
+    expect(sent.map(p => p.side)).toEqual(["sell", "sell"]);
+    expect(row("SPY").quantity).toBeCloseTo(qty - 1, 9);
+    expect(getPortfolioDecision(SLEEVE, VERSION, SESSION)!.orders[0].applied).toBe(true);
+    expect(getPortfolioDecision(SLEEVE, VERSION, SESSION)!.orders[1].applied).toBe(false);
+    const remainder = [...book.values()].find(o => o.id.endsWith("-r1"))!;
+    Object.assign(remainder, { status: "filled", filled_qty: "1.733856978" });
+    expect((await engine(venue, { config, decide: coreDecide }).runSession(WINDOW)).status).toBe("resumed");
+    expect(sent.map(p => p.side)).toEqual(["sell", "sell", "buy"]);
+    expect(getDB().query("SELECT status, close_reason FROM trades WHERE id='expired'").get()).toEqual({ status: "closed", close_reason: "MAX_HOLD" });
+    expect((await e.runSession(WINDOW)).status).toBe("already_done");
+    expect(sent).toHaveLength(3);
+  });
+
+  test("ambiguous retry fill survives restart without reapplying the first fill or selling twice", async () => {
+    const { venue, state, sent } = setup("partial");
+    state.ambiguousRemainder = state.lookupFails = true;
+    expect((await engine(venue, { config, decide: coreDecide }).runSession(WINDOW)).status).toBe("failed");
+    expect(sent).toHaveLength(2);
+    expect(row("SPY").quantity).toBeCloseTo(qty - 1, 9);
+    state.ambiguousRemainder = state.lookupFails = false;
+    expect((await engine(venue, { config, decide: coreDecide }).runSession(WINDOW)).status).toBe("resumed");
+    expect(sent.map(p => p.side)).toEqual(["sell", "sell", "buy"]);
+    expect(countExecutedOrders(NOW - 1, NOW, SLEEVE)).toBe(3);
+  });
+
+  for (const mode of ["unfilled", "partial_unfilled"] as const) test(`${mode}: retry is bounded; age is preserved and NEXT session closes overdue remainder before any buy`, async () => {
+    const { venue, state, sent } = setup(mode);
+    const first = await engine(venue, { config, decide: coreDecide }).runSession(WINDOW);
+    expect(first.orders.find(o => o.intent.maxHold === "rebuy")!.skipped).toBe("max_hold_close_incomplete");
+    expect(sent.map(p => p.side)).toEqual(["sell", "sell"]);
+    const remaining = mode === "unfilled" ? qty : qty - 1;
+    expect(row("SPY")).toMatchObject({ entry_time: entryTime, quantity: remaining, status: "open" });
+    state.mode = "partial";
+    state.session = "2026-10-21";
+    const next = await engine(venue, { config, decide: coreDecide, now: () => Date.parse("2026-10-21T14:00:00Z") }, histDb("2026-10-20"))
+      .runSession({ session: "2026-10-21", asOf: "2026-10-20" });
+    expect(next.rejected).toBe(1);
+    expect(next.orders[0].intent).toMatchObject({ side: "sell", maxHold: "close", qty: remaining });
+    expect(sent.slice(2).map(p => p.side)).toEqual(["sell", "sell", "buy"]);
+    expect(getDB().query("SELECT close_reason FROM trades WHERE id='expired'").get()).toEqual({ close_reason: "MAX_HOLD" });
   });
 });
 

@@ -221,7 +221,13 @@ for (const kind of ["partial", "reject", "retry", "restart"] as const) test(`ren
   const window = { session: dates[11], asOf: dates[10] };
   const first = await engine.runSession(window);
   expect(first.status).toBe(kind === "retry" ? "retrying" : kind === "restart" ? "failed" : "submitted");
-  expect(venue.submits.map(o => o.order.side)).toEqual(["sell"]);
+  // A canceled partial close retries its remainder once in the same pass (close-fix);
+  // a still-incomplete close never rebuys.
+  expect(venue.submits.map(o => o.order.side)).toEqual(kind === "partial" ? ["sell", "sell"] : ["sell"]);
+  if (kind === "partial") {
+    expect(venue.submits[1].order.qty).toBeCloseTo(5, 9);
+    expect(venue.submits[1].clientOrderId).toBe(`${venue.submits[0].clientOrderId}-r1`);
+  }
   if (kind === "retry" || kind === "restart") {
     const firstId = venue.submits[0].clientOrderId;
     venue.behavior.ETF = { kind: "fill", price: 100 };

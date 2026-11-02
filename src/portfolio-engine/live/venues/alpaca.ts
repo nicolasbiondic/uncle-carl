@@ -12,6 +12,8 @@
 //     full-position DELETE /v2/positions/{symbol}: that liquidates the
 //     account's aggregate (AGENTS.md "Alpaca close semantics") and this bot's
 //     two stock sleeves share one wallet;
+//   - MAX_HOLD closes allow 180 s for paper fills and confirm cancellation
+//     before returning a remainder for the engine's bounded same-pass retry;
 //   - positions and latest prices read through the executor (its limiter,
 //     its cache, its symbol normalization);
 //   - rules: fractional, min notional 5 USD (RW manifest), band from the design.
@@ -207,7 +209,15 @@ export class AlpacaVenue implements VenueAdapter {
   }
 
   async submit(order: OrderIntent, clientOrderId: string): Promise<OrderResult> {
-    if (order.side !== "buy") return this.submitOrder(order, clientOrderId);
+    if (order.side !== "buy") {
+      const result = await this.submitOrder(order, clientOrderId);
+      // A cancel ACK is not settlement. An unknown/working order can still fill:
+      // leave the engine journal unapplied and recover the SAME id next tick.
+      if (order.maxHold === "close" && (result.status === "unknown" || (result.brokerOrderId && !ALPACA_TERMINAL_STATUSES.has(result.status)))) {
+        throw new Error(`${order.symbol}: close order ${result.brokerOrderId ?? clientOrderId} still working or unknown (${result.error ?? result.status})`);
+      }
+      return result;
+    }
     const previous = AlpacaVenue.buys.get(this.executor) ?? Promise.resolve();
     let release!: () => void;
     const next = new Promise<void>(resolve => { release = resolve; });
@@ -310,7 +320,8 @@ export class AlpacaVenue implements VenueAdapter {
 
   private async awaitTerminal(initial: any, order: OrderIntent): Promise<OrderResult> {
     const orderId = String(initial?.id ?? "");
-    const timeoutMs = this.opts.fillTimeoutMs ?? 60_000;
+    const mandatoryClose = order.side === "sell" && order.maxHold === "close";
+    const timeoutMs = this.opts.fillTimeoutMs ?? (mandatoryClose ? 180_000 : 60_000);
     const pollMs = this.opts.pollIntervalMs ?? 2_000;
     const now = this.opts.now ?? Date.now;
     const start = now();
@@ -325,10 +336,15 @@ export class AlpacaVenue implements VenueAdapter {
     }
     // Still working: cancel the REMAINDER by order id (never the position).
     if (orderId) {
-      try { await this.client.cancelOrder(orderId); log.warn(`${order.symbol}: order ${orderId} timed out — remainder cancelled`); }
+      try { await this.client.cancelOrder(orderId); log.warn(`${order.symbol}: order ${orderId} timed out — remainder cancel requested`); }
       catch (e: any) { log.warn(`${order.symbol}: cancel ${orderId} failed (${e?.message ?? e}) — reading final state`); }
-      await this.sleep(this.opts.settleMs ?? 1_000);
-      try { latest = await this.client.getOrder(orderId); } catch (e: any) { log.warn(`final read ${orderId}: ${e?.message ?? e}`); }
+      const deadline = now() + (mandatoryClose ? (this.opts.releaseConfirmTimeoutMs ?? 20_000) : 0);
+      do {
+        await this.sleep(this.opts.settleMs ?? 1_000);
+        try { latest = await this.client.getOrder(orderId); } catch (e: any) { log.warn(`final read ${orderId}: ${e?.message ?? e}`); }
+        if (ALPACA_TERMINAL_STATUSES.has(String(latest?.status ?? "")) || now() >= deadline) break;
+        await this.sleep(this.opts.releasePollMs ?? 1_000);
+      } while (true);
     }
     const status = String(latest?.status ?? "");
     const res = this.toResult(latest, order, ALPACA_TERMINAL_STATUSES.has(status) ? undefined : "order still working after timeout");

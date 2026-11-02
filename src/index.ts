@@ -164,7 +164,8 @@ export function fileStatePersistence(path: string, currentBase: number, legacyBa
           ...(isEnvelope && parsed.turtleDaily ? { turtleDaily: parsed.turtleDaily } : {}),
           ...(isEnvelope && typeof parsed.breakoutEntryAt === "number" ? { breakoutEntryAt: parsed.breakoutEntryAt } : {}),
           ...(isEnvelope && typeof parsed.breakoutBelowEntry === "boolean" ? { breakoutBelowEntry: parsed.breakoutBelowEntry } : {}),
-          ...(isEnvelope && parsed.breakoutBySymbol && typeof parsed.breakoutBySymbol === "object" && !Array.isArray(parsed.breakoutBySymbol) ? { breakoutBySymbol: parsed.breakoutBySymbol } : {}) };
+          ...(isEnvelope && parsed.breakoutBySymbol && typeof parsed.breakoutBySymbol === "object" && !Array.isArray(parsed.breakoutBySymbol) ? { breakoutBySymbol: parsed.breakoutBySymbol } : {}),
+          ...(isEnvelope && parsed.breakoutLongBySymbol && typeof parsed.breakoutLongBySymbol === "object" && !Array.isArray(parsed.breakoutLongBySymbol) ? { breakoutLongBySymbol: parsed.breakoutLongBySymbol } : {}) };
       } catch (e: any) {
         if (e?.code === "ENOENT") {
           // File vanished between existsSync and the read — same contract as
@@ -205,6 +206,7 @@ export function fileStatePersistence(path: string, currentBase: number, legacyBa
           ...(state.breakoutEntryAt !== undefined ? { breakoutEntryAt: state.breakoutEntryAt } : {}),
           ...(state.breakoutBelowEntry !== undefined ? { breakoutBelowEntry: state.breakoutBelowEntry } : {}),
           ...(state.breakoutBySymbol && Object.keys(state.breakoutBySymbol).length ? { breakoutBySymbol: state.breakoutBySymbol } : {}),
+          ...(state.breakoutLongBySymbol && Object.keys(state.breakoutLongBySymbol).length ? { breakoutLongBySymbol: state.breakoutLongBySymbol } : {}),
         }));
         renameSync(tmp, path);
       } catch (e: any) {
@@ -668,8 +670,8 @@ export function momentumCryptoPortfolioPlan(): MomentumPortfolioPlan {
       // RW6 owner rule: 5-day holds, checked at decisions; keep the RiskState key.
       timeStop: { maxHoldHours: 120 },
       allowSameTickReentry: true,
-      // RW8 §19.3–19.4, artifact b37681ff: Turtle shorts, independent of vt35 longs.
-      breakoutShort: { symbols: [...MOMENTUM_CRYPTO_UNIVERSE], entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 },
+      // RW10 §21–21.1, artifact 4aca1803: System 1 shorts, independent of vt35 longs.
+      breakoutShort: { symbols: [...MOMENTUM_CRYPTO_UNIVERSE], entryDays: 20, exitDays: 10, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 },
       // tsmTrail intentionally ABSENT on crypto — the 2026-07-12 sweep found it
       // amputates fat-tail trend rides. (That sweep's "+148→+178%/yr" claim for
       // enhanced TSM is pre-nested machinery, not evidence — see above.)

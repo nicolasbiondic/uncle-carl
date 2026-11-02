@@ -13,6 +13,7 @@ export type StrategyName =
   | "MOMENTUM"         // v7.0: cross-sectional momentum engine (replacement strategy)
   | "IDLE_OVERLAY"     // monthly idle-capital TSM; deliberately no protective stops
   | "BREAKOUT_SHORT"   // hourly-close Turtle unit; engine owns its 2N stop
+  | "BREAKOUT_LONG"    // hourly-close Turtle unit; distinct from the TSM book
   | "MEANREV"           // Connors-style daily mean reversion (MeanRevEngine)
   | "MEANREV_WIDE"      // shadow_meanrev_wide breadth sleeve (ShadowAdapter)
   | "CARRY"             // shadow_carry funding-carry sleeve (CarryShadowEngine)

@@ -15,6 +15,7 @@
 
 import type { MomentumBrokerAdapter } from "./MomentumEngine";
 import { BREAKOUT_SHORT_TIME_STOP } from "./MomentumEngine";
+import { BREAKOUT_LONG_EXIT, BREAKOUT_LONG_STOP, BREAKOUT_LONG_PRIORITY, BREAKOUT_LONG_DRAWDOWN, BREAKOUT_LONG_TIME_STOP } from "./MomentumEngine";
 import { BREAKOUT_SHORT_EXIT, BREAKOUT_SHORT_STOP, BREAKOUT_SHORT_PRIORITY, BREAKOUT_SHORT_DRAWDOWN, IDLE_OVERLAY_EXIT_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, TIME_STOP_CLOSE_REASON, TRAIL_STOP_CLOSE_REASON, TREND_EXIT_CLOSE_REASON } from "./MomentumEngine";
 import type { CurrentPosition } from "./Rebalancer";
 import type { OHLCV } from "../../utils/types";
@@ -41,7 +42,7 @@ const log = createLogger("BinanceMomentumAdapter");
 // MOMENTUM_REBALANCE — both were previously recorded as the latter). Any
 // other/absent value falls back to MOMENTUM_REBALANCE, so free-text can
 // never land in the enum-ish column. Mirrors AlpacaMomentumAdapter.
-const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, TREND_EXIT_CLOSE_REASON, IDLE_OVERLAY_EXIT_CLOSE_REASON, BREAKOUT_SHORT_EXIT, BREAKOUT_SHORT_STOP, BREAKOUT_SHORT_PRIORITY, BREAKOUT_SHORT_DRAWDOWN, BREAKOUT_SHORT_TIME_STOP]);
+const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, TREND_EXIT_CLOSE_REASON, IDLE_OVERLAY_EXIT_CLOSE_REASON, BREAKOUT_SHORT_EXIT, BREAKOUT_SHORT_STOP, BREAKOUT_SHORT_PRIORITY, BREAKOUT_SHORT_DRAWDOWN, BREAKOUT_SHORT_TIME_STOP, BREAKOUT_LONG_EXIT, BREAKOUT_LONG_STOP, BREAKOUT_LONG_PRIORITY, BREAKOUT_LONG_DRAWDOWN, BREAKOUT_LONG_TIME_STOP]);
 
 export interface BinanceMomentumAdapterConfig {
   /** Profile id to associate trades with. */
@@ -62,6 +63,8 @@ export interface BinanceMomentumAdapterConfig {
   candleTimeframe: "1Hour" | "1Day";
   /** Allowed Turtle short units. USDⓈ-M perpetuals require no borrow. Absent = disabled. */
   breakoutShortSymbols?: string[];
+  /** Allowed Turtle long units. Absent = disabled; no live wiring by default. */
+  breakoutLongSymbols?: string[];
 }
 
 export const DEFAULT_ADAPTER_CONFIG: BinanceMomentumAdapterConfig = {
@@ -143,6 +146,7 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
         entryTime: t.entryTime,
         ...(t.strategy === "IDLE_OVERLAY" ? { role: "idle-overlay" as const } : {}),
         ...(t.strategy === "BREAKOUT_SHORT" ? { role: "breakout-short" as const, entryPrice: t.entryPrice, stopLoss: t.stopLoss, breakoutN: t.breakoutN } : {}),
+        ...(t.strategy === "BREAKOUT_LONG" ? { role: "breakout-long" as const, entryPrice: t.entryPrice, stopLoss: t.stopLoss, breakoutN: t.breakoutN } : {}),
       });
     }
     return out;
@@ -166,7 +170,7 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
         `SELECT COALESCE(SUM(pnl), 0) net
          FROM trades
          WHERE account_id = ? AND status = 'closed' AND exit_time > ?
-           AND strategy IN ('MOMENTUM', 'IDLE_OVERLAY', 'BREAKOUT_SHORT') AND ${RECONCILE_CLOSE_SQL}`
+           AND strategy IN ('MOMENTUM', 'IDLE_OVERLAY', 'BREAKOUT_SHORT', 'BREAKOUT_LONG') AND ${RECONCILE_CLOSE_SQL}`
       ).get(this.cfg.accountId, epochMs) as any;
       return row?.net ?? 0;
     } catch (e: any) {
@@ -176,6 +180,9 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
   }
 
   async openPosition(action: Parameters<MomentumBrokerAdapter["openPosition"]>[0]): Promise<{ ok: boolean; reason?: string }> {
+    if (action.role === "breakout-long" && (!this.cfg.breakoutLongSymbols?.includes(action.symbol) || !this.toNative(action.symbol) || action.side !== "buy" || !action.breakout || ![action.breakout.n, action.breakout.stopN, action.breakout.quantity].every(x => Number.isFinite(x) && x > 0))) {
+      return { ok: false, reason: `breakout long requires a configured, mapped ${this.cfg.quoteAsset} buy with positive N/stopN` };
+    }
     if (action.role === "breakout-short" && (!this.cfg.breakoutShortSymbols?.includes(action.symbol) || !this.toNative(action.symbol) || action.side !== "sell" || !action.breakout || ![action.breakout.n, action.breakout.stopN, action.breakout.quantity].every(x => Number.isFinite(x) && x > 0))) {
       return { ok: false, reason: `breakout short requires a configured, mapped ${this.cfg.quoteAsset} sell with positive N/stopN` };
     }
@@ -217,7 +224,7 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
     // MARGIN the broker locks — it must NOT multiply qty. The old ×leverage
     // here doubled the backtested exposure and starved slots 2-4 of margin
     // ("Margin is insufficient" on the first live tick, 2026-07-10).
-    const rawQty = action.role === "breakout-short" ? action.breakout!.quantity : action.notionalUsd / price;
+    const rawQty = action.role === "breakout-short" || action.role === "breakout-long" ? action.breakout!.quantity : action.notionalUsd / price;
     if (rawQty <= 0) return { ok: false, reason: "computed qty <= 0" };
 
     // BinanceExecutor.placeOrder expects a Signal-like input. Build a minimal one.
@@ -352,7 +359,7 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
     const stopPct = action.stopLossPct !== undefined && action.stopLossPct > 0
       ? action.stopLossPct
       : this.cfg.stopLossPct;
-    const stopLoss = action.role === "breakout-short" ? filledPrice + action.breakout!.n * action.breakout!.stopN : action.role === "idle-overlay" ? 0 : action.side === "buy"
+    const stopLoss = action.role === "breakout-long" ? filledPrice - action.breakout!.n * action.breakout!.stopN : action.role === "breakout-short" ? filledPrice + action.breakout!.n * action.breakout!.stopN : action.role === "idle-overlay" ? 0 : action.side === "buy"
       ? filledPrice * (1 - stopPct / 100)
       : filledPrice * (1 + stopPct / 100);
 
@@ -464,8 +471,8 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
       symbol: action.symbol,
       market: "crypto",
       side: action.side,
-      strategy: action.role === "breakout-short" ? "BREAKOUT_SHORT" : action.role === "idle-overlay" ? "IDLE_OVERLAY" : "MOMENTUM" as any,
-      breakoutN: action.role === "breakout-short" ? action.breakout!.n : undefined,
+      strategy: action.role === "breakout-long" ? "BREAKOUT_LONG" : action.role === "breakout-short" ? "BREAKOUT_SHORT" : action.role === "idle-overlay" ? "IDLE_OVERLAY" : "MOMENTUM" as any,
+      breakoutN: action.role === "breakout-short" || action.role === "breakout-long" ? action.breakout!.n : undefined,
       entryPrice: filledPrice,
       quantity: filledQty,
       entryTime: Date.now(),
@@ -539,7 +546,7 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
     try {
       row = getDB().prepare(
         `SELECT id, entry_price, quantity, side, open_commission FROM trades
-         WHERE account_id = ? AND symbol = ? AND status = 'open' AND strategy IN ('MOMENTUM', 'SYNC_RECOVERY', 'IDLE_OVERLAY', 'BREAKOUT_SHORT')
+         WHERE account_id = ? AND symbol = ? AND status = 'open' AND strategy IN ('MOMENTUM', 'SYNC_RECOVERY', 'IDLE_OVERLAY', 'BREAKOUT_SHORT', 'BREAKOUT_LONG')
          ORDER BY entry_time DESC LIMIT 1`
       ).get(this.cfg.accountId, action.symbol) as any;
     } catch (e: any) {

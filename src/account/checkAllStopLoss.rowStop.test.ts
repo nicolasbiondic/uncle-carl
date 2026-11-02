@@ -40,7 +40,7 @@ function rowStatus(id: string) {
 beforeAll(() => { makeTestDb(); });
 
 describe("checkAllStopLoss (15s loop) — row's stop_loss takes precedence over the profile's fixed pct", () => {
-  test.each(["IDLE_OVERLAY", "BREAKOUT_SHORT"] as const)("durable %s ownership exempts model-specific inventory from the 15s stop", async strategy => {
+  test.each(["IDLE_OVERLAY", "BREAKOUT_SHORT", "BREAKOUT_LONG"] as const)("durable %s ownership exempts model-specific inventory from the 15s stop", async strategy => {
     const id = `role-no-stop-${strategy}`;
     seedOpenTrade(id, "momentum_crypto", { symbol: "BTC/USD", market: "crypto", strategy, side: "sell", stopLoss: 105 });
     let closes = 0;

@@ -14,10 +14,10 @@ import { currentModelVersion } from "./portfolio/modelVersions";
 import { evaluateRisk, DEFAULT_RISK_CONFIG, type RiskState } from "./strategies/momentum/RiskGuard";
 
 describe("momentum_crypto modelVersion wiring", () => {
-  test("RW8 plan and builtin carry the exact manifest Turtle list/config without changing the RiskState key", () => {
+  test("RW10 plan and builtin carry the exact manifest System 1 list/config without changing the RiskState key", () => {
     const v = currentModelVersion("momentum_crypto")!;
-    expect(v.id).toBe("momentum_crypto@vt35-corroff-mh120-nobrakes-bo8");
-    expect(v.manifest).toBe("experiments/momentum-crypto-rw8-breakout8-pure-v1.json");
+    expect(v.id).toBe("momentum_crypto@vt35-corroff-mh120-nobrakes-bo8s1");
+    expect(v.manifest).toBe("experiments/momentum-crypto-rw10-turtle-s1-short-pure-v1.json");
     const manifest = JSON.parse(readFileSync(join(import.meta.dir, "..", v.manifest!), "utf8"));
     const plan = momentumCryptoPortfolioPlan();
     expect(plan.engineConfig.breakoutShort).toEqual(manifest.candidates[0].breakoutShort);

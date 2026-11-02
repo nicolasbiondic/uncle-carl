@@ -142,6 +142,28 @@ describe("historical RW3 seed refreshes to the current hourly builtin at boot", 
 });
 
 describe("RW8 boot: builtin registry rows refresh from RW6/RW7 and carry every new key through validation and the factory", () => {
+  test("RW10 boot replaces builtin 55/20 channels with 20/10, but freezes owner rows and preserves the RiskState key", () => {
+    for (const source of ["builtin", "owner"]) {
+      const db = new Database(":memory:");
+      try {
+        initPlatformPortfolios(db, 1_000);
+        const row = loadPlatformPortfolioRows(db).find(r => r.id === "momentum_crypto")!;
+        const params = row.params as any;
+        const old = { ...params, breakoutShort: { ...params.breakoutShort, entryDays: 55, exitDays: 20 } };
+        db.run("UPDATE platform_portfolios SET params_json = ?, source = ? WHERE id = ?", [JSON.stringify(old), source, row.id]);
+        initPlatformPortfolios(db, 2_000);
+        const refreshed = loadPlatformPortfolioRows(db).find(r => r.id === row.id)!;
+        expect(refreshed.params).toEqual(source === "builtin" ? params : old);
+        expect((refreshed.params as any).modelVersion).toBe("vt35-corroff-2026-10-23");
+        expect(refreshed.updatedAt).toBe(source === "builtin" ? 2_000 : 1_000);
+        if (source === "builtin") {
+          const plan = buildPortfolioPlan(loadPlatformPortfolioDefinitions(db).find(d => d.id === row.id)!, Date.now());
+          expect(plan).toEqual(momentumCryptoPortfolioPlan());
+          expect((plan as any).engineConfig.breakoutShort).toMatchObject({ entryDays: 20, exitDays: 10 });
+        }
+      } finally { db.close(); }
+    }
+  });
   test("db-source crypto engines equal code plans; owner rows stay frozen and RiskState keys do not change", () => {
     const db = new Database(":memory:");
     try {

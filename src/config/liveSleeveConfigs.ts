@@ -291,7 +291,7 @@ export function liveMeanRevStocksConfig(): LiveSleeveConfig {
   };
 }
 
-/** momentum_crypto — 60min TSM, vt-35 sizing, no entry brakes + Turtle shorts (RW8). */
+/** momentum_crypto — 60min TSM, vt-35 sizing, no entry brakes + System 1 shorts (RW10). */
 export function liveMomentumCryptoConfig(): LiveSleeveConfig {
   return {
     sleeve: "momentum_crypto",
@@ -311,7 +311,7 @@ export function liveMomentumCryptoConfig(): LiveSleeveConfig {
       regime: MOMENTUM_CRYPTO_REGIME.enabled === false ? "off" : { ...MOMENTUM_CRYPTO_REGIME },
       timeStop: { ...MOMENTUM_CRYPTO_TIME_STOP },
       allowSameTickReentry: true,
-      breakoutShort: { symbols: [...MOMENTUM_CRYPTO_UNIVERSE], entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 },
+      breakoutShort: { symbols: [...MOMENTUM_CRYPTO_UNIVERSE], entryDays: 20, exitDays: 10, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 },
       risk: { peakHalfLifeDays: DEFAULT_RISK_CONFIG.peakHalfLifeDays, mode: "sizeOnly" },
       maxGrossExposureMult: MOMENTUM_CRYPTO_MAX_GROSS_EXPOSURE_MULT,
     },

@@ -119,6 +119,56 @@ describe("submit", () => {
   });
 });
 
+describe("MAX_HOLD close settlement", () => {
+  const close = (qty = 2.733856978) => intent({ symbol: "AVGO", side: "sell", reduceOnly: true, maxHold: "close", qty, notional: qty * 325 });
+
+  test("paper fills after 60 s are allowed to settle before cancelling a mandatory close", async () => {
+    let t = 0;
+    const client = fakeClient({
+      createOrder: () => ({ id: "slow", status: "accepted", filled_qty: "0" }),
+      getOrder: () => ({ id: "slow", status: t >= 90_000 ? "filled" : "accepted", filled_qty: t >= 90_000 ? "2.733856978" : "0", filled_avg_price: "325" }),
+    });
+    const res = await new AlpacaVenue(fakeExecutor(), client, { now: () => t, sleep: async ms => { t += ms; } }).submit(close(), "close");
+    expect(res).toMatchObject({ ok: true, filledQty: 2.733856978, avgPrice: 325 });
+    expect(t).toBe(90_000);
+    expect(client.calls.some(c => c.method === "cancelOrder")).toBe(false);
+  });
+
+  test("cancel must become terminal; report late fills so the engine cannot oversell its remainder", async () => {
+    let t = 0, cancelAt = -1;
+    const client = fakeClient({
+      createOrder: () => ({ id: "first", status: "accepted", filled_qty: "0" }),
+      cancelOrder: () => { cancelAt = t; },
+      getOrder: () => ({ id: "first", status: cancelAt < 0 ? "accepted" : t < cancelAt + 3_000 ? "pending_cancel" : "canceled", filled_qty: cancelAt < 0 ? "0" : "1", filled_avg_price: "325" }),
+    });
+    const res = await new AlpacaVenue(fakeExecutor(), client, { fillTimeoutMs: 1_000, pollIntervalMs: 1_000, settleMs: 1_000,
+      sleep: async ms => { t += ms; }, now: () => t }).submit(close(), "late");
+    expect(res).toMatchObject({ ok: false, status: "canceled", filledQty: 1, avgPrice: 325 });
+    expect(t).toBeGreaterThanOrEqual(cancelAt + 3_000);
+  });
+
+  test("a still-working/unknown close throws, never retries against reserved shares", async () => {
+    let t = 0;
+    const client = fakeClient({ createOrder: () => ({ id: "stuck", status: "accepted", filled_qty: "0" }),
+      getOrder: () => ({ id: "stuck", status: "pending_cancel", filled_qty: "1", filled_avg_price: "325" }) });
+    const venue = new AlpacaVenue(fakeExecutor(), client, { fillTimeoutMs: 1_000, pollIntervalMs: 1_000, releaseConfirmTimeoutMs: 3_000,
+      sleep: async ms => { t += ms; }, now: () => t });
+    await expect(venue.submit(close(), "stuck")).rejects.toThrow(/still working/);
+    expect(client.calls.filter(c => c.method === "createOrder")).toHaveLength(1);
+    expect(t).toBeLessThanOrEqual(5_000);
+    const unknown = fakeClient({ createOrder: () => { throw http(422, "duplicate client_order_id"); }, getOrderByClientId: () => { throw http(503, "unreadable"); } });
+    await expect(new AlpacaVenue(fakeExecutor(), unknown).submit(close(), "unknown")).rejects.toThrow(/lookup failed/);
+  });
+
+  test("terminal rejection / invalid close returns normally for the engine's existing policy", async () => {
+    const rejected = fakeClient({ createOrder: () => { throw http(403, "insufficient qty"); } });
+    expect((await new AlpacaVenue(fakeExecutor(), rejected).submit(close(), "reject")).status).toBe("rejected");
+    expect(rejected.calls).toHaveLength(1);
+    expect((await new AlpacaVenue(fakeExecutor(), rejected).submit(close(0), "invalid")).status).toBe("invalid");
+    expect(rejected.calls).toHaveLength(1);
+  });
+});
+
 describe("Q5 shared-account gross cap (live only)", () => {
   const absent = () => { throw http(404, "order not found"); };
   test("clips to 1.9x equity INCLUDING treasury/other sleeves; floors fractional quantity, keeps the intent unchanged", async () => {

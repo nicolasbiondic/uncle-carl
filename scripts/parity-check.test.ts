@@ -481,11 +481,11 @@ describe("utcDayCloses / heldSymbolsAt / compareDailyHoldings (momentum_crypto's
   });
 });
 
-describe("momentum_crypto parity epoch — RW8 Turtle shorts (2026-10-31)", () => {
+describe("momentum_crypto parity epoch — RW10 System 1 shorts (2026-11-03)", () => {
   test("the epoch is an exact instant not before the current version's `since`: never replay the new entry policy over an old pass", () => {
     const v = currentModelVersion("momentum_crypto")!;
-    expect(v.id).toBe("momentum_crypto@vt35-corroff-mh120-nobrakes-bo8");
-    expect(PARITY_EPOCHS.momentum_crypto).toBe("2026-10-31T03:00:00Z");
+    expect(v.id).toBe("momentum_crypto@vt35-corroff-mh120-nobrakes-bo8s1");
+    expect(PARITY_EPOCHS.momentum_crypto).toBe("2026-11-03T03:00:00Z");
     expect(Number.isNaN(Date.parse(PARITY_EPOCHS.momentum_crypto!))).toBe(false);
     expect(Date.parse(PARITY_EPOCHS.momentum_crypto!)).toBeGreaterThanOrEqual(Date.parse(v.since));
   });
@@ -496,7 +496,7 @@ describe("momentum_crypto parity epoch — RW8 Turtle shorts (2026-10-31)", () =
     expect(cand.sharpeGate).toBeUndefined();
     expect(cand.allowSameTickReentry).toBe(true);
     expect(cand.timeStop).toEqual({ maxHoldHours: 120 });
-    expect(cand.breakoutShort).toMatchObject({ symbols: liveSleeveConfig("momentum_crypto").universe, entryDays: 55, exitDays: 20, maxHoldHours: 120 });
+    expect(cand.breakoutShort).toMatchObject({ symbols: liveSleeveConfig("momentum_crypto").universe, entryDays: 20, exitDays: 10, maxHoldHours: 120 });
   });
 });
 

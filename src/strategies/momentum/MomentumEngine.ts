@@ -65,7 +65,7 @@ export interface MomentumBrokerAdapter {
    *  `volStop` config). Adapters that persist a stop derive the stop PRICE
    *  from the FILL price with it; absent → the adapter/profile legacy fixed
    *  distance applies unchanged. */
-  openPosition(action: { symbol: string; side: "buy" | "sell"; notionalUsd: number; stopLossPct?: number; role?: "idle-overlay" | "breakout-short"; breakout?: { n: number; stopN: number; quantity: number } }): Promise<{ ok: boolean; reason?: string }>;
+  openPosition(action: { symbol: string; side: "buy" | "sell"; notionalUsd: number; stopLossPct?: number; role?: "idle-overlay" | "breakout-short" | "breakout-long"; breakout?: { n: number; stopN: number; quantity: number } }): Promise<{ ok: boolean; reason?: string }>;
   /** Close the entire position for the given symbol/side. `closeReason` is an
    *  optional CANONICAL telemetry label (e.g. TRAIL_STOP_CLOSE_REASON) the
    *  adapter maps onto trades.close_reason; absent (plan-driven signal-flip
@@ -572,8 +572,15 @@ export const BREAKOUT_SHORT_STOP = "BREAKOUT_SHORT_STOP";
 export const BREAKOUT_SHORT_PRIORITY = "BREAKOUT_SHORT_PRIORITY";
 export const BREAKOUT_SHORT_DRAWDOWN = "BREAKOUT_SHORT_DRAWDOWN";
 export const BREAKOUT_SHORT_TIME_STOP = "BREAKOUT_SHORT_TIME_STOP";
+export type BreakoutLongConfig = Extract<BreakoutShortConfig, { symbols: string[] }>;
+export const BREAKOUT_LONG_EXIT = "BREAKOUT_LONG_EXIT";
+export const BREAKOUT_LONG_STOP = "BREAKOUT_LONG_STOP";
+export const BREAKOUT_LONG_PRIORITY = "BREAKOUT_LONG_PRIORITY";
+export const BREAKOUT_LONG_DRAWDOWN = "BREAKOUT_LONG_DRAWDOWN";
+export const BREAKOUT_LONG_TIME_STOP = "BREAKOUT_LONG_TIME_STOP";
 export interface TurtleDailyState { day: number; n: number; close: number }
-export interface BreakoutSymbolState { daily?: TurtleDailyState; entryAt?: number; belowEntry?: boolean }
+export interface BreakoutSymbolState { daily?: TurtleDailyState; entryAt?: number; belowEntry?: boolean; belowEntryDays?: number }
+export interface BreakoutLongSymbolState { daily?: TurtleDailyState; entryAt?: number; aboveEntry?: boolean }
 export const breakoutSymbols = (c: BreakoutShortConfig): string[] => c.symbols ?? [c.symbol!];
 export const breakoutHistoryDays = (c: BreakoutShortConfig): number => Math.max(c.entryDays, c.exitDays, c.atrDays + 1);
 export function validateBreakoutShort(c: any): asserts c is BreakoutShortConfig {
@@ -587,12 +594,20 @@ export function validateBreakoutShort(c: any): asserts c is BreakoutShortConfig 
     throw new Error("breakoutShort requires legacy symbol BTC/USD OR unique symbols (BASE/USD or BASE/USDC), integer days 2..990, positive stopN, riskPerN in (0,0.01] and optional positive maxHoldHours");
   }
 }
+export function validateBreakoutLong(c: unknown): asserts c is BreakoutLongConfig {
+  try {
+    validateBreakoutShort(c);
+    if (!c.symbols) throw new Error("symbols required");
+  } catch {
+    throw new Error("breakoutLong requires unique symbols (BASE/USD or BASE/USDC), integer days 2..990, positive stopN, riskPerN in (0,0.01] and optional positive maxHoldHours");
+  }
+}
 /** Initial N: SMA of the first atrDays true ranges in the initial window.
  * Thereafter continue Wilder's recurrence, never reseed a rolling window.
  * Strict UTC continuity is checked here as well as at the adapter seam.
  * Daily decisions compare D's close with channels through D-1; N still uses
  * every completed day through D, the same information set as hourly N. */
-export function turtleChannels(bars: OHLCV[], c: BreakoutShortConfig, now: number, previous?: TurtleDailyState, excludeDecisionDay = false): { low: number; high: number; state: TurtleDailyState } | null {
+export function turtleChannels(bars: OHLCV[], c: BreakoutShortConfig, now: number, previous?: TurtleDailyState, excludeDecisionDay = false, side: "sell" | "buy" = "sell"): { low: number; high: number; state: TurtleDailyState } | null {
   const D = 86_400_000, end = Math.floor(now / D) * D;
   if (bars.length < breakoutHistoryDays(c) + (excludeDecisionDay ? 1 : 0) || bars.at(-1)!.timestamp !== end - D ||
       bars.some((b, i) => b.timestamp !== end - (bars.length - i) * D ||
@@ -610,7 +625,7 @@ export function turtleChannels(bars: OHLCV[], c: BreakoutShortConfig, now: numbe
   }
   if (!(state.n > 0)) return null;
   const channelBars = excludeDecisionDay ? bars.slice(0, -1) : bars;
-  return { low: Math.min(...channelBars.slice(-c.entryDays).map(b => b.low)), high: Math.max(...channelBars.slice(-c.exitDays).map(b => b.high)), state };
+  return { low: Math.min(...channelBars.slice(-(side === "buy" ? c.exitDays : c.entryDays)).map(b => b.low)), high: Math.max(...channelBars.slice(-(side === "buy" ? c.entryDays : c.exitDays)).map(b => b.high)), state };
 }
 
 /** Fixed research safety bounds, not fitted to prices. Caps apply at entry;
@@ -815,6 +830,8 @@ export interface MomentumEngineConfig {
   /** Independent one-unit shorts (legacy BTC or a list), hourly/daily close triggers; no native stop,
    * no momentum slots/vol scaling/resizes. Absent = byte-identical legacy. */
   breakoutShort?: BreakoutShortConfig;
+  /** Independent Turtle long units; TSM longs retain same-symbol priority. Default OFF. */
+  breakoutLong?: BreakoutLongConfig;
   scorer: Partial<MomentumScorerConfig>;
   tsm: Partial<TSMConfig>;
   regime: Partial<RegimeFilterConfig>;
@@ -1043,6 +1060,7 @@ export interface MomentumPersistedState {
   breakoutBelowEntry?: boolean;
   /** List-mode only: independent Wilder recurrence, age and channel edge. */
   breakoutBySymbol?: Record<string, BreakoutSymbolState>;
+  breakoutLongBySymbol?: Record<string, BreakoutLongSymbolState>;
 }
 
 export interface MomentumStatePersistence {
@@ -1167,6 +1185,7 @@ export class MomentumEngine {
   private breakoutEntryAt?: number;
   private breakoutBelowEntry?: boolean;
   private breakoutBySymbol: Record<string, BreakoutSymbolState> = {};
+  private breakoutLongBySymbol: Record<string, BreakoutLongSymbolState> = {};
   /** Shadow-equity resume (cfg.risk.shadowResume): symbols the VIRTUAL long
    *  book held at the previous tick, and their last decision closes.
    *  Deliberately EPHEMERAL (not persisted): the monetary anchors live on
@@ -1228,6 +1247,12 @@ export class MomentumEngine {
         throw new Error("breakoutShort requires hourly/daily long-only momentum with matching bars/cadence, breakout symbols in universe and no idleOverlay");
       }
     }
+    if (cfg.breakoutLong !== undefined) {
+      validateBreakoutLong(cfg.breakoutLong);
+      if (cfg.idleOverlay || (cfg.tsm?.maxShorts ?? 0) !== 0 || ![60, 1440].includes(cfg.rebalanceMinutes!) || cfg.tsm?.barMinutes !== cfg.rebalanceMinutes || cfg.breakoutLong.symbols.some(s => !(cfg.universe ?? DEFAULT_ENGINE_CONFIG.universe).includes(s))) {
+        throw new Error("breakoutLong requires hourly/daily long-only momentum with matching bars/cadence, breakout symbols in universe and no idleOverlay");
+      }
+    }
     this.cfg = {
       ...DEFAULT_ENGINE_CONFIG,
       ...cfg,
@@ -1249,6 +1274,14 @@ export class MomentumEngine {
           this.idleOverlayMonth = loaded.idleOverlayMonth;
         }
         this.idleOverlayExitPending = loaded.idleOverlayExitPending === true;
+        for (const symbol of this.cfg.breakoutLong?.symbols ?? []) {
+          const s = loaded.breakoutLongBySymbol?.[symbol];
+          if (s && typeof s === "object") this.breakoutLongBySymbol[symbol] = {
+            ...(s.daily ? { daily: s.daily } : {}),
+            ...(validRiskAnchor(s.entryAt, this.clock.now()) ? { entryAt: s.entryAt } : {}),
+            ...(typeof s.aboveEntry === "boolean" ? { aboveEntry: s.aboveEntry } : {}),
+          };
+        }
         if (this.cfg.breakoutShort?.symbols) {
           for (const symbol of this.cfg.breakoutShort.symbols) {
             const s = loaded.breakoutBySymbol?.[symbol];
@@ -1256,6 +1289,7 @@ export class MomentumEngine {
               ...(s.daily ? { daily: s.daily } : {}),
               ...(validRiskAnchor(s.entryAt, this.clock.now()) ? { entryAt: s.entryAt } : {}),
               ...(typeof s.belowEntry === "boolean" ? { belowEntry: s.belowEntry } : {}),
+              ...(Number.isInteger(s.belowEntryDays) ? { belowEntryDays: s.belowEntryDays } : {}),
             };
           }
         } else if (this.cfg.breakoutShort) this.turtleDaily = loaded.turtleDaily;
@@ -1536,7 +1570,7 @@ export class MomentumEngine {
         try {
           // Turtle entry AND stop must use the executed perpetual's close,
           // never an Alpaca fallback when the Binance feed is unavailable.
-          const c = this.cfg.breakoutShort && breakoutSymbols(this.cfg.breakoutShort).includes(sym)
+          const c = (this.cfg.breakoutShort && breakoutSymbols(this.cfg.breakoutShort).includes(sym)) || this.cfg.breakoutLong?.symbols.includes(sym)
             ? await this.broker.fetchCandles(sym, this.cfg.historyBars, { strictVenue: true })
             : await this.broker.fetchCandles(sym, this.cfg.historyBars);
           return [sym, c];
@@ -1718,7 +1752,17 @@ export class MomentumEngine {
         else delete s.entryAt;
         // Missing data never rearms a sustained breach, even after restart.
         const price = candles.get(symbol)?.at(-1)?.close;
-        if (channel && price) s.belowEntry = price < channel.low;
+        if (channel && price) {
+          // RW10: a restored edge from another (or legacy unlabelled) entry
+          // channel cannot arm/block a crossing under the new channel length.
+          // N and held-unit age remain valid; rebuild only the edge from bars.
+          if (bc!.symbols && s.belowEntry !== undefined && s.belowEntryDays !== bc!.entryDays) {
+            const previousPrice = candles.get(symbol)?.at(-2)?.close;
+            breakoutWasBelow.set(symbol, previousPrice ? previousPrice < channel.low : true);
+          }
+          s.belowEntry = price < channel.low;
+          if (bc!.symbols) s.belowEntryDays = bc!.entryDays;
+        }
         this.saveBreakoutState(symbol, s);
       }
     }
@@ -1733,6 +1777,56 @@ export class MomentumEngine {
         : breakoutPrice && breakoutPrice >= p.stopLoss ? BREAKOUT_SHORT_STOP
         : breakoutPrice && channel && breakoutPrice > channel.high ? BREAKOUT_SHORT_EXIT : undefined;
       if (reason) await closeBreakout(reason, p.symbol);
+    }
+    const bl = this.cfg.breakoutLong;
+    let breakoutLongPositions = positions.filter(p => p.role === "breakout-long");
+    const breakoutLongClosedThisTick = new Set<string>();
+    const closeBreakoutLong = async (closeReason: string, symbol: string): Promise<boolean> => {
+      for (const p of breakoutLongPositions.filter(p => p.symbol === symbol)) {
+        try {
+          const res = await this.broker.closePosition({ symbol, side: p.side, closeReason });
+          if (res.ok) {
+            breakoutLongPositions = breakoutLongPositions.filter(x => x !== p);
+            breakoutLongClosedThisTick.add(symbol);
+            const s = { ...this.breakoutLongBySymbol[symbol] };
+            delete s.entryAt;
+            this.saveBreakoutLongState(symbol, s);
+            breakoutActions.push({ type: "close", symbol, side: p.side, closeReason, reason: closeReason });
+          } else this.log.warn(`breakout long close failed: ${res.reason}`);
+        } catch (e: any) { this.log.error(`breakout long close threw: ${e.message}`); }
+      }
+      return !breakoutLongPositions.some(p => p.symbol === symbol);
+    };
+    const longChannels = new Map<string, NonNullable<ReturnType<typeof turtleChannels>>>();
+    const breakoutWasAbove = new Map<string, boolean | undefined>();
+    for (const symbol of bl?.symbols ?? []) {
+      const s = { ...this.breakoutLongBySymbol[symbol] };
+      breakoutWasAbove.set(symbol, s.aboveEntry);
+      let channel: ReturnType<typeof turtleChannels> = null;
+      try {
+        const dailyDecision = this.cfg.rebalanceMinutes === 1440;
+        const days = Math.max(breakoutHistoryDays(bl!) + (dailyDecision ? 1 : 0), s.daily ? Math.floor(now / 86_400_000) - s.daily.day / 86_400_000 - 1 : 0);
+        channel = turtleChannels(await this.broker.fetchDailyBars?.(symbol, days) ?? [], bl!, now, s.daily, dailyDecision, "buy");
+        if (channel) { s.daily = channel.state; longChannels.set(symbol, channel); }
+      } catch (e: any) { this.log.warn(`breakout long daily fetch failed: ${e.message}`); }
+      if (bl!.maxHoldHours !== undefined) {
+        const held = breakoutLongPositions.find(p => p.symbol === symbol);
+        if (held) s.entryAt ??= validRiskAnchor(held.entryTime, now) || now;
+        else delete s.entryAt;
+        const price = candles.get(symbol)?.at(-1)?.close;
+        if (channel && price) s.aboveEntry = price > channel.high;
+      }
+      this.saveBreakoutLongState(symbol, s);
+    }
+    for (const p of [...breakoutLongPositions]) {
+      const s = this.breakoutLongBySymbol[p.symbol], channel = longChannels.get(p.symbol);
+      const price = candles.get(p.symbol)?.at(-1)?.close;
+      const reason = hardDrawdown ? BREAKOUT_LONG_DRAWDOWN
+        : bl?.maxHoldHours !== undefined && s?.entryAt !== undefined && now - s.entryAt >= bl.maxHoldHours * 3_600_000 ? BREAKOUT_LONG_TIME_STOP
+        : !bl || !bl.symbols.includes(p.symbol) || !p.breakoutN || !p.stopLoss || !p.entryPrice ? BREAKOUT_LONG_EXIT
+        : price && price <= p.stopLoss ? BREAKOUT_LONG_STOP
+        : price && channel && price < channel.low ? BREAKOUT_LONG_EXIT : undefined;
+      if (reason) await closeBreakoutLong(reason, p.symbol);
     }
     // Removing the knob also drains owned inventory.
     if (overlayMonthDue || this.idleOverlayExitPending || hardDrawdown || universePositions.length > 0 || !this.cfg.idleOverlay) await closeOverlay();
@@ -1999,8 +2093,8 @@ export class MomentumEngine {
     // local running total, no extra broker reads. Seeded from THIS tick's
     // pre-loop position snapshot (universePositions) and updated in lockstep
     // as closes/opens execute below, so it stays accurate without re-fetching.
-    const notionalBySymbolSide = new Map([...universePositions, ...breakoutPositions].map(p => [`${p.symbol}|${p.side}`, Math.abs(p.notional)]));
-    let liveGrossNotional = [...universePositions, ...breakoutPositions].reduce((s, p) => s + Math.abs(p.notional), 0);
+    const notionalBySymbolSide = new Map([...universePositions, ...breakoutPositions, ...breakoutLongPositions].map(p => [`${p.symbol}|${p.side}`, Math.abs(p.notional)]));
+    let liveGrossNotional = [...universePositions, ...breakoutPositions, ...breakoutLongPositions].reduce((s, p) => s + Math.abs(p.notional), 0);
     // ── P0 funnel counters (telemetry only — recordDecisionPass at the end;
     // never read by any branch below). Gate keys count BLOCKED PASSES (one
     // per tick), entry keys (gross_cap/capacity/no_slot/open_failed) count
@@ -2116,6 +2210,13 @@ export class MomentumEngine {
           }
           else this.log.warn(`close ${a.symbol} failed: ${res.reason}`);
         } else {
+          if (a.side === "buy" && breakoutLongPositions.some(p => p.symbol === a.symbol)) {
+            const freed = breakoutLongPositions.filter(p => p.symbol === a.symbol).reduce((s, p) => s + Math.abs(p.notional), 0);
+            const closed = await closeBreakoutLong(BREAKOUT_LONG_PRIORITY, a.symbol);
+            executed.push(...breakoutActions.splice(0));
+            if (!closed) { bumpBlock("breakout_long_close_failed"); continue; }
+            liveGrossNotional -= freed;
+          }
           if (a.side === "buy" && breakoutPositions.some(p => p.symbol === a.symbol)) {
             const freed = breakoutPositions.filter(p => p.symbol === a.symbol).reduce((s, p) => s + Math.abs(p.notional), 0);
             const closed = await closeBreakout(BREAKOUT_SHORT_PRIORITY, a.symbol);
@@ -2239,6 +2340,28 @@ export class MomentumEngine {
         } catch (e: any) { this.log.error(`breakout short open threw: ${e.message}`); }
       }
     }
+    for (const symbol of bl?.symbols ?? []) {
+      const channel = longChannels.get(symbol), price = candles.get(symbol)?.at(-1)?.close;
+      if (!bl || !channel || !price || price <= channel.high || breakoutLongClosedThisTick.has(symbol) ||
+          (bl.maxHoldHours !== undefined && breakoutWasAbove.get(symbol) === true) ||
+          breakoutLongPositions.some(p => p.symbol === symbol) || !equityValid || !realisedValid || !canOpen || tradingDisabled || hardDrawdown || hasUndecidableHold) continue;
+      const remaining = await this.broker.getOpenPositions();
+      const quantity = equity * bl.riskPerN / channel.state.n, notionalUsd = quantity * price;
+      const gross = remaining.reduce((s, p) => s + Math.abs(p.notional), 0);
+      if (!remaining.some(p => p.symbol === symbol) && Number.isFinite(notionalUsd) && notionalUsd > 0 &&
+          (this.cfg.maxGrossExposureMult === undefined || gross + notionalUsd <= equity * this.cfg.maxGrossExposureMult)) {
+        try {
+          const res = await this.broker.openPosition({ symbol, side: "buy", notionalUsd, role: "breakout-long", breakout: { n: channel.state.n, stopN: bl.stopN, quantity } });
+          intendedOpenUsd += notionalUsd;
+          if (res.ok) {
+            if (bl.maxHoldHours !== undefined) this.saveBreakoutLongState(symbol, { ...this.breakoutLongBySymbol[symbol], entryAt: now, aboveEntry: true });
+            liveGrossNotional += notionalUsd;
+            executed.push({ type: "open", symbol, side: "buy", notionalTarget: notionalUsd, reason: "Turtle daily high breakout" });
+            if (sleeve) sleeveOutput.recordOpenSuccess(sleeve);
+          } else this.log.warn(`breakout long open failed: ${res.reason}`);
+        } catch (e: any) { this.log.error(`breakout long open threw: ${e.message}`); }
+      }
+    }
     if (this.cfg.idleOverlay) {
       const remaining = await this.broker.getOpenPositions();
       // A busy, gated, data-starved or failed-renewal month stays consumed;
@@ -2334,7 +2457,7 @@ export class MomentumEngine {
         };
         if (equityValid && equity > 0) {
           const planCloseKeys = new Set(plan.actions.filter(a => a.type === "close").map(a => `${a.symbol}|${a.side}`));
-          const keptGross = [...universePositions, ...breakoutPositions]
+          const keptGross = [...universePositions, ...breakoutPositions, ...breakoutLongPositions]
             .filter(p => !planCloseKeys.has(`${p.symbol}|${p.side}`))
             .reduce((s, p) => s + Math.abs(p.notional), 0);
           gateTelemetry.exposureReal = Math.max(0, liveGrossNotional) / equity;
@@ -2599,6 +2722,11 @@ export class MomentumEngine {
       : { daily: this.turtleDaily, entryAt: this.breakoutEntryAt, belowEntry: this.breakoutBelowEntry };
   }
 
+  private saveBreakoutLongState(symbol: string, s: BreakoutLongSymbolState) {
+    this.breakoutLongBySymbol[symbol] = s;
+    this.persistState();
+  }
+
   private saveBreakoutState(symbol: string, s: BreakoutSymbolState) {
     if (this.cfg.breakoutShort?.symbols) this.breakoutBySymbol[symbol] = s;
     else { this.turtleDaily = s.daily; this.breakoutEntryAt = s.entryAt; this.breakoutBelowEntry = s.belowEntry; }
@@ -2625,6 +2753,7 @@ export class MomentumEngine {
         ...(this.cfg.idleOverlay && this.idleOverlayMonth ? { idleOverlayMonth: this.idleOverlayMonth } : {}),
         ...(this.idleOverlayExitPending ? { idleOverlayExitPending: true } : {}),
         ...(this.cfg.breakoutShort?.symbols && Object.keys(this.breakoutBySymbol).length ? { breakoutBySymbol: this.breakoutBySymbol } : {}),
+        ...(this.cfg.breakoutLong && Object.keys(this.breakoutLongBySymbol).length ? { breakoutLongBySymbol: this.breakoutLongBySymbol } : {}),
         ...(this.cfg.breakoutShort && this.turtleDaily ? { turtleDaily: this.turtleDaily } : {}),
         ...(this.cfg.breakoutShort?.maxHoldHours !== undefined ? {
           ...(this.breakoutEntryAt !== undefined ? { breakoutEntryAt: this.breakoutEntryAt } : {}),

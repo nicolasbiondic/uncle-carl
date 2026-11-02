@@ -546,6 +546,20 @@ export class PortfolioEngine {
           this.log.error(`${o.intent.side} ${o.intent.symbol}: fill ${result.filledQty} without a price — row marked at last close ${px}`);
         }
       }
+      // Paper can leave a mandatory close unfilled/partial even after the longer
+      // venue wait. Retry its CONFIRMED terminal remainder once, before the rebuy.
+      // Journal the new deterministic id BEFORE submitting it: restart resumes only
+      // the unapplied leg, and each broker fill remains separately countable.
+      const remaining = o.intent.qty - result.filledQty;
+      if (this.opts.venue.venue === "alpaca" && o.intent.side === "sell" && o.intent.maxHold === "close"
+        && ["canceled", "expired"].includes(result.status) && remaining > 1e-9 * Math.max(1, o.intent.qty)
+        && !clientOrderId.endsWith("-r1")) {
+        orders.splice(orders.indexOf(o) + 1, 0, {
+          intent: { ...o.intent, qty: remaining, notional: o.intent.notional * remaining / o.intent.qty },
+          clientOrderId: `${clientOrderId}-r1`, result: null, applied: false,
+        });
+        this.log.warn(`${o.intent.symbol}: MAX_HOLD close settled ${result.filledQty}/${o.intent.qty} — retrying remainder ${remaining} once`);
+      }
       if (!result.ok) {
         rejected.push(o);
         this.log.warn(`${o.intent.side} ${o.intent.symbol} ${o.intent.qty}: NOT filled (${result.status}${result.error ? `: ${result.error}` : ""})`);

@@ -42,6 +42,7 @@
 import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
 import { breakoutSymbols } from "../src/strategies/momentum/MomentumEngine";
+import type { BreakoutLongConfig } from "../src/strategies/momentum/MomentumEngine";
 import { MomentumEngine, TREND_EXIT_CLOSE_REASON, breakoutHistoryDays, idleOverlayHistoryDays, shortStopDistancePct, trailPctFromVol, type BreakoutShortConfig, type IdleOverlayConfig, type ExposureControlConfig, type MarketTrendGateConfig, type MomentumBrokerAdapter, type MomentumStatePersistence, type ShortStopSpec, type TimeStopConfig, type TrailMark, type TrailStopConfig, type TrendExitConfig, type VolSizingConfig, type VolTargetConfig } from "../src/strategies/momentum/MomentumEngine";
 import type { CurrentPosition } from "../src/strategies/momentum/Rebalancer";
 import { DEFAULT_TSM_CONFIG, type TSMConfig } from "../src/strategies/momentum/TimeSeriesMomentum";
@@ -638,7 +639,7 @@ export class FundingBook {
 // ── sim broker ────────────────────────────────────────────────────────
 export interface SimPosition {
   symbol: string; side: "buy" | "sell"; qty: number; entryPrice: number; entryAt: number; entryMargin: number;
-  role?: "idle-overlay" | "breakout-short";
+  role?: "idle-overlay" | "breakout-short" | "breakout-long";
   breakoutN?: number;
   breakoutStop?: number;
   /** Commission charged at open (already deducted from cash there). Netted into ClosedTrade.pnl at close. */
@@ -915,6 +916,7 @@ export class SimBroker implements MomentumBrokerAdapter {
   trendExitOrders = { exits: 0, reentries: 0, orders: 0 };
   idleOverlayStats = { orders: 0, opens: 0, closes: 0, activeDays: 0, longDays: 0, shortDays: 0, fundingPaid: 0 };
   breakoutShortStats = { orders: 0, opens: 0, closes: 0, shortDays: 0, fundingPaid: 0, exits: {} as Record<string, number> };
+  breakoutLongStats = { orders: 0, opens: 0, closes: 0, longDays: 0, fundingPaid: 0, exits: {} as Record<string, number> };
   private awaitingTrendReentry = new Set<string>();
   /** symbol → decisionTicks value at which entries unblock (B2 axis). Empty
    *  unless cooldownBarsAfterStop > 0 AND a hard stop actually fired. */
@@ -986,7 +988,7 @@ export class SimBroker implements MomentumBrokerAdapter {
       symbol: p.symbol, side: p.side, quantity: p.qty,
       notional: p.qty * this.price(p.symbol, this.now),
       ...(p.role ? { role: p.role } : {}),
-      ...(p.role === "breakout-short" ? { entryPrice: p.entryPrice, breakoutN: p.breakoutN, stopLoss: p.breakoutStop } : {}),
+      ...(p.role === "breakout-short" || p.role === "breakout-long" ? { entryPrice: p.entryPrice, breakoutN: p.breakoutN, stopLoss: p.breakoutStop } : {}),
     }));
   }
 
@@ -1024,7 +1026,7 @@ export class SimBroker implements MomentumBrokerAdapter {
     const px = this.executionPrice(a.symbol);
     if (!px || a.notionalUsd <= 0) return { ok: false, reason: "no price" };
     const slip = a.side === "buy" ? px * (1 + this.slippageBps / 10_000) : px * (1 - this.slippageBps / 10_000);
-    const rawQty = a.role === "breakout-short" ? a.breakout!.quantity : a.notionalUsd / slip;
+    const rawQty = a.role === "breakout-short" || a.role === "breakout-long" ? a.breakout!.quantity : a.notionalUsd / slip;
     const qty = this.isStock ? Math.floor(rawQty) : rawQty;
     if (qty <= 0) return { ok: false, reason: "zero_qty" };
     const actualNotional = qty * slip;
@@ -1066,6 +1068,10 @@ export class SimBroker implements MomentumBrokerAdapter {
     if (a.role === "breakout-short") {
       Object.assign(this.positions.at(-1)!, { breakoutN: a.breakout!.n, breakoutStop: slip + a.breakout!.n * a.breakout!.stopN });
       this.breakoutShortStats.opens++; this.breakoutShortStats.orders++;
+    }
+    if (a.role === "breakout-long") {
+      Object.assign(this.positions.at(-1)!, { breakoutN: a.breakout!.n, breakoutStop: slip - a.breakout!.n * a.breakout!.stopN });
+      this.breakoutLongStats.opens++; this.breakoutLongStats.orders++;
     }
     if (a.role === "idle-overlay") { this.idleOverlayStats.opens++; this.idleOverlayStats.orders++; }
     if (a.side === "buy" && this.awaitingTrendReentry.delete(a.symbol)) {
@@ -1228,6 +1234,10 @@ export class SimBroker implements MomentumBrokerAdapter {
       const s = this.breakoutShortStats, key = engineCloseReason ?? reason;
       s.closes++; s.orders++; s.exits[key] = (s.exits[key] ?? 0) + 1;
     }
+    if (p.role === "breakout-long") {
+      const s = this.breakoutLongStats, key = engineCloseReason ?? reason;
+      s.closes++; s.orders++; s.exits[key] = (s.exits[key] ?? 0) + 1;
+    }
     const slip = side === "buy" ? px * (1 - this.slippageBps / 10_000) : px * (1 + this.slippageBps / 10_000);
     this.turnoverNotional += p.qty * slip;
     const gross = (slip - p.entryPrice) * p.qty * (side === "buy" ? 1 : -1);
@@ -1374,6 +1384,7 @@ export class SimBroker implements MomentumBrokerAdapter {
           p.fundingCashDelta = (p.fundingCashDelta ?? 0) - amt;
           this.fundingPaid += amt;
           if (p.role === "idle-overlay") this.idleOverlayStats.fundingPaid += amt;
+          if (p.role === "breakout-long") this.breakoutLongStats.fundingPaid += amt;
           this.fundingBySymbol.set(p.symbol, (this.fundingBySymbol.get(p.symbol) ?? 0) + amt);
         } else if (this.shortFundingMode === "credit") {
           this.cash += amt;
@@ -1399,6 +1410,7 @@ export class SimBroker implements MomentumBrokerAdapter {
   }
   accrueBreakoutActivity(fromMs: number, toMs: number) {
     if (toMs > fromMs && this.positions.some(p => p.role === "breakout-short")) this.breakoutShortStats.shortDays += (toMs - fromMs) / 86_400_000;
+    if (toMs > fromMs && this.positions.some(p => p.role === "breakout-long")) this.breakoutLongStats.longDays += (toMs - fromMs) / 86_400_000;
   }
 
   /**
@@ -1700,6 +1712,7 @@ export interface ReplayConfig {
   trendExit?: TrendExitConfig;
   idleOverlay?: IdleOverlayConfig;
   breakoutShort?: BreakoutShortConfig;
+  breakoutLong?: BreakoutLongConfig;
   /** Present iff sleeve === "meanrev": routes the trial to runMeanRevReplay. */
   meanrev?: MeanRevSimParams;
   /**
@@ -1838,6 +1851,7 @@ export interface ReplayResult {
   trendExitStats?: { exits: number; reentries: number; orders: number };
   idleOverlayStats?: SimBroker["idleOverlayStats"];
   breakoutShortStats?: SimBroker["breakoutShortStats"];
+  breakoutLongStats?: SimBroker["breakoutLongStats"];
   /** Exposure-control telemetry (cfg.exposureControl only; legacy runs keep
    *  the exact result shape): resize ORDERS executed (the extra orders the
    *  protocol counts), their Σ|Δnotional| in USD (already inside
@@ -2270,11 +2284,12 @@ export async function runWithConfig(
         broker.trendExitDaily.set(symbol, dailyClosesFromBars(bars));
       }
     }
-    if (cfg.breakoutShort) {
+    if (cfg.breakoutShort || cfg.breakoutLong) {
       // Daily channels exclude the decision day; retain one extra prior day.
-      const extraFrom = fromMs - (breakoutHistoryDays(cfg.breakoutShort) + (cfg.cadenceMin === 1440 ? 1 : 0) + 15) * 86_400_000;
+      const legs = [cfg.breakoutShort, cfg.breakoutLong].filter((c): c is BreakoutShortConfig => !!c);
+      const extraFrom = fromMs - (Math.max(...legs.map(breakoutHistoryDays)) + (cfg.cadenceMin === 1440 ? 1 : 0) + 15) * 86_400_000;
       broker.breakoutDaily = new Map();
-      for (const symbol of breakoutSymbols(cfg.breakoutShort)) {
+      for (const symbol of new Set(legs.flatMap(breakoutSymbols))) {
         const bars = loadBars(symbol, cfg.timeframe, cfg.source, cfg.rthOnly, extraFrom, toMs, db);
         broker.breakoutDaily.set(symbol, dailyBarsFromBars(bars, barDurationMs));
       }
@@ -2435,6 +2450,7 @@ export async function runWithConfig(
         trendExit: cfg.trendExit,
         idleOverlay: cfg.idleOverlay,
         breakoutShort: cfg.breakoutShort,
+        breakoutLong: cfg.breakoutLong,
         // maxGrossExposureMult: already a MomentumEngineConfig field (prod
         // parity — the sim instantiates the real engine). undefined = OFF,
         // matching the engine's own default.
@@ -2494,7 +2510,7 @@ export async function runWithConfig(
         // The price snapshot still prices at `t` (unaffected).
         if (prevT && cfg.funding) broker.applyFunding(prevT, t, Math.min(t, toMs - 1));
         if (prevT && cfg.idleOverlay) broker.accrueIdleOverlayActivity(prevT, Math.min(t, toMs));
-        if (prevT && cfg.breakoutShort) broker.accrueBreakoutActivity(prevT, Math.min(t, toMs));
+        if (prevT && (cfg.breakoutShort || cfg.breakoutLong)) broker.accrueBreakoutActivity(prevT, Math.min(t, toMs));
         // Margin interest accrues over the same capped range — a UTC-day
         // boundary exactly AT toMs belongs to the next fold, like a funding
         // event. No-op unless cfg.marginInterest set a nonzero rate.
@@ -2575,7 +2591,7 @@ export async function runWithConfig(
     // is a no-op in that case.
     if (cfg.funding) broker.applyFunding(prevT, toMs, toMs - 1);
     if (cfg.idleOverlay) broker.accrueIdleOverlayActivity(prevT, toMs);
-    if (cfg.breakoutShort) broker.accrueBreakoutActivity(prevT, toMs);
+    if (cfg.breakoutShort || cfg.breakoutLong) broker.accrueBreakoutActivity(prevT, toMs);
 
     // Terminal margin-interest settle mirrors the funding settle: UTC-day
     // boundaries in (lastBar, toMs) accrue while positions are still open;
@@ -2710,6 +2726,7 @@ export async function runWithConfig(
       ...(cfg.trendExit ? { trendExitStats: { ...broker.trendExitOrders } } : {}),
       ...(cfg.idleOverlay ? { idleOverlayStats: { ...broker.idleOverlayStats } } : {}),
       ...(cfg.breakoutShort ? { breakoutShortStats: { ...broker.breakoutShortStats } } : {}),
+      ...(cfg.breakoutLong ? { breakoutLongStats: { ...broker.breakoutLongStats } } : {}),
       // Line-S output-only telemetry: absent unless the run actually charged
       // borrow / vetoed a short on the gross cap (legacy shape preserved).
       ...(broker.shortBorrowPaid > 0 ? { shortBorrow: broker.shortBorrowPaid } : {}),
