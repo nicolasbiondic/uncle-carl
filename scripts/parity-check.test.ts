@@ -463,6 +463,22 @@ describe("utcDayCloses / heldSymbolsAt / compareDailyHoldings (momentum_crypto's
     const d = compareDailyHoldings(sim, live, Date.parse("2026-09-26T19:00:00Z"), Date.parse("2026-09-27T06:00:00Z"));
     expect(d).toContainEqual({ type: "eod_holdings_extra_live", symbol: "DOGE/USD", liveDate: "2026-09-27" });
   });
+
+  test("a midnight decision filled seconds after the boundary is not a divergence (NEAR 2026-10-29, USDC daily pass)", () => {
+    const sim: SleeveDecisions = { entries: [{ symbol: "NEAR/USD", date: "2026-10-29T00:00:00.000Z" }], exits: [], endHoldings: ["NEAR/USD"] };
+    const live: SleeveDecisions = { entries: [{ symbol: "NEAR/USD", date: "2026-10-29T00:00:20.508Z" }], exits: [], endHoldings: ["NEAR/USD"] };
+    const from = Date.parse("2026-10-28T13:00:00Z");
+    const to = Date.parse("2026-10-31T00:00:00Z");
+    expect(compareDailyHoldings(sim, live, from, to)).toEqual([]);
+    expect(compareDailyHoldings(sim, live, from, to, 0)).toContainEqual({ type: "eod_holdings_missing_live", symbol: "NEAR/USD", simDate: "2026-10-29" });
+  });
+
+  test("the slack does not hide a live book that never followed the sim", () => {
+    const sim: SleeveDecisions = { entries: [{ symbol: "NEAR/USD", date: "2026-10-29T00:00:00.000Z" }], exits: [], endHoldings: ["NEAR/USD"] };
+    const live: SleeveDecisions = { entries: [{ symbol: "NEAR/USD", date: "2026-10-29T01:00:20.000Z" }], exits: [], endHoldings: ["NEAR/USD"] };
+    const d = compareDailyHoldings(sim, live, Date.parse("2026-10-28T13:00:00Z"), Date.parse("2026-10-31T00:00:00Z"));
+    expect(d).toContainEqual({ type: "eod_holdings_missing_live", symbol: "NEAR/USD", simDate: "2026-10-29" });
+  });
 });
 
 describe("momentum_crypto parity epoch — RW8 Turtle shorts (2026-10-31)", () => {

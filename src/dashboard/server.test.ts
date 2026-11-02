@@ -154,6 +154,7 @@ describe("DashboardServer.start() port-bind failure", () => {
 // silent out of all proportion to its cadence (isDeadLoop) — is a 503.
 describe("/healthz reflects critical loop staleness (P1 fix, liveness semantics 2026-09-11)", () => {
   test("a STALE-but-alive loop is reported in the body but keeps 200 — the watchdog must not restart a slow pass", async () => {
+    heartbeats._clearForTests(); // the status assertions below are about THIS loop only
     await withServer(async (base) => {
       const name = "test:critical_loop_regression";
       heartbeats.register(name, 50, { graceMultiplier: 1 }); // stale after 50ms, dead only after 5min

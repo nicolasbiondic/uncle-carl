@@ -282,10 +282,14 @@ const VALID_CANDIDATE_KEYS = new Set<keyof CandidateConfig>([
 function validateTimeStop(t: unknown): void {
   if (!t || typeof t !== "object") throw new Error("timeStop must be an object");
   const obj = t as Record<string, unknown>;
-  const unknown = Object.keys(obj).filter(k => k !== "maxHoldHours");
+  const unknown = Object.keys(obj).filter(k => k !== "maxHoldHours" && k !== "rollover");
   if (unknown.length > 0) throw new Error(`timeStop has unknown keys: ${unknown.join(", ")}`);
   if (!Number.isFinite(obj.maxHoldHours) || (obj.maxHoldHours as number) <= 0) {
     throw new Error("timeStop.maxHoldHours must be a positive number of calendar hours");
+  }
+  // RW9 (RW §20): same-pass re-open of TIME_STOP longs. Optional, boolean.
+  if (obj.rollover !== undefined && typeof obj.rollover !== "boolean") {
+    throw new Error("timeStop.rollover must be a boolean when present");
   }
 }
 

@@ -1596,6 +1596,32 @@
       "hypothesisCount": 1, "priorUniqueTrials": 471, "resultingUniqueTrials": 472,
       "inventoryComplete": false, "resultsComplete": false, "executionReported": true,
       "evidence": "RW8 SS19.5-19.6: +1, 471->472. #471 347fd7f0 vs 68181bd6: solo elimina sharpeGate, CAGR 2.2623% vs 10.2564% (-7.9941pp), Sharpe 0.2832 vs 0.4435, DD sleeve 69.5928% vs 57.2045%, libro 17.7414%, 861 vs 668 operaciones. CUMPLE N formalmente (CAGR >=0 y DD libro <=35%), pero DD sleeve supera linea del dueno de 40%: NO SE CABLEA, PENDIENTE decision explicita, no fracaso N ni aprobado. Libro E1 SH 0bb06b9d, E2 2325210c y horario elegido b37681ff, capitales fijos. authoritativeArtifactRw8Usdc conserva cifras/costes y control; vivo sigue daily-d13s5-xc-dd-mh120-sizeonly. Regla nunca dejar de operar, sin pausa ni reasignacion; regimen/cooldown, exposureControl suelo 0.25 y 120h se mantienen. approved=false, inventario historico incompleto; manifest 471 ya alineado, total 472. Fecha 31-oct es la del pre-registro/reporte."
+    },
+    {
+      "id": "rw8-usdc-bo13-2026-10-31",
+      "sourceCommit": "15d2ebb (pre-registro SS19.8, quorum Q6); ec9c713 y b4514da (resultado SS19.9)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-usdc-daily-s5-rw8-sizeonly-bo13-pure-v1.json",
+        "scripts/rw5-crypto-evaluate.ts",
+        "docs/reports/RW-reescritura-rentable.md",
+        "docs/reports/Q6-quorum-decision.md"
+      ],
+      "hypothesisCount": 1, "priorUniqueTrials": 472, "resultingUniqueTrials": 473,
+      "inventoryComplete": false, "resultsComplete": false, "executionReported": true,
+      "evidence": "RW8 SS19.9: +1, 472->473. #472 57430944 vs 68181bd6: anade cortos Turtle 55/20 diarios en las 13 monedas de USDC; CAGR 12.0% vs 10.3%, Sharpe 0.48 vs 0.44, DD sleeve 63.2% vs 57.2%, libro 17.4%, 840 vs 668 operaciones; empeora el bajista de 2022 (fold 2 DD 60% vs 55%). FALLA la condicion pre-registrada (DD <= 57.2%) y la regla Q2 de Q6 (max(40%, control)): NO SE CABLEA, USDC sigue daily-d13s5-xc-dd-mh120-sizeonly. Anotado 2026-11-01 (SS19.9 lo dejaba pendiente)."
+    },
+    {
+      "id": "rw9-rollover-2026-11-01",
+      "sourceCommit": "b7b70e2 (pre-registro SS20 antes de correr); 13e0e52 (mando timeStop.rollover y manifests)",
+      "sourcePaths": [
+        "experiments/momentum-crypto-rw9-rollover-pure-v1.json",
+        "experiments/momentum-crypto-usdc-daily-s5-rw9-rollover-pure-v1.json",
+        "scripts/rw5-crypto-evaluate.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 2, "priorUniqueTrials": 473, "resultingUniqueTrials": 475,
+      "inventoryComplete": false, "resultsComplete": false, "executionReported": true,
+      "evidence": "RW9 SS20-20.1: +2, 473->475. Renovar en la misma pasada, con el umbral de permanencia, los largos cerrados por TIME_STOP 120h. #473 a9ae0cc7 vs b37681ff (horario): CAGR 13.3% vs 12.9%, Sharpe 0.503 vs 0.494, DD 45.0% vs 45.3%, libro 17.5%, 2841 vs 2834 operaciones; FALLA R1 (+3pp). #474 14dabe3a vs 68181bd6 (USDC): CAGR 1.1% vs 10.3%, Sharpe 0.247 vs 0.443, DD 64.6% vs 57.2%, libro 16.9%, 906 vs 668; FALLA R1, R2, R3, R5. NO SE CABLEA; los dos sleeves siguen igual, mando apagado por defecto."
     }
   ],
   "authoritativeArtifactRw8Stocks": {

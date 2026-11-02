@@ -1,0 +1,34 @@
+{
+  "name": "momentum-crypto-rw9-rollover-pure-v1",
+  "sleeve": "crypto",
+  "description": "PRE-REGISTERED (2026-11-01) BEFORE any run, docs/reports/RW-reescritura-rentable.md §20. Copy of momentum-crypto-rw8-breakout8-pure-v1 (live, control b37681ff) with only timeStop.rollover true. Criterion R. Trial 473 -> 474.",
+  "trialAccounting": { "priorUniqueTrials": 473, "complete": false },
+  "data": {
+    "dbPath": "./data/historical.db", "source": "binance_futures", "timeframe": "1h",
+    "universe": ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"],
+    "refSymbol": "BTC/USD", "rthOnly": false, "funding": true, "barMinutes": 60, "barMinutesEq": 60
+  },
+  "asOf": "2026-10-02T08:00:00Z",
+  "window": { "from": "2021-01-01", "to": "2026-12-31", "outerFoldCount": 3, "innerFoldCount": 3, "purgeYears": 0.25, "warmupDays": 45 },
+  "costs": { "base": { "slippageBps": 5, "commissionBps": 4 }, "stress": { "slippageBps": 10, "commissionBps": 8 } },
+  "ledger": { "initialEquity": 5000, "leverage": 2, "hardStopPct": 0.04 },
+  "candidates": [{
+    "name": "vt-35-corr92-roll", "cadenceMin": 60, "notionalPctPerSlot": 0.375,
+    "entryPct": 5, "exitPct": -2, "maxLongs": 4, "maxShorts": 0,
+    "volTarget": { "annualizedPct": 35, "lookbackBars": 720, "minScale": 0.33, "maxScale": 1.5 },
+    "risk": { "peakHalfLifeDays": 30, "mode": "sizeOnly" }, "regime": "off",
+    "timeStop": { "maxHoldHours": 120, "rollover": true }, "allowSameTickReentry": true,
+    "breakoutShort": {
+      "symbols": ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"],
+      "entryDays": 55, "exitDays": 20, "atrDays": 20, "stopN": 2, "riskPerN": 0.01, "maxHoldHours": 120
+    }
+  }],
+  "acceptance": {
+    "minSharpe": 0, "maxDrawdown": 0.45, "minTotalReturn": -0.2,
+    "minExcessReturnVsBench": 0, "maxConcentration": 0.6, "minTrades": 10,
+    "stressMinSharpe": -0.5, "stressMaxDrawdown": 0.55, "stressMinTotalReturn": -0.3,
+    "looMinSharpe": -0.5, "looMaxDrawdown": 0.55, "looMinTotalReturn": -0.3,
+    "minOuterPsr": 0.95, "minFoldsPsrAbove": { "threshold": 0.5, "count": 2 },
+    "maxTurnoverAnnual": 150, "maxDisplacementShare": 0.35, "minBreakEvenSlippageBps": 20
+  }
+}

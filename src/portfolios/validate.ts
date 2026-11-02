@@ -189,6 +189,9 @@ export function validateMomentumParams(
   if (p.timeStop != null && (typeof p.timeStop !== "object" || !isFiniteNum(p.timeStop.maxHoldHours) || p.timeStop.maxHoldHours <= 0)) {
     errors.push("params.timeStop.maxHoldHours: expected positive finite calendar hours");
   }
+  if (p.timeStop != null && typeof p.timeStop === "object" && p.timeStop.rollover !== undefined && typeof p.timeStop.rollover !== "boolean") {
+    errors.push("params.timeStop.rollover: expected boolean");
+  }
   if (p.allowSameTickReentry !== undefined && typeof p.allowSameTickReentry !== "boolean") {
     errors.push("params.allowSameTickReentry: expected boolean");
   }

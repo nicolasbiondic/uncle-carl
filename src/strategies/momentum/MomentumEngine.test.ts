@@ -4,7 +4,7 @@ import { INITIAL_RISK_STATE } from "./RiskGuard";
 import type { OHLCV } from "../../utils/types";
 import { heartbeats } from "../../ops/heartbeat";
 import { eventBus, EVENTS } from "../../utils/events";
-import { ramp, FakeBroker, silentLogger } from "../../test-support/momentum";
+import { ramp, FakeBroker, MemoryPersistence, silentLogger } from "../../test-support/momentum";
 import { TestClock } from "../../utils/clock";
 
 describe("MomentumEngine", () => {
@@ -1291,5 +1291,164 @@ describe("MomentumEngine timeStop (time barrier — third barrier, OFF by defaul
       engine.stop();
       expect(store.get()?.entryMarks?.["UP1|buy"]).toBe(t0);
     });
+  });
+});
+
+describe("MomentumEngine timeStop.rollover (RW9 — RW §20, OFF by default)", () => {
+  const HOUR = 3_600_000;
+  const t0 = Date.parse("2024-01-01T00:00:00Z");
+  /** Hourly candles ENDING at t0 from an explicit close path. */
+  function hourly(closes: number[]): OHLCV[] {
+    return closes.map((p, i) => ({ timestamp: t0 - (closes.length - i) * HOUR, open: p, high: p, low: p, close: p, volume: 1000 }));
+  }
+  const lin = (n: number, a: number, b: number) => Array.from({ length: n }, (_, i) => a + (b - a) * i / (n - 1));
+  // 35 days hourly: 21 days 100→110, then 14 days drifting 110→110.67.
+  // 14d return ≈ +0.6%: ABOVE the stay threshold (−2%), BELOW entry (+5%);
+  // px > MA30 (the MA still carries the rise). A held long stays; a fresh
+  // candidate does not qualify.
+  const stayOnly = () => hourly([...lin(504, 100, 110), ...lin(336, 110, 110.67)]);
+  // Same, but the last 14 days fall 110→106: r ≈ −3.6% < exit threshold.
+  const belowExit = () => hourly([...lin(504, 100, 110), ...lin(336, 110, 106)]);
+  // Stay-only return (+0.45%) with a NEGATIVE recent Sharpe: a 1-day pop to
+  // 112.5 then 13 days of decline to 110.5 → 7d daily Sharpe < 0.
+  const stayNegSharpe = () => hourly([...lin(504, 100, 110), ...lin(24, 110, 112.5), ...lin(312, 112.5, 110.5)]);
+
+  const tsm = { barMinutes: 60, lookbackDays: 14, maLengthDays: 30, maxLongs: 1, entryThresholdPct: 5, exitThresholdPct: -2 };
+  const base = (extra: Record<string, unknown> = {}) => ({
+    universe: ["UP1"], rebalanceMinutes: 60, notionalPctPerSlot: 0.3, tsm,
+    regime: { enabled: false }, ...extra,
+  });
+
+  /** Tick once at t0 (anchors the held lot), then at t0 + 120h. */
+  async function heldThenExpire(cfg: Record<string, unknown>, candles: OHLCV[], arrange?: (b: FakeBroker) => void, store?: MemoryPersistence) {
+    const clock = new TestClock(t0), broker = new FakeBroker();
+    broker.setCandles("UP1", candles);
+    broker.positions = [{ symbol: "UP1", side: "buy", quantity: 30, notional: 3000 }];
+    const engine = new MomentumEngine(cfg as any, broker, silentLogger, store, clock);
+    await engine.tick();
+    expect(broker.closed).toEqual([]);
+    expect(broker.opened).toEqual([]);
+    arrange?.(broker);
+    clock.set(t0 + 120 * HOUR);
+    const report = await engine.tick();
+    return { broker, report };
+  }
+
+  test("fixture sanity: the stay-only path is NOT a fresh entry (r between exit and entry, px > MA)", async () => {
+    const broker = new FakeBroker();
+    broker.setCandles("UP1", stayOnly());
+    const report = await new MomentumEngine(base() as any, broker, silentLogger, undefined, new TestClock(t0)).tick();
+    expect(broker.opened).toEqual([]);
+    const d = report.decisions.find(x => x.symbol === "UP1")!;
+    expect(d.action).toBe("flat");
+    expect(d.score).toBeGreaterThan(-0.02);
+    expect(d.score).toBeLessThan(0.05);
+  });
+
+  test("rollover ON: TIME_STOP close at 120h and same-pass re-open as a NEW lot (stay threshold, fresh clock persisted)", async () => {
+    const store = new MemoryPersistence();
+    const { broker, report } = await heldThenExpire(base({ timeStop: { maxHoldHours: 120, rollover: true } }), stayOnly(), undefined, store);
+    expect(broker.closed.map(c => c.closeReason)).toEqual([TIME_STOP_CLOSE_REASON]);
+    expect(store.store?.entryMarks?.["UP1|buy"]).toBe(t0 + 120 * HOUR); // new lot's clock, written this pass
+    expect(broker.opened).toHaveLength(1);
+    expect(broker.opened[0]).toMatchObject({ symbol: "UP1", side: "buy" });
+    expect(broker.opened[0].notionalUsd).toBeCloseTo(3000, 0); // current entry size, not the old lot
+    expect(broker.positions).toHaveLength(1);
+    expect(report.actions.map(a => a.type)).toEqual(["close", "open"]);
+    const d = report.decisions.find(x => x.symbol === "UP1")!;
+    expect(d.action).toBe("long");
+    expect(d.reason).not.toBe("protective-stopped this tick");
+  });
+
+  test.each([false, true])("rollover OFF (allowSameTickReentry=%p): same scenario closes and does NOT re-open", async same => {
+    const { broker } = await heldThenExpire(base({ timeStop: { maxHoldHours: 120 }, allowSameTickReentry: same }), stayOnly());
+    expect(broker.closed.map(c => c.closeReason)).toEqual([TIME_STOP_CLOSE_REASON]);
+    expect(broker.opened).toEqual([]);
+    expect(broker.positions).toEqual([]);
+  });
+
+  test("rollover ON but r < exit threshold at expiry: TIME_STOP close, no re-open", async () => {
+    // Held with a valid stay signal at t0; by 120h the 14d return has fallen
+    // below the exit threshold → the ranker flattens it, no rollover.
+    const { broker, report } = await heldThenExpire(
+      base({ timeStop: { maxHoldHours: 120, rollover: true } }), stayOnly(),
+      b => b.setCandles("UP1", belowExit()),
+    );
+    expect(broker.closed.map(c => c.closeReason)).toEqual([TIME_STOP_CLOSE_REASON]);
+    expect(broker.opened).toEqual([]);
+    expect(report.decisions.find(x => x.symbol === "UP1")?.action).toBe("flat");
+  });
+
+  test("rollover ON, trailing-stop close (not TIME_STOP) with r between exit and entry: no re-open", async () => {
+    const clock = new TestClock(t0), broker = new FakeBroker();
+    broker.setCandles("UP1", stayOnly());
+    broker.positions = [{ symbol: "UP1", side: "buy", quantity: 30, notional: 3000 }];
+    const store = new MemoryPersistence();
+    // A watermark far above the close → the trail fires on first sighting.
+    store.store = { v: 1, risk: INITIAL_RISK_STATE, trailMarks: { "UP1|buy": { mark: 200, lastTs: t0 - HOUR } } };
+    const cfg = base({ timeStop: { maxHoldHours: 120, rollover: true }, tsmTrail: { kSigma: 1, lookbackBars: 20, minPct: 5, maxPct: 5 } });
+    const report = await new MomentumEngine(cfg as any, broker, silentLogger, store, clock).tick();
+    expect(broker.closed.map(c => c.closeReason)).toEqual([TRAIL_STOP_CLOSE_REASON]);
+    expect(broker.opened).toEqual([]);
+    expect(report.decisions.find(x => x.symbol === "UP1")?.action).toBe("flat");
+  });
+
+  test("rollover ON, TIME_STOP close NOT confirmed: nothing rolls over, position stays held", async () => {
+    const { broker, report } = await heldThenExpire(
+      base({ timeStop: { maxHoldHours: 120, rollover: true } }), stayOnly(),
+      b => { b.closePosition = async (a: any) => { b.closed.push(a); return { ok: false, reason: "venue rejected" }; }; },
+    );
+    expect(broker.closed).toHaveLength(1); // attempted
+    expect(broker.opened).toEqual([]);
+    expect(broker.positions).toHaveLength(1);
+    expect(report.unchanged).toEqual(["UP1"]);
+  });
+
+  test("rollover ON with sharpeGate and NEGATIVE recent Sharpe: exempt (re-opens)", async () => {
+    const cfg = base({ timeStop: { maxHoldHours: 120, rollover: true }, sharpeGate: { lookbackDays: 7, minSharpe: 0 } });
+    // The fixture's 7d daily Sharpe is negative: a fresh entry WOULD be gated.
+    const closes = stayNegSharpe().map(c => c.close);
+    expect(rollingSharpe(closes, 7, 24)!).toBeLessThan(0);
+    const { broker, report } = await heldThenExpire(cfg, stayNegSharpe());
+    expect(broker.closed.map(c => c.closeReason)).toEqual([TIME_STOP_CLOSE_REASON]);
+    expect(broker.opened).toHaveLength(1);
+    const d = report.decisions.find(x => x.symbol === "UP1")!;
+    expect(d.action).toBe("long");
+    expect(d.reason ?? "").not.toContain("sharpe gate");
+  });
+
+  test("rollover ON but the risk gate blocks entries: TIME_STOP close, no re-open", async () => {
+    const { broker, report } = await heldThenExpire(
+      base({ timeStop: { maxHoldHours: 120, rollover: true } }), stayOnly(),
+      b => { b.equity = 7_500; }, // −25% from the 10k peak → RiskGuard pause
+    );
+    expect(report.tradeable).toBe(false);
+    expect(broker.closed.map(c => c.closeReason)).toEqual([TIME_STOP_CLOSE_REASON]);
+    expect(broker.opened).toEqual([]);
+  });
+
+  test("rollover ON but the gross-exposure cap blocks the entry: TIME_STOP close, no re-open", async () => {
+    const { broker } = await heldThenExpire(
+      base({ timeStop: { maxHoldHours: 120, rollover: true }, maxGrossExposureMult: 0.1 }), stayOnly(),
+    );
+    expect(broker.closed.map(c => c.closeReason)).toEqual([TIME_STOP_CLOSE_REASON]);
+    expect(broker.opened).toEqual([]);
+  });
+
+  test("rollover ON: a TSM SHORT closed by TIME_STOP is unchanged (needs the short ENTRY threshold again)", async () => {
+    // 21 days 100→90, then 14 days 90→89.5: r ≈ −0.6% — inside the short
+    // stay band (≤ +2%) but above the short entry threshold (−5%); px < MA.
+    const clock = new TestClock(t0), broker = new FakeBroker();
+    broker.setCandles("DN", hourly([...lin(504, 100, 90), ...lin(336, 90, 89.5)]));
+    broker.positions = [{ symbol: "DN", side: "sell", quantity: 30, notional: 3000 }];
+    const cfg = { ...base({ timeStop: { maxHoldHours: 120, rollover: true }, allowSameTickReentry: true }), universe: ["DN"],
+      tsm: { ...tsm, maxShorts: 1, shortEntryThresholdPct: -5, shortExitThresholdPct: 2 } };
+    const engine = new MomentumEngine(cfg as any, broker, silentLogger, undefined, clock);
+    await engine.tick();
+    expect(broker.closed).toEqual([]);
+    clock.set(t0 + 120 * HOUR);
+    await engine.tick();
+    expect(broker.closed.map(c => ({ side: c.side, closeReason: c.closeReason }))).toEqual([{ side: "sell", closeReason: TIME_STOP_CLOSE_REASON }]);
+    expect(broker.opened).toEqual([]);
   });
 });

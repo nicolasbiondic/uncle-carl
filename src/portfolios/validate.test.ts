@@ -117,6 +117,22 @@ describe("create from a validated preset", () => {
     if (out.ok) expect((out.row.params as MomentumTsmParams).timeStop).toEqual({ maxHoldHours: 120 });
   });
 
+  test("RW9 timeStop.rollover: optional boolean, rejected when not boolean", () => {
+    const create = (timeStop: unknown) => validateCreatePortfolio(
+      { id: "momentum_crypto_v2", name: "Crypto v2", account: "binance_usdt", capital: 5_000, preset: "momentum_crypto", params: { timeStop } },
+      ctx(archivedCrypto()), NOW,
+    );
+    const ok = create({ maxHoldHours: 120, rollover: true });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect((ok.row.params as MomentumTsmParams).timeStop).toEqual({ maxHoldHours: 120, rollover: true });
+    expect(create({ maxHoldHours: 120, rollover: false }).ok).toBe(true);
+    for (const bad of ["true", 1, null]) {
+      const out = create({ maxHoldHours: 120, rollover: bad });
+      expect(out.ok).toBe(false);
+      if (!out.ok) expect(out.errors.join(" ")).toContain("params.timeStop.rollover");
+    }
+  });
+
   test("RW7 risk mode, regime switch and same-tick reentry validate without allowing arbitrary risk overrides", () => {
     const create = (params: Record<string, unknown>) => validateCreatePortfolio(
       { id: "momentum_crypto_v2", name: "Crypto v2", account: "binance_usdt", capital: 5_000, preset: "momentum_crypto", params },

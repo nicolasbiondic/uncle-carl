@@ -224,6 +224,15 @@ export class HeartbeatRegistry {
     }
     return out;
   }
+
+  /** TESTS ONLY: forget every registered loop. The singleton is shared by
+   *  the whole `bun test` process, so a loop another file registered and
+   *  stopped beating (BrokerSync, AccountManager, engines) turned an
+   *  unrelated /healthz status assertion into "degraded" depending on file
+   *  order and elapsed time. */
+  _clearForTests(): void {
+    this.beats.clear();
+  }
 }
 
 // Singleton — mirrors the eventBus pattern in src/utils/events.ts.

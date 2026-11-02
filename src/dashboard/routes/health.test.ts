@@ -167,6 +167,7 @@ describe("broker unreachable ≠ dead loop (watchdog must not restart)", () => {
 
   test("/healthz stays 200 'degraded' with broker_unreachable_count — never 503 for a broker outage", async () => {
     makeTestDb();
+    heartbeats._clearForTests(); // only this test's outage may drive the status
     simulateOutage("sync_alpaca");
     const app = express();
     registerHealthRoutes(app, am);

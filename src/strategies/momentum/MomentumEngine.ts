@@ -972,6 +972,20 @@ export const TREND_EXIT_CLOSE_REASON = "TREND_EXIT";
 export interface TimeStopConfig {
   /** Max hold in calendar hours; e.g. 264 ≈ prod's p90 stocks hold. */
   maxHoldHours: number;
+  /**
+   * RW9 (docs/reports/RW-reescritura-rentable.md §20, opt-in, OFF by
+   * default — absent/false is byte-identical): a LONG closed by TIME_STOP
+   * this pass is still ranked as HELD — it keeps the stay threshold
+   * (exitThresholdPct), its slotHysteresis priority, and is exempt from the
+   * new-entry Sharpe gate and the "protective-stopped this tick" sit-out.
+   * The plan, however, sees the real (closed) book, so a long verdict is a
+   * fresh OPEN: a NEW lot at the current entry size (volTarget, λ), stop from
+   * the new fill, 120h clock and trail mark from zero, through every other
+   * entry gate (risk canOpen, regime, trendExit, gross/margin caps). A failed
+   * TIME_STOP close rolls nothing over; trail/hard-stop closes and shorts
+   * (TSM or Turtle) are unchanged.
+   */
+  rollover?: boolean;
 }
 
 /**
@@ -1542,6 +1556,12 @@ export class MomentumEngine {
     // an expired hold must close even while entries are blocked.
     const timeStopActions = this.cfg.timeStop ? await this.applyTimeStops(now) : [];
     const trailClosedSymbols = new Set([...trailActions, ...timeStopActions].map(a => a.symbol));
+    // RW9 rollover (TimeStopConfig.rollover, opt-in): longs CONFIRMED closed
+    // by TIME_STOP this pass. Empty when the knob is off — every consumer
+    // below is then byte-identical to the legacy path.
+    const rolloverSymbols = new Set(
+      this.cfg.timeStop?.rollover ? timeStopActions.filter(a => a.side === "buy").map(a => a.symbol) : [],
+    );
 
     // Risk gate — SKIPPED when equity is invalid (no evaluate/mutate/persist
     // of RiskGuard state). Entries are forced blocked instead; exits below
@@ -1757,6 +1777,14 @@ export class MomentumEngine {
 
     const heldSymbols = new Set(universePositions.filter(p => p.side === "buy").map(p => p.symbol));
     const heldShorts = new Set(universePositions.filter(p => p.side === "sell").map(p => p.symbol));
+    // RANKING view of the long book (RW9 rollover): the real holds plus the
+    // longs TIME_STOP just closed, so the ranker applies the STAY threshold /
+    // slotHysteresis priority and the Sharpe gate treats them as held. Only
+    // rank(), entryEligibility and sharpeGate read this set; the plan below
+    // keeps reading `universePositions` (fetched AFTER applyTimeStops, so the
+    // closed lot is absent) and emits a fresh OPEN. Without rollover the
+    // set is the same object as heldSymbols.
+    const rankHeld = rolloverSymbols.size > 0 ? new Set([...heldSymbols, ...rolloverSymbols]) : heldSymbols;
     const trendExits = new Set<string>();
     const trendUnverified = new Set<string>();
     const longBlocked = new Set<string>();
@@ -1788,7 +1816,7 @@ export class MomentumEngine {
     if (this.cfg.entryEligibility) {
       rankCandles = new Map<string, OHLCV[]>();
       for (const [sym, c] of candles) {
-        if (heldSymbols.has(sym) || heldShorts.has(sym) || this.cfg.entryEligibility(sym, now)) rankCandles.set(sym, c);
+        if (rankHeld.has(sym) || heldShorts.has(sym) || this.cfg.entryEligibility(sym, now)) rankCandles.set(sym, c);
       }
     }
     // Short-regime gate (line S, opt-in via tsm.shortRegime — see its
@@ -1802,7 +1830,7 @@ export class MomentumEngine {
     const shortRegimeBearish = shortRegimeCfg ? await this.evaluateShortRegimeBearish(shortRegimeCfg) : undefined;
     let decisions = this.tsm.rank(
       rankCandles,
-      heldSymbols,
+      rankHeld,
       heldShorts,
       this.cfg.trendExit || shortRegimeCfg ? { shortRegimeBearish, ...(this.cfg.trendExit ? { longBlocked } : {}) } : undefined,
     );
@@ -1824,7 +1852,7 @@ export class MomentumEngine {
       const { lookbackDays, minSharpe } = this.cfg.sharpeGate;
       decisions = decisions.map(d => {
         if (d.action === "flat") return d;
-        const alreadyHeld = d.action === "long" ? heldSymbols.has(d.symbol) : heldShorts.has(d.symbol);
+        const alreadyHeld = d.action === "long" ? rankHeld.has(d.symbol) : heldShorts.has(d.symbol);
         if (alreadyHeld) return d;
         const closes = (candles.get(d.symbol) ?? []).map(c => c.close);
         const s = rollingSharpe(closes, lookbackDays, this.barsPerDay());
@@ -1840,9 +1868,11 @@ export class MomentumEngine {
     // A symbol trail- or time-stopped THIS tick sits out one tick — otherwise
     // the rebalance below would re-open it at the same price (fee churn only;
     // for the time stop it would also reset the barrier's clock for free).
+    // RW9 rollover exempts ONLY the longs TIME_STOP closed this pass (the
+    // clock reset is the point: a new lot); a trail/hard-stop close still sits out.
     if (!this.cfg.allowSameTickReentry && trailClosedSymbols.size > 0) {
       decisions = decisions.map(d =>
-        d.action !== "flat" && trailClosedSymbols.has(d.symbol)
+        d.action !== "flat" && trailClosedSymbols.has(d.symbol) && !(d.action === "long" && rolloverSymbols.has(d.symbol))
           ? { ...d, action: "flat" as const, reason: "protective-stopped this tick" }
           : d,
       );
@@ -2242,7 +2272,7 @@ export class MomentumEngine {
     executed.push(...overlayActions);
     // Fractions and RW7 re-entry clocks must reach disk this tick: a restart
     // must not restore a fresh lot's old expiry (or lose its sizing fraction).
-    if ((exposure || this.cfg.allowSameTickReentry) && planOpensOk > 0) this.persistState();
+    if ((exposure || this.cfg.allowSameTickReentry || this.cfg.timeStop?.rollover) && planOpensOk > 0) this.persistState();
     // Tick recorded AFTER outputs so a pass that finally produces something
     // resets the silence counter before the check runs (no page on recovery).
     if (sleeve) sleeveOutput.recordTick(sleeve);
@@ -2258,8 +2288,13 @@ export class MomentumEngine {
     // interval — a failed read's losses are recovered, never dropped, and
     // never double-counted.
 
+    // Rollover count (RW9 telemetry): TIME_STOP longs re-opened this pass.
+    // The suffix exists only with the knob on — the legacy line is untouched.
+    const rollovers = this.cfg.timeStop?.rollover
+      ? executed.filter(a => a.type === "open" && a.side === "buy" && rolloverSymbols.has(a.symbol)).length
+      : 0;
     this.log.info(
-      `Rebalance done: equity=$${equity.toFixed(2)}, ${executed.filter(a => a.type === "close").length} close, ${executed.filter(a => a.type === "open").length} open, ${plan.unchanged.length} hold. Realised since last: ${realisedValid ? `$${realised.toFixed(2)}` : "unknown (read failed)"}`
+      `Rebalance done: equity=$${equity.toFixed(2)}, ${executed.filter(a => a.type === "close").length} close, ${executed.filter(a => a.type === "open").length} open, ${plan.unchanged.length} hold.${this.cfg.timeStop?.rollover ? ` ${rollovers} rollover.` : ""} Realised since last: ${realisedValid ? `$${realised.toFixed(2)}` : "unknown (read failed)"}`
     );
 
     // Gate-binding + exposure telemetry (2026-10-23). Definitions live on
@@ -2275,7 +2310,7 @@ export class MomentumEngine {
         const noSlotLong = rawDecisions.filter(d => d.action !== "long" && sideLongRaw(d)).length;
         const sharpeFlat = new Set(postSharpeDecisions.filter(d => d.action === "flat").map(d => d.symbol));
         const sharpeRemoved = rawDecisions.filter(d => d.action === "long" && sharpeFlat.has(d.symbol)).length;
-        const stopRemoved = this.cfg.allowSameTickReentry ? 0 : postSharpeDecisions.filter(d => d.action === "long" && trailClosedSymbols.has(d.symbol)).length;
+        const stopRemoved = this.cfg.allowSameTickReentry ? 0 : postSharpeDecisions.filter(d => d.action === "long" && trailClosedSymbols.has(d.symbol) && !rolloverSymbols.has(d.symbol)).length;
         const plannedOpens = plan.actions.filter(a => a.type === "open").length;
         const entriesGated = blocked || hasUndecidableHold;
         const binding: string[] = [];

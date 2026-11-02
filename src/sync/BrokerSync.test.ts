@@ -102,6 +102,15 @@ describe("BrokerSync.syncAll — liveness (the confessed 4-day no-op)", () => {
     expect(source.calls.getOpenPositions).toBe(1);  // proof it reached the position sync
   });
 
+  test("stop() cancels the pending initial sync (no syncAll after shutdown)", () => {
+    const bs = new BrokerSync([fakeSource()], 30_000);
+    bs.start();
+    expect((bs as any).initialTimer).not.toBeNull();
+    bs.stop();
+    expect((bs as any).initialTimer).toBeNull();
+    expect((bs as any).interval).toBeNull();
+  });
+
   test("disconnected sources are skipped", async () => {
     const source = fakeSource({ status: "disconnected" });
     const bs = new BrokerSync([source], 30_000);

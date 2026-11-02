@@ -1808,6 +1808,18 @@ describe("meanrev sleeve manifest validation", () => {
     expect(new Set([legacy, h1, h2]).size).toBe(3);
   });
 
+  test("timeStop.rollover (RW9 §20): optional boolean, rejected otherwise, distinct hash from the same horizon without it", () => {
+    const momo = baseManifest.candidates[0];
+    expect(() => validateCandidate({ ...momo, timeStop: { maxHoldHours: 120, rollover: true } })).not.toThrow();
+    expect(() => validateCandidate({ ...momo, timeStop: { maxHoldHours: 120, rollover: false } })).not.toThrow();
+    expect(() => validateCandidate({ ...momo, timeStop: { maxHoldHours: 120, rollover: "yes" } })).toThrow(/rollover must be a boolean/);
+    expect(() => validateCandidate({ ...momo, timeStop: { maxHoldHours: 120, rollover: 1 } })).toThrow(/rollover must be a boolean/);
+    expect(() => validateCandidate({ ...momo, timeStop: { maxHoldHours: 120, rollOver: true } })).toThrow(/unknown keys/);
+    const plain = hashReplayConfig(candidateToReplayConfig(baseManifest, { ...momo, timeStop: { maxHoldHours: 120 } }, "base"));
+    const roll = hashReplayConfig(candidateToReplayConfig(baseManifest, { ...momo, timeStop: { maxHoldHours: 120, rollover: true } }, "base"));
+    expect(roll).not.toBe(plain);
+  });
+
   test("candidates differing only in hardStop are distinct hypotheses (hash + duplicate guard)", () => {
     const incumbent = meanrevCandidate; // absent hardStop = legacy fixed
     const noStop: CandidateConfig = { ...meanrevCandidate, name: "no-stop", hardStop: { mode: "none" } };

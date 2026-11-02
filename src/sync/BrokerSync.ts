@@ -126,6 +126,7 @@ export interface SyncChange {
 
 export class BrokerSync {
   private interval: ReturnType<typeof setInterval> | null = null;
+  private initialTimer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   private syncing = false; // reentrancy guard — MUST be separate from `running` (lifecycle flag): start() sets running=true, so reusing it made every syncAll() bail instantly (BrokerSync was a TOTAL NO-OP 2026-07-09→07-13)
   private assetSyncing = new Set<string>();
@@ -174,13 +175,17 @@ export class BrokerSync {
     // alert; a dead loop now pages via ERROR_BURST. grace 2 (never throws).
     try { heartbeats.register("broker_sync", this.syncIntervalMs); } catch (e: any) { log.warn(`heartbeat register failed: ${e.message}`); }
 
-    // Initial sync after 5s
-    setTimeout(() => this.syncAll(), 5000);
+    // Initial sync after 5s — kept so stop() cancels it: an uncleared one
+    // fired syncAll() after shutdown (in the suite: against a closed test DB,
+    // failing whichever unrelated test was running 5 s later).
+    this.initialTimer = setTimeout(() => { this.initialTimer = null; this.syncAll(); }, 5000);
     this.interval = setInterval(() => this.syncAll(), this.syncIntervalMs);
   }
 
   stop() {
     this.running = false;
+    if (this.initialTimer) clearTimeout(this.initialTimer);
+    this.initialTimer = null;
     if (this.interval) clearInterval(this.interval);
     this.interval = null;
   }

@@ -3217,8 +3217,11 @@ describe("historical hypothesis ledger", () => {
     expect(batches.map((b: any) => [b.id, b.priorUniqueTrials, b.hypothesisCount, b.resultingUniqueTrials]))
       .toEqual([[ids[0], 468, 1, 469], [ids[1], 469, 2, 471], [ids[2], 471, 1, 472]]);
     expect(ledger.batches.find((b: any) => b.id === "rw7-nobrakes-2026-10-28").resultingUniqueTrials).toBe(batches[0].priorUniqueTrials);
-    expect(ledger.batches.at(-1).id).toBe(ids[2]);
-    expect(ledger.batches.at(-1).resultingUniqueTrials).toBe(472);
+    // §19.9 (USDC Turtle shorts, failed) is the next batch, recorded 2026-11-01.
+    const next = ledger.batches[ledger.batches.indexOf(batches[2]) + 1];
+    expect(next).toMatchObject({ id: "rw8-usdc-bo13-2026-10-31", priorUniqueTrials: 472, hypothesisCount: 1, resultingUniqueTrials: 473 });
+    for (const p of next.sourcePaths) expect(sourcePathPresent(p)).toBe(true);
+    expect(next.evidence).toContain("NO SE CABLEA");
     expect(batches.map((b: any) => b.sourceCommit)).toEqual([
       "f21fa78 (pre-registro SS19 antes de correr); 1cee162 (resultado SS19.1); ae13e51 (cableado); ef12c87 (corte SS19.2)",
       "3eea24f (disenos pre-registrados); 53ff2a2 (pre-registro SS19.3 antes de correr); 3d23541 (resultado SS19.4); 5a7b0da (version y cableado, integrado por 82be40e)",

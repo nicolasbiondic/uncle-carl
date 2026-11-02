@@ -251,6 +251,13 @@ export const MATCH_TOLERANCE_DAYS = 3;
  *  same-day-but-wrong-symbol divergence. */
 export const MATCH_TOLERANCE_HOURS_CRYPTO = 2;
 
+/** Live lag behind the sim at a UTC day close: the sim books a decision AT
+ *  the bar boundary, live ticks at boundary + 15s and fills seconds later.
+ *  Sampling both books at the same instant flagged every midnight decision
+ *  (momentum_crypto_usdc decides only at 00:00 UTC; NEAR 2026-10-29: sim
+ *  00:00:00, live fill 00:00:20.5). Far below the next hourly pass. */
+export const LIVE_PASS_SLACK_MS = 5 * 60_000;
+
 // ── decision extraction ──────────────────────────────────────────────────
 export interface DecisionEvent { symbol: string; date: string }
 
@@ -451,18 +458,20 @@ export function heldSymbolsAt(entries: DecisionEvent[], exits: DecisionEvent[], 
 /** Portfolio parity at the close of every UTC day inside [fromMs, toMs] —
  *  catches a same-day open+close round trip that entry/exit matching alone
  *  can miss (right symbol, right side, but the live book briefly held a
- *  DIFFERENT combination than the sim at some point inside the window). */
+ *  DIFFERENT combination than the sim at some point inside the window).
+ *  The live book is read `liveSlackMs` after the close (LIVE_PASS_SLACK_MS). */
 export function compareDailyHoldings(
   sim: SleeveDecisions,
   live: SleeveDecisions,
   fromMs: number,
   toMs: number,
+  liveSlackMs: number = LIVE_PASS_SLACK_MS,
 ): Divergence[] {
   const out: Divergence[] = [];
   for (const closeMs of utcDayCloses(fromMs, toMs)) {
     const dayKey = new Date(closeMs).toISOString().slice(0, 10);
     const simHeld = heldSymbolsAt(sim.entries, sim.exits, closeMs);
-    const liveHeld = heldSymbolsAt(live.entries, live.exits, closeMs);
+    const liveHeld = heldSymbolsAt(live.entries, live.exits, closeMs + liveSlackMs);
     for (const s of simHeld) if (!liveHeld.has(s)) out.push({ type: "eod_holdings_missing_live", symbol: s, simDate: dayKey });
     for (const s of liveHeld) if (!simHeld.has(s)) out.push({ type: "eod_holdings_extra_live", symbol: s, liveDate: dayKey });
   }
