@@ -194,6 +194,10 @@ export const MODEL_VERSIONS: Readonly<Record<string, readonly ModelVersion[]>> =
       note: "RW §18.4–18.5 owner never-stop rule: sizeOnly risk removes pauses only; regime, Sharpe gate, cooldown, exposureControl floor 0.25 and 120h cap stay (full nobrakes failed N); N passed: CAGR 10.3% vs 24.7%, Sharpe 0.44 vs 0.76, DD 57.2% vs 48.1%, four-sleeve DD 16.9%; RiskState key NOT changed/re-anchored",
       manifest: "experiments/momentum-crypto-usdc-daily-s5-rw7-sizeonly-pure-v1.json",
       artifact: { dir: "data/backtests/68181bd662a9462ad79e3802076ad9dd25d6ad3023b363c074255c090c1fa644", shiftDays: -1 } },
+    { id: "momentum_crypto_usdc@daily-d13s5-xc-dd-mh120-sizeonly-bo13", since: "2026-11-05T12:00:00Z", modelStart: "2026-11-06",
+      note: "Owner approved 2026-11-05, RW §19.8–19.9 / Q6 §6: add daily Turtle 55/20 shorts on all 13 USDC coins; one unit per coin, ATR20 N through the completed decision day, channels exclude it, 1N = 1% equity, daily-close 2N stop and 120h cap; independent of exposureControl λ, same-symbol long priority and shared gross/margin caps; CAGR 12.0% vs 10.3%, sleeve DD 63.2% vs 57.2% (cost, not veto), four-sleeve DD 17.4%, 840 vs 668 trades; regime/Sharpe/cooldown retained, RiskState key NOT changed/re-anchored",
+      manifest: "experiments/momentum-crypto-usdc-daily-s5-rw8-sizeonly-bo13-pure-v1.json",
+      artifact: { dir: "data/backtests/574309447f608d2786889e9d98f41de15f3aac3262b4ca8784b3d3bcee9cb0c4", shiftDays: -1 } },
   ],
   momentum_btc: [
     { id: "momentum_btc@hourly-coinm", since: EPOCH, modelStart: null,

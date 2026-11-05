@@ -198,9 +198,11 @@ export function validateMomentumParams(
   if (p.breakoutShort !== undefined) {
     try {
       validateBreakoutShort(p.breakoutShort);
-      if (account !== "binance_usdt" || p.barMinutes !== 60 || p.rebalanceMinutes !== 60 ||
+      const venueCadence = (account === "binance_usdt" && p.barMinutes === 60 && p.rebalanceMinutes === 60) ||
+        (account === "binance_usdc" && p.barMinutes === 1440 && p.rebalanceMinutes === 1440);
+      if (!venueCadence ||
           !Array.isArray(p.universe) || breakoutSymbols(p.breakoutShort).some(s => !p.universe.includes(s))) {
-        errors.push("params.breakoutShort: requires hourly Binance USDT and symbols in params.universe");
+        errors.push("params.breakoutShort: requires hourly Binance USDT or daily Binance USDC and symbols in params.universe");
       }
     } catch (e: any) { errors.push(`params.breakoutShort: ${e.message}`); }
   }

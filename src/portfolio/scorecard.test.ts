@@ -348,6 +348,8 @@ describe("sleeveExpectationArtifacts — the CURRENT model version's artifact, o
       expect(arts.meanrev_stocks.manifest).toBe("experiments/rw7-e2-meanrev-maxhold5-stagger-v1.json");
       expect(arts.momentum_crypto.dir).toBe("data/backtests/4aca18035a259fac4bfbba41696c6ee19d750dab1cb8fd3d084e47193e4c0f33");
       expect(arts.momentum_crypto.manifest).toBe("experiments/momentum-crypto-rw10-turtle-s1-short-pure-v1.json");
+      expect(arts.momentum_crypto_usdc.dir).toBe("data/backtests/574309447f608d2786889e9d98f41de15f3aac3262b4ca8784b3d3bcee9cb0c4");
+      expect(arts.momentum_crypto_usdc.manifest).toBe("experiments/momentum-crypto-usdc-daily-s5-rw8-sizeonly-bo13-pure-v1.json");
       // Portfolio replays label a session by its date (weekday labels, verified on both artifacts): no −1 shift.
       expect(arts.momentum_stocks.shiftDays).toBe(0);
       expect(arts.meanrev_stocks.shiftDays).toBe(0);

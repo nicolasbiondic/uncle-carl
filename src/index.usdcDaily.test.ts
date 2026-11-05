@@ -15,10 +15,25 @@ import {
   momentumUsdcPortfolioPlan,
 } from "./index";
 import { builtinPortfolio } from "./portfolios/builtin";
+import { currentModelVersion } from "./portfolio/modelVersions";
 import { exposureResizeFactor, exposureScale } from "./strategies/momentum/MomentumEngine";
 import { evaluateRisk, DEFAULT_RISK_CONFIG, type RiskState } from "./strategies/momentum/RiskGuard";
 
 describe("momentum_crypto_usdc daily-kernel cutover", () => {
+  test("approved bo13 plan and builtin use USDC-native symbols for the exact manifest Turtle candidate; RiskState key stays", () => {
+    const v = currentModelVersion("momentum_crypto_usdc")!;
+    expect(v.id).toBe("momentum_crypto_usdc@daily-d13s5-xc-dd-mh120-sizeonly-bo13");
+    expect(v.manifest).toBe("experiments/momentum-crypto-usdc-daily-s5-rw8-sizeonly-bo13-pure-v1.json");
+    const manifest = JSON.parse(readFileSync(join(import.meta.dir, "..", v.manifest!), "utf8"));
+    const symbols = manifest.data.universe.map((s: string) => s.replace("/USD", "/USDC"));
+    const breakoutShort = { ...manifest.candidates[0].breakoutShort, symbols };
+    const plan = momentumUsdcPortfolioPlan();
+    expect(plan.engineConfig.breakoutShort).toEqual(breakoutShort);
+    expect(plan.engineConfig.universe).toEqual(symbols);
+    expect((builtinPortfolio("momentum_crypto_usdc").params as any).breakoutShort).toEqual(breakoutShort);
+    expect(plan.adapter).toEqual({ kind: "binance_usdm", options: { accountId: "momentum_crypto_usdc", quoteAsset: "USDC", candleTimeframe: "1Day", breakoutShortSymbols: symbols } });
+    expect(plan.engineConfig.modelVersion).toBe("daily-s5-blend3-2026-09-26");
+  });
   test("RW7 keeps the 120h cap, exposure control and entry filters, but removes risk pauses without changing the RiskState key", () => {
     expect(momentumUsdcPortfolioPlan().engineConfig.timeStop).toEqual({ maxHoldHours: 120 });
     expect((builtinPortfolio("momentum_crypto_usdc").params as any).timeStop).toEqual({ maxHoldHours: 120 });

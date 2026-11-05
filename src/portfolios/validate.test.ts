@@ -177,6 +177,26 @@ describe("create from a validated preset", () => {
     }
   });
 
+  test("USDC bo13 validates at matching daily cadence with native symbols; wrong cadence, venue and proxy list fail", () => {
+    const p = presetParamsFor("momentum_crypto_usdc", "test_usdc", 5_000) as MomentumTsmParams;
+    const check = (params: any, account: any = "binance_usdc") => {
+      const errors: string[] = [];
+      validateMomentumParams(params, account, errors);
+      return errors;
+    };
+    expect(check(p)).toEqual([]);
+    expect(p.breakoutShort).toMatchObject({ symbols: p.universe, entryDays: 55, exitDays: 20 });
+    expect(p.breakoutShort!.symbols).toHaveLength(13);
+    for (const params of [{ ...p, barMinutes: 60 }, { ...p, rebalanceMinutes: 60 },
+      { ...p, breakoutShort: { ...p.breakoutShort, symbols: ["BTC/USD"] } },
+      { ...p, breakoutShort: { ...p.breakoutShort, symbols: ["UNKNOWN/USDC"] } }]) {
+      expect(check(params).join(" ")).toContain("params.breakoutShort");
+    }
+    for (const account of ["alpaca_main", "binance_usdt", "binance_coinm"]) {
+      expect(check(p, account).join(" ")).toContain("params.breakoutShort");
+    }
+  });
+
   test("ANY param override on a preset leaves the artifact behind → unvalidated", () => {
     const out = validateCreatePortfolio(
       { id: "momentum_crypto_v2", name: "Crypto v2", account: "binance_usdt", capital: 5_000, preset: "momentum_crypto", params: { notionalPctPerSlot: 0.3 } },

@@ -9,7 +9,7 @@
 //   momentum_stocks ↔ experiments/momentum-stocks-daily-blend3-pure-v1.json
 //   meanrev_stocks  ↔ experiments/meanrev-breadth7-pure-v1.json
 //   momentum_crypto ↔ experiments/momentum-crypto-rw10-turtle-s1-short-pure-v1.json
-//   momentum_crypto_usdc ↔ experiments/momentum-crypto-usdc-daily-s5-rw7-sizeonly-pure-v1.json
+//   momentum_crypto_usdc ↔ experiments/momentum-crypto-usdc-daily-s5-rw8-sizeonly-bo13-pure-v1.json
 //     (RW7: no risk pauses; hourly removes regime/Sharpe/cooldown, USDC keeps them)
 //
 // RW2 (2026-10-23): momentum_stocks and meanrev_stocks run on the PORTFOLIO
@@ -221,12 +221,12 @@ describe("portfolio-engine sleeves — the version table names manifest, candida
     expect(sleeveManagedBy("momentum_crypto")).toBe("incumbent");
     expect(sleeveManagedBy("momentum_crypto_usdc")).toBe("incumbent");
   });
-  test("momentum_crypto_usdc RW7: sizeOnly is the ONLY change vs RW6; daily replay keeps shiftDays −1 and the exposure control", () => {
+  test("momentum_crypto_usdc bo13: only daily Turtle shorts change vs RW7; replay keeps shiftDays −1 and the exposure control", () => {
     const v = currentModelVersion("momentum_crypto_usdc")!;
     expect(v).toMatchObject({
-      id: "momentum_crypto_usdc@daily-d13s5-xc-dd-mh120-sizeonly",
-      manifest: "experiments/momentum-crypto-usdc-daily-s5-rw7-sizeonly-pure-v1.json",
-      artifact: { dir: "data/backtests/68181bd662a9462ad79e3802076ad9dd25d6ad3023b363c074255c090c1fa644", shiftDays: -1 },
+      id: "momentum_crypto_usdc@daily-d13s5-xc-dd-mh120-sizeonly-bo13",
+      manifest: "experiments/momentum-crypto-usdc-daily-s5-rw8-sizeonly-bo13-pure-v1.json",
+      artifact: { dir: "data/backtests/574309447f608d2786889e9d98f41de15f3aac3262b4ca8784b3d3bcee9cb0c4", shiftDays: -1 },
     });
     expect(v.engine).toBeUndefined();
     expect(LIVE_SLEEVE_MANIFESTS.momentum_crypto_usdc).toBe(v.manifest!);
@@ -246,15 +246,20 @@ describe("portfolio-engine sleeves — the version table names manifest, candida
     expect(liveSleeveConfig("momentum_crypto_usdc").candidate.exposureControl).toEqual(cand.exposureControl);
     expect(MOMENTUM_USDC_EXPOSURE_CONTROL).toEqual(knob);
     expect(cand.timeStop).toEqual({ maxHoldHours: 120 });
-    // The previous candidate is byte-identical apart from risk.mode and its label.
+    // The previous candidate is byte-identical apart from the short leg and label.
     const list = MODEL_VERSIONS.momentum_crypto_usdc;
-    expect(list[list.length - 2].id).toBe("momentum_crypto_usdc@daily-d13s5-xc-dd-mh120");
-    expect(list[list.length - 2].manifest).toBe("experiments/momentum-crypto-usdc-daily-s5-rw6-maxhold5-pure-v1.json");
+    expect(list[list.length - 2].id).toBe("momentum_crypto_usdc@daily-d13s5-xc-dd-mh120-sizeonly");
+    expect(list[list.length - 2].manifest).toBe("experiments/momentum-crypto-usdc-daily-s5-rw7-sizeonly-pure-v1.json");
     const controlManifest: any = JSON.parse(readFileSync(join(ROOT, list[list.length - 2].manifest!), "utf-8"));
     const control: any = controlManifest.candidates[0];
-    expect(control.risk).toEqual({ peakHalfLifeDays: 30 });
-    const { risk: _r, name: _n, ...rest } = cand;
-    const { risk: _r2, name: _n2, ...controlRest } = control;
+    expect(control.breakoutShort).toBeUndefined();
+    expect(cand.breakoutShort).toEqual({ symbols: m.data.universe, entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 });
+    expect(liveSleeveConfig("momentum_crypto_usdc").candidate.breakoutShort).toEqual(cand.breakoutShort);
+    const runtimeBreakout = { ...cand.breakoutShort, symbols: m.data.universe.map(s => s.replace("/USD", "/USDC")) };
+    expect(momentumUsdcPortfolioPlan().engineConfig.breakoutShort).toEqual(runtimeBreakout);
+    expect((builtinPortfolio("momentum_crypto_usdc").params as any).breakoutShort).toEqual(runtimeBreakout);
+    const { breakoutShort: _b, name: _n, ...rest } = cand;
+    const { name: _n2, ...controlRest } = control;
     expect(rest).toEqual(controlRest);
     expect(controlManifest.asOf).toBe((m as any).asOf);
     expect(controlManifest.data).toEqual(m.data);

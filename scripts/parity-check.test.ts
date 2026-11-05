@@ -501,18 +501,19 @@ describe("momentum_crypto parity epoch — RW10 System 1 shorts (2026-11-03)", (
 });
 
 describe("momentum_crypto_usdc parity — live BASE/USDC vs the replay's BASE/USD proxies", () => {
-  test("RW7: the parity boundary is the deploy instant; the first DAILY tick is afterwards, not a pre-sizeOnly pass", () => {
+  test("bo13: the parity boundary is the approved deploy instant; the first DAILY tick is afterwards, not a pre-Turtle pass", () => {
     const v = currentModelVersion("momentum_crypto_usdc")!;
-    expect(v.id).toBe("momentum_crypto_usdc@daily-d13s5-xc-dd-mh120-sizeonly");
-    expect(PARITY_EPOCHS.momentum_crypto_usdc).toBe("2026-10-28T13:00:00Z");
+    expect(v.id).toBe("momentum_crypto_usdc@daily-d13s5-xc-dd-mh120-sizeonly-bo13");
+    expect(PARITY_EPOCHS.momentum_crypto_usdc).toBe("2026-11-05T12:00:00Z");
     expect(PARITY_EPOCHS.momentum_crypto_usdc).toBe(v.since);
-    expect(Date.parse(PARITY_EPOCHS.momentum_crypto_usdc!)).toBeLessThan(Date.parse("2026-10-29T00:00:15Z"));
+    expect(Date.parse(PARITY_EPOCHS.momentum_crypto_usdc!)).toBeLessThan(Date.parse("2026-11-06T00:00:15Z"));
     // (Before: 2026-10-08T00:00:00Z — the owner's UNI realign; AUDITS 2026-10-06.)
   });
 
   test("the replay the monitor runs for momentum_crypto_usdc carries the drawdown exposure control (live = validated)", () => {
     const cand = liveSleeveConfig("momentum_crypto_usdc").candidate;
     expect(cand.exposureControl).toEqual({ drawdown: { startPct: 0.1, endPct: 0.4 }, minScale: 0.25, band: 0.1, minOrderUsd: 100 });
+    expect(cand.breakoutShort).toMatchObject({ symbols: liveSleeveConfig("momentum_crypto_usdc").universe, entryDays: 55, exitDays: 20, maxHoldHours: 120 });
     expect(cand.risk?.mode).toBe("sizeOnly");
     expect(cand.timeStop).toEqual({ maxHoldHours: 120 });
   });

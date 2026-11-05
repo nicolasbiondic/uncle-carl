@@ -5,11 +5,18 @@
 // ══════════════════════════════════════════════
 
 import { describe, test, expect, beforeAll } from "bun:test";
+import { Database } from "bun:sqlite";
 import { getDB, updateTradeCloseReason } from "../../db/database";
 import { BinanceMomentumAdapter } from "./BinanceMomentumAdapter";
 import { makeTestDb, seedOpenTrade } from "../../test-support/db";
-import { momentumCryptoPortfolioPlan } from "../../index";
+import { momentumCryptoPortfolioPlan, momentumUsdcPortfolioPlan } from "../../index";
 import { USDC_SYMBOL_MAP, type QuoteAsset } from "../../executor/binance/quoteAsset";
+import { initPlatformPortfolios, loadPlatformPortfolioDefinitions, loadPlatformPortfolioRows } from "../../portfolios/store";
+import { buildPortfolioPlan } from "../../portfolios/factory";
+import { validateMomentumParams } from "../../portfolios/validate";
+import { MomentumEngine } from "./MomentumEngine";
+import { MemoryPersistence, silentLogger } from "../../test-support/momentum";
+import { TestClock } from "../../utils/clock";
 
 beforeAll(() => {
   makeTestDb();
@@ -151,6 +158,70 @@ describe("BinanceMomentumAdapter ownership boundary — the DB, not the broker, 
 });
 
 describe("BinanceMomentumAdapter close_reason telemetry — TRAIL_STOP vs signal-flip (P2)", () => {
+  test("USDC bo13 end to end: boot refresh → DB → validation → factory → engine → adapter opens all 13 native units from completed UTC days", async () => {
+    const registry = new Database(":memory:"), saved = globalThis.fetch;
+    const day = Math.floor(Date.now() / 86400000) * 86400000, symbols = Object.keys(USDC_SYMBOL_MAP);
+    try {
+      initPlatformPortfolios(registry, 1_000);
+      const row = loadPlatformPortfolioRows(registry).find(r => r.id === "momentum_crypto_usdc")!;
+      const { breakoutShort: _leg, ...old } = row.params as any;
+      registry.run("UPDATE platform_portfolios SET params_json = ? WHERE id = ?", [JSON.stringify(old), row.id]);
+      initPlatformPortfolios(registry, 2_000);
+      const refreshed = loadPlatformPortfolioRows(registry).find(r => r.id === row.id)!;
+      expect(refreshed).toMatchObject({ source: "builtin", updatedAt: 2_000 });
+      const errors: string[] = [];
+      validateMomentumParams(refreshed.params, refreshed.account, errors, { permittedCutover: old.cutover });
+      expect(errors).toEqual([]);
+      const plan = buildPortfolioPlan(loadPlatformPortfolioDefinitions(registry).find(d => d.id === row.id)!, day);
+      expect(plan).toEqual(momentumUsdcPortfolioPlan());
+      if (plan.template !== "momentum_tsm" || plan.adapter.kind !== "binance_usdm") throw new Error("expected USDM momentum");
+      expect(plan.adapter.options.breakoutShortSymbols).toEqual(symbols);
+      const reads: string[] = [], orders: Array<{ symbol: string; quantity: number }> = [];
+      const raw = Array.from({ length: 264 }, (_, i) => {
+        const t = day - (263 - i) * 86400000;
+        // Forming day has a huge range; yesterday's low permits the strict breach.
+        return [t, "100", i === 263 ? "1000000000" : "110", i === 262 ? "80" : "90", i === 262 ? "89" : "100", "1000", t + 86400000 - 1];
+      });
+      globalThis.fetch = (async (url: any) => {
+        const u = new URL(String(url));
+        expect(u.pathname).toBe("/fapi/v1/klines");
+        expect(u.searchParams.get("interval")).toBe("1d");
+        reads.push(u.searchParams.get("symbol")!);
+        return new Response(JSON.stringify(raw));
+      }) as any;
+      const bin = {
+        isConnected: () => true, getBalance: async () => ({ marginEquity: 5_000, marginCash: 5_000 }),
+        getPrice: async (native: string) => { expect(Object.values(USDC_SYMBOL_MAP)).toContain(native); return 89; },
+        getPositions: async () => orders.map(o => ({ symbol: USDC_SYMBOL_MAP[o.symbol], positionAmt: -o.quantity, entryPrice: 89, unrealizedProfit: 0 })),
+        placeOrder: async (s: any, quantity: number, accountId: string) => {
+          expect(s.side).toBe("sell"); expect(accountId).toBe(row.id);
+          orders.push({ symbol: s.symbol, quantity });
+          return { id: `usdc-bo13-e2e-${s.symbol}`, quantity, status: "filled", filledPrice: 89, filledAt: day + 15000 };
+        },
+        placeStopMarketClose: async () => { throw new Error("Turtle has a daily-close stop, no native stop"); },
+      } as any;
+      const adapter = new BinanceMomentumAdapter({ getBars: async () => { throw new Error("no Alpaca proxy"); } } as any, bin, plan.adapter.options);
+      for (const symbol of symbols) {
+        const bars = await adapter.fetchDailyBars(symbol, 56);
+        expect(bars).toHaveLength(56); expect(bars.at(-1)!.timestamp).toBe(day - 86400000);
+        expect(Math.max(...bars.map(b => b.high))).toBe(110);
+        expect(await adapter.fetchDailyBars(symbol, 56)).toBe(bars);
+      }
+      const report = await new MomentumEngine(plan.engineConfig, adapter, silentLogger, new MemoryPersistence(), new TestClock(day + 15000)).tick();
+      expect(orders.map(o => o.symbol)).toEqual(symbols);
+      expect(report.actions.filter(a => a.type === "open")).toHaveLength(13);
+      const held = await new BinanceMomentumAdapter({} as any, bin, plan.adapter.options).getOpenPositions();
+      expect(held).toHaveLength(13);
+      for (const p of held) {
+        expect(p.role).toBe("breakout-short"); expect(p.quantity * p.breakoutN!).toBeCloseTo(50, 10);
+        expect(p.stopLoss).toBeCloseTo(89 + 2 * p.breakoutN!, 10);
+      }
+      expect(new Set(reads)).toEqual(new Set(Object.values(USDC_SYMBOL_MAP)));
+      expect(await new BinanceMomentumAdapter({} as any, bin, plan.adapter.options).openPosition({ symbol: "BTC/USD", side: "sell", notionalUsd: 10, role: "breakout-short", breakout: { n: 20, stopN: 2, quantity: 0.1 } })).toMatchObject({ ok: false });
+      raw.splice(240, 1); // missing completed day fails closed, not a shorter channel
+      expect(await new BinanceMomentumAdapter({} as any, bin, plan.adapter.options).fetchDailyBars("BTC/USDC", 56)).toEqual([]);
+    } finally { globalThis.fetch = saved; registry.close(); }
+  });
   test("Turtle gets consecutive completed venue OHLC for every configured coin, and never falls back to Alpaca", async () => {
     const saved = globalThis.fetch, day = Math.floor(Date.now() / 86400000) * 86400000;
     let alpacaReads = 0;

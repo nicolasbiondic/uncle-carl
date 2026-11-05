@@ -151,7 +151,10 @@ function buildMomentumPlan(def: PortfolioDefinition, nowMs: number): MomentumPor
     case "binance_usdc":
       adapter = {
         kind: "binance_usdm",
-        options: { accountId: def.id, quoteAsset: "USDC", candleTimeframe: horizon ? "1Day" : "1Hour" },
+        options: {
+          accountId: def.id, quoteAsset: "USDC", candleTimeframe: horizon ? "1Day" : "1Hour",
+          ...(p.breakoutShort ? { breakoutShortSymbols: [...breakoutSymbols(p.breakoutShort)] } : {}),
+        },
       };
       shadowTimeframe = p.barMinutes === 1440 ? "1Day" : "1Hour";
       scheduler = { kind: "engine-start" };

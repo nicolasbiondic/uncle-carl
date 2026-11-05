@@ -126,12 +126,12 @@ export const PARITY_EPOCHS: Partial<Record<LiveSleeveId, string>> = {
   // new entry policy over pre-deploy decisions. This moves the parity window,
   // NOT the persisted live RiskState key (neither crypto sleeve re-anchors).
   momentum_crypto: "2026-11-03T03:00:00Z",
-  // Same deploy boundary for DAILY USDC: the first eligible tick is 10-29
+  // Owner-approved bo13 boundary for DAILY USDC: first eligible tick is 11-06
   // 00:00:15Z. The replay still starts fresh risk while live keeps its peak,
   // drawdown and exposure fractions — the known state difference remains.
   // Live trades are BASE/USDC; the replay runs the BASE/USD USDT-perp proxies
   // (declared in its manifest) — normalizeLiveDecisions.
-  momentum_crypto_usdc: "2026-10-28T13:00:00Z",
+  momentum_crypto_usdc: "2026-11-05T12:00:00Z",
 };
 
 // ── sleeves managed by the portfolio engine (RW2) ─────────────────────────

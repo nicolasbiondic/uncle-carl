@@ -358,6 +358,8 @@ export function liveMomentumUsdcConfig(): LiveSleeveConfig {
       // RW7 keeps the RW4a drawdown exposure control, including its floor.
       exposureControl: { ...MOMENTUM_USDC_EXPOSURE_CONTROL, drawdown: { ...MOMENTUM_USDC_EXPOSURE_CONTROL.drawdown! } },
       timeStop: { ...MOMENTUM_CRYPTO_TIME_STOP },
+      // Research uses USDT-perp proxies; runtime uses the same bases in /USDC.
+      breakoutShort: { symbols: Object.keys(USDC_SYMBOL_MAP).map(s => s.replace("/USDC", "/USD")), entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 },
       maxGrossExposureMult: MOMENTUM_USDC_MAX_GROSS_EXPOSURE_MULT,
     },
     universe: Object.keys(USDC_SYMBOL_MAP).map(s => s.replace("/USDC", "/USD")),

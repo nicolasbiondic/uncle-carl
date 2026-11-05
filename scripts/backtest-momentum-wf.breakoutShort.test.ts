@@ -286,6 +286,35 @@ describe("daily Turtle shorts (Q6, no historical trial)", () => {
       return this.tape.filter(b => b.timestamp + D <= this.clock.now()).slice(-bars);
     }
   }
+  test.each([10_000, 20_000])("USDC exposure control: λ affects momentum only, never Turtle entry units or held resizes; live/sim + restart (peak %s)", async peak => {
+    const bars = tape(), clock = new TestClock(T), live = new DailyBroker(bars, clock);
+    const sim = new SimBroker(10_000, new Map([["BTC/USD", bars]]), 0, 0, D, { leverage: 2, maintRate: 0.005 });
+    sim.breakoutDaily = new Map([["BTC/USD", dailyBarsFromBars(bars, D)]]);
+    const ls = new MemoryPersistence(), ss = new MemoryPersistence();
+    for (const store of [ls, ss]) store.store = { v: 1, risk: { ...INITIAL_RISK_STATE,
+      peakEquity: peak, dayStartEquity: 10_000, dayStartedAt: T, lastEvalAt: T } };
+    const exposureControl = read("momentum-crypto-usdc-daily-s5-rw8-sizeonly-bo13-pure-v1").candidates[0].exposureControl;
+    const c = { ...dailyCfg, risk: { ...risk, mode: "sizeOnly" as const }, exposureControl };
+    let resizes = 0;
+    Object.assign(live, { scalePosition: async () => { resizes++; return { ok: true }; } });
+    for (let day = 0; day < 2; day++) {
+      clock.set(T + day * D); sim.now = clock.now();
+      live.price = bars.find(b => b.timestamp === clock.now())!.open;
+      live.equity = sim.equityNow();
+      // New engine instances on the second day restore the exact held unit.
+      const lr = await new MomentumEngine(c, live, silentLogger, ls, clock).tick();
+      const sr = await new MomentumEngine(c, sim, silentLogger, ss, clock).tick();
+      expect(sr.actions).toEqual(lr.actions);
+      expect(lr.exposureControl!.scale).toBe(peak === 20_000 ? 0.25 : 1);
+      expect(sr.exposureControl!.scale).toBe(lr.exposureControl!.scale);
+      expect(lr.exposureControl!.resizes).toBe(0); expect(sim.resizes).toEqual([]);
+      expect(live.positions[0].quantity).toBeCloseTo(100 / 20.5, 12); // 1% equity / N, NOT ×λ
+      expect(sim.positions[0].qty).toBeCloseTo(live.positions[0].quantity, 12);
+      expect(ls.store!.exposureFracs ?? {}).toEqual({});
+      expect(ss.store!.breakoutBySymbol).toEqual(ls.store!.breakoutBySymbol);
+    }
+    expect(resizes).toBe(0); expect(live.opens).toHaveLength(1);
+  });
   test.each([
     { priorLow: 90, close: 89, enters: true },
     { priorLow: 90, close: 90, enters: false },

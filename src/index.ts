@@ -736,7 +736,7 @@ export function momentumUsdcPortfolioPlan(): MomentumPortfolioPlan {
     template: "momentum_tsm",
     portfolioId: "momentum_crypto_usdc",
     governorRegistration: { sleeve: "momentum_crypto_usdc", kind: "live", evidenceVersion: MOMENTUM_USDC_EVIDENCE_VERSION },
-    adapter: { kind: "binance_usdm", options: { accountId: "momentum_crypto_usdc", quoteAsset: "USDC", candleTimeframe: "1Day" } },
+    adapter: { kind: "binance_usdm", options: { accountId: "momentum_crypto_usdc", quoteAsset: "USDC", candleTimeframe: "1Day", breakoutShortSymbols: Object.keys(USDC_SYMBOL_MAP) } },
     shadow: { strategy: "MOMENTUM", closeReason: "MOMENTUM_REBALANCE", timeframe: "1Day", market: "crypto" },
     loggerContext: "Momentum:usdc",
     engineConfig: {
@@ -761,6 +761,8 @@ export function momentumUsdcPortfolioPlan(): MomentumPortfolioPlan {
       scorer: { barMinutes: 1440 },
       // RW6: first daily decision at/after 120h; no same-pass re-entry.
       timeStop: { maxHoldHours: 120 },
+      // Owner approved 2026-11-05, RW §19.9 / Q6 §6 (57430944): independent of λ.
+      breakoutShort: { symbols: Object.keys(USDC_SYMBOL_MAP), entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 },
       tsmTrail: { ...MOMENTUM_USDC_DAILY_VOL_STOP },
       // Vol-scaled HARD stop: the engine passes stopLossPct on every open;
       // BinanceMomentumAdapter derives the stop PRICE from the real fill,

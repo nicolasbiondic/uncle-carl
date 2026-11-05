@@ -90,6 +90,8 @@ export function builtinPortfolios(): PortfolioDefinition[] {
         risk: { mode: "sizeOnly" },
         exposureControl: { drawdown: { startPct: 0.1, endPct: 0.4 }, minScale: 0.25, band: 0.1, minOrderUsd: 100 },
         timeStop: { maxHoldHours: 120 }, // RW6, same RiskState/drawdown input
+        // Owner approved 2026-11-05 (57430944): daily Turtle units, not λ-scaled.
+        breakoutShort: { symbols: Object.keys(USDC_SYMBOL_MAP), entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 },
         capacityGuard: { maxAdvPct: 1, lookbackBars: 20, mode: "observe" },
         equitySemantics: EQUITY_SEMANTICS.BINANCE_USDC_MARGIN,
         // Not re-anchored for RW4a: the same kernel built the live drawdown the control reads (index.ts docstring).

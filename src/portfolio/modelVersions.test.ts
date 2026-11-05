@@ -125,9 +125,7 @@ describe("the version table", () => {
     expect(modelVersionAt("momentum_stocks", T(v.since) - 1)!.id).toBe(previous.id);
     expect(modelVersionAt("momentum_stocks", T(v.since))!.id).toBe(v.id);
     expect(rowModelVersion("momentum_stocks", { strategy_version: previous.id, entry_time: T(v.since) })).toBe(previous.id);
-    for (const sleeve of ["meanrev_stocks", "momentum_crypto_usdc"]) {
-      expect(MODEL_VERSIONS[sleeve].at(-1)!.since).toBe("2026-10-28T13:00:00Z");
-    }
+    expect(MODEL_VERSIONS.meanrev_stocks.at(-1)!.since).toBe("2026-10-28T13:00:00Z");
   });
 
   test("RW8 bo8 appends only hourly crypto at the approved strictly later epoch; inherited rows keep their opening version", () => {
@@ -156,13 +154,26 @@ describe("the version table", () => {
     expect(rowModelVersion("momentum_crypto", { strategy_version: previous.id, entry_time: T(v.since) })).toBe(previous.id);
   });
 
+  test("USDC bo13 appends at the approved strictly later epoch; inherited rows keep their opening version", () => {
+    const list = MODEL_VERSIONS.momentum_crypto_usdc, v = list.at(-1)!, previous = list.at(-2)!;
+    expect(v).toMatchObject({ id: "momentum_crypto_usdc@daily-d13s5-xc-dd-mh120-sizeonly-bo13",
+      since: "2026-11-05T12:00:00Z", modelStart: "2026-11-06",
+      manifest: "experiments/momentum-crypto-usdc-daily-s5-rw8-sizeonly-bo13-pure-v1.json",
+      artifact: { dir: "data/backtests/574309447f608d2786889e9d98f41de15f3aac3262b4ca8784b3d3bcee9cb0c4", shiftDays: -1 } });
+    expect(previous.id).toBe("momentum_crypto_usdc@daily-d13s5-xc-dd-mh120-sizeonly");
+    expect(T(v.since)).toBeGreaterThan(T(previous.since));
+    expect(modelVersionAt("momentum_crypto_usdc", T(v.since) - 1)!.id).toBe(previous.id);
+    expect(modelVersionAt("momentum_crypto_usdc", T(v.since))!.id).toBe(v.id);
+    expect(rowModelVersion("momentum_crypto_usdc", { strategy_version: previous.id, entry_time: T(v.since) })).toBe(previous.id);
+  });
+
   test("the scorecard's MODEL_START IS the current version's modelStart (one source), for every scorecard sleeve", () => {
     expect(MODEL_START).toEqual(currentModelStarts());
     expect(MODEL_START).toEqual({
       momentum_stocks: "2026-10-29",
       meanrev_stocks: "2026-10-29",
       momentum_crypto: "2026-11-03",
-      momentum_crypto_usdc: "2026-10-29",
+      momentum_crypto_usdc: "2026-11-06",
     });
     for (const e of SCORECARD_ENTITIES.filter(e => e.kind === "sleeve")) {
       expect(MODEL_START[e.id]).toBeTruthy();

@@ -212,6 +212,8 @@ describe("RW8 boot: builtin registry rows refresh from RW6/RW7 and carry every n
           expect(plan.engineConfig.sharpeGate).toEqual({ lookbackDays: 30, minSharpe: 0 });
           expect(plan.engineConfig.allowSameTickReentry).toBeUndefined();
           expect(plan.engineConfig.exposureControl?.minScale).toBe(0.25);
+          expect(plan.engineConfig.breakoutShort).toEqual(reference().engineConfig.breakoutShort);
+          expect(plan.adapter).toMatchObject({ options: { quoteAsset: "USDC", breakoutShortSymbols: params.universe } });
         }
       }
       initPlatformPortfolios(db, 3_000);
