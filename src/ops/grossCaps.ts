@@ -10,6 +10,9 @@
 
 export type GrossCapBase = "equity" | "allocation";
 
+/** Q5: shared-Alpaca-account gross headroom for live stock execution. */
+export const ALPACA_ACCOUNT_MAX_GROSS = 1.9;
+
 const caps = new Map<string, { mult: number; base: GrossCapBase }>();
 
 export function registerGrossCap(sleeveId: string, mult: number | undefined, base: GrossCapBase): void {

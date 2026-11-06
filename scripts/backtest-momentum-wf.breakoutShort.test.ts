@@ -60,6 +60,71 @@ class Broker implements MomentumBrokerAdapter {
 const read = (name: string): ExperimentManifest => JSON.parse(readFileSync(join(import.meta.dir, "../experiments", `${name}.json`), "utf8"));
 const name = "momentum-crypto-rw5-btc-breakout55-pure-v1", liveName = "momentum-crypto-rw3-vt-35-corroff-pure-v1";
 
+// Frozen config/base/stress identities from the saved artifacts, independent
+// of ignored data/ so CI checks the same pins. Code hashes necessarily change.
+describe("hold-grid: pinned crypto artifact identities", () => {
+  test.each([
+    ["b37681ff", "momentum-crypto-rw8-breakout8-pure-v1",
+      "ab6a1aa1a897cf655776d6519d56b2fa18294c670e69247f2c98b130e391dab4",
+      "1fa00b9dd2de287f2fc515cbcc39342382d334895f01521848d51af9a8dd285d",
+      "264fa8dcfc826f2f9231d2463117aadf554d6790bbde9196750d2bf405f86164"],
+    ["4aca1803", "momentum-crypto-rw10-turtle-s1-short-pure-v1",
+      "79f125d4c82facfdc1ec5ac74f7353e1c8bfd07725f3dccf686fd83f62b2bfe3",
+      "ad67b27c54510f986d501968c5f4b31bf107e1854c8e8fa1c8e0a524f0fe4068",
+      "7ba875d81e019ffdf26e63b49ccb502c3b476eb1d847ac9e79c8eec7cea35730"],
+    ["57430944", "momentum-crypto-usdc-daily-s5-rw8-sizeonly-bo13-pure-v1",
+      "a20ee13a24a0ae25b775ac4e15548c95dd9f6ace9a9e977b370baae3cd2f2cd1",
+      "aa98d958294219f7ab25b5d53a0e410e0155abd89514b614b43776fec26fe403",
+      "85fd73274e13dbfbd54e6709e92c9f199fb37ddf5cc03fb9475b621b9e3a34af"],
+    ["68181bd6", "momentum-crypto-usdc-daily-s5-rw7-sizeonly-pure-v1",
+      "e13f970350cc15e3d85f655c3ad5c96fe721a78741220f01adc9e99c313e1971",
+      "5b0ec4e0c9a8a8744866f1a48b0fa3fe0b4a23c82d1c89679bdd4767d4080498",
+      "215e542665512805cb3d6f4c0fb97aed79716cc3612e44861995c870d8454c13"],
+    ["2deab5da", "momentum-crypto-rw7-nobrakes-pure-v1",
+      "4c4ebd26417c96e8357c6102b9e497ab29de52889ab9550d3e459aafd4668808",
+      "09c918f75226636c9cc3fd09e896b82a6bc4a3b6f15f40fcb2ad5b984e0e34a9",
+      "c6beeab39a2bb7e42b364282463ff394e4c17343f4d80690e6a38c8816dbd609"],
+  ])("%s config and base/stress hashes are unchanged", (_artifact, file, configHash, baseHash, stressHash) => {
+    const m = validateManifest(read(file));
+    expect(createHash("sha256").update(canonicalJson(manifestIdentity(m))).digest("hex")).toBe(configHash);
+    for (const [tier, hash] of [["base", baseHash], ["stress", stressHash]] as const) {
+      const c = candidateToReplayConfig(m, m.candidates[0], tier);
+      expect(hashReplayConfig(c)).toBe(hash);
+      // Integer-grid ages k*C cross H and H-C/2 on the same tick when H=n*C.
+      for (const hours of [c.timeStop?.maxHoldHours, c.breakoutShort?.maxHoldHours, c.breakoutLong?.maxHoldHours]) {
+        if (hours !== undefined) expect(hours * 60 % c.cadenceMin).toBe(0);
+      }
+    }
+  });
+});
+
+describe("Turtle hold-grid jitter (both legs, durable anchors)", () => {
+  for (const cadence of [60, 1440]) for (const side of ["buy", "sell"] as const) {
+    test(`${side} unit closes at 120h minus 1ms with ${cadence}min cadence after restart`, async () => {
+      const entryAt = T + 15_001, clock = new TestClock(entryAt), b = new Broker(), store = new MemoryPersistence();
+      b.price = side === "buy" ? 111 : 89;
+      if (cadence === 1440) b.bars.unshift({ ...b.bars[0], timestamp: T - 56 * D });
+      const leg = { symbols: ["BTC/USD"], entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 };
+      const c: Partial<MomentumEngineConfig> = { ...cfg, universe: ["BTC/USD"], rebalanceMinutes: cadence,
+        tsm: { ...cfg.tsm, barMinutes: cadence }, risk: { ...risk, mode: "sizeOnly" },
+        breakoutShort: side === "sell" ? leg : undefined, breakoutLong: side === "buy" ? leg : undefined };
+      const first = new MomentumEngine(c, b, silentLogger, store, clock);
+      await first.tick(); first.stop();
+      expect(b.opens).toHaveLength(1);
+      const saved = side === "buy" ? store.store!.breakoutLongBySymbol : store.store!.breakoutBySymbol;
+      expect(saved!["BTC/USD"].entryAt).toBe(entryAt);
+      // History failure cannot defer the time stop or replace a restored anchor.
+      b.bars = [];
+      clock.set(entryAt + 120 * H - cadence * 60_000 - 1);
+      const restarted = new MomentumEngine(c, b, silentLogger, store, clock);
+      await restarted.tick(); expect(b.closes).toEqual([]);
+      clock.set(entryAt + 120 * H - 1); await restarted.tick();
+      expect(b.closes).toEqual([{ symbol: "BTC/USD", side, closeReason: side === "buy" ? "BREAKOUT_LONG_TIME_STOP" : "BREAKOUT_SHORT_TIME_STOP" }]);
+      expect(b.positions).toEqual([]); expect(b.opens).toHaveLength(1);
+    });
+  }
+});
+
 describe("RW10 Turtle long units (synthetic only, no historical trial)", () => {
   const long: BreakoutLongConfig = { symbols: ["BTC/USD", "ETH/USD"], entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 };
   const c: Partial<MomentumEngineConfig> = { ...cfg, breakoutShort: undefined, breakoutLong: long, risk: { ...risk, mode: "sizeOnly" } };

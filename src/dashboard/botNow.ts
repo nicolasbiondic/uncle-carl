@@ -24,13 +24,15 @@ export interface BotNowRuntime {
 export interface BotNowEvent {
   at: number;
   portfolioId: string | null;
-  kind: "buy" | "sell" | "close" | "resize" | "rebalance" | "pause" | "resume" | "cutover" | "treasury" | "stop" | "error";
+  kind: "buy" | "sell" | "close" | "resize" | "rebalance" | "pause" | "resume" | "cutover" | "treasury" | "stop" | "warning" | "error";
   symbol: string | null;
   qty: number | null;
   usd: number | null;
   pnlUsd: number | null;
   reason: string;
   detail: string | null;
+  /** Order-outcome events only: count rendered by the localized frontend. */
+  count?: number;
   /** rebalance events only: filled buys/sells of the pass (the UI words them). */
   buys?: number;
   sells?: number;
@@ -41,7 +43,7 @@ export interface BotNowEvent {
   newBuyUsd?: number;
 }
 export interface BotNowDecision {
-  at: number; entries: number; exits: number; resizes: number; orders: number; rejected: number;
+  at: number; entries: number; exits: number; resizes: number; orders: number; rejected: number; partial: number; unfilled: number; accountGrossCap: number;
   signalsLong: number | null; universe: number | null; note: string | null;
 }
 export interface BotNowPortfolio {
@@ -102,16 +104,43 @@ export function botBlockReason(detail: string): string {
   return detail.split(":")[0].trim().replace(/\W+/g, "_").toLowerCase() || "risk_gate";
 }
 
+type PortfolioOrderOutcome = "rejected" | "partial" | "unfilled" | "account_gross_cap";
+
+/** The broker reports fractional fills to 9 decimals, below the intent's float
+ *  precision: a complete fill can read a few 1e-10 short of the intent. */
+const FULL_FILL_RATIO = 1 - 1e-6;
+
+function portfolioOrderOutcome(order: PersistedOrder): PortfolioOrderOutcome | null {
+  const result = order.result;
+  if (!result) return null;
+  const status = result.status.toLowerCase();
+  if (status === "rejected") return "rejected";
+  if (status === "account_gross_cap") return "account_gross_cap";
+  if (status !== "filled" && result.filledQty > 0 && result.filledQty < order.intent.qty * FULL_FILL_RATIO) return "partial";
+  if (result.filledQty === 0 && (status === "canceled" || status === "expired")) return "unfilled";
+  return null;
+}
+
 function portfolioCounts(row: any): BotNowDecision {
   const orders = json(row.orders_json, []) as PersistedOrder[];
   const filled = orders.filter(o => (o.result?.filledQty ?? 0) > 0);
+  // A MAX_HOLD close whose remainder the same-pass retry (`<id>-r1`) filled completed:
+  // only the retry leg's own outcome counts.
+  const completedByRetry = new Set(orders
+    .filter(o => o.clientOrderId?.endsWith("-r1") && (o.result?.filledQty ?? 0) > 0 && portfolioOrderOutcome(o) === null)
+    .map(o => o.clientOrderId!.slice(0, -"-r1".length)));
+  const outcomeCount = (outcome: PortfolioOrderOutcome) => orders.filter(o =>
+    !(o.clientOrderId && completedByRetry.has(o.clientOrderId)) && portfolioOrderOutcome(o) === outcome).length;
   return {
     at: row.decided_at,
     entries: filled.filter(o => o.intent.side === "buy" && o.intent.currentWeight === 0).length,
     exits: filled.filter(o => o.intent.side === "sell" && o.intent.targetWeight === 0).length,
     resizes: filled.filter(o => o.intent.currentWeight > 0 && o.intent.targetWeight > 0).length,
     orders: orders.length,
-    rejected: orders.filter(o => o.result && !o.result.ok && o.result.status !== "unknown").length,
+    rejected: outcomeCount("rejected"),
+    partial: outcomeCount("partial"),
+    unfilled: outcomeCount("unfilled"),
+    accountGrossCap: outcomeCount("account_gross_cap"),
     signalsLong: null, universe: null, note: row.note ?? null,
   };
 }
@@ -176,11 +205,12 @@ export function buildBotNow(deps: BotNowDeps): { asOf: number; portfolios: BotNo
     const pass = engine !== "portfolio" ? db.query("SELECT * FROM decision_passes WHERE account_id = ? AND ts >= ? ORDER BY ts DESC, id DESC LIMIT 1")
       .get(summary.id, current ? Date.parse(current.since) : 0) as any : null;
     const lastDecision: BotNowDecision | null = engine === "portfolio" ? pe ? portfolioCounts(pe) : null : pass ? {
-      at: pass.ts, entries: pass.entries, exits: pass.exits,
-      resizes: activities.filter(a => a.account_id === summary.id && /^Resized /.test(a.message) && a.created_at >= pass.ts && a.created_at < pass.ts + 30 * 60_000).length,
-      orders: pass.entries + pass.exits,
-      rejected: orders.filter(o => o.account_id === summary.id && o.created_at >= pass.ts && (o.status === "rejected" || o.state === "REJECTED")).length,
-      signalsLong: pass.signals_raw_long ?? pass.signals_long, universe: pass.universe, note: pass.block_note ?? null,
+       at: pass.ts, entries: pass.entries, exits: pass.exits,
+       resizes: activities.filter(a => a.account_id === summary.id && /^Resized /.test(a.message) && a.created_at >= pass.ts && a.created_at < pass.ts + 30 * 60_000).length,
+       orders: pass.entries + pass.exits,
+       rejected: orders.filter(o => o.account_id === summary.id && o.created_at >= pass.ts && (o.status === "rejected" || o.state === "REJECTED")).length,
+       partial: 0, unfilled: 0, accountGrossCap: 0,
+       signalsLong: pass.signals_raw_long ?? pass.signals_long, universe: pass.universe, note: pass.block_note ?? null,
     } : null;
     if (lastDecision && engine !== "portfolio") lastDecision.orders = Math.max(lastDecision.orders + lastDecision.resizes,
       orders.filter(o => o.account_id === summary.id && o.created_at >= lastDecision.at).length);
@@ -234,7 +264,12 @@ function buildEvents(db: Database, now: number, decisions: any[], orders: any[],
       buys: filledBuys.length, sells: filled.filter(o => o.intent.side === "sell").length, detail: null,
       rebought: filledBuys.filter(o => o.intent.maxHold === "rebuy").map(o => o.intent.symbol),
       newBuyUsd: filledBuys.filter(o => o.intent.maxHold !== "rebuy").reduce((s, o) => s + dollars(o), 0) });
-    if (d.status === "failed" || d.status === "skipped_stale" || counts.rejected) out.push({ ...base(d.updated_at, d.account_id, "error", d.status === "submitted" ? "ORDER_REJECTED" : d.status.toUpperCase()), detail: d.note ?? `${counts.rejected} órdenes rechazadas` });
+    if (d.status === "failed" || d.status === "skipped_stale") out.push({ ...base(d.updated_at, d.account_id, "error", d.status.toUpperCase()), detail: d.note });
+    for (const [outcome, count] of [["rejected", counts.rejected], ["partial", counts.partial], ["unfilled", counts.unfilled], ["account_gross_cap", counts.accountGrossCap]] as const) {
+      if (!(count > 0)) continue;
+      const rejected = outcome === "rejected";
+      out.push({ ...base(d.updated_at, d.account_id, rejected ? "error" : "warning", outcome.toUpperCase()), count, detail: null });
+    }
   }
   const closes = db.query("SELECT * FROM trades WHERE status = 'closed' AND exit_time >= ? AND exit_time <= ? ORDER BY exit_time DESC").all(since, now) as any[];
   for (const t of closes) {

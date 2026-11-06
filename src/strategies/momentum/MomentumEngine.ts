@@ -968,7 +968,8 @@ export const TREND_EXIT_CLOSE_REASON = "TREND_EXIT";
 /**
  * Optional time barrier (López de Prado's third barrier; Hummingbot
  * `TripleBarrierConfig.time_limit`): close any held universe position once
- * it has been held ≥ maxHoldHours. OFF by default (DEFAULT_ENGINE_CONFIG
+ * it reaches maxHoldHours, with half a decision period of tolerance (see
+ * holdExpired). OFF by default (DEFAULT_ENGINE_CONFIG
  * leaves it undefined) — momentum holds are unlimited by design until this
  * axis passes the walk-forward protocol.
  *
@@ -1772,7 +1773,7 @@ export class MomentumEngine {
       const s = this.breakoutStateFor(p.symbol), channel = channels.get(p.symbol);
       const breakoutPrice = candles.get(p.symbol)?.at(-1)?.close;
       const reason = hardDrawdown ? BREAKOUT_SHORT_DRAWDOWN
-        : bc?.maxHoldHours !== undefined && s.entryAt !== undefined && now - s.entryAt >= bc.maxHoldHours * 3_600_000 ? BREAKOUT_SHORT_TIME_STOP
+        : bc?.maxHoldHours !== undefined && s.entryAt !== undefined && this.holdExpired(now, s.entryAt, bc.maxHoldHours) ? BREAKOUT_SHORT_TIME_STOP
         : !bc || !breakoutSymbols(bc).includes(p.symbol) || !p.breakoutN || !p.stopLoss || !p.entryPrice ? BREAKOUT_SHORT_EXIT
         : breakoutPrice && breakoutPrice >= p.stopLoss ? BREAKOUT_SHORT_STOP
         : breakoutPrice && channel && breakoutPrice > channel.high ? BREAKOUT_SHORT_EXIT : undefined;
@@ -1822,7 +1823,7 @@ export class MomentumEngine {
       const s = this.breakoutLongBySymbol[p.symbol], channel = longChannels.get(p.symbol);
       const price = candles.get(p.symbol)?.at(-1)?.close;
       const reason = hardDrawdown ? BREAKOUT_LONG_DRAWDOWN
-        : bl?.maxHoldHours !== undefined && s?.entryAt !== undefined && now - s.entryAt >= bl.maxHoldHours * 3_600_000 ? BREAKOUT_LONG_TIME_STOP
+        : bl?.maxHoldHours !== undefined && s?.entryAt !== undefined && this.holdExpired(now, s.entryAt, bl.maxHoldHours) ? BREAKOUT_LONG_TIME_STOP
         : !bl || !bl.symbols.includes(p.symbol) || !p.breakoutN || !p.stopLoss || !p.entryPrice ? BREAKOUT_LONG_EXIT
         : price && price <= p.stopLoss ? BREAKOUT_LONG_STOP
         : price && channel && price < channel.low ? BREAKOUT_LONG_EXIT : undefined;
@@ -2655,10 +2656,17 @@ export class MomentumEngine {
     return actions;
   }
 
+  /** Half a decision period absorbs tick/fill jitter and off-phase restarts,
+   * without expiring a full period early. On an exact cadence grid, a hold
+   * limit that is a multiple of that cadence expires on the same tick. */
+  private holdExpired(now: number, entryAt: number, maxHoldHours: number): boolean {
+    return now - entryAt >= maxHoldHours * 3_600_000 - this.cfg.rebalanceMinutes * 60_000 / 2;
+  }
+
   /**
    * Time barrier (López de Prado's third barrier; flag-gated via
    * cfg.timeStop): close any held universe position whose clock anchor is
-   * ≥ maxHoldHours old. Runs right after applyTrailStops, BEFORE the risk/
+   * expired on the decision grid (holdExpired). Runs right after applyTrailStops, BEFORE the risk/
    * regime/kill-switch gates — an expired hold must close even while entries
    * are blocked. A position with no anchor (opened before the feature/state
    * existed, or state lost) is anchored at NOW and never fired on first
@@ -2686,7 +2694,6 @@ export class MomentumEngine {
     const liveKeys = new Set(held.map(p => `${p.symbol}|${p.side}`));
     for (const key of this.entryMarks.keys()) if (!liveKeys.has(key)) this.entryMarks.delete(key);
 
-    const maxHoldMs = cfg.maxHoldHours * 3_600_000;
     for (const p of held) {
       const key = `${p.symbol}|${p.side}`;
       const entryAt = this.entryMarks.get(key);
@@ -2694,8 +2701,8 @@ export class MomentumEngine {
         this.entryMarks.set(key, now);
         continue;
       }
-      if (now - entryAt < maxHoldMs) continue;
-      const reason = `time stop: held ${((now - entryAt) / 3_600_000).toFixed(1)}h >= ${cfg.maxHoldHours}h`;
+      if (!this.holdExpired(now, entryAt, cfg.maxHoldHours)) continue;
+      const reason = `time stop: held ${((now - entryAt) / 3_600_000).toFixed(1)}h ${now - entryAt >= cfg.maxHoldHours * 3_600_000 ? ">=" : "~="} ${cfg.maxHoldHours}h`;
       try {
         // closeReason: canonical TIME_STOP label → trades.close_reason, so
         // telemetry separates horizon expiries from signal-flip rebalances.

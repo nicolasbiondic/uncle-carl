@@ -156,6 +156,7 @@ export class PortfolioEngine {
   private failStreak = 0;
   private failPagedSession = "";
   private stalePagedSession = "";
+  private stockMarketWasClosed = false;
 
   constructor(private readonly opts: PortfolioEngineOptions) {
     this.log = createLogger(`Portfolio:${opts.accountId}`);
@@ -225,9 +226,10 @@ export class PortfolioEngine {
   // ── one session ────────────────────────────────────────────────────────
 
   private stockMarketClosed(): boolean {
-    if (this.opts.market !== "stocks" || isMarketOpen(this.now())) return false;
-    this.log.info("skip: stock market closed (outside regular market hours)");
-    return true;
+    const closed = this.opts.market === "stocks" && !isMarketOpen(this.now());
+    if (closed && !this.stockMarketWasClosed) this.log.info("skip: stock market closed (outside regular market hours)");
+    this.stockMarketWasClosed = closed;
+    return closed;
   }
 
   async runSession(window: RunWindow): Promise<PortfolioRunReport> {

@@ -95,6 +95,29 @@ describe("first rebalance (empty book)", () => {
   });
 });
 
+describe("stock-market-closed logging", () => {
+  test("logs once per closed period and never submits while the market is closed", async () => {
+    const venue = new FakeVenue();
+    let now = Date.parse("2026-10-18T14:00:00Z"); // Saturday
+    const e = engine(venue, { now: () => now });
+    const output: string[] = [];
+    const realLog = console.log;
+    console.log = (...args: any[]) => output.push(args.join(" "));
+    try {
+      await e.tick();
+      await e.tick();
+      now = NOW; // market open: reset the transition state
+      expect((e as any).stockMarketClosed()).toBe(false);
+      now = Date.parse("2026-10-18T14:00:00Z");
+      await e.tick();
+    } finally {
+      console.log = realLog;
+    }
+    expect(venue.submits).toHaveLength(0);
+    expect(output.filter(line => line.includes("skip: stock market closed (outside regular market hours)"))).toHaveLength(2);
+  });
+});
+
 describe("adoption (first live run)", () => {
   test("legacy MOMENTUM rows of the sleeve are re-tagged, never sold and re-bought", async () => {
     // Held: 10 SPY @ 480 from the old engine; broker agrees.

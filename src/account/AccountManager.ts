@@ -59,7 +59,7 @@ import {
   reconcilePortfolioInvariants, setBrokerTruthAvailable, isBrokerTruthAvailable,
 } from "../portfolio/truth";
 import { heartbeats } from "../ops/heartbeat";
-import { grossCapOf } from "../ops/grossCaps";
+import { ALPACA_ACCOUNT_MAX_GROSS, grossCapOf } from "../ops/grossCaps";
 import { sleeveRealizedPnl } from "../portfolio-engine/live/rows";
 import { publishInstanceManifest } from "../ops/instanceManifest";
 import { checkPrice, DEFAULT_PLAUSIBILITY, plausibilityMode, RejectionTally } from "../market/plausibility";
@@ -1471,7 +1471,8 @@ export class AccountManager {
   // run at ~2x its OWN $50k allocation (~$103k) and meanrev_stocks owns
   // another ~$25k-50k on top, against a single ~$105k Alpaca account; that
   // sum was never audited anywhere. This logs it every 5min alongside the
-  // snapshot write (same cadence, no new loop) — VISIBILITY ONLY, it does
+  // snapshot write (same cadence, no new loop) — WARN only above the live
+  // venue's account-wide cap; it does
   // NOT block anything. The guards that DO block: per-sleeve
   // MomentumEngine/MeanRevEngine.maxGrossExposureMult, and since 2026-08-20
   // the shared-ACCOUNT pre-submit Reg-T mirror in
@@ -1490,7 +1491,7 @@ export class AccountManager {
     const combined = (stocks?.state.stocksValue ?? 0) + (meanrev?.state.stocksValue ?? 0);
     const pct = (combined / accountEquity) * 100;
     const msg = `Alpaca account gross exposure: momentum_stocks+meanrev_stocks $${combined.toFixed(0)} of $${accountEquity.toFixed(0)} account equity (${pct.toFixed(1)}%)`;
-    if (combined > accountEquity) log.warn(`⚠️ ${msg} — combined sleeve exposure EXCEEDS account equity`);
+    if (combined > ALPACA_ACCOUNT_MAX_GROSS * accountEquity) log.warn(`⚠️ ${msg} — combined sleeve exposure EXCEEDS ${ALPACA_ACCOUNT_MAX_GROSS}× account equity`);
     else log.info(msg);
   }
 

@@ -121,6 +121,11 @@ describe("recent actions", () => {
     expect(eventSentence({ kind: "buy", portfolioId: "meanrev_stocks", qty: 32, usd: 48200 }, names)).toBe("Mean Reversion Stocks bought 32 stocks ($48,200)");
     expect(eventSentence({ kind: "stop", portfolioId: "momentum_crypto_usdc", symbol: "SOL/USDC", pnlUsd: -88.4, reason: "stop_loss" }, names)).toBe('Momentum Crypto USDC was stopped out of SOL/USDC, −$88 <span class="bn-why">— stop-loss</span>');
     expect(eventSentence({ kind: "error", portfolioId: null, detail: "<b>x</b>" }, names)).toBe('Problem in The bot <span class="muted">&lt;b&gt;x&lt;/b&gt;</span>');
+    expect(eventSentence({ kind: "error", portfolioId: "momentum_stocks", reason: "REJECTED", count: 2 }, names)).toBe('Problem in Momentum Stocks <span class="bn-why">— 2 orders rejected</span>');
+    expect(eventSentence({ kind: "warning", portfolioId: "momentum_stocks", reason: "PARTIAL", count: 1 }, names)).toBe('Warning in Momentum Stocks <span class="bn-why">— 1 order partially filled</span>');
+    expect(eventSentence({ kind: "warning", portfolioId: "momentum_stocks", reason: "UNFILLED", count: 2 }, names)).toBe('Warning in Momentum Stocks <span class="bn-why">— 2 orders unfilled after timeout</span>');
+    store.state.lang = "es";
+    expect(eventSentence({ kind: "warning", portfolioId: "momentum_stocks", reason: "PARTIAL", count: 1 }, names)).toBe('Aviso en Momentum Stocks <span class="bn-why">— 1 orden parcialmente ejecutada</span>');
   });
 
   test("a 5-day close reads \"closed X at the 5-day limit\", never \"sold … max hold\"", () => {

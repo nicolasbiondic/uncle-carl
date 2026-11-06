@@ -127,6 +127,40 @@ describe("bot now: causal events", () => {
     expect(result.events.find(e => e.kind === "rebalance")).toMatchObject({ usd: 500, buys: 2, sells: 1, detail: null });
     expect(result.portfolios[0].lastDecision).toMatchObject({ entries: 1, exits: 1, resizes: 1, orders: 4, rejected: 1 });
   });
+  test("portfolio order outcomes distinguish broker rejections from partial and unfilled timeouts", () => {
+    const f = fixture("momentum_stocks", "portfolio");
+    const failed = (symbol: string, result: Record<string, any>) => ({ ...filled("buy", symbol, 0, 0.2), result });
+    f.pe({ orders_json: JSON.stringify([
+      failed("REJECTED", { ok: false, filledQty: 0, status: "rejected" }),
+      failed("PARTIAL", { ok: false, filledQty: 1, status: "canceled" }),
+      failed("UNFILLED", { ok: false, filledQty: 0, status: "expired" }),
+      failed("CAP", { ok: false, filledQty: 0, status: "account_gross_cap" }),
+    ]) });
+    const result = f.build();
+    expect(result.portfolios[0].lastDecision).toMatchObject({ rejected: 1, partial: 1, unfilled: 1, accountGrossCap: 1 });
+    expect(result.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "error", reason: "REJECTED", count: 1, detail: null }),
+      expect.objectContaining({ kind: "warning", reason: "PARTIAL", count: 1, detail: null }),
+      expect.objectContaining({ kind: "warning", reason: "UNFILLED", count: 1, detail: null }),
+      expect.objectContaining({ kind: "warning", reason: "ACCOUNT_GROSS_CAP", count: 1, detail: null }),
+    ]));
+  });
+
+  test("broker 9-decimal rounding and a completed same-pass close retry are not partial fills", () => {
+    const f = fixture("momentum_stocks", "portfolio");
+    const qty = 14.181331139000001;
+    const leg = (symbol: string, clientOrderId: string, filledQty: number, status: string, q = qty) =>
+      ({ ...filled("sell", symbol, 0.2, 0.2, q), clientOrderId, result: { ok: status === "filled", filledQty, avgPrice: 100, status, brokerOrderId: clientOrderId } });
+    f.pe({ orders_json: JSON.stringify([
+      leg("NVDA", "pf-nvda", 14.181331139, "filled"),          // complete: broker rounds to 9 decimals
+      leg("GLD", "pf-gld", qty - 2e-10, "canceled"),           // cancel acknowledged after a complete fill
+      leg("AAPL", "pf-aapl", 5, "canceled", 9.29),             // MAX_HOLD close remainder…
+      leg("AAPL", "pf-aapl-r1", 4.29, "filled", 4.29),         // …filled by its same-pass retry
+      leg("AMZN", "pf-amzn", 6, "canceled", 7.93),             // a real partial
+    ]) });
+    const result = f.build();
+    expect(result.portfolios[0].lastDecision).toMatchObject({ rejected: 0, partial: 1, unfilled: 0, accountGrossCap: 0 });
+  });
   test("resize, pause/resume, stop, cutover, treasury and rejected orders stay distinguishable", () => {
     const f = fixture("momentum_crypto_usdc"); f.pass();
     f.activity("Resized SOL/USDC ×0.794: −2.62 @ $102.65 (remaining 10.16) — exposure control: λ 0.794 vs kept 1.000");

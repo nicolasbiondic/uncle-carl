@@ -317,6 +317,18 @@ const LIMIT_REASON = /^(max_hold|time_stop|breakout_short_time_stop)$/i;
 /** A close forced by the owner's 5-day maximum hold, whatever engine wrote it. */
 const isLimitClose = (e) => ["close", "sell", "stop"].includes(e.kind) && LIMIT_REASON.test(e.reason || "");
 
+function orderOutcomeLabel(reason, count) {
+  const n = Number(count) || 1;
+  switch (String(reason || "").toLowerCase()) {
+    case "rejected":
+    case "order_rejected": return t(`${n} order${n === 1 ? "" : "s"} rejected`, `${n} ${n === 1 ? "orden rechazada" : "órdenes rechazadas"}`);
+    case "partial": return t(`${n} order${n === 1 ? "" : "s"} partially filled`, `${n} ${n === 1 ? "orden parcialmente ejecutada" : "órdenes parcialmente ejecutadas"}`);
+    case "unfilled": return t(`${n} order${n === 1 ? "" : "s"} unfilled after timeout`, `${n} ${n === 1 ? "orden sin ejecutar tras la espera" : "órdenes sin ejecutar tras la espera"}`);
+    case "account_gross_cap": return t(`${n} order${n === 1 ? "" : "s"} limited by the account cap`, `${n} ${n === 1 ? "orden limitada por el tope de la cuenta" : "órdenes limitadas por el tope de la cuenta"}`);
+    default: return "";
+  }
+}
+
 /** `opts.bare` drops the portfolio name (a line inside an expanded pass);
  *  `opts.rebought` marks a 5-day close whose symbol was bought again in the pass. */
 export function eventSentence(ev, portfolios = {}, opts = {}) {
@@ -361,9 +373,11 @@ export function eventSentence(ev, portfolios = {}, opts = {}) {
     case "cutover": body = t(`${who} switched to a new model version`, `${who} cambió a una nueva versión del modelo`); break;
     case "treasury": body = t(`${who} moved cash${usd}`, `${who} movió efectivo${usd}`); break;
     case "error": body = t(`Problem in ${who}`, `Problema en ${who}`); break;
+    case "warning": body = t(`Warning in ${who}`, `Aviso en ${who}`); break;
     default: body = `${who} ${esc(String(ev.kind || "").replace(/_/g, " "))}${what === t("its positions", "sus posiciones") ? "" : ` ${what}`}${usd}`;
   }
-  const reason = ev.reason && !limit ? ` <span class="bn-why">— ${esc(reasonWord(ev.reason))}</span>` : "";
+  const outcome = orderOutcomeLabel(ev.reason, ev.count);
+  const reason = ev.reason && !limit ? ` <span class="bn-why">— ${esc(outcome || reasonWord(ev.reason))}</span>` : "";
   const detail = ev.kind === "error" && ev.detail ? ` <span class="muted">${esc(ev.detail)}</span>` : "";
   return `${body.trim()}${reason}${detail}`;
 }

@@ -27,13 +27,14 @@
 //     design ever declares one on this venue.
 
 import type { AlpacaExecutor } from "../../../executor/alpaca-executor";
+import { ALPACA_ACCOUNT_MAX_GROSS } from "../../../ops/grossCaps";
 import { createLogger } from "../../../utils/logger";
 import type { LegacyStopRelease, OrderIntent, OrderResult, Position, VenueAdapter, VenueRules } from "../../types";
 
 const log = createLogger("PortfolioVenue:alpaca");
 
 /** Q5: shared-account headroom below overnight Reg-T (live execution only). */
-export const ALPACA_ACCOUNT_MAX_GROSS = 1.9;
+export { ALPACA_ACCOUNT_MAX_GROSS } from "../../../ops/grossCaps";
 
 /** The raw v3-shaped client surface this venue needs (alpaca-v5-compat). */
 export interface AlpacaVenueClient {

@@ -1220,7 +1220,7 @@ describe("MomentumEngine timeStop (time barrier — third barrier, OFF by defaul
       await engine.tick();
       expect(broker.closed).toEqual([]);
 
-      advanceTo(t0 + 47 * HOUR); // inside the horizon
+      advanceTo(t0 + 45 * HOUR); // before 48h minus half the default 4h cadence
       await engine.tick();
       expect(broker.closed).toEqual([]);
 

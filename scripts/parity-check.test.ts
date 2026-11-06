@@ -7,11 +7,15 @@
 // ═══════════════════════════════════════════════════════════════════════
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   MATCH_TOLERANCE_DAYS,
   MATCH_TOLERANCE_HOURS_CRYPTO,
   compareDailyHoldings,
   compareDecisions,
+  compareCryptoReplay,
   extractLiveDecisions,
   extractSeedPositions,
   extractSimDecisions,
@@ -28,7 +32,8 @@ import {
   utcDayCloses,
   type SleeveDecisions,
 } from "./parity-check";
-import type { ClosedTrade, SeedPosition } from "./backtest-momentum-wf";
+import { runWithConfig, SimBroker, type ClosedTrade, type SeedPosition } from "./backtest-momentum-wf";
+import { candidateToReplayConfig, type ExperimentManifest } from "./walk-forward";
 import { getETDayBounds } from "../src/db/database";
 import { liveSleeveConfig } from "../src/config/liveSleeveConfigs";
 import { currentModelVersion } from "../src/portfolio/modelVersions";
@@ -46,20 +51,22 @@ function at(dateKey: string): number {
 function makeTradingDb(rows: Array<{
   symbol: string; entry: string; exit?: string; status?: string; account?: string;
   side?: string; entryPrice?: number; quantity?: number; stopLoss?: number | null;
+  strategy?: string;
 }>): Database {
   const db = new Database(":memory:");
   db.run(`CREATE TABLE trades (
     id TEXT PRIMARY KEY, account_id TEXT, symbol TEXT, side TEXT,
     entry_price REAL, quantity REAL, stop_loss REAL,
-    entry_time INTEGER, exit_time INTEGER, status TEXT, close_reason TEXT
+    entry_time INTEGER, exit_time INTEGER, status TEXT, close_reason TEXT, strategy TEXT
   )`);
   const ins = db.prepare(
-    "INSERT INTO trades (id, account_id, symbol, side, entry_price, quantity, stop_loss, entry_time, exit_time, status) VALUES (?,?,?,?,?,?,?,?,?,?)",
+    "INSERT INTO trades (id, account_id, symbol, side, entry_price, quantity, stop_loss, entry_time, exit_time, status, strategy) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
   );
   rows.forEach((r, i) => ins.run(
     `t${i}`, r.account ?? "meanrev_stocks", r.symbol, r.side ?? "buy",
     r.entryPrice ?? 100, r.quantity ?? 10, r.stopLoss ?? null,
     at(r.entry), r.exit ? at(r.exit) : null, r.status ?? (r.exit ? "closed" : "open"),
+    r.strategy ?? "MOMENTUM",
   ));
   return db;
 }
@@ -120,7 +127,7 @@ describe("extractLiveDecisions", () => {
     const db = new Database(":memory:");
     db.run(`CREATE TABLE trades (
       id TEXT PRIMARY KEY, account_id TEXT, symbol TEXT, side TEXT,
-      entry_time INTEGER, exit_time INTEGER, status TEXT, close_reason TEXT
+      entry_time INTEGER, exit_time INTEGER, status TEXT, close_reason TEXT, strategy TEXT
     )`);
     const ins = db.prepare(
       "INSERT INTO trades (id, account_id, symbol, side, entry_time, exit_time, status, close_reason) VALUES (?,?,?,?,?,?,?,?)",
@@ -173,7 +180,7 @@ describe("extractSeedPositions", () => {
     db.run(`CREATE TABLE trades (
       id TEXT PRIMARY KEY, account_id TEXT, symbol TEXT, side TEXT,
       entry_price REAL, quantity REAL, stop_loss REAL,
-      entry_time INTEGER, exit_time INTEGER, status TEXT, close_reason TEXT
+      entry_time INTEGER, exit_time INTEGER, status TEXT, close_reason TEXT, strategy TEXT
     )`);
     const epoch = at("2026-09-28");
     db.prepare(
@@ -200,6 +207,163 @@ describe("normalizeSeedPositions", () => {
   test("other sleeves keep their symbols verbatim (same identity, not just equal value)", () => {
     const seeds: SeedPosition[] = [{ symbol: "SOL/USD", side: "buy", qty: 1, entryPrice: 1, entryAt: 0 }];
     expect(normalizeSeedPositions("momentum_crypto", seeds)).toBe(seeds);
+  });
+});
+
+describe("Turtle units carried across the parity epoch", () => {
+  const H = 3_600_000, D = 24 * H, epoch = Date.parse("2026-11-03T03:00:00Z");
+
+  test.each(["BREAKOUT_SHORT", "BREAKOUT_LONG"])("extracts %s role and preserves it through USDC normalization", strategy => {
+    const db = makeTradingDb([{ symbol: "SOL/USDC", account: "momentum_crypto_usdc", entry: "2026-11-02", strategy }]);
+    try {
+      const seeds = normalizeSeedPositions("momentum_crypto_usdc", extractSeedPositions(db, "momentum_crypto_usdc", epoch));
+      expect(seeds[0]).toMatchObject({ symbol: "SOL/USD", role: strategy === "BREAKOUT_SHORT" ? "breakout-short" : "breakout-long" });
+    } finally { db.close(); }
+  });
+
+  test.each(["hold", "stop", "channel", "age", "long-age", "daily-age"] as const)("seeded unit: %s stays in the breakout book and its exit is still compared", async mode => {
+    const dir = mkdtempSync(join(tmpdir(), "parity-breakout-")), path = join(dir, "historical.db");
+    const daily = mode === "daily-age", long = mode === "long-age", barMs = daily ? D : H;
+    const start = daily ? Math.floor(epoch / D) * D : epoch;
+    const end = start + (daily ? 3 * D : mode === "hold" ? 53 * H : 4 * H);
+    const entryAt = mode.includes("age") ? start - 119 * H : Date.parse("2026-11-02T18:00:00Z");
+    const seed: SeedPosition = { symbol: "SOL/USD", side: long ? "buy" : "sell", qty: 1, entryPrice: 100, entryAt, stopPrice: long ? 60 : 140, role: long ? "breakout-long" : "breakout-short" };
+    try {
+      const hist = new Database(path);
+      hist.exec("CREATE TABLE historical_bars(symbol TEXT, timeframe TEXT, source TEXT, timestamp INTEGER, open REAL, high REAL, low REAL, close REAL, volume REAL)");
+      const q = hist.query("INSERT INTO historical_bars VALUES ('SOL/USD', ?, 'binance_futures', ?, ?, ?, ?, ?, 1000)");
+      hist.transaction(() => {
+        for (let t = start - (daily ? 400 : 100) * D; t < end; t += barMs) {
+          const p = t >= start && mode === "stop" ? 141 : t >= start && mode === "channel" ? 111 : long ? 111 : 89;
+          q.run(daily ? "1d" : "1h", t, p, Math.max(110, p), Math.min(90, p), p);
+        }
+      })();
+      hist.close();
+      const sleeve = daily ? "momentum_crypto_usdc" : "momentum_crypto";
+      const live = liveSleeveConfig(sleeve);
+      const manifest: ExperimentManifest = JSON.parse(readFileSync(join(import.meta.dir, "..", live.manifestPath), "utf8"));
+      manifest.data = { ...manifest.data, universe: ["SOL/USD"], refSymbol: "SOL/USD", funding: false };
+      const leg = { symbols: ["SOL/USD"], entryDays: 20, exitDays: 10, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 };
+      const cfg = candidateToReplayConfig(manifest, { ...live.candidate, entryPct: 100000, volTarget: undefined, exposureControl: undefined,
+        breakoutShort: long ? undefined : leg, breakoutLong: long ? leg : undefined }, "base", path);
+      const broker = new SimBroker(10000, new Map(), 0, 0, barMs, { leverage: 2, maintRate: 0.005 });
+      broker.seedPositions([seed], cfg);
+      expect(broker.positions[0]).toMatchObject({ role: seed.role, breakoutN: 20, breakoutStop: seed.stopPrice, stopFrac: null });
+      expect((await broker.getOpenPositions())[0]).toMatchObject({ role: seed.role, breakoutN: 20, stopLoss: seed.stopPrice });
+      const result = await runWithConfig(cfg, { label: "parity-seeded-unit", from: isoInstant(start), to: isoInstant(end) }, undefined, [seed]);
+      expect(result).not.toBeNull();
+      expect(result!.closedTrades).toHaveLength(1); // no spurious re-entry on a sustained breach
+      const t = result!.closedTrades[0];
+      expect(t.entryAt).toBe(entryAt);
+      const reason = mode === "hold" ? undefined : mode === "stop" ? "BREAKOUT_SHORT_STOP" : mode === "channel" ? "BREAKOUT_SHORT_EXIT" : long ? "BREAKOUT_LONG_TIME_STOP" : "BREAKOUT_SHORT_TIME_STOP";
+      if (reason) expect(t.engineCloseReason).toBe(reason);
+      else expect(t.reason).toBe("fold_end");
+      const sim = extractSimDecisions(result!.closedTrades, end, isoInstant, [seed]);
+      expect(sim.entries).toEqual([]);
+      const liveDecisions: SleeveDecisions = { entries: [], exits: reason ? [{ symbol: seed.symbol, date: isoInstant(t.exitAt + 20_000) }] : [], endHoldings: reason ? [] : [seed.symbol] };
+      expect(compareDecisions(sim, liveDecisions, MATCH_TOLERANCE_HOURS_CRYPTO / 24)).toEqual([]);
+      if (reason) expect(compareDecisions(sim, { entries: [], exits: [], endHoldings: [seed.symbol] }, MATCH_TOLERANCE_HOURS_CRYPTO / 24).map(d => d.type)).toContain("exit_missing_live");
+      const liveDb = makeTradingDb([]), referenceDb = new Database(path, { readonly: true });
+      try {
+        liveDb.query("INSERT INTO trades VALUES ('seed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(sleeve, daily ? "SOL/USDC" : seed.symbol, seed.side, seed.entryPrice, seed.qty, seed.stopPrice!, entryAt,
+          reason ? t.exitAt + 20_000 : null, reason ? "closed" : "open", reason ?? null, long ? "BREAKOUT_LONG" : "BREAKOUT_SHORT");
+        const check = () => compareCryptoReplay(liveDb, referenceDb, sleeve, manifest.data, result!.closedTrades, [seed], start, end);
+        expect(check().divergences).toEqual([]);
+        expect(check().explained).toEqual([]); // seeded exits have the real row stop; no blanket waiver
+        if (reason) {
+          liveDb.exec("UPDATE trades SET status = 'open', exit_time = NULL, close_reason = NULL");
+          expect(check().divergences.map(d => d.type)).toContain("exit_missing_live");
+        }
+      } finally { liveDb.close(); referenceDb.close(); }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe("testnet-fill-anchored Turtle stops", () => {
+  const H = 3_600_000, D = 24 * H, epoch = Date.parse("2026-11-03T03:00:00Z"), end = Date.parse("2026-11-05T08:00:00Z");
+  const data = { source: "binance_futures", timeframe: "1h", barMinutes: 60 };
+  const btcEntry = Date.parse("2026-11-04T03:00:20Z"), liveExit = Date.parse("2026-11-04T23:00:21Z");
+  function fixture() {
+    const db = makeTradingDb([]), hist = new Database(":memory:");
+    db.query(`INSERT INTO trades VALUES ('sol', 'momentum_crypto', 'SOL/USD', 'sell', 100, 1, 140, ?, NULL, 'open', NULL, 'BREAKOUT_SHORT')`).run(Date.parse("2026-11-02T18:00:00Z"));
+    db.query(`INSERT INTO trades VALUES ('btc', 'momentum_crypto', 'BTC/USD', 'sell', 76488.2, 1, 80539.86, ?, ?, 'closed', 'BREAKOUT_SHORT_STOP', 'BREAKOUT_SHORT')`).run(btcEntry, liveExit);
+    hist.exec("CREATE TABLE historical_bars(symbol TEXT, source TEXT, timeframe TEXT, timestamp INTEGER, close REAL)");
+    const q = hist.query("INSERT INTO historical_bars VALUES ('BTC/USD', 'binance_futures', '1h', ?, ?)");
+    q.run(btcEntry - 20_000 - H, 90000); // close BEFORE live fill: must not count
+    q.run(Date.parse("2026-11-04T15:00:00Z"), 80300); // crosses SIM stop, below LIVE stop
+    q.run(Date.parse("2026-11-04T22:00:00Z"), 80600); // first close above LIVE stop = 23:00
+    const seeds = extractSeedPositions(db, "momentum_crypto", epoch);
+    const trades: ClosedTrade[] = [
+      { symbol: "SOL/USD", side: "sell", entryAt: seeds[0].entryAt, exitAt: end, reason: "fold_end", pnl: 0 },
+      { symbol: "BTC/USD", side: "sell", entryAt: btcEntry - 19_999, entryPrice: 76128, exitAt: Date.parse("2026-11-04T16:00:00.001Z"), reason: "rebalance", engineCloseReason: "BREAKOUT_SHORT_STOP", pnl: 0 },
+    ];
+    return { db, hist, seeds, trades };
+  }
+  test("prod 11-05: carried SOL short + BTC 76488.2 testnet fill / 76128 reference fill → zero divergences, one explained", () => {
+    const f = fixture();
+    try {
+      const r = compareCryptoReplay(f.db, f.hist, "momentum_crypto", data, f.trades, f.seeds, epoch, end);
+      expect(r.divergences).toEqual([]);
+      expect(r.explained).toHaveLength(1);
+      expect(r.explained[0]).toMatchObject({ symbol: "BTC/USD", stopPrice: 80539.86, referenceDate: "2026-11-04T23:00:00.000Z", liveDate: isoInstant(liveExit), simDate: "2026-11-04T16:00:00.001Z" });
+      expect(r.sim.exits[0].date).toBe("2026-11-04T16:00:00.001Z"); // output stays honest
+      const text = renderSummary([{ sleeve: "momentum_crypto", status: "compared", epoch: isoInstant(epoch), staleSymbols: [], ...r }]);
+      expect(text).toContain("explained (stop anchored to the testnet fill)");
+      expect(text).toContain("✅ PARITY — no divergences");
+    } finally { f.db.close(); f.hist.close(); }
+  });
+  test.each(["wrong-exit", "earlier-crossing", "no-crossing", "wrong-reason", "other-unit", "other-role"] as const)("%s remains a divergence", mode => {
+    const f = fixture();
+    try {
+      if (mode === "wrong-exit") f.db.query("UPDATE trades SET exit_time = ? WHERE id = 'btc'").run(liveExit - 4 * H);
+      if (mode === "earlier-crossing") f.hist.query("UPDATE historical_bars SET close = 80600 WHERE close = 80300").run();
+      if (mode === "no-crossing") f.hist.query("UPDATE historical_bars SET close = 80000").run();
+      if (mode === "wrong-reason") f.db.query("UPDATE trades SET close_reason = 'BREAKOUT_SHORT_EXIT' WHERE id = 'btc'").run();
+      if (mode === "other-unit") f.trades[1].entryAt! -= 5 * H;
+      if (mode === "other-role") f.trades[1].engineCloseReason = "TIME_STOP";
+      const r = compareCryptoReplay(f.db, f.hist, "momentum_crypto", data, f.trades, f.seeds, epoch, end);
+      expect(r.explained).toEqual([]);
+      expect(r.divergences.map(d => d.type)).toContain("exit_missing_live");
+      expect(r.divergences.map(d => d.type)).toContain("exit_extra_live");
+    } finally { f.db.close(); f.hist.close(); }
+  });
+  test("explaining one unit never suppresses another exit of the same symbol", () => {
+    const f = fixture();
+    try {
+      f.trades.push({ ...f.trades[1], entryAt: liveExit + H, exitAt: liveExit + 2 * H });
+      const r = compareCryptoReplay(f.db, f.hist, "momentum_crypto", data, f.trades, f.seeds, epoch, end);
+      expect(r.explained).toHaveLength(1);
+      expect(r.divergences).toContainEqual({ type: "exit_missing_live", symbol: "BTC/USD", simDate: isoInstant(liveExit + 2 * H) });
+    } finally { f.db.close(); f.hist.close(); }
+  });
+  test("hourly stop evidence uses ±2 decision bars, not a same-day waiver", () => {
+    const f = fixture();
+    try {
+      f.db.query("UPDATE trades SET exit_time = ? WHERE id = 'btc'").run(liveExit - 2 * H);
+      expect(compareCryptoReplay(f.db, f.hist, "momentum_crypto", data, f.trades, f.seeds, epoch, end).explained).toHaveLength(1);
+      f.db.query("UPDATE trades SET exit_time = ? WHERE id = 'btc'").run(liveExit - 3 * H);
+      expect(compareCryptoReplay(f.db, f.hist, "momentum_crypto", data, f.trades, f.seeds, epoch, end).explained).toEqual([]);
+    } finally { f.db.close(); f.hist.close(); }
+  });
+  test.each(["BREAKOUT_SHORT", "BREAKOUT_LONG"])("daily USDC %s requires the same UTC decision day (not daily ±3-day slack)", strategy => {
+    const f = fixture(), long = strategy === "BREAKOUT_LONG", entry = Math.floor(epoch / D) * D + 20_000;
+    const stopDay = Date.parse("2026-11-04T00:00:00Z"), exit = stopDay + 3 * H;
+    try {
+      f.db.exec("DELETE FROM trades");
+      f.db.query("INSERT INTO trades VALUES ('daily', 'momentum_crypto_usdc', 'BTC/USDC', ?, 100, 1, ?, ?, ?, 'closed', ?, ?)").run(long ? "buy" : "sell", long ? 60 : 140, entry, exit, `${strategy}_STOP`, strategy);
+      f.hist.exec("DELETE FROM historical_bars");
+      f.hist.query("INSERT INTO historical_bars VALUES ('BTC/USD', 'binance_futures', '1d', ?, ?)").run(stopDay - D, long ? 59 : 141);
+      const trades: ClosedTrade[] = [{ symbol: "BTC/USD", side: long ? "buy" : "sell", entryAt: entry - 19_999, exitAt: stopDay - D + 1, reason: "rebalance", engineCloseReason: `${strategy}_STOP`, pnl: 0 }];
+      const check = () => compareCryptoReplay(f.db, f.hist, "momentum_crypto_usdc", { ...data, timeframe: "1d", barMinutes: 1440 }, trades, [], entry - 20_000, end);
+      expect(check().explained).toHaveLength(1);
+      expect(check().divergences).toEqual([]);
+      trades[0].exitAt = stopDay + 1; // also explain >2h within one daily decision day
+      expect(check().explained).toHaveLength(1);
+      expect(check().divergences).toEqual([]);
+      f.db.query("UPDATE trades SET exit_time = ?").run(stopDay + D + 20_000);
+      expect(check().explained).toEqual([]);
+      expect(check().divergences.map(d => d.type)).toContain("exit_extra_live");
+    } finally { f.db.close(); f.hist.close(); }
   });
 });
 
@@ -471,6 +635,13 @@ describe("utcDayCloses / heldSymbolsAt / compareDailyHoldings (momentum_crypto's
     const to = Date.parse("2026-10-31T00:00:00Z");
     expect(compareDailyHoldings(sim, live, from, to)).toEqual([]);
     expect(compareDailyHoldings(sim, live, from, to, 0)).toContainEqual({ type: "eod_holdings_missing_live", symbol: "NEAR/USD", simDate: "2026-10-29" });
+  });
+
+  test("the replay's boundary + 1ms exit and the live fill use the same EOD snapshot slack", () => {
+    const entry = { symbol: "SOL/USD", date: "2026-11-02T18:00:00.000Z" };
+    const sim = { entries: [entry], exits: [{ symbol: "SOL/USD", date: "2026-11-04T00:00:00.001Z" }], endHoldings: [] };
+    const live = { entries: [entry], exits: [{ symbol: "SOL/USD", date: "2026-11-04T00:00:20.000Z" }], endHoldings: [] };
+    expect(compareDailyHoldings(sim, live, Date.parse("2026-11-03T03:00:00Z"), Date.parse("2026-11-05T00:00:00Z"))).toEqual([]);
   });
 
   test("the slack does not hide a live book that never followed the sim", () => {

@@ -18,7 +18,7 @@
 import { describe, expect, test } from "bun:test";
 import { MomentumEngine, SLOT_DISPLACED_CLOSE_REASON, TIME_STOP_CLOSE_REASON, type RebalanceReport } from "./MomentumEngine";
 import { TestClock } from "../../utils/clock";
-import { rampTo, FakeBroker, silentLogger as silent } from "../../test-support/momentum";
+import { rampTo, FakeBroker, MemoryPersistence, silentLogger as silent } from "../../test-support/momentum";
 
 /** Fixed epoch anchor — nothing in this file reads the real clock. */
 const T0 = Date.UTC(2024, 5, 1, 12, 0, 0);
@@ -31,6 +31,7 @@ function makeRig(clock: TestClock) {
   const engine = new MomentumEngine(
     {
       universe: ["UP", "DOWN"],
+      rebalanceMinutes: 60,
       notionalPctPerSlot: 0.3,
       scorer: { topLongs: 1, minLongScore: 0.01 },
       timeStop: { maxHoldHours: 24 },
@@ -44,6 +45,79 @@ function makeRig(clock: TestClock) {
 }
 
 describe("MomentumEngine clock injection", () => {
+  for (const cadence of [60, 1440]) {
+    for (const restart of [false, true]) {
+      test(`120h time stop absorbs 1ms jitter at ${cadence}min cadence (restart=${restart})`, async () => {
+        // NEAR/USDC live incident: Nov 3's pass was 1ms before its Oct 29 anchor.
+        const entryAt = Date.parse("2026-10-29T00:00:15.001Z");
+        const clock = new TestClock(entryAt), broker = new FakeBroker(), store = new MemoryPersistence();
+        broker.setCandles("NEAR/USDC", rampTo(entryAt, 100, 130));
+        const cfg = { universe: ["NEAR/USDC"], rebalanceMinutes: cadence,
+          regime: { enabled: false }, risk: { mode: "sizeOnly" as const }, timeStop: { maxHoldHours: 120 } };
+        let engine = new MomentumEngine(cfg, broker, silent, store, clock);
+        await engine.tick(); engine.stop();
+        expect(store.store?.entryMarks?.["NEAR/USDC|buy"]).toBe(entryAt);
+        clock.set(entryAt + 120 * HOUR - cadence * 60_000 - 1);
+        await engine.tick();
+        expect(broker.closed).toEqual([]); // never a full decision period early
+        if (restart) {
+          engine.stop();
+          engine = new MomentumEngine(cfg, broker, silent, store, clock);
+        }
+        clock.set(Date.parse("2026-11-03T00:00:15.000Z"));
+        await engine.tick();
+        expect(broker.closed).toEqual([{ symbol: "NEAR/USDC", side: "buy", closeReason: TIME_STOP_CLOSE_REASON }]);
+        expect(broker.positions).toEqual([]);
+      });
+    }
+
+    test(`off-phase restart anchor expires at the first eligible ${cadence}min grid tick`, async () => {
+      const entryAt = Date.parse("2026-10-29T18:09:00Z");
+      const clock = new TestClock(entryAt), broker = new FakeBroker(), store = new MemoryPersistence();
+      broker.setCandles("UP", rampTo(entryAt, 100, 130));
+      const cfg = { universe: ["UP"], rebalanceMinutes: cadence, regime: { enabled: false },
+        risk: { mode: "sizeOnly" as const }, timeStop: { maxHoldHours: 120 } };
+      const first = new MomentumEngine(cfg, broker, silent, store, clock);
+      await first.tick(); first.stop();
+      const cadenceMs = cadence * 60_000, threshold = 120 * HOUR - cadenceMs / 2;
+      // Live grid = UTC boundary + 15s, even if the entry was off-phase.
+      const due = Math.ceil((entryAt + threshold - 15_000) / cadenceMs) * cadenceMs + 15_000;
+      clock.set(due - cadenceMs);
+      const restarted = new MomentumEngine(cfg, broker, silent, store, clock);
+      await restarted.tick();
+      expect(broker.closed).toEqual([]);
+      clock.set(due); await restarted.tick();
+      expect(broker.closed[0]?.closeReason).toBe(TIME_STOP_CLOSE_REASON);
+      expect(due - entryAt).toBeGreaterThanOrEqual(threshold);
+      expect(due - entryAt).toBeLessThan(120 * HOUR + cadenceMs);
+      if (cadence === 60) expect(due - entryAt).toBeLessThan(120 * HOUR);
+    });
+
+    test(`half-cadence expiry boundary is inclusive at ${cadence}min cadence`, async () => {
+      const clock = new TestClock(T0), broker = new FakeBroker();
+      broker.setCandles("UP", rampTo(T0, 100, 130));
+      const engine = new MomentumEngine({ universe: ["UP"], rebalanceMinutes: cadence,
+        regime: { enabled: false }, risk: { mode: "sizeOnly" }, timeStop: { maxHoldHours: 120 } }, broker, silent, undefined, clock);
+      await engine.tick();
+      const threshold = T0 + 120 * HOUR - cadence * 60_000 / 2;
+      clock.set(threshold - 1); await engine.tick();
+      expect(broker.closed).toEqual([]);
+      clock.set(threshold); await engine.tick();
+      expect(broker.closed[0]?.closeReason).toBe(TIME_STOP_CLOSE_REASON);
+    });
+
+    test(`120h exact-grid decisions remain unchanged at ${cadence}min cadence`, async () => {
+      const clock = new TestClock(T0), broker = new FakeBroker();
+      broker.setCandles("UP", rampTo(T0, 100, 130));
+      const engine = new MomentumEngine({ universe: ["UP"], rebalanceMinutes: cadence,
+        regime: { enabled: false }, risk: { mode: "sizeOnly" }, timeStop: { maxHoldHours: 120 } }, broker, silent, undefined, clock);
+      for (let age = 0; age <= 120 * HOUR; age += cadence * 60_000) {
+        clock.set(T0 + age); await engine.tick();
+        expect(broker.closed.length).toBe(age >= 120 * HOUR ? 1 : 0);
+      }
+    });
+  }
+
   test("identical scenario under two identical TestClocks is bit-identical, and every timestamp is the injected time", async () => {
     const run = async (): Promise<{ reports: RebalanceReport[]; closed: FakeBroker["closed"] }> => {
       const clock = new TestClock(T0);

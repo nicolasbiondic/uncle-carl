@@ -192,6 +192,8 @@ export interface SeedPosition {
   /** trades.stop_loss — the position's REAL persisted stop price. null/
    *  undefined = the row never got one (see seedStopFraction's fallback). */
   stopPrice?: number | null;
+  /** trades.strategy BREAKOUT_*: managed by Turtle, never the TSM book. */
+  role?: "breakout-short" | "breakout-long";
 }
 
 /**
@@ -1092,15 +1094,25 @@ export class SimBroker implements MomentumBrokerAdapter {
    * `entryMargin` is bookkeeping-only — see openPosition, which never
    * debits it from cash either, only `equityNow()` vs. the margin total).
    */
-  seedPositions(seeds: SeedPosition[]): void {
+  seedPositions(seeds: SeedPosition[], cfg: Pick<ReplayConfig, "breakoutShort" | "breakoutLong"> = {}): void {
     for (const s of seeds) {
       const entryMargin = (s.qty * s.entryPrice) / this.margin.leverage;
-      const stopFrac = this.hardStopSpec
+      const breakout = s.role === "breakout-short" ? cfg.breakoutShort : cfg.breakoutLong;
+      const stopFrac = s.role ? null : this.hardStopSpec
         ? seedStopFraction(s, this.hardStopSpec, this.hardStopPct)
         : undefined; // legacy path: no stop-axis override configured — same sentinel as a fresh open's checkStops fallback.
       this.positions.push({
         symbol: s.symbol, side: s.side, qty: s.qty, entryPrice: s.entryPrice, entryAt: s.entryAt,
         entryMargin, entryCommission: 0, fundingCashDelta: 0, stopFrac, peakPrice: s.entryPrice, lockLevel: null,
+        ...(s.role ? {
+          role: s.role,
+          breakoutStop: s.stopPrice ?? undefined,
+          // N was fixed at entry. Recover it from the persisted row stop,
+          // not today's ATR (a missing config/stop is drained by the engine).
+          breakoutN: s.stopPrice && breakout?.stopN
+            ? Math.abs(s.stopPrice - s.entryPrice) / breakout.stopN
+            : undefined,
+        } : {}),
       });
     }
   }
@@ -2273,7 +2285,7 @@ export async function runWithConfig(
     // P2) — BEFORE the tick loop starts, so slots/exposure/stops see them
     // from tick 0. Absent/empty seedPositions = byte-identical legacy
     // empty-book behavior.
-    if (seedPositions && seedPositions.length > 0) broker.seedPositions(seedPositions);
+    if (seedPositions && seedPositions.length > 0) broker.seedPositions(seedPositions, cfg);
     if (cfg.trendExit) {
       broker.trendExitDaily = new Map();
       // Separate daily history: an hourly sleeve's normal warmup (45d) is
@@ -2364,12 +2376,26 @@ export async function runWithConfig(
     // configured) counts the position's true hold, not time-since-epoch.
     const seedTrailMarks: Record<string, TrailMark> = {};
     const seedEntryMarks: Record<string, number> = {};
+    // Reuse the engine's restore seam: Turtle has its OWN age and crossing
+    // state. TSM entryMarks alone neither age it nor prevent false re-entry.
+    const seedBreakoutBySymbol: Record<string, { entryAt: number; belowEntry: boolean; belowEntryDays?: number }> = {};
+    const seedBreakoutLongBySymbol: Record<string, { entryAt: number; aboveEntry: boolean }> = {};
     for (const s of seedPositions ?? []) {
+      if (s.role === "breakout-short") {
+        seedBreakoutBySymbol[s.symbol] = { entryAt: s.entryAt, belowEntry: true, belowEntryDays: cfg.breakoutShort?.entryDays };
+        continue;
+      }
+      if (s.role === "breakout-long") {
+        seedBreakoutLongBySymbol[s.symbol] = { entryAt: s.entryAt, aboveEntry: true };
+        continue;
+      }
       const key = `${s.symbol}|${s.side}`;
       seedEntryMarks[key] = s.entryAt;
       if (cfg.tsmTrail) seedTrailMarks[key] = seedTrailMark(s, candles.get(s.symbol) ?? [], fromMs);
     }
-    const hasSeedState = Object.keys(seedTrailMarks).length > 0 || Object.keys(seedEntryMarks).length > 0;
+    const legacyBreakoutSeed = cfg.breakoutShort?.symbol ? seedBreakoutBySymbol[cfg.breakoutShort.symbol] : undefined;
+    const hasSeedState = Object.keys(seedTrailMarks).length > 0 || Object.keys(seedEntryMarks).length > 0
+      || Object.keys(seedBreakoutBySymbol).length > 0 || Object.keys(seedBreakoutLongBySymbol).length > 0;
     const statePersistence: MomentumStatePersistence = {
       load: () => (persistedRiskState || hasSeedState)
         ? {
@@ -2377,6 +2403,9 @@ export async function runWithConfig(
             risk: persistedRiskState ?? { ...INITIAL_RISK_STATE },
             ...(Object.keys(seedTrailMarks).length > 0 ? { trailMarks: seedTrailMarks } : {}),
             ...(Object.keys(seedEntryMarks).length > 0 ? { entryMarks: seedEntryMarks } : {}),
+            ...(Object.keys(seedBreakoutBySymbol).length > 0 ? { breakoutBySymbol: seedBreakoutBySymbol } : {}),
+            ...(Object.keys(seedBreakoutLongBySymbol).length > 0 ? { breakoutLongBySymbol: seedBreakoutLongBySymbol } : {}),
+            ...(legacyBreakoutSeed ? { breakoutEntryAt: legacyBreakoutSeed.entryAt, breakoutBelowEntry: true } : {}),
           }
         : null,
       save: (s) => { persistedRiskState = s.risk; },

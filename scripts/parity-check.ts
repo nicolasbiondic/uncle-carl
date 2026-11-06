@@ -31,13 +31,16 @@
  *     by SYMBOL within the same ±2h window — never by price (the sim's
  *     entry-anchored stop and the broker's live trigger price can legally
  *     differ). See checkMomentumCryptoSleeve.
+ *   - Turtle BREAKOUT_* seeds retain their role, entry age and row stop.
+ *     A differing Turtle stop exit is explained (not paged) ONLY when the
+ *     first reference-data CLOSE crossing the LIVE row stop agrees with the
+ *     live decision bar (hourly ±2h, daily same UTC day). Its matched sim
+ *     unit's exit is aligned only for comparison; output keeps both times.
  *
  * Decisions, not P&L: fill prices/quantities are expected to differ; the
- * SYMBOLS and their approximate TIMES are not. Positions opened before the
- * epoch are ignored on the live side (legacy books are the cutover's
- * problem, not parity's) — this is also why momentum_crypto's epoch is set
- * to the exact instant of its 2026-09-26 risk-state re-anchor: the sim's
- * empty book at the epoch mirrors the live book emptied by that re-anchor.
+ * SYMBOLS and their approximate TIMES are not. Positions already open at
+ * the epoch seed the sim's inventory: their inherited entries are ignored,
+ * but their exits and holdings remain comparable (except MODEL_CUTOVER).
  *
  * Portfolio-engine sleeves (RW2, 2026-10-23): a sleeve whose live manager is
  * the portfolio engine (platform_portfolios: template "portfolio", enabled,
@@ -80,10 +83,9 @@
  *   - RiskGuard starts FRESH at the epoch; live carries drawdown/streak
  *     state from before it (momentum_crypto's epoch is chosen so this is
  *     also true of live, per the re-anchor above).
- *   - The sim book starts EMPTY at the epoch; live slots occupied by
- *     pre-epoch positions can admit fewer entries than the sim until they
- *     roll off (small for these epochs: momentum re-underwrites at its
- *     epoch, meanrev had 3 of 7 slots carried in, crypto re-anchors flat).
+ *   - Seeded TSM trail watermarks can only be reconstructed from history
+ *     loaded by the replay; a seed predating that history lacks its older
+ *     watermark (see seedTrailMark).
  *
  * Usage:
  *   bun run scripts/parity-check.ts [--db data/trading.db]
@@ -221,12 +223,12 @@ export function normalizeSeedPositions(sleeve: LiveSleeveId, seeds: SeedPosition
  */
 export function extractSeedPositions(db: Database, accountId: string, epochMs: number): SeedPosition[] {
   const rows = db.prepare(
-    `SELECT symbol, side, entry_time, entry_price, quantity, stop_loss FROM trades
+    `SELECT symbol, side, entry_time, entry_price, quantity, stop_loss, strategy FROM trades
      WHERE account_id = ? AND entry_time < ? AND (status = 'open' OR exit_time >= ?)
        AND (close_reason IS NULL OR close_reason != ?)
      ORDER BY entry_time ASC`,
   ).all(accountId, epochMs, epochMs, MODEL_CUTOVER_CLOSE_REASON) as Array<{
-    symbol: string; side: string; entry_time: number; entry_price: number; quantity: number; stop_loss: number | null;
+    symbol: string; side: string; entry_time: number; entry_price: number; quantity: number; stop_loss: number | null; strategy: string | null;
   }>;
   return rows.map(r => ({
     symbol: r.symbol,
@@ -235,6 +237,7 @@ export function extractSeedPositions(db: Database, accountId: string, epochMs: n
     entryPrice: r.entry_price,
     entryAt: r.entry_time,
     stopPrice: r.stop_loss,
+    ...(r.strategy === "BREAKOUT_SHORT" ? { role: "breakout-short" as const } : r.strategy === "BREAKOUT_LONG" ? { role: "breakout-long" as const } : {}),
   }));
 }
 
@@ -459,7 +462,8 @@ export function heldSymbolsAt(entries: DecisionEvent[], exits: DecisionEvent[], 
  *  catches a same-day open+close round trip that entry/exit matching alone
  *  can miss (right symbol, right side, but the live book briefly held a
  *  DIFFERENT combination than the sim at some point inside the window).
- *  The live book is read `liveSlackMs` after the close (LIVE_PASS_SLACK_MS). */
+ *  Both books are read `liveSlackMs` after the close (LIVE_PASS_SLACK_MS):
+ *  replay engine exits are stamped boundary + 1ms, live fills seconds later. */
 export function compareDailyHoldings(
   sim: SleeveDecisions,
   live: SleeveDecisions,
@@ -470,7 +474,7 @@ export function compareDailyHoldings(
   const out: Divergence[] = [];
   for (const closeMs of utcDayCloses(fromMs, toMs)) {
     const dayKey = new Date(closeMs).toISOString().slice(0, 10);
-    const simHeld = heldSymbolsAt(sim.entries, sim.exits, closeMs);
+    const simHeld = heldSymbolsAt(sim.entries, sim.exits, closeMs + liveSlackMs);
     const liveHeld = heldSymbolsAt(live.entries, live.exits, closeMs + liveSlackMs);
     for (const s of simHeld) if (!liveHeld.has(s)) out.push({ type: "eod_holdings_missing_live", symbol: s, simDate: dayKey });
     for (const s of liveHeld) if (!simHeld.has(s)) out.push({ type: "eod_holdings_extra_live", symbol: s, liveDate: dayKey });
@@ -491,6 +495,8 @@ export interface SleeveParityResult {
   skipped?: { definitionId: string; strategyVersion: string | null };
   /** Divergences matched by PARITY_ACKNOWLEDGED — shown, never counted. */
   acknowledged?: Divergence[];
+  /** Reference-close evidence explains this unit's different stop timing. */
+  explained?: ExplainedBreakoutStop[];
   lastSession?: string;
   /** Universe symbols whose newest daily bar lags the universe's newest by
    *  more than STALE_SYMBOL_DAYS — they clamp (or freeze) the comparison
@@ -506,6 +512,91 @@ export interface SleeveParityResult {
 /** A symbol lagging the freshest universe symbol by more than this many
  *  calendar days is reported as STALE (frozen backfill, delisting, rename). */
 export const STALE_SYMBOL_DAYS = 7;
+
+export interface ExplainedBreakoutStop {
+  symbol: string;
+  entryDate: string;
+  simDate: string;
+  liveDate: string;
+  referenceDate: string;
+  stopPrice: number;
+}
+
+/** Compare crypto decisions without treating a testnet-fill-anchored Turtle
+ * stop as a strategy divergence. Evidence is per UNIT, never a symbol-wide
+ * waiver. No reference crossing, wrong decision bar, unmatched entry or
+ * non-stop counterpart means the original divergence survives unchanged. */
+export function compareCryptoReplay(
+  tradingDb: Database,
+  hist: Database,
+  sleeve: "momentum_crypto" | "momentum_crypto_usdc",
+  data: Pick<ExperimentManifest["data"], "source" | "timeframe" | "barMinutes">,
+  closedTrades: ClosedTrade[],
+  seeds: SeedPosition[],
+  epochMs: number,
+  endMs: number,
+): { sim: SleeveDecisions; live: SleeveDecisions; divergences: Divergence[]; explained: ExplainedBreakoutStop[] } {
+  const sim = extractSimDecisions(closedTrades, endMs, isoInstant, seeds);
+  const live = normalizeLiveDecisions(sleeve, extractLiveDecisions(tradingDb, sleeve, epochMs, endMs, isoInstant));
+  const barMs = data.barMinutes * 60_000, daily = data.barMinutes === 1440;
+  const sameDecision = (a: number, b: number) => daily
+    ? Math.floor(a / 86_400_000) === Math.floor(b / 86_400_000)
+    : Math.abs(a - b) <= MATCH_TOLERANCE_HOURS_CRYPTO * 3_600_000;
+  const rows = tradingDb.prepare(
+    `SELECT symbol, side, entry_time, entry_price, exit_time, stop_loss, strategy FROM trades
+     WHERE account_id = ? AND status != 'open' AND entry_time < ? AND exit_time >= ? AND exit_time < ?
+       AND ((strategy = 'BREAKOUT_SHORT' AND close_reason = 'BREAKOUT_SHORT_STOP')
+         OR (strategy = 'BREAKOUT_LONG' AND close_reason = 'BREAKOUT_LONG_STOP'))
+     ORDER BY entry_time ASC`,
+  ).all(sleeve, endMs, epochMs, endMs) as Array<{
+    symbol: string; side: string; entry_time: number; entry_price: number; exit_time: number; stop_loss: number | null; strategy: string;
+  }>;
+  const adjustedTrades = [...closedTrades], used = new Set<number>(), explained: ExplainedBreakoutStop[] = [];
+  for (const r of rows) {
+    const long = r.strategy === "BREAKOUT_LONG";
+    if (!r.stop_loss || !Number.isFinite(r.stop_loss) || !(r.entry_price > 0)
+      || r.side !== (long ? "buy" : "sell") || (long ? r.stop_loss >= r.entry_price : r.stop_loss <= r.entry_price)) continue;
+    const symbol = sleeve === "momentum_crypto_usdc" ? r.symbol.replace(/\/USDC$/, "/USD") : r.symbol;
+    // Match the opening decision (or exact seed identity), not whichever exit
+    // happens to be nearest: repeated units of the same coin stay distinct.
+    let best = -1, bestDiff = Infinity;
+    for (let i = 0; i < closedTrades.length; i++) {
+      const t = closedTrades[i];
+      if (used.has(i) || t.symbol !== symbol || t.side !== r.side || t.entryAt === undefined
+        || t.reason === "fold_end" || t.exitAt >= endMs || t.engineCloseReason !== `${r.strategy}_STOP`) continue;
+      const matchesEntry = r.entry_time < epochMs ? t.entryAt === r.entry_time
+        : t.entryAt >= epochMs && sameDecision(t.entryAt, r.entry_time);
+      const diff = Math.abs(t.entryAt - r.entry_time);
+      if (matchesEntry && diff < bestDiff) { best = i; bestDiff = diff; }
+    }
+    if (best < 0) continue;
+    used.add(best);
+    const t = closedTrades[best];
+    // An ordinary matched stop (especially a seed carrying the SAME row stop)
+    // needs no explanation and remains under the normal comparison contract.
+    if (Math.abs(t.exitAt - r.exit_time) <= MATCH_TOLERANCE_HOURS_CRYPTO * 3_600_000) continue;
+    const crossing = hist.prepare(
+      `SELECT timestamp + ? AS decision FROM historical_bars
+       WHERE source = ? AND timeframe = ? AND symbol = ?
+         AND timestamp >= ? AND timestamp + ? >= ? AND timestamp + ? < ?
+         AND close ${long ? "<=" : ">="} ? ORDER BY timestamp ASC LIMIT 1`,
+    ).get(barMs, data.source, data.timeframe, symbol, r.entry_time - barMs, barMs, r.entry_time, barMs, endMs, r.stop_loss) as { decision: number } | null;
+    if (!crossing || !sameDecision(crossing.decision, Math.floor(r.exit_time / barMs) * barMs)) continue;
+    explained.push({ symbol, entryDate: isoInstant(r.entry_time), simDate: isoInstant(t.exitAt), liveDate: isoInstant(r.exit_time), referenceDate: isoInstant(crossing.decision), stopPrice: r.stop_loss });
+    adjustedTrades[best] = { ...t, exitAt: r.exit_time };
+  }
+  const comparableSim = extractSimDecisions(adjustedTrades, endMs, isoInstant, seeds);
+  // Inherited entries are not decisions, but they DO establish the initial
+  // inventory for EOD checks. Add them symmetrically only for that check.
+  const inherited = seeds.map(s => ({ symbol: s.symbol, date: isoInstant(s.entryAt) }));
+  return {
+    sim, live, explained,
+    divergences: [
+      ...compareDecisions(comparableSim, live, MATCH_TOLERANCE_HOURS_CRYPTO / 24),
+      ...compareDailyHoldings({ ...comparableSim, entries: [...inherited, ...comparableSim.entries] }, { ...live, entries: [...inherited, ...live.entries] }, epochMs, endMs),
+    ],
+  };
+}
 
 /** Last session (ET date key + max bar ts) covered by EVERY universe symbol
  *  — a lagging symbol must clamp the window, or the replay fails closed.
@@ -684,32 +775,27 @@ export async function checkMomentumCryptoSleeve(
   // (OPEN.md P2) — normalized to the replay's BASE/USD proxy symbols for
   // momentum_crypto_usdc, same as the live decisions below.
   const tradingDb = new Database(tradingDbPath, { readonly: true });
-  let sim: SleeveDecisions;
-  let live: SleeveDecisions;
+  let comparison: ReturnType<typeof compareCryptoReplay>;
   try {
     const seeds = normalizeSeedPositions(sleeve, extractSeedPositions(tradingDb, sleeve, epochMs));
     const result = await runWithConfig(cfg, win, undefined, seeds);
     if (!result) {
       return { sleeve, status: "nothing_yet", epoch, lastSession: new Date(last.ts).toISOString(), staleSymbols: last.stale, divergences: [] };
     }
-    sim = extractSimDecisions(result.closedTrades, endMs, isoInstant, seeds);
-    live = normalizeLiveDecisions(sleeve, extractLiveDecisions(tradingDb, sleeve, epochMs, endMs, isoInstant));
+    const referenceDb = new Database(histPath, { readonly: true });
+    try {
+      comparison = compareCryptoReplay(tradingDb, referenceDb, sleeve, manifest.data, result.closedTrades, seeds, epochMs, endMs);
+    } finally { referenceDb.close(); }
   } finally {
     tradingDb.close();
   }
-  const divergences = [
-    ...compareDecisions(sim, live, MATCH_TOLERANCE_HOURS_CRYPTO / 24),
-    ...compareDailyHoldings(sim, live, epochMs, endMs),
-  ];
   return {
     sleeve,
     status: "compared",
     epoch,
     lastSession: new Date(last.ts).toISOString(),
     staleSymbols: last.stale,
-    sim,
-    live,
-    divergences,
+    ...comparison,
   };
 }
 
@@ -798,6 +884,9 @@ export function renderSummary(results: SleeveParityResult[]): string {
     lines.push(`  live holdings @end: ${r.live!.endHoldings.join(", ") || "(none)"}`);
     for (const d of r.acknowledged ?? []) {
       lines.push(`  ☑️  acknowledged (explained, not paged): ${d.type} ${d.symbol}${d.simDate ? ` sim=${d.simDate}` : ""}${d.liveDate ? ` live=${d.liveDate}` : ""}`);
+    }
+    for (const e of r.explained ?? []) {
+      lines.push(`  ☑️  explained (stop anchored to the testnet fill): ${e.symbol} entry=${e.entryDate} sim=${e.simDate} live=${e.liveDate} stop=${e.stopPrice} first reference close=${e.referenceDate}`);
     }
     if (r.divergences.length === 0) {
       lines.push("  ✅ PARITY — no divergences");

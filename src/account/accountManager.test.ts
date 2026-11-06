@@ -5,6 +5,7 @@ import { EVENTS } from "../utils/events";
 import { makeTestDb, seedOpenTrade } from "../test-support/db";
 import { captureBursts, captureEvent } from "../test-support/events";
 import { makeAccountManager } from "../test-support/account";
+import { setBrokerTruthAvailable } from "../portfolio/truth";
 
 /** Both the price-unavailable escalation and the DEFERRED-close tests fake
  *  Date to a fixed moment during US market hours (checkAllStopLoss skips
@@ -83,6 +84,32 @@ describe("boundedAlpacaStockSymbols", () => {
     expect(symbols.slice(0, 2)).toEqual(["AAPL", "MSFT"]);
     expect(symbols).toContain("TSLA");
     expect(symbols).toHaveLength(3);
+  });
+});
+
+describe("AccountManager Alpaca account gross exposure", () => {
+  function grossLog(combined: number): string[] {
+    const manager: any = makeAccountManager();
+    manager.alpacaMainTruth = { equity: 100, cash: 0 };
+    manager.statesLoaded = true;
+    manager.accounts.get("momentum_stocks").state.stocksValue = combined;
+    setBrokerTruthAvailable("alpaca", true);
+    const output: string[] = [];
+    const realLog = console.log;
+    console.log = (...args: any[]) => output.push(args.join(" "));
+    try {
+      manager.logAlpacaAccountGrossExposure();
+    } finally {
+      console.log = realLog;
+      setBrokerTruthAvailable("alpaca", false);
+    }
+    return output;
+  }
+
+  test("allows Q5 leverage and warns only above the shared 1.9× account cap", () => {
+    expect(grossLog(150).join(" ")).toContain("[INFO]");
+    expect(grossLog(150).join(" ")).not.toContain("EXCEEDS");
+    expect(grossLog(191).join(" ")).toContain("EXCEEDS 1.9× account equity");
   });
 });
 
