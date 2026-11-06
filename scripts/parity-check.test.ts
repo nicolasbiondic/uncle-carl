@@ -7,15 +7,18 @@
 // ═══════════════════════════════════════════════════════════════════════
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   MATCH_TOLERANCE_DAYS,
   MATCH_TOLERANCE_HOURS_CRYPTO,
   compareDailyHoldings,
   compareDecisions,
   compareCryptoReplay,
+  checkPortfolioSleeve,
+  lastCompletedStockSession,
+  PORTFOLIO_FLOAT_TOLERANCE,
   extractLiveDecisions,
   extractSeedPositions,
   extractSimDecisions,
@@ -36,7 +39,12 @@ import { runWithConfig, SimBroker, type ClosedTrade, type SeedPosition } from ".
 import { candidateToReplayConfig, type ExperimentManifest } from "./walk-forward";
 import { getETDayBounds } from "../src/db/database";
 import { liveSleeveConfig } from "../src/config/liveSleeveConfigs";
-import { currentModelVersion } from "../src/portfolio/modelVersions";
+import { currentModelVersion, MODEL_VERSIONS } from "../src/portfolio/modelVersions";
+import { decide } from "../src/portfolio-engine/decide";
+import { planOrders } from "../src/portfolio-engine/orders";
+import { HistoricalPriceView } from "../src/portfolio-engine/live/priceView";
+import { latestPortfolioMemory, type PersistedOrder } from "../src/portfolio-engine/live/persistence";
+import type { VolManagedConfig, Position } from "../src/portfolio-engine/types";
 
 // ── fixture helpers ───────────────────────────────────────────────────────
 const [EPOCH_START] = getETDayBounds("2026-09-25");
@@ -764,7 +772,7 @@ describe("acknowledged divergences (explained once, never re-paged)", () => {
   });
 });
 
-describe("portfolio-engine sleeves are skipped, never compared against the incumbent's replay (RW2 cutover 2026-10-23)", () => {
+describe("portfolio-engine registry dispatch (never the incumbent's replay)", () => {
   function registryDb(rows: Array<{ id: string; template?: string; enabled?: number; mode?: string; status?: string; params: any }>): Database {
     const db = new Database(":memory:");
     db.exec(`CREATE TABLE platform_portfolios (
@@ -802,16 +810,202 @@ describe("portfolio-engine sleeves are skipped, never compared against the incum
     db.exec("CREATE TABLE trades (id TEXT)");
     expect(portfolioEngineLiveSleeves(db).size).toBe(0);
   });
-  test("renderSummary prints an explicit SKIPPED line, no divergence, and the other sleeves still render", () => {
+  test("renderSummary prints portfolio decisions and still renders crypto unchanged", () => {
     const text = renderSummary([
-      { sleeve: "momentum_stocks", status: "skipped_portfolio_engine", epoch: "2026-10-12", skipped: { definitionId: "pe_momentum_stocks", strategyVersion: "momentum_stocks@pe-vt15" }, staleSymbols: [], divergences: [] },
+      { sleeve: "momentum_stocks", status: "compared", epoch: "2026-10-29", portfolio: [], staleSymbols: [], divergences: [] },
       { sleeve: "momentum_crypto", status: "compared", epoch: "2026-09-26T19:00:00Z", lastSession: "x", staleSymbols: [],
         sim: { entries: [], exits: [], endHoldings: [] }, live: { entries: [], exits: [], endHoldings: [] }, divergences: [] },
     ] as any);
     expect(text).toContain("── momentum_stocks");
-    expect(text).toContain("SKIPPED — live manager is the portfolio engine (pe_momentum_stocks, momentum_stocks@pe-vt15)");
+    expect(text).toContain("exact decision replay");
+    expect(text).not.toContain("SKIPPED");
     expect(text).not.toMatch(/momentum_stocks[^]*❌/);
     expect(text).toContain("── momentum_crypto");
     expect(text).toContain("✅ PARITY — no divergences");
+  });
+});
+
+describe("portfolio-engine exact decision replay", () => {
+  const sleeve = "momentum_stocks", version = currentModelVersion(sleeve)!;
+  const session = "2026-10-29", asOf = "2026-10-28", now = Date.parse("2026-10-29T22:00:00Z");
+  function fixture() {
+    const root = mkdtempSync(join(tmpdir(), "pe-parity-")), dbPath = join(root, "trading.db"), histPath = join(root, "historical.db");
+    const db = new Database(dbPath), hist = new Database(histPath);
+    db.exec(`CREATE TABLE portfolio_decisions (id INTEGER PRIMARY KEY, account_id TEXT, strategy_version TEXT,
+      session TEXT, as_of TEXT, mode TEXT, status TEXT, equity REAL, book_json TEXT, memory_json TEXT,
+      weights_json TEXT, diagnostics_json TEXT, orders_json TEXT)`);
+    hist.exec(`CREATE TABLE historical_bars (symbol TEXT, timeframe TEXT, source TEXT, timestamp INTEGER,
+      open REAL, high REAL, low REAL, close REAL, volume REAL)`);
+    const config: VolManagedConfig = { kind: "volManaged", universe: ["AAA", "BBB"], inceptionGuardBars: 4,
+      volLookback: 3, covLookback: 3, portfolioVolTarget: 0.15, annualization: 252, perAssetCap: 0.8, maxGross: 1,
+      maxHoldSessions: 5, maxHoldStagger: true,
+      regimeOverlay: { signals: [{ kind: "maTrend", symbol: "AAA", period: 3, sampling: "daily", bandPct: 1 }], combine: "any", coreScale: 0 } };
+    const manifestPath = join(root, version.manifest!);
+    mkdirSync(dirname(manifestPath), { recursive: true });
+    writeFileSync(manifestPath, JSON.stringify({ candidates: [{ name: version.candidate, portfolio: { strategy: config } }], data: {} }));
+    for (const symbol of config.universe) for (const [i, date] of ["2026-10-21", "2026-10-22", "2026-10-23", "2026-10-26", "2026-10-27", asOf].entries()) {
+      const close = symbol === "AAA" ? [95, 99, 97, 102, 101, 106][i] : [85, 87, 86, 89, 91, 92][i];
+      hist.query("INSERT INTO historical_bars VALUES (?, '1d', 'alpaca_wide', ?, ?, ?, ?, ?, 1000)")
+        .run(symbol, Date.parse(`${date}T04:00:00Z`), close, close + 1, close - 1, close);
+    }
+    const book: Position[] = [{ symbol: "AAA", qty: 3, avgEntryPrice: 100, entrySession: "2026-10-23" }];
+    // Observer memory of THIS version is eligible; another version's newer memory never is.
+    const priorMemory = { portfolioCore: { version: 1, signals: {}, stops: {}, regime: {
+      session: "2026-10-27", riskOff: false, signalOff: [false], pending: 0, switched: false, ready: true } } };
+    const insert = db.query("INSERT INTO portfolio_decisions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    insert.run(1, sleeve, version.id, "2026-10-27", "2026-10-26", "observer", "observed", 1000, "[]", JSON.stringify(priorMemory), "{}", "{}", "[]");
+    insert.run(2, sleeve, "other-version", asOf, "2026-10-27", "observer", "observed", 1000, "[]", '{"wrong":true}', "{}", "{}", "[]");
+    const memory = latestPortfolioMemory(sleeve, version.id, { db, beforeSession: session });
+    const view = new HistoricalPriceView({ db: hist, asOf, symbols: config.universe });
+    const target = decide({ view, config, book: { equity: 1000, positions: book, memory }, executionSession: session });
+    const prices = { AAA: 106, BBB: 92 };
+    const orders: PersistedOrder[] = planOrders(target, { equity: 1000, positions: book, memory }, prices,
+      { venue: "alpaca", fractional: true, minOrderNotional: 5, rebalanceBand: 0.01 }).map(intent => ({
+        intent, clientOrderId: null, result: { ok: true, filledQty: intent.qty, avgPrice: prices[intent.symbol as keyof typeof prices], status: "filled" }, applied: true,
+      }));
+    insert.run(3, sleeve, version.id, session, asOf, "live", "submitted", 1000, JSON.stringify(book), JSON.stringify(target.memory),
+      JSON.stringify(target.weights), JSON.stringify({ ...target.diagnostics, freshness: view.freshness(config.universe), prices, rules: {}, drift: [] }), JSON.stringify(orders));
+    return { db, hist, root, dbPath, histPath, orders, memory, target,
+      run: (since?: string, clock = now) => checkPortfolioSleeve(sleeve, dbPath, histPath, root, since, clock),
+      close() { db.close(); hist.close(); rmSync(root, { recursive: true, force: true }); } };
+  }
+  test("synthetic fixture: same kernel, exact input book/memory, weights, regime, maxHold and diagnostics → parity", () => {
+    const f = fixture();
+    try {
+      expect(f.memory).not.toHaveProperty("wrong");
+      const r = f.run();
+      expect(r.divergences).toEqual([]);
+      expect(r.portfolio).toHaveLength(1);
+      expect(r.portfolio![0]).toMatchObject({ classification: "PARITY", maxNumericDelta: 0, differences: [], executionDrift: [] });
+      expect(f.target.maxHold).toEqual(["AAA"]);
+    } finally { f.close(); }
+  });
+  test("tampered weight with identical input diagnostics → DIVERGENCE", () => {
+    const f = fixture();
+    try {
+      f.db.query("UPDATE portfolio_decisions SET weights_json = ? WHERE id = 3").run(JSON.stringify({ ...f.target.weights, AAA: 0.7 }));
+      expect(f.run().portfolio![0].classification).toBe("DIVERGENCE");
+      expect(f.run().divergences.map(d => d.type)).toContain("portfolio_decision");
+    } finally { f.close(); }
+  });
+  test("a revised input bar changes diagnostics/weights, names the symbol, but does not page without a regime/target-set flip", () => {
+    const f = fixture();
+    try {
+      f.hist.exec("UPDATE historical_bars SET close = close * 1.001 WHERE symbol = 'AAA' AND timestamp = (SELECT MAX(timestamp) FROM historical_bars)");
+      const r = f.run();
+      expect(r.portfolio![0].classification).toBe("DATA REVISED");
+      expect(r.portfolio![0].changedSymbols).toEqual(["AAA"]);
+      expect(r.divergences).toEqual([]);
+      expect(renderSummary([r])).toContain("DATA REVISED");
+    } finally { f.close(); }
+  });
+  test("revised bars that flip the regime/target set DO page", () => {
+    const f = fixture();
+    try {
+      f.hist.exec("UPDATE historical_bars SET close = 50 WHERE symbol = 'AAA' AND timestamp = (SELECT MAX(timestamp) FROM historical_bars)");
+      const r = f.run();
+      expect(r.portfolio![0].classification).toBe("DATA REVISED");
+      expect(r.divergences.map(d => d.type)).toContain("portfolio_data_flip");
+    } finally { f.close(); }
+  });
+  test.each(["missing", "duplicate"])("%s NYSE session is a divergence, even across strategy versions", mode => {
+    const f = fixture();
+    try {
+      if (mode === "missing") f.db.exec("DELETE FROM portfolio_decisions WHERE id = 3");
+      else {
+        f.db.exec(`INSERT INTO portfolio_decisions SELECT 4, account_id, strategy_version, session, as_of, mode, status,
+          equity, book_json, memory_json, weights_json, diagnostics_json, orders_json FROM portfolio_decisions WHERE id = 3`);
+        const old = MODEL_VERSIONS[sleeve].at(-2)!;
+        const m = JSON.parse(readFileSync(join(f.root, version.manifest!), "utf8"));
+        m.candidates[0].name = old.candidate;
+        writeFileSync(join(f.root, old.manifest!), JSON.stringify(m));
+        f.db.query("UPDATE portfolio_decisions SET strategy_version = ? WHERE id = 4").run(old.id);
+      }
+      expect(f.run().divergences).toContainEqual(expect.objectContaining({ type: "portfolio_session", symbol: expect.stringContaining(mode) }));
+    } finally { f.close(); }
+  });
+  test("maxHold set tampering is a logic divergence", () => {
+    const f = fixture();
+    try {
+      f.db.query("UPDATE portfolio_decisions SET orders_json = ? WHERE id = 3").run(JSON.stringify(f.orders.map(o => ({ ...o, intent: { ...o.intent, maxHold: undefined } }))));
+      expect(f.run().portfolio![0]).toMatchObject({ classification: "DIVERGENCE" });
+      expect(f.run().divergences).not.toEqual([]);
+    } finally { f.close(); }
+  });
+  test("tampering only a derived diagnostic is NOT evidence of revised input bars", () => {
+    const f = fixture();
+    try {
+      const d = f.db.query("SELECT diagnostics_json FROM portfolio_decisions WHERE id = 3").get() as any;
+      const diagnostics = JSON.parse(d.diagnostics_json);
+      diagnostics.scale += 0.1;
+      f.db.query("UPDATE portfolio_decisions SET diagnostics_json = ? WHERE id = 3").run(JSON.stringify(diagnostics));
+      expect(f.run().portfolio![0].classification).toBe("DIVERGENCE");
+    } finally { f.close(); }
+  });
+  test("memory loader excludes failed/stale and future decisions, including across an older --since window", () => {
+    const f = fixture();
+    try {
+      f.db.exec(`INSERT INTO portfolio_decisions SELECT 4, account_id, strategy_version, '2026-10-28', '2026-10-27', 'live', 'failed',
+        equity, book_json, '{"bad":true}', weights_json, diagnostics_json, orders_json FROM portfolio_decisions WHERE id = 3`);
+      expect(latestPortfolioMemory(sleeve, version.id, { db: f.db, beforeSession: session })).toEqual(f.memory);
+      expect(f.run().portfolio![0].classification).toBe("PARITY");
+      f.db.exec("UPDATE portfolio_decisions SET status = 'skipped_stale' WHERE id = 4");
+      expect(latestPortfolioMemory(sleeve, version.id, { db: f.db, beforeSession: session })).toEqual(f.memory);
+    } finally { f.close(); }
+  });
+  test("missing target bar and invalid as_of cannot be hidden as DATA REVISED", () => {
+    const f = fixture();
+    try {
+      f.hist.exec("DELETE FROM historical_bars WHERE symbol = 'BBB' AND timestamp = (SELECT MAX(timestamp) FROM historical_bars)");
+      expect(f.run().divergences[0].symbol).toContain("missing target bar BBB");
+      f.db.exec("UPDATE portfolio_decisions SET as_of = session WHERE id = 3");
+      expect(f.run().portfolio![0].classification).toBe("DIVERGENCE");
+    } finally { f.close(); }
+  });
+  test.each(["canceled", "rejected", "account_gross_cap"])("%s execution drift reports resulting reference-weight error, never pages", status => {
+    const f = fixture();
+    try {
+      const orders = f.orders.map((o, i) => i ? o : { ...o, result: { ok: false, filledQty: o.intent.qty / 2, avgPrice: 106, status } });
+      f.db.query("UPDATE portfolio_decisions SET orders_json = ? WHERE id = 3").run(JSON.stringify(orders));
+      const r = f.run();
+      expect(r.divergences).toEqual([]);
+      expect(r.portfolio![0].executionDrift[0]).toMatchObject({ status, filled: orders[0].intent.qty / 2 });
+      expect(r.portfolio![0].executionDrift[0].offTargetWeight).not.toBe(0);
+    } finally { f.close(); }
+  });
+  test("roundoff tolerance is tiny; raw calibration deltas remain visible", () => {
+    const f = fixture();
+    try {
+      const key = Object.keys(f.target.weights)[0];
+      f.db.query("UPDATE portfolio_decisions SET weights_json = ? WHERE id = 3").run(JSON.stringify({ ...f.target.weights, [key]: f.target.weights[key] + PORTFOLIO_FLOAT_TOLERANCE / 2 }));
+      expect(f.run().divergences).toEqual([]);
+      expect(f.run().portfolio![0].maxNumericDelta).toBeGreaterThan(0);
+    } finally { f.close(); }
+  });
+  test("--since expands coverage without changing each recorded version's config", () => {
+    const f = fixture();
+    try {
+      const r = f.run("2026-10-24");
+      expect(r.divergences.filter(d => d.type === "portfolio_session")).toHaveLength(3); // 26, 27, 28 (observer ≠ live)
+      expect(r.portfolio![0].classification).toBe("PARITY");
+    } finally { f.close(); }
+  });
+  test("completed-session calendar handles holidays, early close and DST; today's early pass is replayed but not yet required", () => {
+    expect(lastCompletedStockSession(Date.parse("2026-11-27T17:59:00Z"))).toBe("2026-11-25");
+    expect(lastCompletedStockSession(Date.parse("2026-11-27T18:00:00Z"))).toBe("2026-11-27");
+    expect(lastCompletedStockSession(Date.parse("2026-11-02T20:59:00Z"))).toBe("2026-10-30");
+    const f = fixture();
+    try {
+      expect(f.run(undefined, Date.parse("2026-10-29T14:00:00Z")).portfolio![0].classification).toBe("PARITY");
+      f.db.exec("DELETE FROM portfolio_decisions WHERE id = 3");
+      expect(f.run(undefined, Date.parse("2026-10-29T14:00:00Z")).divergences).toEqual([]);
+    } finally { f.close(); }
+  });
+  test("an unknown version fails operationally, never silently compares the incumbent", () => {
+    const f = fixture();
+    try {
+      f.db.exec("UPDATE portfolio_decisions SET strategy_version = 'unknown' WHERE id = 3");
+      expect(() => f.run()).toThrow("unknown portfolio version");
+    } finally { f.close(); }
   });
 });

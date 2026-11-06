@@ -8,6 +8,7 @@
 // version's.
 
 import { getDB } from "../../db/database";
+import type { Database } from "bun:sqlite";
 import type { OrderIntent, OrderResult, Position, SessionDate, StopLevel } from "../types";
 
 export type DecisionMode = "observer" | "live";
@@ -131,12 +132,13 @@ export function getPortfolioSessionDecision(accountId: string, session: SessionD
 
 /** Memory to feed the next decision of THIS version: the latest decision that
  *  actually produced a target (decided/observed/submitted). {} when none. */
-export function latestPortfolioMemory(accountId: string, strategyVersion: string): Readonly<Record<string, unknown>> {
-  const r = getDB().prepare(
+export function latestPortfolioMemory(accountId: string, strategyVersion: string, opts: { db?: Database; beforeSession?: SessionDate } = {}): Readonly<Record<string, unknown>> {
+  const r = (opts.db ?? getDB()).prepare(
     `SELECT memory_json FROM portfolio_decisions
-     WHERE account_id = ? AND strategy_version = ? AND status IN ('decided', 'observed', 'submitted')
-     ORDER BY session DESC, id DESC LIMIT 1`,
-  ).get(accountId, strategyVersion) as any;
+      WHERE account_id = ? AND strategy_version = ? AND status IN ('decided', 'observed', 'submitted')
+        AND session < ?
+      ORDER BY session DESC, id DESC LIMIT 1`,
+  ).get(accountId, strategyVersion, opts.beforeSession ?? "9999-12-31") as any;
   return r ? JSON.parse(r.memory_json) : {};
 }
 

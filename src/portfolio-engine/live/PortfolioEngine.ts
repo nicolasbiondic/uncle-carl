@@ -125,6 +125,32 @@ const DEFAULT_MAX_SELL_ATTEMPTS = 5;
  *  (e.g. a stop whose cancel has not settled) still holds the shares; also its `held_for_orders` field. */
 const HELD_QTY_REJECTION_RE = /insufficient\s+(qty|quantity)|held[_ ]for[_ ]orders|available:\s*[\d.]+\s*\)/i;
 
+/** Shared by live and the read-only decision monitor: identical membership and reference loading. */
+export function portfolioDecisionSymbols(cfg: PortfolioStrategyConfig, membership: MembershipView | undefined,
+  asOf: SessionDate, memory: Readonly<Record<string, unknown>>, session?: SessionDate): { all: string[]; required: string[] } {
+  if (cfg.kind === "factorCore") {
+    if (!membership) throw new Error("factorCore needs a MembershipView (point-in-time index members)");
+    const members = [...membership.members(asOf)].filter(s => !cfg.exclude.includes(s));
+    const core = (memory.portfolioCore as any)?.coreMembers as string[] | undefined;
+    const required = new Set<string>(members);
+    if (cfg.overlay) required.add(cfg.overlay.ref);
+    for (const s of core ?? []) required.add(s);
+    return { all: [...required], required: [...required] };
+  }
+  if (cfg.kind === "copySignal") throw new Error("copySignal is research-only: no live signal source is wired");
+  if (cfg.kind === "volManaged" && (cfg.regimeOverlay || cfg.pitUniverse)) {
+    const members = cfg.pitUniverse ? (() => {
+      if (!membership) throw new Error("pitUniverse needs a MembershipView (point-in-time index members)");
+      return membership.members(session ?? asOf).filter(s => !cfg.pitUniverse!.exclude?.includes(s));
+    })() : [];
+    const all = [...new Set([...cfg.universe, ...members, ...(cfg.regimeOverlay ? overlaySymbols(cfg.regimeOverlay, false) : [])])];
+    // Candidates with unavailable history are ineligible, not a reason to block the entire PIT book.
+    const required = [...new Set([...cfg.universe, ...(cfg.regimeOverlay ? overlaySymbols(cfg.regimeOverlay) : [])])];
+    return { all, required };
+  }
+  return { all: [...cfg.universe], required: [...cfg.universe] };
+}
+
 /** A SELL the venue refused only because the shares are held/unavailable right now. The venue never created the
  *  order (a 403's client id stays free), so the same id can be sent again. Every other rejection is terminal. */
 export function isRetryableSellRejection(intent: OrderIntent, result: OrderResult): boolean {
@@ -259,28 +285,7 @@ export class PortfolioEngine {
   }
 
   private decisionSymbols(asOf: SessionDate, memory: Readonly<Record<string, unknown>>, session?: SessionDate): { all: string[]; required: string[] } {
-    const cfg = this.opts.config;
-    if (cfg.kind === "factorCore") {
-      if (!this.opts.membership) throw new Error("factorCore needs a MembershipView (point-in-time index members)");
-      const members = [...this.opts.membership.members(asOf)].filter(s => !cfg.exclude.includes(s));
-      const core = (memory.portfolioCore as any)?.coreMembers as string[] | undefined;
-      const required = new Set<string>(members);
-      if (cfg.overlay) required.add(cfg.overlay.ref);
-      for (const s of core ?? []) required.add(s);
-      return { all: [...required], required: [...required] };
-    }
-    if (cfg.kind === "copySignal") throw new Error("copySignal is research-only: no live signal source is wired");
-    if (cfg.kind === "volManaged" && (cfg.regimeOverlay || cfg.pitUniverse)) {
-      const members = cfg.pitUniverse ? (() => {
-        if (!this.opts.membership) throw new Error("pitUniverse needs a MembershipView (point-in-time index members)");
-        return this.opts.membership.members(session ?? asOf).filter(s => !cfg.pitUniverse!.exclude?.includes(s));
-      })() : [];
-      const all = [...new Set([...cfg.universe, ...members, ...(cfg.regimeOverlay ? overlaySymbols(cfg.regimeOverlay, false) : [])])];
-      // Candidates with unavailable history are ineligible, not a reason to block the entire PIT book.
-      const required = [...new Set([...cfg.universe, ...(cfg.regimeOverlay ? overlaySymbols(cfg.regimeOverlay) : [])])];
-      return { all, required };
-    }
-    return { all: [...cfg.universe], required: [...cfg.universe] };
+    return portfolioDecisionSymbols(this.opts.config, this.opts.membership, asOf, memory, session);
   }
 
   private hasDesignStops(): boolean {

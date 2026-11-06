@@ -42,13 +42,18 @@
  * the epoch seed the sim's inventory: their inherited entries are ignored,
  * but their exits and holdings remain comparable (except MODEL_CUTOVER).
  *
- * Portfolio-engine sleeves (RW2, 2026-10-23): a sleeve whose live manager is
- * the portfolio engine (platform_portfolios: template "portfolio", enabled,
- * mode live, params.runMode live → params.sleeve; portfolioEngineLiveSleeves)
- * is SKIPPED with an explicit summary line — the incumbent replay this
- * monitor runs is no longer what trades, so comparing against it would page
- * a false divergence every day. Exit code unaffected (0 when nothing else
- * diverges).
+ * Portfolio-engine stock sleeves: EXACT DECISION REPLAY, never a simulated
+ * book. Rebuild HistoricalPriceView, the persisted pre-order positions/equity
+ * and the preceding SAME-version memory (including observer decisions) using
+ * live's loader. Run decide() on that version's manifest strategy. Compare
+ * weights, regime, maxHold close intents and kernel diagnostics. Changed
+ * input diagnostics → DATA REVISED (symbols reported); page only if the
+ * regime/target set flips. Same inputs but changed outputs → DIVERGENCE.
+ * Diagnostics are evidence, not a full bar snapshot: revisions outside their
+ * coverage cannot be proven retrospectively. Execution drift is report-only.
+ * Check one live decision per NYSE session through the last completed session,
+ * previous-session as_of, and target-bar coverage. Default epoch = current
+ * ModelVersion.since; --since replays older versions using THEIR manifests.
  *
  * Epochs (PARITY_EPOCHS — the monitor's sleeve list IS this map's keys):
  *   momentum_stocks 2026-09-28 — first daily pass after MODEL_CUTOVER
@@ -89,7 +94,7 @@
  *
  * Usage:
  *   bun run scripts/parity-check.ts [--db data/trading.db]
- *       [--hist data/historical.db] [--notify] [--sleeve <id>]
+ *       [--hist data/historical.db] [--notify] [--sleeve <id>] [--since <ISO date>]
  *
  * Exit code: 0 = parity (or nothing to compare yet); 1 = divergences.
  * --notify sends ONE message to the OPS chat (TELEGRAM_BOT_TOKEN +
@@ -111,6 +116,15 @@ import { runWithConfig, type ClosedTrade, type ReplayResult, type SeedPosition }
 import { MODEL_CUTOVER_CLOSE_REASON } from "../src/strategies/momentum/MomentumEngine";
 import { runMeanRevReplay } from "./meanrev-replay";
 import { candidateToReplayConfig, type CandidateConfig, type ExperimentManifest } from "./walk-forward";
+import { MODEL_VERSIONS, currentModelVersion } from "../src/portfolio/modelVersions";
+import { decide } from "../src/portfolio-engine/decide";
+import { latestPortfolioMemory, type PersistedOrder } from "../src/portfolio-engine/live/persistence";
+import { portfolioDecisionSymbols } from "../src/portfolio-engine/live/PortfolioEngine";
+import { HistoricalPriceView, DEFAULT_MAX_BARS } from "../src/portfolio-engine/live/priceView";
+import { contingencyHistoryBars, overlaySymbols } from "../src/portfolio-engine/contingency";
+import { getPreviousTradingDay, getSessionClose, isTradingDay } from "../src/utils/marketHours";
+import type { PortfolioStrategyConfig, Position } from "../src/portfolio-engine/types";
+import { IndexMembershipView } from "./lib/portfolioData";
 
 // ── epochs ────────────────────────────────────────────────────────────────
 // The monitor's sleeve list IS this map's keys (see main()) — adding a
@@ -142,20 +156,11 @@ export const PARITY_EPOCHS: Partial<Record<LiveSleeveId, string>> = {
  * DB's registry: enabled `platform_portfolios` rows with template
  * "portfolio", params.runMode "live" and mode "live" (the same predicate
  * src/portfolio-engine/live/cutover.ts resolves at boot) → params.sleeve.
- * The monitor SKIPS those sleeves: it replays the INCUMBENT's config
- * (liveSleeveConfigs), and after a cutover that is not what runs, so every
- * entry/exit it would report is a false divergence (2026-10-23:
- * momentum_stocks and meanrev_stocks on @pe-vt15). A DB without the table
+ * Dispatches those sleeves to exact portfolio decision replay, not the
+ * incumbent's entry/exit simulator. A DB without the table
  * (pre-F3b, fixtures) means no cutover anywhere → empty map.
  *
- * Honest parity for these sleeves is a DIFFERENT check (not built here):
- * `portfolio_decisions.weights_json` (one row per session and version) vs the
- * target weights of the manifest candidate's design replayed on
- * data/historical.db up to the same session (pure
- * src/portfolio-engine/construction.ts + decide.ts, no fills to model), plus
- * the open PORTFOLIO rows vs the decision's book. Cheap (one covariance per
- * session), deterministic, and it compares what the engine actually
- * decided instead of what the incumbent would have.
+ * See checkPortfolioSleeve. Registry detection is retained for rollbacks.
  */
 export function portfolioEngineLiveSleeves(db: Database): Map<string, { definitionId: string; strategyVersion: string | null }> {
   const out = new Map<string, { definitionId: string; strategyVersion: string | null }>();
@@ -382,7 +387,10 @@ export type DivergenceType =
   // momentum_crypto only: the portfolio at the close of a UTC calendar day
   // inside the window, not just at the window's end (see compareDailyHoldings).
   | "eod_holdings_missing_live"
-  | "eod_holdings_extra_live";
+  | "eod_holdings_extra_live"
+  | "portfolio_decision"
+  | "portfolio_session"
+  | "portfolio_data_flip";
 
 export interface Divergence {
   type: DivergenceType;
@@ -482,17 +490,170 @@ export function compareDailyHoldings(
   return out;
 }
 
+// ── portfolio-engine exact decision replay ────────────────────────────────
+/** Calibrated on prod 2026-11-06 (see AUDITS): only roundoff, not a trading band.
+ * Compare |a-b| / max(1, |a|, |b|), also recording the RAW maximum per row. */
+export const PORTFOLIO_FLOAT_TOLERANCE = 8 * Number.EPSILON;
+
+export interface PortfolioParityDecision {
+  session: string;
+  version: string;
+  classification: "PARITY" | "DATA REVISED" | "DIVERGENCE";
+  changedSymbols: string[];
+  differences: string[];
+  maxNumericDelta: number;
+  /** Filled quantities marked at the original reference prices/equity, NOT later market prices. */
+  executionDrift: Array<{ symbol: string; side: string; status: string; filled: number; requested: number; offTargetWeight: number }>;
+}
+
+interface PortfolioParityRow {
+  id: number; strategy_version: string; session: string; as_of: string; status: string;
+  equity: number; book_json: string; memory_json: string; weights_json: string;
+  diagnostics_json: string; orders_json: string;
+}
+
+/** JSON structural comparison, key-order independent; arrays retain their order. */
+function portfolioDiff(a: any, b: any, path = "", out: string[] = [], delta = { max: 0 }): { paths: string[]; max: number } {
+  if (typeof a === "number" && typeof b === "number") {
+    const diff = Math.abs(a - b) / Math.max(1, Math.abs(a), Math.abs(b));
+    delta.max = Math.max(delta.max, diff);
+    if (!Number.isFinite(diff) || diff > PORTFOLIO_FLOAT_TOLERANCE) out.push(path);
+  } else if (a !== null && b !== null && typeof a === "object" && typeof b === "object" && Array.isArray(a) === Array.isArray(b)) {
+    for (const k of [...new Set([...Object.keys(a), ...Object.keys(b)])].sort()) portfolioDiff(a[k], b[k], path ? `${path}.${k}` : k, out, delta);
+  } else if (a !== b) out.push(path);
+  return { paths: out, max: delta.max };
+}
+
+/** Calendar, not historical-data tail: missing bars must not freeze the monitor. */
+export function lastCompletedStockSession(nowMs: number): string {
+  const today = getETDateKey(nowMs);
+  const [start] = getETDayBounds(today);
+  return isTradingDay(today) && nowMs >= start + getSessionClose(today).closeMinutes * 60_000
+    ? today : getPreviousTradingDay(today);
+}
+
+function portfolioExecutionDrift(book: Position[], weights: Record<string, number>, orders: PersistedOrder[],
+  prices: Record<string, number>, equity: number): PortfolioParityDecision["executionDrift"] {
+  const qty = new Map(book.map(p => [p.symbol, p.qty]));
+  for (const o of orders) {
+    // Unknown/transport outcomes are not confirmed fills. Only applied journal legs affect the rows.
+    if (o.applied && (o.result?.filledQty ?? 0) > 0) qty.set(o.intent.symbol,
+      (qty.get(o.intent.symbol) ?? 0) + (o.intent.side === "buy" ? 1 : -1) * o.result!.filledQty);
+  }
+  return orders.filter(o => o.skipped || !o.result?.ok || o.result.filledQty < o.intent.qty * (1 - 1e-6)).map(o => ({
+    symbol: o.intent.symbol, side: o.intent.side, status: o.skipped ?? o.result?.status ?? "unfilled",
+    filled: o.result?.filledQty ?? 0, requested: o.intent.qty,
+    offTargetWeight: (qty.get(o.intent.symbol) ?? 0) * (prices[o.intent.symbol] ?? 0) / equity - (weights[o.intent.symbol] ?? 0),
+  }));
+}
+
+export function checkPortfolioSleeve(sleeve: LiveSleeveId, tradingDbPath: string, histPath: string, rootDir: string,
+  since?: string, nowMs = Date.now()): SleeveParityResult {
+  const epoch = since ?? currentModelVersion(sleeve)?.since;
+  if (!epoch || !Number.isFinite(Date.parse(epoch))) throw new Error(`portfolio parity: invalid epoch ${epoch}`);
+  const from = getETDateKey(Date.parse(epoch.length === 10 ? `${epoch}T12:00:00Z` : epoch));
+  const completed = lastCompletedStockSession(nowMs), today = getETDateKey(nowMs);
+  const db = new Database(tradingDbPath, { readonly: true });
+  const hist = new Database(histPath, { readonly: true });
+  try {
+    // Include today's already-taken decision even before its close; require coverage only through completed.
+    const rows = db.query(`SELECT * FROM portfolio_decisions WHERE account_id = ? AND mode = 'live'
+      AND session >= ? AND session <= ? ORDER BY session, id`).all(sleeve, from, today) as PortfolioParityRow[];
+    const divergences: Divergence[] = [], portfolio: PortfolioParityDecision[] = [];
+    const add = (type: DivergenceType, session: string, detail: string) => divergences.push({ type, symbol: detail, liveDate: session });
+    const actual = rows.filter(r => ["decided", "submitted"].includes(r.status));
+    for (let t = Date.parse(`${from}T00:00:00Z`); t <= Date.parse(`${completed}T00:00:00Z`); t += 86_400_000) {
+      const session = new Date(t).toISOString().slice(0, 10);
+      if (!isTradingDay(session)) continue;
+      const n = actual.filter(r => r.session === session).length;
+      if (n !== 1) add("portfolio_session", session, `${n === 0 ? "missing" : "duplicate"} live decision (${n})`);
+    }
+    // A duplicate already written today need not wait for the session close to page.
+    if (today > completed && actual.filter(r => r.session === today).length > 1) add("portfolio_session", today, "duplicate live decision");
+    for (const r of actual) {
+      const version = MODEL_VERSIONS[sleeve]?.find(v => v.id === r.strategy_version);
+      if (!version?.manifest || version.engine !== "portfolio") throw new Error(`unknown portfolio version ${r.strategy_version}`);
+      const manifest = JSON.parse(readFileSync(join(rootDir, version.manifest), "utf8"));
+      const candidate = manifest.candidates.find((c: any) => c.name === version.candidate);
+      const config: PortfolioStrategyConfig | undefined = candidate?.portfolio?.strategy;
+      if (!config) throw new Error(`missing portfolio candidate ${version.candidate} of ${version.manifest}`);
+      const book: Position[] = JSON.parse(r.book_json), weights: Record<string, number> = JSON.parse(r.weights_json);
+      const stored: Record<string, any> = JSON.parse(r.diagnostics_json), orders: PersistedOrder[] = JSON.parse(r.orders_json);
+      const memory = latestPortfolioMemory(sleeve, r.strategy_version, { db, beforeSession: r.session });
+      const membership = config.kind === "volManaged" && config.pitUniverse
+        ? IndexMembershipView.load(hist, manifest.data.membership?.index ?? "sp500", manifest.data.membership?.exclude ?? []) : undefined;
+      const symbols = portfolioDecisionSymbols(config, membership, r.as_of, memory, r.session);
+      const view = new HistoricalPriceView({ db: hist, asOf: r.as_of,
+        symbols: [...new Set([...symbols.all, ...symbols.required, ...book.map(p => p.symbol), ...Object.keys(weights)])],
+        maxBars: config.kind === "volManaged" && (config.regimeOverlay || config.pitUniverse)
+          ? Math.max(DEFAULT_MAX_BARS, contingencyHistoryBars(config)) : DEFAULT_MAX_BARS });
+      if (!(r.equity > 0) || !Number.isFinite(r.equity)) throw new Error(`invalid equity at ${sleeve} ${r.session}`);
+      const invariants: string[] = [];
+      if (!isTradingDay(r.session)) invariants.push("non-NYSE session");
+      if (r.as_of !== getPreviousTradingDay(r.session)) invariants.push(`as_of ${r.as_of} != previous session`);
+      for (const symbol of Object.keys(weights)) if (view.lastSession(symbol) !== r.as_of) invariants.push(`missing target bar ${symbol}@${r.as_of}`);
+      // Invalid dates / missing target bars can make the kernel throw; these known
+      // invariant failures are divergences, not an opaque operational replay error.
+      if (invariants.length) {
+        add("portfolio_decision", r.session, invariants.join(", "));
+        portfolio.push({ session: r.session, version: r.strategy_version, classification: "DIVERGENCE", changedSymbols: [],
+          differences: invariants, maxNumericDelta: 0, executionDrift: [] });
+        continue;
+      }
+      const target = decide({ view, membership, book: { equity: r.equity, positions: book, memory }, config, executionSession: r.session });
+      // Live enriches diagnostics with venue-only fields; those are not kernel outputs.
+      const { freshness: _freshness, prices, drift: _drift, rules: _rules, ...kernelDiagnostics } = stored;
+      const diagnosticsDiff = portfolioDiff(target.diagnostics, kernelDiagnostics);
+      const weightsDiff = portfolioDiff(target.weights, weights);
+      // maxHold itself was not journaled separately: its close intents preserve the selected set.
+      // A terminal remainder retry repeats the same symbol, not a second selection.
+      const liveMaxHold = [...new Set(orders.filter(o => o.intent.maxHold === "close").map(o => o.intent.symbol))].sort();
+      const maxHoldDiff = portfolioDiff([...(target.maxHold ?? [])].sort(), liveMaxHold).paths;
+      const inputs = new Set(["vols", "covariance", "slowVol", "fastVol", "overlayCovariance", "signals", "pitUniverse"]);
+      const inputPaths = diagnosticsDiff.paths.filter(p => inputs.has(p.split(".")[0]));
+      const changed = new Set<string>();
+      // A revised series moves its entire covariance row/column, NOT every
+      // counterparty's input series. Prefer own vol/variance evidence first.
+      for (const p of inputPaths) {
+        const parts = p.split(".");
+        if (parts[0] === "vols" || parts[0] === "signals" ||
+          (["covariance", "overlayCovariance"].includes(parts[0]) && parts[1] === parts[2])) changed.add(parts[1]);
+      }
+      for (const p of inputPaths) {
+        const parts = p.split(".");
+        if (["covariance", "overlayCovariance"].includes(parts[0]) && parts.length === 3 &&
+          !changed.has(parts[1]) && !changed.has(parts[2])) { changed.add(parts[1]); changed.add(parts[2]); }
+      }
+      // Regime references may be outside the core covariance (e.g. SPY in a future sleeve).
+      const regimeDiff = portfolioDiff(target.diagnostics.regimeOverlay, stored.regimeOverlay).paths;
+      if (regimeDiff.length && config.kind === "volManaged" && config.regimeOverlay)
+        for (const s of overlaySymbols(config.regimeOverlay)) changed.add(s);
+      const revised = inputPaths.length > 0;
+      const targetSetFlipped = portfolioDiff(Object.keys(target.weights).sort(), Object.keys(weights).sort()).paths.length > 0;
+      const regimeFlipped = (target.diagnostics.regimeOverlay as any)?.riskOff !== stored.regimeOverlay?.riskOff;
+      const differences = [...invariants, ...weightsDiff.paths.map(p => `weights.${p}`), ...diagnosticsDiff.paths.map(p => `diagnostics.${p}`),
+        ...maxHoldDiff.map(p => `maxHold.${p}`)];
+      const logicDiverged = !revised && differences.length > 0;
+      const page = invariants.length > 0 || maxHoldDiff.length > 0 || logicDiverged || (revised && (targetSetFlipped || regimeFlipped));
+      if (page) add(revised && !invariants.length && !maxHoldDiff.length ? "portfolio_data_flip" : "portfolio_decision", r.session,
+        `${r.strategy_version}: ${differences.slice(0, 8).join(", ")}${differences.length > 8 ? ` (+${differences.length - 8})` : ""}`);
+      portfolio.push({ session: r.session, version: r.strategy_version,
+        classification: revised ? "DATA REVISED" : logicDiverged || invariants.length || maxHoldDiff.length ? "DIVERGENCE" : "PARITY",
+        changedSymbols: [...changed].sort(), differences, maxNumericDelta: Math.max(diagnosticsDiff.max, weightsDiff.max),
+        executionDrift: portfolioExecutionDrift(book, weights, orders, prices ?? {}, r.equity) });
+    }
+    return { sleeve, status: "compared", epoch, lastSession: completed, staleSymbols: [], divergences, portfolio };
+  } finally { db.close(); hist.close(); }
+}
+
 // ── replay drivers ────────────────────────────────────────────────────────
 export interface SleeveParityResult {
   sleeve: LiveSleeveId;
-  /** "skipped_portfolio_engine": the sleeve's live manager is the portfolio
-   *  engine (portfolioEngineLiveSleeves) — nothing replayed, nothing paged. */
-  status: "compared" | "nothing_yet" | "error" | "skipped_portfolio_engine";
+  status: "compared" | "nothing_yet" | "error";
   epoch: string;
   /** status "error": why this sleeve's check threw (the others still run). */
   error?: string;
-  /** status "skipped_portfolio_engine": the registry definition that manages the sleeve. */
-  skipped?: { definitionId: string; strategyVersion: string | null };
+  portfolio?: PortfolioParityDecision[];
   /** Divergences matched by PARITY_ACKNOWLEDGED — shown, never counted. */
   acknowledged?: Divergence[];
   /** Reference-close evidence explains this unit's different stop timing. */
@@ -864,8 +1025,19 @@ export function renderSummary(results: SleeveParityResult[]): string {
       lines.push(`  ❌ check FAILED (other sleeves unaffected): ${r.error ?? "unknown error"}`);
       continue;
     }
-    if (r.status === "skipped_portfolio_engine") {
-      lines.push(`  ⏭️  SKIPPED — live manager is the portfolio engine (${r.skipped?.definitionId ?? "?"}, ${r.skipped?.strategyVersion ?? "version ?"}); this monitor replays the incumbent's config, which no longer runs. Not a divergence. Decision parity for this sleeve: portfolio_decisions.weights_json vs the manifest design replayed (see portfolioEngineLiveSleeves).`);
+    if (r.portfolio) {
+      lines.push(`  exact decision replay → ${r.lastSession}; float tolerance ${PORTFOLIO_FLOAT_TOLERANCE}`);
+      for (const version of [...new Set(r.portfolio.map(d => d.version))]) {
+        const rows = r.portfolio.filter(d => d.version === version);
+        const counts = ["PARITY", "DATA REVISED", "DIVERGENCE"].map(c => `${rows.filter(d => d.classification === c).length} ${c}`).join(" / ");
+        lines.push(`  ${version}: ${rows.length} decisions; ${counts}; max numeric delta=${Math.max(...rows.map(d => d.maxNumericDelta))}`);
+      }
+      for (const d of r.divergences) lines.push(`  ❌ DIVERGENCE ${d.liveDate}: ${d.symbol}`);
+      for (const d of r.portfolio) {
+        if (d.classification === "DATA REVISED") lines.push(`  DATA REVISED ${d.session}: inputs moved [${d.changedSymbols.join(", ") || "unattributed"}]; ${d.differences.length} differences; max delta=${d.maxNumericDelta}`);
+        if (d.executionDrift.length) lines.push(`  execution drift (report only) ${d.session}: ${d.executionDrift.map(o => `${o.symbol} ${o.side} ${o.status} ${o.filled}/${o.requested} off-target=${o.offTargetWeight}`).join("; ")}`);
+      }
+      lines.push(r.divergences.length ? `  ❌ ${r.divergences.length} divergence(s)` : "  ✅ PARITY — no divergences (DATA REVISED / execution drift, if any, reported above)");
       continue;
     }
     if (r.staleSymbols.length > 0) {
@@ -936,6 +1108,8 @@ async function main() {
   // replaying a past week against the live book after a config incident.
   // The cron path never sets it.
   const epochOverride = flag("--epoch");
+  const since = flag("--since"); // Portfolio history only; do not alter crypto's --epoch semantics.
+  if (since && !Number.isFinite(Date.parse(since))) throw new Error(`invalid --since ${since}`);
   const notify = args.includes("--notify");
 
   // The monitor's sleeve list IS PARITY_EPOCHS' keys (module docstring) —
@@ -943,8 +1117,7 @@ async function main() {
   // entry there.
   const sleeves = (Object.keys(PARITY_EPOCHS) as LiveSleeveId[])
     .filter(s => !only || s === only);
-  // RW2: a sleeve whose live manager is the portfolio engine is skipped
-  // (the incumbent's replay is not what runs) — read once, from the same
+  // Dispatch portfolio-engine sleeves to their own decision replay — read once, from the same
   // readonly trading.db the live decisions come from. An unreadable DB
   // degrades to "no cutover" (empty map, logged), exactly like a DB that
   // predates the table — the per-sleeve checks below then fail on their own.
@@ -957,21 +1130,18 @@ async function main() {
   }
   const results: SleeveParityResult[] = [];
   for (const sleeve of sleeves) {
-    const pe = peLive.get(sleeve);
-    if (pe) {
-      results.push({ sleeve, status: "skipped_portfolio_engine", epoch: epochOverride ?? PARITY_EPOCHS[sleeve] ?? "?", skipped: pe, staleSymbols: [], divergences: [] });
-      continue;
-    }
     // One sleeve's failure must not blind the monitor to the others
     // (2026-09-29: a momentum_crypto funding-tail throw aborted all four).
     try {
       results.push(
-        sleeve === "momentum_crypto" || sleeve === "momentum_crypto_usdc"
+        peLive.has(sleeve) && (sleeve === "momentum_stocks" || sleeve === "meanrev_stocks")
+          ? checkPortfolioSleeve(sleeve, tradingDbPath, histPath, rootDir, since ?? epochOverride)
+          : sleeve === "momentum_crypto" || sleeve === "momentum_crypto_usdc"
           ? await checkMomentumCryptoSleeve(tradingDbPath, histPath, rootDir, epochOverride, sleeve)
           : await checkSleeve(sleeve, tradingDbPath, histPath, rootDir, epochOverride),
       );
     } catch (e: any) {
-      results.push({ sleeve, status: "error", epoch: epochOverride ?? PARITY_EPOCHS[sleeve] ?? "?", error: e?.message ?? String(e), staleSymbols: [], divergences: [] });
+      results.push({ sleeve, status: "error", epoch: peLive.has(sleeve) ? since ?? epochOverride ?? currentModelVersion(sleeve)?.since ?? "?" : epochOverride ?? PARITY_EPOCHS[sleeve] ?? "?", error: e?.message ?? String(e), staleSymbols: [], divergences: [] });
     }
   }
 
