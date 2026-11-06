@@ -572,14 +572,11 @@ describe("AlpacaExecutor SDK timeouts", () => {
     mock.module("../utils/timeout", () => ({ fetchT: realFetchT, withTimeout: realWithTimeout }));
   });
 
-  const fastWithTimeout = <T>(p: Promise<T>, _timeoutMs: number, label: string) =>
-    Promise.race([
-      p,
-      new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`${label} timeout`)), 5)),
-    ]);
+  const immediateTimeout = <T>(_p: Promise<T>, _timeoutMs: number, label: string) =>
+    Promise.reject<T>(new Error(`${label} timeout`));
 
-  function armFastTimeout() {
-    mock.module("../utils/timeout", () => ({ fetchT: realFetchT, withTimeout: fastWithTimeout }));
+  function armImmediateTimeout() {
+    mock.module("../utils/timeout", () => ({ fetchT: realFetchT, withTimeout: immediateTimeout }));
   }
 
   test("placeOrder timeout on a hanging createOrder is UNKNOWN (in flight), never a silent rejection", async () => {
@@ -588,41 +585,35 @@ describe("AlpacaExecutor SDK timeouts", () => {
     // timeout-treated-as-rejection bug class. The order resolves by
     // client_order_id query; with the query also down, the result is an
     // explicit UNKNOWN, never null.
-    armFastTimeout();
+    armImmediateTimeout();
     const exec = executor() as any;
     exec.resolveRetryDelayMs = 1;
     exec.client = { createOrder: () => new Promise(() => {}) };
-    const start = Date.now();
     const result = await exec.placeOrder({ symbol: "AAPL", side: "buy", market: "stock", price: 100 } as any, 1);
     expect(result?.outcome).toBe("unknown");
-    expect(Date.now() - start).toBeLessThan(200);
   });
 
   test("pollOrderUntilFilled times out a hanging getOrder", async () => {
-    armFastTimeout();
+    armImmediateTimeout();
     const exec = executor() as any;
     exec.client = {
       getOrder: () => new Promise(() => {}),
       cancelOrder: mock().mockResolvedValue({}),
     };
-    const start = Date.now();
     const result = await exec.pollOrderUntilFilled("order-123", 10, 5, 0);
     // The final fetch also hung: the order was never CONFIRMED terminal, so
     // this is "timeout_unresolved" (unknown), not "timeout_cancelled"
     // (proven) — see cancelAndFetchFinal.
     expect(result.status).toBe("timeout_unresolved");
-    expect(Date.now() - start).toBeLessThan(100);
   });
 
   test("closePosition times out a hanging closePosition SDK call", async () => {
-    armFastTimeout();
+    armImmediateTimeout();
     const exec = executor() as any;
     exec.client = { closePosition: () => new Promise(() => {}) };
-    const start = Date.now();
     const result = await exec.closePosition("AAPL");
     expect(result.success).toBe(false);
     expect(result.reason).toContain("timeout");
-    expect(Date.now() - start).toBeLessThan(100);
   });
 });
 
@@ -643,6 +634,9 @@ describe("AlpacaExecutor partial fills", () => {
 
   test("pollOrderUntilFilled cancels remainder and returns real filled qty on timeout", async () => {
     const exec = executor() as any;
+    let now = 0;
+    exec.clock = () => now;
+    exec.sleep = async (ms: number) => { now += ms; };
     exec.client = {
       getOrder: mock()
         .mockResolvedValueOnce({ status: "partially_filled", filled_qty: "3", filled_avg_price: "101" })

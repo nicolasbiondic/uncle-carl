@@ -15,22 +15,23 @@ const env = (k: string) => process.env[k] ?? "";
 const alpacaBase = env("ALPACA_BASE_URL") || "https://paper-api.alpaca.markets";
 const AH = { "APCA-API-KEY-ID": env("ALPACA_API_KEY"), "APCA-API-SECRET-KEY": env("ALPACA_SECRET_KEY") };
 
-async function alpaca(path: string) {
-  const r = await fetch(`${alpacaBase}${path}`, { headers: AH });
+export async function alpaca(path: string) {
+  const r = await fetch(`${alpacaBase}${path}`, { method: "GET", headers: AH, signal: AbortSignal.timeout(15_000) });
   if (!r.ok) throw new Error(`alpaca ${path} → ${r.status} ${await r.text()}`);
   return r.json();
 }
 
 const fapiBase = env("BINANCE_FUTURES_REST_BASE") || "https://demo-fapi.binance.com";
-async function fapi(path: string) {
+export async function fapi(path: string) {
   const ts = Date.now();
   const qs = `timestamp=${ts}&recvWindow=10000`;
   const sig = createHmac("sha256", env("BINANCE_FUTURES_SECRET_KEY")).update(qs).digest("hex");
-  const r = await fetch(`${fapiBase}${path}?${qs}&signature=${sig}`, { headers: { "X-MBX-APIKEY": env("BINANCE_FUTURES_API_KEY") } });
+  const r = await fetch(`${fapiBase}${path}?${qs}&signature=${sig}`, { method: "GET", headers: { "X-MBX-APIKEY": env("BINANCE_FUTURES_API_KEY") }, signal: AbortSignal.timeout(15_000) });
   if (!r.ok) throw new Error(`fapi ${path} → ${r.status} ${await r.text()}`);
   return r.json();
 }
 
+if (import.meta.main) {
 console.log(`▌ ALPACA paper (${alpacaBase})`);
 const acct = await alpaca("/v2/account");
 console.log(`   account ${acct.id.slice(0, 8)}… equity=$${(+acct.equity).toFixed(2)} cash=$${(+acct.cash).toFixed(2)} regt_bp=$${(+acct.regt_buying_power).toFixed(0)} pdt=${acct.pattern_day_trader} daytrades=${acct.daytrade_count} multiplier=${acct.multiplier}`);
@@ -60,3 +61,4 @@ console.log(`   Σ unrealized Binance = ${binUnreal >= 0 ? "+" : ""}$${binUnreal
 
 console.log(`\n▌ TOTAL unrealized at the brokers = ${(alpUnreal + binUnreal) >= 0 ? "+" : ""}$${(alpUnreal + binUnreal).toFixed(2)}`);
 console.log(`   positions at brokers: ${pos.length + open.length}`);
+}

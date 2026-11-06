@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ══════════════════════════════════════════════
 # Install Uncle Carl cron entries for the current user. Idempotent: rerun
-# safely. Installs four jobs. Times are the HOST'S LOCAL time (cron has no
+# safely. Times are the HOST'S LOCAL time (cron has no
 # timezone of its own): the reference host runs at UTC−5 (no DST), so 04:00 /
 # 04:30 / 04:45 there are 09:00 / 09:30 / 09:45 UTC = 05:00–05:45 ET — the
 # relative order (refresh → backup → parity, all before the 09:35 ET pass)
@@ -24,6 +24,8 @@
 #      roll). Shadow-only — own DB (data/ai-quorum.db), zero capital, never
 #      touches trading.db; without AI_QUORUM_* keys it stores the snapshot
 #      and calls nobody ("pending" mode).
+#   7. Read-only runtime guardian at :20 every hour (scripts/guardian.sh),
+#      pages OPS once on violation and once on recovery.
 # ══════════════════════════════════════════════
 
 set -euo pipefail
@@ -34,10 +36,11 @@ BACKUP_SCRIPT="$ROOT_DIR/scripts/backup-db.sh"
 REFRESH_SCRIPT="$ROOT_DIR/scripts/refresh-historical.sh"
 WATCHDOG_SCRIPT="$ROOT_DIR/scripts/watchdog.sh"
 PARITY_SCRIPT="$ROOT_DIR/scripts/parity-check.sh"
+GUARDIAN_SCRIPT="$ROOT_DIR/scripts/guardian.sh"
 AI_QUORUM_SCRIPT="$ROOT_DIR/scripts/ai-quorum.sh"
 LOG_DIR="$ROOT_DIR/logs"
 
-for s in "$BACKUP_SCRIPT" "$REFRESH_SCRIPT" "$WATCHDOG_SCRIPT" "$PARITY_SCRIPT" "$AI_QUORUM_SCRIPT"; do
+for s in "$BACKUP_SCRIPT" "$REFRESH_SCRIPT" "$WATCHDOG_SCRIPT" "$PARITY_SCRIPT" "$GUARDIAN_SCRIPT" "$AI_QUORUM_SCRIPT"; do
   if [ ! -x "$s" ]; then
     chmod +x "$s"
   fi
@@ -59,6 +62,9 @@ WATCHDOG_TAG="# uncle-carl-watchdog"
 # backup (04:30). Tue–Sat covers previous sessions Mon–Fri.
 PARITY_LINE="45 4 * * 2-6 $PARITY_SCRIPT >> $LOG_DIR/parity-check.log 2>&1"
 PARITY_TAG="# uncle-carl-parity-check"
+
+GUARDIAN_LINE="20 * * * * $GUARDIAN_SCRIPT >> $LOG_DIR/guardian.log 2>&1"
+GUARDIAN_TAG="# uncle-carl-guardian"
 
 # Línea-D shadow AI quorum — times are HOST-LOCAL (a UTC−5 host shown):
 # 16:15 Mon–Fri = 21:15 UTC (stocks, after the US close);
@@ -85,6 +91,7 @@ add_entry "$BACKUP_TAG"  "$BACKUP_LINE"
 add_entry "$REFRESH_TAG" "$REFRESH_LINE"
 add_entry "$WATCHDOG_TAG" "$WATCHDOG_LINE"
 add_entry "$PARITY_TAG" "$PARITY_LINE"
+add_entry "$GUARDIAN_TAG" "$GUARDIAN_LINE"
 add_entry "$AIQ_STOCKS_TAG" "$AIQ_STOCKS_LINE"
 add_entry "$AIQ_CRYPTO_TAG" "$AIQ_CRYPTO_LINE"
 

@@ -1252,8 +1252,10 @@ const V8_ACCOUNTS_SQL = `('${ALL_PROFILE_IDS.join("','")}')`;
  * orders also resize existing rows: confirmed fills come from fills (including
  * exposure-control trims) and the portfolio decision journal, deduplicated by
  * broker order id and against the corresponding entry/exit row events.
+ * `source` lets read-only monitors reuse the exact query without initDatabase
+ * (which creates/migrates/prunes the live DB).
  */
-export function countExecutedOrders(sinceMs: number, untilMs?: number, accountId?: string): number {
+export function countExecutedOrders(sinceMs: number, untilMs?: number, accountId?: string, source: Database = db): number {
   const whereAcc = accountId ? ` AND account_id = ?3` : ` AND account_id IN ${V8_ACCOUNTS_SQL}`;
   const bindAcc = accountId ? [accountId] : [];
   const until = untilMs ?? Number.MAX_SAFE_INTEGER;
@@ -1262,7 +1264,7 @@ export function countExecutedOrders(sinceMs: number, untilMs?: number, accountId
   // Legacy row times are DB-write times; fills use broker times. Match only
   // the same trade/side within one minute (never confuse an old entry with a
   // later trim). Portfolio journals instead bound their own apply interval.
-  const result = db.prepare(`
+  const result = source.prepare(`
     WITH confirmed_fills AS (
       SELECT account_id, decided_at, updated_at, NULL AS trade_id,
         json_extract(o.value, '$.intent.symbol') AS symbol,

@@ -154,14 +154,17 @@ describe("meanrev replay — crypto perps mode (binance_futures)", () => {
   }), 60_000);
 
   test("funding unit semantics: exclusive-left boundary, entryTime bound, last-completed-close mark", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "meanrev-funding-unit-"));
+    const db = new Database(":memory:");
     try {
-      const dbPath = join(dir, "funding.db");
       const D0 = Date.parse("2023-03-01T00:00:00Z");
       const D1 = D0 + DAY;
       const D2 = D0 + 2 * DAY;
-      writeFundingRates(dbPath, ["AAAUSDT"], D0 - H8, D2 + 2 * DAY, 1e-4);
-      const db = new Database(dbPath, { readonly: true });
+      db.run(`CREATE TABLE funding_rates (
+        symbol TEXT, funding_time INTEGER, rate REAL,
+        PRIMARY KEY(symbol, funding_time)
+      )`);
+      const insert = db.prepare("INSERT INTO funding_rates VALUES (?,?,?)");
+      for (let t = D0 - H8; t <= D2 + 2 * DAY; t += H8) insert.run("AAAUSDT", t, 1e-4);
       const book = new FundingBook(db, ["AAA/USD"], D0, D2);
 
       const bars = [D0, D1, D2].map((ts, i) => ({
@@ -190,9 +193,8 @@ describe("meanrev replay — crypto perps mode (binance_futures)", () => {
       const before = broker.fundingPaid;
       broker.applyFunding(D0, D1);
       expect(broker.fundingPaid).toBe(before);
-      db.close();
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      db.close();
     }
   });
 

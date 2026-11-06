@@ -223,6 +223,10 @@ export interface AlpacaExecutorOptions {
 export class AlpacaExecutor {
   private client: any;
   private connected = false;
+  /** Clock/sleeper seam: defaults preserve live polling behavior; tests replace
+   * them to exercise timeout accounting without competing for wall-clock time. */
+  private clock = () => Date.now();
+  private sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
   /** Injected runtime credentials, or null = env mode (config-backed). */
   private readonly creds: AlpacaRuntimeCredentials | null;
@@ -2098,9 +2102,9 @@ export class AlpacaExecutor {
   async pollOrderUntilFilled(externalId: string, timeoutMs = 30000, pollIntervalMs = 2000, settleMs = 1000, cls: RequestClass = "trade"): Promise<{ status: string; filledPrice?: number; filledQty?: number; filledAt?: number; priceEstimated?: boolean }> {
     if (!this.connected) return { status: "error" };
 
-    const start = Date.now();
+    const start = this.clock();
 
-    while (Date.now() - start < timeoutMs) {
+    while (this.clock() - start < timeoutMs) {
       try {
         const order = await this.limited(cls, () => withTimeout<any>(this.client.getOrder(externalId), 10_000, 'alpaca getOrder'));
         const filledQty = parseFloat(order.filled_qty ?? "0");
@@ -2139,7 +2143,7 @@ export class AlpacaExecutor {
       } catch (e: any) {
         log.warn(`Poll order error: ${e.message}`);
       }
-      await new Promise(r => setTimeout(r, pollIntervalMs));
+      await this.sleep(pollIntervalMs);
     }
 
     // Timeout — cancel remainder and fetch the real filled amount.
@@ -2157,7 +2161,7 @@ export class AlpacaExecutor {
     }
 
     // Brief settle, then read the broker's final accounting.
-    if (settleMs > 0) await new Promise(r => setTimeout(r, settleMs));
+    if (settleMs > 0) await this.sleep(settleMs);
 
     try {
       const order = await this.limited(cls, () => withTimeout<any>(this.client.getOrder(externalId), 10_000, 'alpaca getOrder'));

@@ -1,0 +1,359 @@
+import { describe, expect, test, spyOn } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { createHmac } from "node:crypto";
+import {
+  evaluateGuardian, episodeTransitions, guardianExitCode, guardianMain, stockPassTime, writeState,
+  type GuardianResult, type EpisodeState, type StockConfigs, type BrokerPosition,
+} from "./guardian";
+
+const HOUR = 3_600_000, NOW = Date.parse("2026-11-02T16:00:00Z");
+const root = resolve(import.meta.dir, "..");
+const emptyState = (): EpisodeState => ({ version: 1, active: {} });
+const configs: StockConfigs = {
+  momentum_stocks: { kind: "volManaged", universe: ["SPY"], maxHoldSessions: 5,
+    regimeOverlay: { signals: [{ kind: "maTrend", symbol: "SPY", period: 200, sampling: "daily", bandPct: 1 }],
+      combine: "any", coreScale: 0, hedge: { symbol: "SH", fraction: 0.5 } } } as any,
+  meanrev_stocks: { kind: "volManaged", universe: ["ABBV"], maxHoldSessions: 5 } as any,
+};
+
+function fixture() {
+  const dir = mkdtempSync(join(tmpdir(), "guardian-"));
+  const path = join(dir, "trading.db"), histPath = join(dir, "historical.db");
+  const db = new Database(path), hist = new Database(histPath);
+  db.exec(`CREATE TABLE trades (id TEXT, account_id TEXT, symbol TEXT, side TEXT, quantity REAL, entry_time INTEGER,
+    exit_time INTEGER, strategy TEXT, status TEXT, close_reason TEXT);
+    CREATE TABLE portfolio_decisions (id INTEGER PRIMARY KEY, account_id TEXT, strategy_version TEXT, session TEXT,
+      status TEXT, mode TEXT, orders_json TEXT, decided_at INTEGER, updated_at INTEGER);
+    CREATE TABLE decision_passes (account_id TEXT, ts INTEGER);
+    CREATE TABLE platform_portfolios (id TEXT, template TEXT, enabled INTEGER, mode TEXT, status TEXT, params_json TEXT);
+    CREATE TABLE fills (account_id TEXT, trade_id TEXT, order_id TEXT, symbol TEXT, side TEXT, fill_time INTEGER, filled_qty REAL);
+    CREATE TABLE activity_log (event_type TEXT, message TEXT, created_at INTEGER);`);
+  hist.exec(`CREATE TABLE historical_bars (symbol TEXT, source TEXT, timeframe TEXT, timestamp INTEGER,
+    open REAL, high REAL, low REAL, close REAL, volume REAL);`);
+  function decision(sleeve = "momentum_stocks", session = "2026-11-02", orders: any[] = [], version = "fixture", at = NOW - HOUR) {
+    db.query("INSERT INTO portfolio_decisions (account_id,strategy_version,session,status,mode,orders_json,decided_at,updated_at) VALUES (?,?,?,'submitted','live',?,?,?)")
+      .run(sleeve, version, session, JSON.stringify(orders), at, at);
+  }
+  for (const sleeve of ["momentum_crypto", "momentum_crypto_usdc"]) {
+    db.query("INSERT INTO decision_passes VALUES (?,?)").run(sleeve, NOW - HOUR);
+    db.query("INSERT INTO platform_portfolios VALUES (?,'momentum',1,'live','active',?)")
+      .run(sleeve, JSON.stringify({ timeStop: { maxHoldHours: 120 }, breakoutShort: { maxHoldHours: 120 } }));
+  }
+  for (const [sleeve, strategy] of Object.entries(configs)) {
+    decision(sleeve);
+    db.query("INSERT INTO platform_portfolios VALUES (?,'portfolio',1,'live','active',?)")
+      .run(`pe_${sleeve}`, JSON.stringify({ sleeve, runMode: "live", strategy }));
+  }
+  for (const symbol of ["SPY", "SH", "ABBV"]) hist.query("INSERT INTO historical_bars VALUES (?,'alpaca_wide','1d',?,100,101,99,100,1000)")
+    .run(symbol, Date.parse("2026-10-30T04:00:00Z"));
+  function trade(overrides: Record<string, any> = {}) {
+    const r = { id: "row", account_id: "momentum_crypto_usdc", symbol: "NEAR/USDC", side: "buy", quantity: 2,
+      entry_time: NOW - HOUR, exit_time: null, strategy: "MOMENTUM", status: "open", close_reason: null, ...overrides };
+    db.query("INSERT INTO trades VALUES (?,?,?,?,?,?,?,?,?,?)").run(...Object.values(r));
+  }
+  const run = (overrides: Partial<Parameters<typeof evaluateGuardian>[0]> = {}) => evaluateGuardian({ db, hist, now: NOW, root, noBroker: true, ...overrides });
+  return { dir, path, histPath, db, hist, trade, decision, run, close() { db.close(); hist.close(); rmSync(dir, { recursive: true, force: true }); } };
+}
+const findings = (r: GuardianResult, check: string) => r.violations.filter(f => f.check === check);
+function closeOrder(qty = 10, filled = 0, id = "close") {
+  return { intent: { symbol: "ABBV", side: "sell", qty, maxHold: "close" }, clientOrderId: id,
+    result: { ok: filled === qty, filledQty: filled, status: filled === qty ? "filled" : "canceled" }, applied: true };
+}
+
+describe("guardian runtime rules (readonly synthetic fixtures)", () => {
+  test("healthy fixture, readonly handles, G6 uses executed-order accounting and restart events (REPORT only)", async () => {
+    const f = fixture();
+    try {
+      f.trade();
+      f.db.query("INSERT INTO activity_log VALUES ('system','Account manager started (fixture)',?)").run(NOW - HOUR);
+      f.db.query("INSERT INTO activity_log VALUES ('system','Account manager started (old)',?)").run(NOW - 25 * HOUR);
+      const db = new Database(f.path, { readonly: true }), hist = new Database(f.histPath, { readonly: true });
+      const before = Buffer.from(readFileSync(f.path));
+      try {
+        const r = await f.run({ db, hist });
+        expect(r.errors).toEqual([]); expect(r.violations).toEqual([]); expect(guardianExitCode(r)).toBe(0);
+        expect(r.reports.join("\n")).toContain("executed orders today (ET): 1");
+        expect(r.reports.join("\n")).toContain("starts last 24h: 1");
+        expect(readFileSync(f.path)).toEqual(before);
+        expect(() => db.exec("DELETE FROM trades")).toThrow();
+      } finally { db.close(); hist.close(); }
+    } finally { f.close(); }
+  });
+  test.each(["momentum_crypto", "momentum_crypto_usdc"])("G1 %s: TSM AND Turtle clock, strict 120h+1h slack; resizes do not refresh entry", async sleeve => {
+    const f = fixture();
+    try {
+      f.trade({ id: "tsm", account_id: sleeve, entry_time: NOW - 121 * HOUR });
+      f.trade({ id: "turtle", account_id: sleeve, strategy: "BREAKOUT_SHORT", side: "sell", entry_time: NOW - 121 * HOUR - 1 });
+      expect(findings(await f.run(), "G1").map(r => r.key)).toEqual(["G1:turtle"]);
+      f.db.exec("UPDATE trades SET quantity = 1 WHERE id = 'turtle'");
+      expect(findings(await f.run(), "G1")).toHaveLength(1);
+      f.db.query("UPDATE trades SET exit_time = ?, status = 'closed' WHERE id = 'turtle'").run(NOW);
+      expect(findings(await f.run(), "G1")).toEqual([]);
+      // At a historical instant a row closed later must still be considered open.
+      f.db.query("UPDATE trades SET exit_time = ? WHERE id = 'turtle'").run(NOW + HOUR);
+      expect(findings(await f.run(), "G1")).toHaveLength(1);
+      f.db.query("UPDATE trades SET entry_time = ? WHERE id = 'turtle'").run(NOW + 1);
+      expect(findings(await f.run(), "G1")).toEqual([]);
+    } finally { f.close(); }
+  });
+  test.each(["momentum_stocks", "meanrev_stocks"])("G1 %s: fifth NYSE boundary, grace, weekend, holiday and DST", async sleeve => {
+    const f = fixture();
+    try {
+      // 26, 27, 28, 29, 30 = fifth session; entry on 23 is excluded.
+      f.trade({ account_id: sleeve, symbol: "SPY", strategy: "PORTFOLIO", entry_time: Date.parse("2026-10-23T14:00:00Z") });
+      const due = stockPassTime("2026-10-30") + 30 * 60_000;
+      expect(findings(await f.run({ now: due - 1 }), "G1")).toEqual([]);
+      expect(findings(await f.run({ now: due }), "G1")).toHaveLength(1);
+      expect(findings(await f.run({ now: Date.parse("2026-10-31T12:00:00Z") }), "G1")).toHaveLength(1);
+      f.db.query("UPDATE trades SET entry_time = ?").run(Date.parse("2026-10-26T14:00:00Z"));
+      const dstDue = stockPassTime("2026-11-02") + 30 * 60_000;
+      expect(findings(await f.run({ now: dstDue - 1 }), "G1")).toEqual([]);
+      expect(findings(await f.run({ now: dstDue }), "G1")).toHaveLength(1);
+      // Thanksgiving is NOT one of the five session boundaries.
+      f.db.query("UPDATE trades SET entry_time = ?").run(Date.parse("2026-11-20T15:00:00Z"));
+      expect(findings(await f.run({ now: Date.parse("2026-11-27T18:00:00Z") }), "G1")).toEqual([]);
+      expect(findings(await f.run({ now: Date.parse("2026-11-30T16:00:00Z") }), "G1")).toHaveLength(1);
+    } finally { f.close(); }
+  });
+  test("G2 stocks: deadline from engine schedule, duplicate across versions, no observers/failed/future rows", async () => {
+    const f = fixture();
+    try {
+      f.decision("momentum_stocks", "2026-10-30"); f.decision("meanrev_stocks", "2026-10-30");
+      f.db.exec("DELETE FROM portfolio_decisions WHERE session = '2026-11-02'");
+      const due = stockPassTime("2026-11-02") + 55 * 60_000;
+      expect(findings(await f.run({ now: due - 1 }), "G2")).toEqual([]);
+      expect(findings(await f.run({ now: due }), "G2")).toHaveLength(2);
+      f.decision(); f.decision("meanrev_stocks");
+      expect(findings(await f.run(), "G2")).toEqual([]);
+      f.decision("momentum_stocks", "2026-11-02", [], "second-version");
+      expect(findings(await f.run(), "G2")[0].message).toContain("duplicate pass (2");
+      f.db.exec("UPDATE portfolio_decisions SET mode = 'observer' WHERE strategy_version = 'second-version'");
+      expect(findings(await f.run(), "G2")).toEqual([]);
+      f.db.exec("UPDATE portfolio_decisions SET mode='live', status='failed' WHERE strategy_version = 'second-version'");
+      expect(findings(await f.run(), "G2")).toEqual([]);
+      f.db.query("UPDATE portfolio_decisions SET status='submitted', decided_at=? WHERE strategy_version='second-version'").run(NOW + 1);
+      expect(findings(await f.run(), "G2")).toEqual([]);
+      expect(stockPassTime("2026-10-30")).toBe(Date.parse("2026-10-30T13:35:00Z"));
+      expect(stockPassTime("2026-11-02")).toBe(Date.parse("2026-11-02T14:35:00Z"));
+    } finally { f.close(); }
+  });
+  test.each([["momentum_crypto", 2], ["momentum_crypto_usdc", 26]] as const)("G2 %s: exact rolling %ih threshold, clear and future timestamps", async (sleeve, hours) => {
+    const f = fixture();
+    try {
+      f.db.query("UPDATE decision_passes SET ts=? WHERE account_id=?").run(NOW - hours * HOUR, sleeve);
+      expect(findings(await f.run(), "G2")).toEqual([]);
+      f.db.query("UPDATE decision_passes SET ts=ts-1 WHERE account_id=?").run(sleeve);
+      expect(findings(await f.run(), "G2")[0].key).toBe(`G2:${sleeve}:missed`);
+      f.db.query("UPDATE decision_passes SET ts=? WHERE account_id=?").run(NOW + 1, sleeve);
+      expect(findings(await f.run(), "G2")).toHaveLength(1);
+      f.db.query("UPDATE decision_passes SET ts=? WHERE account_id=?").run(NOW, sleeve);
+      expect(findings(await f.run(), "G2")).toEqual([]);
+    } finally { f.close(); }
+  });
+  test("G3 signed per-venue symbol aggregation, treasury-only exclusion, tolerance, missing/extra positions", async () => {
+    const f = fixture();
+    try {
+      f.trade({ id: "a", account_id: "momentum_stocks", symbol: "SPY", quantity: 2 });
+      f.trade({ id: "b", account_id: "meanrev_stocks", symbol: "SPY", quantity: 3 });
+      f.trade({ id: "c", account_id: "momentum_crypto", symbol: "BTC/USD", side: "sell", quantity: 0.02 });
+      f.trade({ id: "d", account_id: "momentum_crypto_usdc", symbol: "BTC/USDC", quantity: 0.01 });
+      const positions: BrokerPosition[] = [{ venue: "alpaca", symbol: "SPY", quantity: 5 + 1e-7 },
+        { venue: "alpaca", symbol: "BOXX", quantity: 999 }, { venue: "fapi", symbol: "BTCUSDT", quantity: -0.02 },
+        { venue: "fapi", symbol: "BTCUSDC", quantity: 0.01 }];
+      const run = () => f.run({ noBroker: false, broker: async () => positions });
+      expect(findings(await run(), "G3")).toEqual([]);
+      positions[0].quantity = 5.01;
+      expect(findings(await run(), "G3")[0].key).toBe("G3:alpaca:SPY");
+      positions[0].quantity = 5;
+      positions.pop();
+      expect(findings(await run(), "G3")[0].key).toBe("G3:fapi:BTCUSDC");
+      positions.push({ venue: "fapi", symbol: "BTCUSDC", quantity: 0.01 }, { venue: "fapi", symbol: "ETHUSDT", quantity: 1 });
+      expect(findings(await run(), "G3")[0].message).toContain("ledger=0 broker=1");
+    } finally { f.close(); }
+  });
+  test("G3 failed GET/malformed response is operational, never fake quantity drift; --no-broker/--now never call GET", async () => {
+    const f = fixture();
+    try {
+      let calls = 0;
+      const broker = async () => { calls++; throw new Error("HTTP 503"); };
+      const r = await f.run({ noBroker: false, broker });
+      expect(findings(r, "G3")).toEqual([]); expect(r.errors).toEqual([{ check: "G3", message: "HTTP 503" }]);
+      expect(guardianExitCode(r)).toBe(2); expect(r.evaluated).not.toContain("G3");
+      await f.run({ broker });
+      await f.run({ historical: true, noBroker: false, broker, configs });
+      expect(calls).toBe(1);
+      const bad = await f.run({ noBroker: false, broker: async () => [{ venue: "alpaca", symbol: "SPY", quantity: NaN }] });
+      expect(findings(bad, "G3")).toEqual([]); expect(guardianExitCode(bad)).toBe(2);
+    } finally { f.close(); }
+  });
+  test("G4 mandatory partial/zero closes and skipped rebuys PAGE; resizes REPORT; -r1 total fill clears", async () => {
+    const f = fixture();
+    try {
+      const orders: any[] = [closeOrder(10, 2), closeOrder(8, 7, "close-r1"),
+        { intent: { symbol: "ABBV", qty: 10, maxHold: "rebuy" }, result: null, skipped: "max_hold_close_incomplete" },
+        { intent: { symbol: "MSFT", qty: 10, side: "sell" }, result: { ok: false, filledQty: 1, status: "canceled" } }];
+      f.db.query("UPDATE portfolio_decisions SET orders_json=? WHERE account_id='meanrev_stocks'").run(JSON.stringify(orders));
+      const r = await f.run();
+      expect(findings(r, "G4")).toHaveLength(1); expect(findings(r, "G4")[0].message).toContain("9/10");
+      expect(findings(r, "G4")[0].message).toContain("rebuy skipped");
+      expect(r.reports.join("\n")).toContain("resize MSFT: 1/10 canceled");
+      orders[1] = closeOrder(8, 8, "close-r1"); orders.splice(2, 1);
+      f.db.query("UPDATE portfolio_decisions SET orders_json=? WHERE account_id='meanrev_stocks'").run(JSON.stringify(orders));
+      expect(findings(await f.run(), "G4")).toEqual([]);
+      f.db.query("UPDATE portfolio_decisions SET orders_json=? WHERE account_id='meanrev_stocks'").run(JSON.stringify([closeOrder()]));
+      expect(findings(await f.run(), "G4")).toHaveLength(1);
+      // An older failed mandatory close is superseded by the latest live decision.
+      f.decision("meanrev_stocks", "2026-11-02", [], "new", NOW - 100);
+      expect(findings(await f.run(), "G4")).toEqual([]);
+    } finally { f.close(); }
+  });
+  test("G4 historical mutable journal updated in the future is unavailable, not a false violation/clear", async () => {
+    const f = fixture();
+    try {
+      f.db.query("UPDATE portfolio_decisions SET orders_json=?, updated_at=? WHERE account_id='meanrev_stocks'").run(JSON.stringify([closeOrder()]), NOW + 1);
+      const r = await f.run();
+      expect(findings(r, "G4")).toEqual([]); expect(guardianExitCode(r)).toBe(2);
+      expect(r.errors[0].message).toContain("updated after --now");
+    } finally { f.close(); }
+  });
+  test("G5 required universe AND regime hedge SH, previous NYSE session, pre-pass UTC gate, recovery", async () => {
+    const f = fixture();
+    try {
+      f.hist.exec("DELETE FROM historical_bars WHERE symbol='SH'");
+      expect(findings(await f.run(), "G5")[0].message).toContain("SH: missing daily bar for 2026-10-30");
+      const early = await f.run({ now: Date.parse("2026-11-02T12:59:59Z") });
+      expect(early.evaluated).not.toContain("G5"); expect(findings(early, "G5")).toEqual([]);
+      expect(findings(await f.run({ now: Date.parse("2026-11-02T13:00:00Z") }), "G5")).toHaveLength(1);
+      f.hist.exec("INSERT INTO historical_bars SELECT 'SH', source,timeframe,timestamp,open,high,low,close,volume FROM historical_bars WHERE symbol='SPY'");
+      expect(findings(await f.run(), "G5")).toEqual([]);
+      f.hist.exec("DELETE FROM historical_bars");
+      expect(findings(await f.run({ now: Date.parse("2026-11-26T16:00:00Z") }), "G5")).toEqual([]);
+    } finally { f.close(); }
+  });
+  test.each(["G1", "G2", "G3", "G4", "G5"] as const)("%s episodes notify once, clear once, recur; operational/skipped checks never falsely recover", check => {
+    const violation: GuardianResult = { violations: [{ key: `${check}:fixture`, check, message: "violation" }], errors: [], reports: [], evaluated: [check] };
+    const first = episodeTransitions(emptyState(), violation, NOW);
+    expect(first.events).toHaveLength(1); expect(first.events[0]).toContain("PAGE");
+    expect(episodeTransitions(first.state, violation, NOW + HOUR).events).toEqual([]);
+    const skipped = episodeTransitions(first.state, { ...violation, violations: [], evaluated: [] }, NOW + HOUR);
+    expect(skipped.events).toEqual([]); expect(skipped.state).toEqual(first.state);
+    const broken = { ...violation, violations: [], evaluated: [], errors: [{ check, message: "unavailable" }] };
+    const failed = episodeTransitions(first.state, broken, NOW + HOUR);
+    expect(failed.events).toHaveLength(1); expect(failed.events[0]).toContain("ERROR");
+    expect(failed.state.active[`${check}:fixture`]).toBeDefined();
+    expect(episodeTransitions(failed.state, broken, NOW + 2 * HOUR).events).toEqual([]);
+    const healthy = { ...violation, violations: [] };
+    const clear = episodeTransitions(failed.state, healthy, NOW + 3 * HOUR);
+    expect(clear.events).toHaveLength(2); expect(clear.events.every(e => e.includes("CLEARED"))).toBe(true);
+    expect(clear.state.active).toEqual({}); expect(episodeTransitions(clear.state, healthy, NOW).events).toEqual([]);
+    expect(episodeTransitions(clear.state, violation, NOW).events).toHaveLength(1);
+    expect(guardianExitCode(broken)).toBe(2); expect(guardianExitCode(violation)).toBe(1);
+  });
+  test("atomic episode state, no-notify and historical mode never write state; invalid CLI fails", async () => {
+    const f = fixture();
+    const clock = spyOn(Date, "now").mockReturnValue(NOW);
+    try {
+      const state = join(f.dir, "state.json");
+      writeState(state, emptyState()); expect(JSON.parse(readFileSync(state, "utf8"))).toEqual(emptyState());
+      writeFileSync(state, "leave untouched");
+      expect(await guardianMain(["--db", f.path, "--hist", f.histPath, "--no-broker", "--state", state, "--no-notify"])).toBe(0);
+      expect(readFileSync(state, "utf8")).toBe("leave untouched");
+      f.db.exec("UPDATE portfolio_decisions SET strategy_version = CASE account_id WHEN 'momentum_stocks' THEN 'momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger-sh50' ELSE 'meanrev_stocks@pe-vt15-mh5-stagger' END");
+      // Outside G5's window so the tiny fixture need not carry the real universes.
+      expect(await guardianMain(["--db", f.path, "--hist", f.histPath, "--state", state, "--now", "2026-11-02T12:00:00Z", "--notify"])).toBe(1); // previous session's pass missing
+      expect(readFileSync(state, "utf8")).toBe("leave untouched");
+      expect(existsSync(`${state}.${process.pid}.tmp`)).toBe(false);
+      await expect(guardianMain(["--now", "nonsense"])).rejects.toThrow("invalid --now");
+      await expect(guardianMain(["--db"])).rejects.toThrow("missing value");
+      await expect(guardianMain(["--unknown"])).rejects.toThrow("unknown option");
+      const source = readFileSync(join(root, "scripts/guardian.ts"), "utf8");
+      expect(source).not.toContain("initDatabase(");
+      expect(source).toContain('new Database(dbPath, { readonly: true })');
+      expect(source).toContain('new Database(histPath, { readonly: true })');
+    } finally { clock.mockRestore(); f.close(); }
+  });
+  test("--notify sends and persists once per episode/recovery; failed delivery never consumes a page", async () => {
+    const f = fixture(), clock = spyOn(Date, "now").mockReturnValue(NOW);
+    const token = process.env.TELEGRAM_BOT_TOKEN, chat = process.env.TELEGRAM_OPS_CHAT_ID;
+    process.env.TELEGRAM_BOT_TOKEN = "fixture"; process.env.TELEGRAM_OPS_CHAT_ID = "fixture-ops";
+    const sent: string[] = [];
+    let fail = true;
+    const send = spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
+      expect(String(url)).toBe("https://api.telegram.org/botfixture/sendMessage");
+      const body = JSON.parse(String(options?.body)); expect(body.chat_id).toBe("fixture-ops");
+      if (fail) return new Response("failure", { status: 503 });
+      sent.push(body.text); return Response.json({ ok: true });
+    });
+    try {
+      const state = join(f.dir, "episodes.json"), args = ["--db", f.path, "--hist", f.histPath, "--no-broker", "--notify", "--state", state];
+      f.trade({ entry_time: NOW - 122 * HOUR });
+      await expect(guardianMain(args)).rejects.toThrow("Telegram failed");
+      expect(existsSync(state)).toBe(false);
+      fail = false;
+      expect(await guardianMain(args)).toBe(1);
+      expect(await guardianMain(args)).toBe(1);
+      expect(sent).toHaveLength(1); expect(sent[0]).toContain("PAGE G1:row");
+      f.db.query("UPDATE trades SET status='closed', exit_time=?").run(NOW);
+      expect(await guardianMain(args)).toBe(0); expect(await guardianMain(args)).toBe(0);
+      expect(sent).toHaveLength(2); expect(sent[1]).toContain("CLEARED G1:row");
+      expect(JSON.parse(readFileSync(state, "utf8")).active).toEqual({});
+    } finally {
+      clock.mockRestore(); send.mockRestore(); f.close();
+      if (token === undefined) delete process.env.TELEGRAM_BOT_TOKEN; else process.env.TELEGRAM_BOT_TOKEN = token;
+      if (chat === undefined) delete process.env.TELEGRAM_OPS_CHAT_ID; else process.env.TELEGRAM_OPS_CHAT_ID = chat;
+    }
+  });
+});
+
+test("broker-truth import stays inert; shared readers are signed GET-only and CLI rendering is unchanged", () => {
+  const script = `
+    process.env.ALPACA_API_KEY='fixture'; process.env.ALPACA_SECRET_KEY='fixture';
+    process.env.BINANCE_FUTURES_API_KEY='fixture'; process.env.BINANCE_FUTURES_SECRET_KEY='fixture';
+    const calls=[]; globalThis.fetch=async (url,opts)=>{calls.push({url,method:opts.method,headers:opts.headers});
+      return {ok:true,json:async()=>url.includes('/v2/positions')?[{symbol:'SPY',side:'short',qty:'2'}]:
+        [{symbol:'BTCUSDT',positionSide:'SHORT',positionAmt:'0.01'},{symbol:'ETHUSDC',positionSide:'BOTH',positionAmt:'-0.2'}]};};
+    const {readBrokerPositions}=await import(${JSON.stringify(join(root, "scripts/guardian.ts"))});
+    if(calls.length) throw Error('import made GET calls');
+    const positions=await readBrokerPositions();console.log(JSON.stringify({calls,positions}));`;
+  // cwd without a .env: a checkout's real keys (dev, prod gate) must not replace the fixture ones.
+  const p = Bun.spawnSync([process.execPath, "-e", script], { cwd: mkdtempSync(join(tmpdir(), "guardian-noenv-")), timeout: 10_000 });
+  expect(p.exitCode).toBe(0);
+  const { calls, positions } = JSON.parse(p.stdout.toString().trim());
+  expect(calls).toHaveLength(2); expect(calls.every((c: any) => c.method === "GET")).toBe(true);
+  const url = new URL(calls[1].url), sig = url.searchParams.get("signature");
+  url.searchParams.delete("signature");
+  expect(sig).toBe(createHmac("sha256", "fixture").update(url.searchParams.toString()).digest("hex"));
+  expect(positions).toEqual([{ venue: "alpaca", symbol: "SPY", quantity: -2 },
+    { venue: "fapi", symbol: "BTCUSDT", quantity: -0.01 }, { venue: "fapi", symbol: "ETHUSDC", quantity: -0.2 }]);
+  const after = readFileSync(join(root, "scripts/broker-truth.ts"), "utf8");
+  expect(after.indexOf("if (import.meta.main)")).toBeLessThan(after.indexOf("console.log("));
+  expect(after.split("\n").filter(l => l.includes("console.log("))).toHaveLength(13);
+});
+
+test("cron installs guardian hourly at :20 exactly once; wrapper resolves bun and propagates status/overrides", () => {
+  const dir = mkdtempSync(join(tmpdir(), "guardian-cron-"));
+  try {
+    const cron = join(dir, "crontab"), store = join(dir, "installed"), bun = join(dir, "bun-fake"), args = join(dir, "args");
+    writeFileSync(cron, `#!/bin/bash\nif [ "$1" = '-l' ]; then cat '${store}' 2>/dev/null; else cat > '${store}'; fi\n`, { mode: 0o755 });
+    const env = { ...process.env, PATH: `${dir}:${process.env.PATH}` };
+    for (let i = 0; i < 2; i++) {
+      const p = Bun.spawnSync(["bash", "scripts/install-cron.sh"], { cwd: root, env });
+      expect(p.exitCode).toBe(0);
+    }
+    const lines = readFileSync(store, "utf8").split("\n");
+    expect(lines.filter(l => l === "# uncle-carl-guardian")).toHaveLength(1);
+    expect(lines.filter(l => l.includes("/scripts/guardian.sh"))).toEqual([`20 * * * * ${root}/scripts/guardian.sh >> ${root}/logs/guardian.log 2>&1`]);
+    // Use a fixture repo, not the real data/ directory or crontab.
+    const scriptDir = join(dir, "scripts");
+    Bun.spawnSync(["mkdir", "-p", scriptDir, join(dir, "data")]);
+    writeFileSync(join(scriptDir, "guardian.sh"), readFileSync(join(root, "scripts/guardian.sh")), { mode: 0o755 });
+    writeFileSync(bun, `#!/bin/bash\nprintf '%s\\n' "$@" > '${args}'\nexit 1\n`, { mode: 0o755 });
+    const p = Bun.spawnSync(["bash", join(scriptDir, "guardian.sh"), "--no-notify", "--no-broker"], { env: { ...env, BUN_BIN: bun } });
+    expect(p.exitCode).toBe(1);
+    expect(readFileSync(args, "utf8").trim().split("\n")).toEqual(["run", "scripts/guardian.ts", "--notify", "--no-notify", "--no-broker"]);
+    expect(Bun.spawnSync(["bash", join(scriptDir, "guardian.sh")], { env: { ...env, BUN_BIN: join(dir, "missing") } }).exitCode).toBe(2);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

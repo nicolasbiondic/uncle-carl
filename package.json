@@ -9,6 +9,7 @@
     "dev": "bun --watch src/index.ts",
     "setup": "bun run scripts/setup.ts",
     "typecheck": "tsc --noEmit",
+    "release": "bun run scripts/release.ts",
     "baseline": "bun run scripts/baseline-report.ts",
     "verify": "bun run scripts/verify-smoke.ts",
     "verify:deploy": "bun run scripts/verify-deploy.ts",
