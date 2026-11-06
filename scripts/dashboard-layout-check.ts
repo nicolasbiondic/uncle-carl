@@ -90,6 +90,9 @@ function syntheticFixtures(dir: string) {
   save("profiles-7d", [{ id: "synthetic", pnlAggregate: {
     equity: 100_000, periodPnl: 234.56, periodPnlPct: 0.23, pnl7d: 1234.56, pnl7dPct: 1.25,
     periodRealized: 123.45, periodRealizedCount: 8, realized7d: 654.32, realized7dCount: 24,
+    // Same-window bridge under each P&L tile (closes + positions == the headline); wide figures on purpose.
+    periodBreakdown: { closedInWindow: -1234.56, positions: 1469.12, closesCount: 10, trimsCount: 8, startPrices: "bars" },
+    breakdown7d: { closedInWindow: -2345.67, positions: 3580.23, closesCount: 48, trimsCount: 30, startPrices: "marks" },
   }, brokerAccounts: ["alpaca", "binance"].map((brokerId) => ({
     brokerId: `${brokerId}_main`, equity: 50_000, firstEquity: 48_000, stats,
     marginBreakdown: brokerId === "binance" ? { usdtFutures: 25_000, usdcFutures: 25_000 } : undefined,

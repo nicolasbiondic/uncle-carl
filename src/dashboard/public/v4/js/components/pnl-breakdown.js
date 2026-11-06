@@ -1,8 +1,12 @@
 // ── pnl-breakdown.js — "why is the period P&L X if Y was realized?"
-// (2026-09-29, owner: "Esos +4000 no los veo"). Modal behind the P&L KPIs'
-// "breakdown" link; same modal pattern as broker-modal.js. Data:
-// /api/v2/pnl-breakdown (src/portfolio/pnlBreakdown.ts) — the bridge
-//   realized − earned before the window + open positions' move + other = P&L
+// (2026-09-29, owner: "Esos +4000 no los veo"; 2026-11-06: the tile's own
+// subline now shows closes + positions of the SAME window, this modal is the
+// bridge from "realized since entry" to those two figures). Modal behind the
+// P&L KPIs; same modal pattern as broker-modal.js. Data:
+// /api/v2/pnl-breakdown (src/portfolio/pnlBreakdown.ts):
+//   realized since entry − counted before the period = closes (tile)
+//   open positions' move + holding costs and other   = positions (tile)
+//   closes + positions                                = the period P&L
 import { t } from "../store.js";
 import { moneySigned, pnlColor, etDate, etDateTime, dur, n } from "../fmt.js";
 import { esc, icon } from "../ui.js";
@@ -39,47 +43,56 @@ export function renderBreakdown(b) {
   const intro = allTime
     ? t("The all-time P&L is how much the accounts' value changed since the start: what closed trades realized plus what the open positions are worth now.",
       "El P&L total es cuánto cambió el valor de las cuentas desde el inicio: lo cobrado en cierres más lo que valen ahora las posiciones abiertas.")
-    : t("The P&L is how much the accounts' value changed in the period. Closing a position adds no money: it turns an open gain into a realized one. A gain built up before the period appears in full as realized, but only its move within the period counts in the P&L.",
-      "El P&L es cuánto cambió el valor de las cuentas en el período. Cerrar una posición no suma dinero: convierte una ganancia abierta en cobrada. Una ganancia acumulada antes del período aparece entera en «cobrado», pero en el P&L solo cuenta lo que se movió dentro del período.");
+    : t("The P&L is how much the accounts' value changed in the period. Closing or trimming a position adds no money: it turns an open result into a realized one. What was realized since entry includes earlier days' moves, which were already in those days' P&L; only the move within the period counts here.",
+      "El P&L es cuánto cambió el valor de las cuentas en el período. Cerrar o recortar una posición no suma dinero: convierte un resultado abierto en cobrado. Lo cobrado desde la entrada incluye movimientos de días anteriores, que contaron en el P&L de esos días; aquí solo cuenta lo que se movió dentro del período.");
 
-  const rows = [bridgeRow(`${t("Realized in", "Cobrado en")} ${count} ${closesWord}`, b.realized)];
+  const trims = n(b.trimsCount);
+  const trimsWord = trims === 1 ? t("trim", "recorte") : t("trims", "recortes");
+  const legs = trims > 0 ? `${count} ${closesWord} ${t("and", "y")} ${trims} ${trimsWord}` : `${count} ${closesWord}`;
+  const rows = [bridgeRow(`${t("Realized since entry in", "Cobrado desde la entrada en")} ${legs}`, b.realized)];
   if (!allTime && b.earnedBefore == null) {
-    rows.push(`<tr><td colspan="2" class="muted">${t("A position closed in the period has no price at its start, so the part earned before can't be separated.", "A una posición cerrada en el período le falta el precio al inicio: no se puede separar lo ganado antes.")}</td></tr>`);
-  } else if (!allTime && Math.abs(n(b.earnedBefore)) >= 0.005) {
-    rows.push(bridgeRow(`− ${t("earned before", "ganado antes del")} ${startDay}`, -b.earnedBefore, "", t("(already in the P&L before the period)", "(ya estaba en el P&L antes del período)")));
-    rows.push(bridgeRow(`= ${t("result of the closes within the period", "resultado de los cierres dentro del período")}`, b.closedInWindow, "sum"));
+    rows.push(`<tr><td colspan="2" class="muted">${t("A position reduced in the period has no price at its start, so the part counted before can't be separated.", "A una posición reducida en el período le falta el precio al inicio: no se puede separar lo contado antes.")}</td></tr>`);
+  } else if (!allTime) {
+    rows.push(bridgeRow(`− ${t("already counted before", "ya contado antes del")} ${startDay}`, -n(b.earnedBefore), "", t("(counted in earlier days' P&L)", "(contado en el P&L de días anteriores)")));
   }
+  rows.push(bridgeRow(`= ${t("closes", "cierres")}`, b.closedInWindow, "sum", t("(the tile figure)", "(la cifra de la tarjeta)")));
   rows.push(bridgeRow(
-    allTime ? `+ ${t("open positions, not yet realized", "posiciones abiertas, sin cobrar")}` : `+ ${t("open positions, change in the period", "posiciones abiertas, cambio en el período")}`,
+    allTime ? `${t("open positions, not yet realized", "posiciones abiertas, sin cobrar")}` : `${t("open positions, price change in the period", "posiciones abiertas, cambio de precio en el período")}`,
     b.openChange, "", `(${n(b.openCount)})`,
   ));
   rows.push(bridgeRow(
-    `+ ${allTime ? t("funding, fees, treasury and history before v8", "funding, comisiones, tesorería e historial anterior a v8") : t("funding, fees, treasury and other", "funding, comisiones, tesorería y otros")}`,
-    b.other,
+    `+ ${t("holding costs and other", "costes de mantener y otros")}`,
+    b.holding, "", t("(funding, margin interest, fees, BTC collateral)", "(funding, interés del margen, comisiones, colateral BTC)"),
   ));
-  rows.push(bridgeRow(`= ${periodName(days)}`, b.pnl, "total"));
+  rows.push(bridgeRow(`= ${t("positions", "posiciones")}`, b.positions, "sum", t("(the tile figure)", "(la cifra de la tarjeta)")));
+  rows.push(bridgeRow(`= ${periodName(days)}`, b.pnl, "total", t("(closes + positions)", "(cierres + posiciones)")));
+  const approx = !allTime && b.startPrices === "bars"
+    ? `<p class="muted pb-note">${t("Start prices from closing bars — approximate.", "Precios de inicio de barras de cierre — aproximado.")}</p>`
+    : "";
 
   const closes = [...(b.closes || [])].sort((x, y) => Math.abs(n(y.realized)) - Math.abs(n(x.realized)));
   const shown = closes.slice(0, MAX_CLOSES);
+  const total = count + trims;
   const closesTable = shown.length === 0 ? "" : `
     <div>
-      <div class="pb-h">${t("Largest closes in the period", "Cierres más grandes del período")}</div>
+      <div class="pb-h">${t("Largest closes and trims in the period", "Cierres y recortes más grandes del período")}</div>
       <div class="scroll"><table class="pb-closes">
-        <thead><tr><th>${t("Sym", "Sím")}</th><th class="r">${t("Realized", "Cobrado")}</th>${allTime ? "" : `<th class="r">${t("Earned before", "Ganado antes")}</th><th class="r">${t("In the period", "En el período")}</th>`}<th class="r">${t("Held", "Abierta")}</th></tr></thead>
+        <thead><tr><th>${t("Sym", "Sím")}</th><th class="r">${t("Since entry", "Desde la entrada")}</th>${allTime ? "" : `<th class="r">${t("Counted before", "Contado antes")}</th><th class="r">${t("In the period", "En el período")}</th>`}<th class="r">${t("Held", "Abierta")}</th></tr></thead>
         <tbody>${shown.map((c) => `<tr>
-          <td>${esc(c.symbol)}</td>
+          <td>${esc(c.symbol)}${c.kind === "trim" ? ` <span class="muted">${t("trim", "recorte")}</span>` : ""}</td>
           <td class="r">${amount(c.realized)}</td>
           ${allTime ? "" : `<td class="r">${amount(c.earnedBefore)}</td><td class="r">${amount(c.inWindow)}</td>`}
           <td class="r muted">${c.exitTime && c.entryTime ? dur(c.exitTime - c.entryTime) : "—"}</td>
         </tr>`).join("")}</tbody>
       </table></div>
-      ${count > shown.length ? `<div class="muted pb-more">${t("and", "y")} ${count - shown.length} ${t("more", "más")}</div>` : ""}
+      ${total > shown.length ? `<div class="muted pb-more">${t("and", "y")} ${total - shown.length} ${t("more", "más")}</div>` : ""}
     </div>`;
 
   return `<div class="pb-body">
     <div class="pb-top"><b style="color:${pnlColor(b.pnl)}">${periodName(days)} ${b.pnl == null ? "—" : moneySigned(b.pnl)}</b> <span class="muted">· ${esc(since)}</span></div>
     <p class="pb-intro">${intro}</p>
     <table class="pb-bridge"><tbody>${rows.join("")}</tbody></table>
+    ${approx}
     ${closesTable}
   </div>`;
 }

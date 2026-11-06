@@ -64,7 +64,9 @@ describe("renderKpis — no Since Start, server-computed period pct", () => {
   test("KPI money is whole dollars even below $100; percentages retain precision", () => {
     Object.assign(store.state, {
       lang: "en", period: 1, view: "consolidated", dashboard: {}, kpis: null,
-      profiles: [{ pnlAggregate: { equity: 106826.74, periodPnl: -85.04, periodPnlPct: -0.3, pnl7d: -1794.42, pnl7dPct: -1.7, periodRealized: 8.99, periodRealizedCount: 1, realized7d: 7963.43, realized7dCount: 19 } }],
+      profiles: [{ pnlAggregate: { equity: 106826.74, periodPnl: -85.04, periodPnlPct: -0.3, pnl7d: -1794.42, pnl7dPct: -1.7,
+        periodBreakdown: { closedInWindow: 8.99, positions: -94.03, closesCount: 1, trimsCount: 0, startPrices: "marks" },
+        breakdown7d: { closedInWindow: 7963.43, positions: -9757.85, closesCount: 19, trimsCount: 0, startPrices: "marks" } } }],
     });
     const html = renderKpis();
     for (const value of ["$106,827", "−$85", "−$1,794", "+$9", "+$7,963", "−0.3%"])

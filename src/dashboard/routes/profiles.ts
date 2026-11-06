@@ -85,6 +85,47 @@ function combineStats(list: ReturnType<typeof getTradingStats>[]) {
   };
 }
 
+/** The tile subline's figures for one window: closes + positions == the
+ *  headline exactly (positions = pnl − closedInWindow). null figures when a
+ *  needed start price is missing — the tile then shows only the counts. */
+export interface TileBreakdown {
+  closedInWindow: number | null;
+  positions: number | null;
+  closesCount: number;
+  trimsCount: number;
+  startPrices: "marks" | "bars";
+}
+
+/** One attribution per window, shared by the tiles (/api/v2/profiles) and the
+ *  modal (/api/v2/pnl-breakdown) through the 30s cache: the bridge walks the
+ *  portfolio journals, so it is computed once per window, not per request. */
+function breakdownFor(am: AccountManager, periodDays: number) {
+  return cached(`pnl_breakdown_${periodDays}`, 30_000, () => {
+    const legs = ["alpaca_main", "binance_main", ...(isMainSeriesApplicable("coinm") ? ["binance_coinm_main"] : [])];
+    const agg = combineEquityPnlLegs(legs, periodDays);
+    const openPositions: BreakdownPosition[] = (am.getConsolidatedState?.()?.positions || []).map((p: any) => ({
+      accountId: p.profileId, symbol: p.symbol, market: p.market, side: p.side, quantity: p.quantity,
+      entryPrice: p.avgEntryPrice, entryTime: p.openedAt, currentPrice: p.currentPrice,
+    }));
+    const hist = openHistoricalReadonly();
+    try {
+      const b = computePnlBreakdown({ db: getDB(), hist, periodDays, pnl: agg?.pnl ?? null, openPositions });
+      // The modal lists the largest legs; the counts keep the full totals.
+      const closes = [...b.closes].sort((x, y) => Math.abs(y.realized ?? 0) - Math.abs(x.realized ?? 0)).slice(0, 20);
+      return { ...b, closes, pnlPct: agg?.pnlPct ?? null, generatedAt: Date.now() };
+    } finally {
+      try { hist?.close(); } catch {}
+    }
+  });
+}
+
+function tileBreakdown(am: AccountManager, periodDays: number): TileBreakdown | null {
+  try {
+    const b = breakdownFor(am, periodDays);
+    return { closedInWindow: b.closedInWindow, positions: b.positions, closesCount: b.closesCount, trimsCount: b.trimsCount, startPrices: b.startPrices };
+  } catch { return null; }
+}
+
 export function registerProfileRoutes(app: express.Application, am: AccountManager): void {
   // ── GET /api/v2/profiles ────────────────────────────────────────────────
   app.get("/api/v2/profiles", async (req, res) => {
@@ -105,12 +146,15 @@ export function registerProfileRoutes(app: express.Application, am: AccountManag
       const aggLegs = ["alpaca_main", "binance_main", ...(isMainSeriesApplicable("coinm") ? ["binance_coinm_main"] : [])];
       const aggPeriod = combineEquityPnlLegs(aggLegs, periodDays);
       const aggPnl7d  = combineEquityPnlLegs(aggLegs, 7);
-      // Realized (closed-trade) P&L over the SAME windows, shown beside each
-      // P&L so a big close announced on Telegram is findable: the P&L is the
-      // change in value, and a gain earned before the window was already in
-      // it (2026-09-29, META). Full attribution: /api/v2/pnl-breakdown.
+      // Realized (closed-trade) P&L over the SAME windows (since entry — the
+      // older sub-line; kept for older readers) and the same-window bridge the
+      // tiles show now: closes + positions == the headline (2026-11-06; the
+      // since-entry figure read as a contradiction next to the equity delta).
+      // Full attribution: /api/v2/pnl-breakdown.
       const periodStats = getTradingStats(undefined, periodDays);
       const stats7d = periodDays === 7 ? periodStats : getTradingStats(undefined, 7);
+      const periodBreakdown = tileBreakdown(am, periodDays);
+      const breakdown7d = periodDays === 7 ? periodBreakdown : tileBreakdown(am, 7);
       const pnlAggregate = {
         equity: getPortfolioEquityNow().total,
         periodPnl: aggPeriod?.pnl ?? null,
@@ -121,6 +165,8 @@ export function registerProfileRoutes(app: express.Application, am: AccountManag
         periodRealizedCount: periodStats.periodClosedTrades,
         realized7d: stats7d.periodPnl,
         realized7dCount: stats7d.periodClosedTrades,
+        periodBreakdown,
+        breakdown7d,
       };
 
       for (const p of profiles) {
@@ -329,31 +375,16 @@ export function registerProfileRoutes(app: express.Application, am: AccountManag
   });
 
   // ── GET /api/v2/pnl-breakdown?days=N (2026-09-29) ───────────────────────
-  // Why the period P&L differs from what was realized in it: realized in the
-  // window, the part of it earned BEFORE the window, the open positions'
-  // in-window move and the residual (src/portfolio/pnlBreakdown.ts). `pnl` is
-  // the same combineEquityPnlLegs figure the KPI shows. On demand (the modal
-  // behind the KPI's "breakdown" link), cached 30s.
+  // Why the period P&L differs from what was realized in it: every reducing
+  // leg in the window since entry, the part of it earned BEFORE the window,
+  // the open positions' in-window move and the holding residual
+  // (src/portfolio/pnlBreakdown.ts). `pnl` is the same combineEquityPnlLegs
+  // figure the KPI shows. On demand (the modal behind the KPI figure), the
+  // same cached computation the tiles' sublines read.
   app.get("/api/v2/pnl-breakdown", (req, res) => {
     try {
       const periodDays = toBoundedInt(req.query.days, 7, 0, 365);
-      res.json(cached(`pnl_breakdown_${periodDays}`, 30_000, () => {
-        const legs = ["alpaca_main", "binance_main", ...(isMainSeriesApplicable("coinm") ? ["binance_coinm_main"] : [])];
-        const agg = combineEquityPnlLegs(legs, periodDays);
-        const openPositions: BreakdownPosition[] = (am.getConsolidatedState().positions || []).map((p: any) => ({
-          accountId: p.profileId, symbol: p.symbol, market: p.market, side: p.side, quantity: p.quantity,
-          entryPrice: p.avgEntryPrice, entryTime: p.openedAt, currentPrice: p.currentPrice,
-        }));
-        const hist = openHistoricalReadonly();
-        try {
-          const b = computePnlBreakdown({ db: getDB(), hist, periodDays, pnl: agg?.pnl ?? null, openPositions });
-          // The modal lists the largest closes; `count` keeps the full total.
-          const closes = [...b.closes].sort((x, y) => Math.abs(y.realized) - Math.abs(x.realized)).slice(0, 20);
-          return { ...b, closes, pnlPct: agg?.pnlPct ?? null, generatedAt: Date.now() };
-        } finally {
-          try { hist?.close(); } catch {}
-        }
-      }));
+      res.json(breakdownFor(am, periodDays));
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

@@ -49,11 +49,12 @@ import {
   saveEquitySnapshot,
   getRecentSignals, getRecentTrades, getV8StartedAt,
   insertActivity, updateTradeCloseReason, updateTradeStopLoss,
-  getETDateKey, getETDayBounds, pruneOldData, recordFill, isSyncOwned, isPortfolioEngineRow, pnlOf,
-  getAlpacaV8StartEquity, getPartialCloseLedger,
+  getETDateKey, getETDayBounds, getETDayStart, pruneOldData, recordFill, isSyncOwned, isPortfolioEngineRow, pnlOf,
+  getAlpacaV8StartEquity, getPartialCloseLedger, savePnlWindowMarks,
   recordCorporateAction, markCorporateActionApplied, applySplitToOpenStockTrades,
 } from "../db/database";
 import type { CorporateActionEvent } from "../market/corporateActions";
+import { MARKABLE_ACCOUNTS } from "../portfolio/pnlBreakdown";
 import {
   getPortfolioEquityNow, getPortfolioEquityStartDisplay, getSleeveEquityStartDisplay,
   reconcilePortfolioInvariants, setBrokerTruthAvailable, isBrokerTruthAvailable,
@@ -312,6 +313,13 @@ export class AccountManager {
   /** Latest broker-truth reading per broker — cached by the 60s syncs, drained
    *  by the single snapshot writer (writeAllSnapshots). null until first sync. */
   private alpacaMainTruth: { equity: number; cash: number } | null = null;
+  /** The previous snapshot pass's time and per-(market, symbol) marks (see
+   *  writeAllSnapshots → persistWindowMarksIfCrossed). null until the first
+   *  pass of this process: a restart across an ET-day boundary writes no
+   *  marks for that day (the bridge falls back to bars). */
+  private lastPassMarks: { time: number; marks: Array<{ market: string; symbol: string; price: number }> } | null = null;
+  /** Clock of the snapshot pass (tests pin it to cross a boundary). */
+  private snapshotClock: () => number = () => Date.now();
   private binanceMainTruth: { equity: number; cash: number } | null = null;
   /** binance_coinm_main (DAPI) — sole-owned by momentum_btc, same cache
    *  contract as the two above. Read-only: never written to by an order path. */
@@ -1431,9 +1439,15 @@ export class AccountManager {
     // Now each write is isolated: on failure we log LOUDLY (an operator must
     // declare the transition — KNOWN_TRANSITIONS in db/database.ts) and keep the
     // bot alive. The read path stays fail-closed (getEquityPnlDisplay → null).
+    // One timestamp for the whole pass: every series row of this pass shares
+    // it, and the window-start marks below quote the same value, so "the row
+    // getEquityPnlDisplay picks as the window start" and "the marks of that
+    // pass" are the same pass by construction (verified in
+    // windowMarks.test.ts), not two clocks a few ms apart.
+    const passTime = this.snapshotClock();
     const safeSnap = (id: string, equity: number, cash: number, pos: number) => {
       try {
-        saveEquitySnapshot(id, equity, cash, pos);
+        saveEquitySnapshot(id, equity, cash, pos, passTime);
       } catch (e: any) {
         log.error(`writeAllSnapshots: snapshot skipped for ${id} — ${e.message} (bot keeps trading; declare the transition to restore this series' history)`);
       }
@@ -1460,7 +1474,55 @@ export class AccountManager {
     if (this.binanceCoinmMainTruth && isBrokerTruthAvailable("coinm")) {
       safeSnap("binance_coinm_main", this.binanceCoinmMainTruth.equity, this.binanceCoinmMainTruth.cash, 0);
     }
+    this.persistWindowMarksIfCrossed(passTime);
     this.logAlpacaAccountGrossExposure();
+  }
+
+  // ── Window-start marks for the P&L bridge (2026-11-06) ──
+  //
+  // The headline period P&L is the change of the *_main snapshots from the
+  // last pass ≤ 00:00 ET; the bridge (src/portfolio/pnlBreakdown.ts) needs the
+  // per-symbol prices THAT pass marked the book at, not the official 1d close
+  // (Alpaca marks 24/5 — alpaca_main moved $150 between the 11-05 close and
+  // the 04:58 UTC pass). So every pass keeps its marks in memory and the first
+  // pass on the other side of an ET-day start persists the PREVIOUS pass's
+  // marks under that day start. No pass between them wrote snapshots (single
+  // writer), so the previous pass IS the row getEquityPnlDisplay picks.
+  // Failure-isolated like safeSnap: a marks problem never touches trading.
+  private persistWindowMarksIfCrossed(passTime: number): void {
+    try {
+      const prev = this.lastPassMarks;
+      const dayStart = getETDayStart(passTime);
+      if (prev && prev.time < dayStart && prev.marks.length > 0) {
+        const n = savePnlWindowMarks(dayStart, prev.time, prev.marks);
+        log.info(`window-start marks: ${n} price(s) saved for ${getETDateKey(dayStart)} from the ${new Date(prev.time).toISOString()} pass`);
+      }
+    } catch (e: any) {
+      log.error(`writeAllSnapshots: window-start marks skipped — ${e.message} (bot keeps trading; the P&L bridge falls back to bars for this day)`);
+    }
+    try {
+      this.lastPassMarks = { time: passTime, marks: this.collectPassMarks() };
+    } catch (e: any) {
+      this.lastPassMarks = { time: passTime, marks: [] };
+      log.error(`writeAllSnapshots: could not collect this pass's marks — ${e.message}`);
+    }
+  }
+
+  /** The prices the active sleeves' positions are marked at in this pass — the
+   *  same acc.state.positions the sleeve values came from. Linear-priced
+   *  sleeves only (MARKABLE_ACCOUNTS): a COIN-M BTC/USD mark would collide
+   *  with the USDT perp's key and its contracts are not linear anyway. */
+  private collectPassMarks(): Array<{ market: string; symbol: string; price: number }> {
+    const out = new Map<string, { market: string; symbol: string; price: number }>();
+    for (const id of this.getActiveProfileIds()) {
+      if (!MARKABLE_ACCOUNTS.has(id)) continue;
+      const acc = this.accounts.get(id);
+      for (const p of acc?.state?.positions ?? []) {
+        if (!(p.currentPrice > 0)) continue;
+        out.set(`${p.market}|${p.symbol}`, { market: p.market, symbol: p.symbol, price: p.currentPrice });
+      }
+    }
+    return [...out.values()];
   }
 
   // ── Account-level aggregate exposure visibility (2026-08-19 audit fix) ──

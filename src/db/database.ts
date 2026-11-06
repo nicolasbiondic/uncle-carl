@@ -207,9 +207,10 @@ export function pruneOldData() {
     const eq = { changes: pruneEquitySnapshots() };
     const sg = db.prepare(`DELETE FROM signals WHERE timestamp < ?`).run(threeDaysAgo);
     const al = db.prepare(`DELETE FROM activity_log WHERE created_at < ?`).run(activityCutoff);
-    const total = eq.changes + sg.changes + al.changes;
+    const mk = db.prepare(`DELETE FROM pnl_window_marks WHERE window_start < ?`).run(Date.now() - PNL_WINDOW_MARKS_RETENTION_MS);
+    const total = eq.changes + sg.changes + al.changes + mk.changes;
     if (total > 0) {
-      log.info(`DB cleanup: pruned ${total} rows (equity=${eq.changes} signals=${sg.changes} activity=${al.changes})`);
+      log.info(`DB cleanup: pruned ${total} rows (equity=${eq.changes} signals=${sg.changes} activity=${al.changes} marks=${mk.changes})`);
       try { db.exec("PRAGMA incremental_vacuum(100)"); } catch {}
     }
   } catch (e: any) { log.debug(`Prune error: ${e.message}`); }
@@ -224,6 +225,35 @@ export const ACTIVITY_LOG_RETENTION_MS = 90 * 24 * 60 * 60_000;
 // stays forever. It used to go after 7 days, which is exactly the evidence an
 // incident review needs (the 22-sep→22-oct review found 3 orders in its window).
 export const ORPHAN_ORDER_RETENTION_MS = 90 * 24 * 60 * 60_000;
+// Window-start marks (pnl_window_marks): the 30D breakdown needs 30 days; the
+// same ≥ 90-day floor as every other evidence table.
+export const PNL_WINDOW_MARKS_RETENTION_MS = 90 * 24 * 60 * 60_000;
+
+/** The prices a snapshot pass marked every markable position at — persisted
+ *  once per ET-day window start by the single snapshot writer (see the table
+ *  comment). Same (window_start, market, symbol) overwrites: a writer that
+ *  reaches the same boundary twice (restart within the same pass window)
+ *  carries the same pass. */
+export function savePnlWindowMarks(windowStart: number, snapshotTime: number, marks: ReadonlyArray<{ market: string; symbol: string; price: number }>): number {
+  const ins = db.prepare(`INSERT OR REPLACE INTO pnl_window_marks (window_start, market, symbol, price, snapshot_time) VALUES (?, ?, ?, ?, ?)`);
+  const txn = db.transaction(() => {
+    let n = 0;
+    for (const m of marks) {
+      if (!(m.price > 0) || !Number.isFinite(m.price)) continue;
+      ins.run(windowStart, m.market, m.symbol, m.price, snapshotTime);
+      n++;
+    }
+    return n;
+  });
+  return txn();
+}
+
+export interface PnlWindowMark { market: string; symbol: string; price: number; snapshotTime: number }
+
+export function getPnlWindowMarks(windowStart: number, database: Database = db): PnlWindowMark[] {
+  const rows = database.prepare(`SELECT market, symbol, price, snapshot_time st FROM pnl_window_marks WHERE window_start = ?`).all(windowStart) as any[];
+  return rows.map(r => ({ market: r.market, symbol: r.symbol, price: r.price, snapshotTime: r.st }));
+}
 
 /** Deletes order rows older than the retention that no trade references. Runs
  *  at boot from migrateColumns (and is exported for the retention test). */
@@ -616,6 +646,23 @@ function createTables() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_equity_snap_profile ON equity_snapshots(profile_id, snapshot_time);
+
+    -- ═══ 2026-11-06: window-start marks for the P&L bridge ═══
+    -- The per-(market, symbol) prices the snapshot pass used as an ET-day
+    -- window's start (the last pass ≤ 00:00 ET — exactly the row
+    -- getEquityPnlDisplay picks) was computed from. Written by
+    -- AccountManager.writeAllSnapshots on the first pass after the boundary;
+    -- read by src/portfolio/pnlBreakdown.ts so "closes + positions" measures
+    -- from the same prices as the headline P&L instead of the official 1d
+    -- close (Alpaca marks overnight; the closes moved $150 on 11-05→06).
+    CREATE TABLE IF NOT EXISTS pnl_window_marks (
+      window_start INTEGER NOT NULL,
+      market TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      price REAL NOT NULL,
+      snapshot_time INTEGER NOT NULL,
+      PRIMARY KEY (window_start, market, symbol)
+    );
 
     -- ═══ Task 1+2: Persistent accounts ═══
     -- equity/cash columns DEPRECATED since v8 — truth lives in equity_snapshots

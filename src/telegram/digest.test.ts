@@ -3,7 +3,8 @@
 //
 //   📊 Uncle Carl · 19 jul · cierre ET
 //   P&L hoy +$0.00 (0.00%) · P&L 7D +$367.02 (+0.33%)
-//   Cobrado hoy +$123.21 en 2 cierres · +$98.00 ya estaba ganado antes de hoy
+//   Cierres +$25 · posiciones −$25 en el día
+//   Cobrado desde la entrada +$123 en 2 cierres
 //   0 trades hoy · 18 en 7D · 6 posiciones abiertas
 //
 //   Rendimiento 7D realizado
@@ -17,11 +18,12 @@
 //
 // The P&L hoy/7D/desde el inicio figures are the change in the accounts'
 // value (combineEquityPnlLegs over the applicable *_main broker series —
-// never a sleeve sum, never the old accounts-table header). "Cobrado hoy"
-// and Rendimiento 7D use filtered closed trades; "ya estaba ganado antes de
-// hoy" is the part of today's realized that was already in the P&L (2026-09-29:
-// the old line labeled the whole equity delta "no realizado", so realized +
-// "no realizado" double-counted every close). Rendimiento 7D lists ACTIVE sleeves with ≥1 weekly close only,
+// never a sleeve sum, never the old accounts-table header). "Cierres ·
+// posiciones en el día" are the dashboard tile's two figures — both inside
+// today, they add up to P&L hoy (src/portfolio/pnlBreakdown.ts; 2026-11-06:
+// the old "Cobrado hoy … ya estaba ganado antes de hoy" read as a
+// contradiction next to the P&L). "Cobrado desde la entrada" and Rendimiento
+// 7D use filtered closed trades. Rendimiento 7D lists ACTIVE sleeves with ≥1 weekly close only,
 // best→worst, no equity/day/all-time clutter. Top-symbol and reject
 // breakdown are gone from the passive digest (operator commands only).
 // ══════════════════════════════════════════════
@@ -203,8 +205,11 @@ describe("realized vs. mark-to-market — the numbers cannot be misread", () => 
     });
     try {
       const msg = reporter.composeDailyDigest();
-      expect(msg).toContain("Cobrado hoy +$42.50 en 1 cierre");
+      expect(msg).toContain("Cobrado desde la entrada +$43 en 1 cierre");
+      expect(msg).toContain("Cierres +$43 · posiciones ");
+      expect(msg).toContain(" en el día");
       expect(msg).not.toContain("$10,041.50");
+      expect(msg).not.toContain("$10,042");
     } finally {
       getDB().prepare("DELETE FROM trades WHERE id IN ('today_real_close', 'today_manual_reconcile')").run();
     }
@@ -304,7 +309,7 @@ describe("Binance decomposition includes CoinM (DAPI) exactly once, once applica
 });
 
 describe("realized today vs P&L today — a gain earned before today (2026-09-28: META)", () => {
-  test("the digest says how much of today's realized was already in the P&L before today", () => {
+  test("the digest shows the tile's words: closes and positions inside the day add up to P&L hoy; since-entry on its own line, no 'ya estaba ganado'", () => {
     const hist = new Database(":memory:");
     hist.exec(`CREATE TABLE historical_bars (symbol TEXT NOT NULL, timeframe TEXT NOT NULL, timestamp INTEGER NOT NULL, open REAL NOT NULL, high REAL NOT NULL, low REAL NOT NULL, close REAL NOT NULL, volume REAL NOT NULL, source TEXT NOT NULL, PRIMARY KEY (symbol, timeframe, timestamp))`);
     // The previous session's close, stamped 00:00 ET of its day.
@@ -317,7 +322,19 @@ describe("realized today vs P&L today — a gain earned before today (2026-09-28
     (reporter as any).openHist = () => hist;
     try {
       const msg = reporter.composeDailyDigest();
-      expect(msg).toContain("Cobrado hoy +$4767.74 en 1 cierre · +$5163.34 ya estaba ganado antes de hoy");
+      // closes = 4767.74 − (736.6 − 607.516501)·40 = −$395.60 inside today; positions = P&L hoy − closes when the
+      // headline exists (an earlier case of this file leaves a COIN-M leg unreadable, so it may read "—" here).
+      const pnlMatch = msg.match(/P&L hoy ([+−]\$[\d,]+\.\d{2})/);
+      if (pnlMatch) {
+        const pnlHoy = Number(pnlMatch[1].replace("−", "-").replace(/[$,]/g, ""));
+        const positions = Math.round(pnlHoy) + 396;
+        const fmt = (v: number) => `${v > 0 ? "+" : v < 0 ? "−" : ""}$${Math.abs(v).toLocaleString("en-US")}`;
+        expect(msg).toContain(`Cierres −$396 · posiciones ${fmt(positions)} en el día`);
+      } else {
+        expect(msg).toContain("Cierres −$396 en el día");
+      }
+      expect(msg).toContain("Cobrado desde la entrada +$4,768 en 1 cierre");
+      expect(msg).not.toContain("ya estaba ganado");
       expect(msg).not.toContain("no realizado");
     } finally {
       (reporter as any).openHist = original;

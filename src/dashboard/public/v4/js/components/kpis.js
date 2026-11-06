@@ -11,20 +11,27 @@ function kpi(label, valueHtml, cls = "", subHtml = "", key = "") {
 /** A P&L figure that opens its breakdown (pnl-breakdown.js) when clicked: a
  *  real button, so it takes focus and Enter/Space like any control. */
 function figure(html, days) {
-  return `<button type="button" class="kfig" data-act="pnl-why" data-days="${days}" title="${esc(t("Click for breakdown", "Clic para ver el desglose"))}">${html}</button>`;
+  return `<button type="button" class="kfig" data-act="pnl-why" data-days="${days}" title="${esc(t("Both within this period — click for the breakdown", "Ambos dentro de este período — clic para ver el desglose"))}">${html}</button>`;
 }
 
-/** Line under a P&L KPI (2026-09-29, owner: "Esos +4000 no los veo"): the
- *  P&L is the change in the accounts' value, so a close whose gain was
- *  earned before the window barely moves it. This shows what closed trades
- *  realized in the SAME window (server-side getTradingStats periodPnl) and
- *  opens the attribution (pnl-breakdown.js). */
-export function realizedSub(realized, count) {
-  if (realized == null) return "";
-  const c = n(count);
-  return c === 0
-    ? t("no closes", "sin cierres")
-    : `${t("realized", "cobrado")} <b style="color:${pnlColor(realized)}">${moneySigned(realized, 0)}</b> ${t("in", "en")} ${num(c, 0)} ${c === 1 ? t("close", "cierre") : t("closes", "cierres")}`;
+/** Line under a P&L KPI (2026-11-06, owner: "+$367 · realized −$912" read as
+ *  a contradiction). Both figures share the tile's window: `closes` is what
+ *  the closes and trims of the period made INSIDE it, `positions` is the
+ *  rest of the headline (pnl − closes), so they add up to it exactly. The
+ *  since-entry figure is not shown on any tile — the modal has it. When the
+ *  closes can't be measured (a start price missing) only the counts show. */
+export function closesSub(b) {
+  if (!b) return "";
+  const closes = n(b.closesCount), trims = n(b.trimsCount);
+  if (closes === 0 && trims === 0) return t("no closes", "sin cierres");
+  const word = (c, one, many) => `${num(c, 0)} ${c === 1 ? one : many}`;
+  const counts = [
+    closes > 0 ? word(closes, t("close", "cierre"), t("closes", "cierres")) : "",
+    trims > 0 ? word(trims, t("trim", "recorte"), t("trims", "recortes")) : "",
+  ].filter(Boolean).join(", ");
+  if (b.closedInWindow == null || b.positions == null) return counts;
+  const fig = (v) => `<b style="color:${pnlColor(v)}">${moneySigned(v, 0)}</b>`;
+  return `${t("closes", "cierres")} ${fig(b.closedInWindow)} · ${t("positions", "posiciones")} ${fig(b.positions)}`;
 }
 
 /** Consolidated "today"/period figures derived from the v2 profiles payload so
@@ -60,10 +67,8 @@ function consolidated(state) {
     periodPnlPct: agg?.periodPnlPct ?? null,
     pnl7d: agg?.pnl7d ?? null,
     pnl7dPct: agg?.pnl7dPct ?? null,
-    periodRealized: agg?.periodRealized ?? null,
-    periodRealizedCount: agg?.periodRealizedCount ?? null,
-    realized7d: agg?.realized7d ?? null,
-    realized7dCount: agg?.realized7dCount ?? null,
+    periodBreakdown: agg?.periodBreakdown ?? null,
+    breakdown7d: agg?.breakdown7d ?? null,
     winRate: totalClosed > 0 ? (wins / totalClosed) * 100 : (n(d?.portfolio?.winRate) || 0),
     todayTrades, totalTrades,
   };
@@ -129,20 +134,20 @@ export function renderKpis() {
   const periodPct = derivedPct(k.periodPnlPct, k.periodPnl, s.period);
   const pnl7dPct = derivedPct(k.pnl7dPct, k.pnl7d, 7);
   const pctSpan = (v) => v == null ? "" : ` <span class="kv sub">${pctSigned(v)}</span>`;
-  // The figure opens the breakdown whenever its realized line exists (old
-  // servers without the realized fields keep a plain, non-clickable figure).
-  const pnlValue = (pnl, pctV, realized, days) => {
+  // The figure opens the breakdown whenever its bridge exists (old servers
+  // without the breakdown fields keep a plain, non-clickable figure).
+  const pnlValue = (pnl, pctV, breakdown, days) => {
     if (pnl == null) return "—";
     const html = `<span style="color:${pnlColor(pnl)}">${moneySigned(pnl, 0)}${pctSpan(pctV)}</span>`;
-    return realized == null ? html : figure(html, days);
+    return breakdown == null ? html : figure(html, days);
   };
   // One row: equity, the two portfolios (profiles.js), the P&L windows, the
   // goals (return, trades), then the win rate.
   return (
     kpi(t("Total equity", "Patrimonio"), k.equity == null ? "—" : money(k.equity, 0), "", sinceStartSub(sinceStart(s)), "equity") +
     renderProfiles() +
-    kpi(pnlL, pnlValue(k.periodPnl, periodPct, k.periodRealized, s.period), "", realizedSub(k.periodRealized, k.periodRealizedCount), "today") +
-    (s.period === 7 ? "" : kpi(t("7D P&L", "P&L 7D"), pnlValue(k.pnl7d, pnl7dPct, k.realized7d, 7), "sm", realizedSub(k.realized7d, k.realized7dCount))) +
+    kpi(pnlL, pnlValue(k.periodPnl, periodPct, k.periodBreakdown, s.period), "", closesSub(k.periodBreakdown), "today") +
+    (s.period === 7 ? "" : kpi(t("7D P&L", "P&L 7D"), pnlValue(k.pnl7d, pnl7dPct, k.breakdown7d, 7), "sm", closesSub(k.breakdown7d))) +
     returnKpi(s.kpis) +
     volumeKpi(k, s.kpis) +
     kpi(t("Win rate", "% Ganadas"), pct(k.winRate, 0), "sm", t("all-time closes", "cierres históricos"), "win")

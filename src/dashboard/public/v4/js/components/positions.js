@@ -375,7 +375,7 @@ export function renderPositions(state, trades) {
     <thead><tr><th title="${esc(t("Quantity, entry and current price in each symbol's tooltip", "Cantidad, entrada y precio actual en el tooltip de cada símbolo"))}">${t("Sym", "Sím")}</th>${anyShort ? "<th>S</th>" : ""}
       <th title="${esc(t("Quantity \u00d7 entry price — the $ actually deployed. \u2014 for COIN-M (contracts, not units)", "Cantidad \u00d7 precio de entrada — el $ realmente invertido. \u2014 en COIN-M (contratos, no unidades)"))}">${t("Notional", "Nocional")}</th>
       <th class="opt3">${t("Entry", "Entrada")}</th><th class="opt3">${t("Now", "Ahora")}</th>
-      <th title="${esc(t("Unrealized P&L; the bar is the % move against the largest on screen", "P&L no realizado; la barra es el % frente al mayor en pantalla"))}">P&L</th>
+      <th title="${esc(t("Unrealized P&L since entry (not this period's); the bar is the % move against the largest on screen", "P&L sin realizar desde la entrada (no el del período); la barra es el % frente al mayor en pantalla"))}">P&L</th>
       <th title="${esc(t("Owner rule: every operation closes at 5 days — 5 NYSE sessions for stocks, 120 h for crypto. The dots fill with the position's age.", "Regla del dueño: toda operación cierra a los 5 días — 5 sesiones NYSE en acciones, 120 h en cripto. Los puntos se llenan con la antigüedad."))}">${t("Time", "Tiempo")}</th>
       ${anyTp ? `<th class="opt1">TP</th>` : ""}</tr></thead>
     <tbody>${body}</tbody>
@@ -424,7 +424,7 @@ function renderTotalsRow(positions, anyTp, anyShort = true) {
   // sideways scroll (2026-10-12).
   const what = `${counted} ${counted === 1 ? t("position", "posición") : t("positions", "posiciones")}`;
   return `<tfoot><tr class="totals">
-    <td colspan="${anyShort ? 2 : 1}" title="${esc(t("Total unrealized P&L", "P&L no realizado total"))} · ${esc(what)}">${t("Unrealized", "No realizado")} <span class="muted">· ${counted}${note}</span></td>
+    <td colspan="${anyShort ? 2 : 1}" title="${esc(t("Total unrealized P&L since entry — not this period's figure", "P&L sin realizar total desde la entrada — no es la cifra del período"))} · ${esc(what)}">${t("Unrealized since entry", "Sin realizar desde la entrada")} <span class="muted">· ${counted}${note}</span></td>
     <td></td><td class="opt3"></td><td class="opt3"></td>
     <td style="color:${pnlColor(total)}">${pnlWhole(total)}</td>
     <td></td>${anyTp ? `<td class="opt1"></td>` : ""}

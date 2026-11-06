@@ -1,5 +1,5 @@
 import express from "express";
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -7,6 +7,7 @@ import { saveEquitySnapshot, upsertAssetBalance } from "../../db/database";
 import { setBrokerTruthAvailable } from "../../portfolio/truth";
 import { registerProfileRoutes, readPersistedRiskState, SLEEVE_STATE_FILES } from "./profiles";
 import { makeTestDb, seedOpenTrade } from "../../test-support/db";
+import { clearApiCache } from "../cache";
 import { _resetLastConstructedSleeveGovernorForTests } from "../../governor/SleeveGovernor";
 
 const am = {
@@ -243,10 +244,12 @@ describe("GET /api/v2/sleeves/risk", () => {
 });
 
 // 2026-09-29 (owner: "Esos +4000 no los veo"): the KPI P&L is the change in
-// value; the realized P&L of the same window rides beside it, and the full
-// attribution is one request away.
+// value; the same window's closes and positions ride beside it (2026-11-06),
+// and the full attribution is one request away.
 describe("realized beside the P&L + GET /api/v2/pnl-breakdown", () => {
   const amWithPositions = (positions: any[]) => ({ ...am, getConsolidatedState: () => ({ positions }) }) as any;
+  // The bridge is cached 30s and shared by the tiles and the modal; each case re-seeds the DB.
+  beforeEach(() => clearApiCache());
 
   async function get(path: string, amInstance: any) {
     const app = express();
@@ -271,9 +274,21 @@ describe("realized beside the P&L + GET /api/v2/pnl-breakdown", () => {
     getDB().prepare(`UPDATE trades SET status='closed', exit_time=?, exit_price=610, pnl=100 WHERE id='closed-today'`).run(exit);
     const [profile] = await get("/api/v2/profiles?days=1", amWithPositions([]));
     expect(profile.pnlAggregate).toMatchObject({ periodRealized: 100, periodRealizedCount: 1, realized7d: 100, realized7dCount: 1 });
+    // The tiles' same-window bridge (2026-11-06): closes + positions == the
+    // headline; without a headline (no *_main rows here) positions is null and
+    // the counts still ride along.
+    expect(profile.pnlAggregate.periodBreakdown).toMatchObject({ closedInWindow: 100, closesCount: 1, trimsCount: 0, positions: null });
+    expect(profile.pnlAggregate.breakdown7d).toMatchObject({ closedInWindow: 100, closesCount: 1, trimsCount: 0 });
+    expect(["marks", "bars"]).toContain(profile.pnlAggregate.periodBreakdown.startPrices);
   });
 
-  test("the breakdown adds up: realized − earned before + open change + other = the P&L", async () => {
+  test("the profiles payload survives an AccountManager without getConsolidatedState (older harness)", async () => {
+    makeTestDb();
+    const [profile] = await get("/api/v2/profiles?days=1", am);
+    expect(profile.pnlAggregate.periodBreakdown).toMatchObject({ closesCount: 0, trimsCount: 0 });
+  });
+
+  test("the breakdown adds up: realized − earned before + open change + holding = the P&L; positions = P&L − closes", async () => {
     makeTestDb();
     const now = Date.now();
     // 7D window (starts ≥ 6 days back): everything below sits inside it at
@@ -288,7 +303,12 @@ describe("realized beside the P&L + GET /api/v2/pnl-breakdown", () => {
     expect(b.realized).toBe(50);
     expect(b.count).toBe(1);
     expect(b.earnedBefore).toBe(0);
+    expect(b.closesCount).toBe(1);
+    expect(b.trimsCount).toBe(0);
     expect(b.openChange).toBeCloseTo(30, 6);
-    if (b.pnl != null) expect(b.closedInWindow + b.openChange + b.other).toBeCloseTo(b.pnl, 6);
+    if (b.pnl != null) {
+      expect(b.closedInWindow + b.openChange + b.holding).toBeCloseTo(b.pnl, 6);
+      expect(b.closedInWindow + b.positions).toBe(b.pnl);
+    }
   });
 });

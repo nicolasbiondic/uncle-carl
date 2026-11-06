@@ -10,3 +10,8 @@ export function cached(key: string, ttlMs: number, fn: () => any): any {
   apiCache.set(key, { data, ts: Date.now() });
   return data;
 }
+
+/** Drops every cached response (tests that re-seed the DB between cases). */
+export function clearApiCache(): void {
+  apiCache.clear();
+}

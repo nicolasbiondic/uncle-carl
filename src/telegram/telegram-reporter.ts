@@ -39,7 +39,7 @@ import { TelegramOutbox, type SendOutcome } from "./outbox";
 import { ALL_PROFILE_IDS, RISK_PROFILES } from "../config/riskProfiles";
 import type { PortfolioState } from "../utils/types";
 import type { Database } from "bun:sqlite";
-import { computeRealizedAttribution, windowStartFor } from "../portfolio/pnlBreakdown";
+import { computePnlBreakdown, type BreakdownPosition, type PnlBreakdown } from "../portfolio/pnlBreakdown";
 import { computeKpiSnapshot } from "../portfolio/kpis";
 
 const log = createLogger("Telegram");
@@ -468,7 +468,7 @@ export class TelegramReporter {
     const now = getPortfolioEquityNow();
     const totalEq = now.total == null ? "—" : `$${fmtMoney(now.total)}`;
     lines.push(
-      `<b>Total ${totalEq} · ${fmtPeriodLeg("P&L hoy", daily.pnl)} · cobrado hoy ${signMoney(daily.realized)} · ${totalPos}pos</b>`
+      `<b>Total ${totalEq} · ${fmtPeriodLeg("P&L hoy", daily.pnl)} · cobrado hoy ${signMoney(daily.breakdown.realized)} · ${totalPos}pos</b>`
     );
     await this.send(lines.join("\n"), chatId);
   }
@@ -612,7 +612,7 @@ export class TelegramReporter {
     const lines: string[] = [];
     lines.push(`📊 <b>Uncle Carl</b> · ${dateLabel} · cierre ET`);
     lines.push(`${fmtPeriodLeg("P&L hoy", daily.pnl)} · ${fmtPeriodLeg("P&L 7D", weekLeg)}`);
-    lines.push(fmtRealizedToday(daily));
+    lines.push(...fmtClosesToday(daily.breakdown));
     lines.push(
       `${dayTrades} ${pluralize(dayTrades, "trade", "trades")} hoy · ${weekTrades} en 7D · ` +
         `${totalPos} ${pluralize(totalPos, "posición abierta", "posiciones abiertas")}`
@@ -739,23 +739,25 @@ export class TelegramReporter {
   }
 
   /** Today's P&L (the change in the accounts' value — combineEquityPnlLegs)
-   *  and what closed trades realized today, with the part of it earned
-   *  BEFORE today: a position that built its gain over weeks realizes all of
-   *  it today, but only today's move is in the P&L (2026-09-28: META closed
-   *  +$4,767.74 on a −$831 day). The old line labeled the whole equity delta
-   *  "no realizado", so "realizado + no realizado" double-counted every
-   *  close. /status and the digest share this. */
-  private dailyPnlBreakdown(mainLegs = this.mainLegs()): {
-    pnl: ReturnType<typeof combineEquityPnlLegs>;
-    realized: number;
-    realizedCount: number;
-    earnedBefore: number | null;
-  } {
+   *  split the way the dashboard tile splits it (src/portfolio/pnlBreakdown.ts):
+   *  what today's closes and trims made INSIDE today, and the rest
+   *  ("positions" = pnl − closes), so the two add up to the headline. The
+   *  since-entry figure rides along for the second line. A position that
+   *  built its gain over weeks realizes all of it today, but only today's
+   *  move is in the P&L (2026-09-28: META closed +$4,767.74 on a −$831 day;
+   *  2026-11-06: ten 5-day renewals showed "+$367 · realized −$912"). /status
+   *  and the digest share this. */
+  private dailyPnlBreakdown(mainLegs = this.mainLegs()): { pnl: ReturnType<typeof combineEquityPnlLegs>; breakdown: PnlBreakdown } {
     let hist: Database | null = null;
     try {
       hist = this.openHist();
-      const ra = computeRealizedAttribution(getDB(), hist, windowStartFor(1));
-      return { pnl: combineEquityPnlLegs(mainLegs, 1), realized: ra.realized, realizedCount: ra.count, earnedBefore: ra.earnedBefore };
+      const pnl = combineEquityPnlLegs(mainLegs, 1);
+      const openPositions: BreakdownPosition[] = (this.getConsolidatedState?.()?.positions || []).map((p: any) => ({
+        accountId: p.profileId, symbol: p.symbol, market: p.market, side: p.side, quantity: p.quantity,
+        entryPrice: p.avgEntryPrice, entryTime: p.openedAt, currentPrice: p.currentPrice,
+      }));
+      const breakdown = computePnlBreakdown({ db: getDB(), hist, periodDays: 1, pnl: pnl?.pnl ?? null, openPositions });
+      return { pnl, breakdown };
     } finally {
       try { hist?.close(); } catch {}
     }
@@ -1032,15 +1034,33 @@ function fmtPct2(pct: number | null): string {
  *  parens omitted when pnlPct is null (rebased basis); the whole leg renders
  *  "Hoy —" when combineEquityPnlLegs itself failed closed (stale/missing
  *  truth) — never a partial number substituted in its place. */
-/** "Cobrado hoy +$5,482.90 en 2 cierres · +$5,742.44 ya estaba ganado antes
- *  de hoy" — what closed trades realized, and how much of it was already in
- *  the P&L before today (so the P&L line above doesn't look wrong). */
-function fmtRealizedToday(d: { realized: number; realizedCount: number; earnedBefore: number | null }): string {
-  if (d.realizedCount === 0) return "Sin cierres hoy";
-  const base = `Cobrado hoy ${signMoney(d.realized)} en ${d.realizedCount} ${pluralize(d.realizedCount, "cierre", "cierres")}`;
-  return d.earnedBefore != null && Math.abs(d.earnedBefore) >= 1
-    ? `${base} · ${signMoney(d.earnedBefore)} ya estaba ganado antes de hoy`
-    : base;
+/** The tile's words: "Cierres +$173 · posiciones +$194 en el día" (both inside
+ *  today, they add up to the P&L hoy line above) and "Cobrado desde la
+ *  entrada −$1,150 en 10 cierres y 8 recortes". When the closes can't be
+ *  measured inside the day (a start price missing) only the counts show. */
+export function fmtClosesToday(b: Pick<PnlBreakdown, "realized" | "closesCount" | "trimsCount" | "closedInWindow" | "positions">): string[] {
+  const legs = legsWord(b.closesCount, b.trimsCount);
+  if (!legs) return ["Sin cierres hoy"];
+  const lines: string[] = [];
+  if (b.closedInWindow != null) {
+    const positions = b.positions == null ? "" : ` · posiciones ${signMoneyWhole(b.positions)}`;
+    lines.push(`Cierres ${signMoneyWhole(b.closedInWindow)}${positions} en el día`);
+  }
+  lines.push(`Cobrado desde la entrada ${signMoneyWhole(b.realized)} en ${legs}`);
+  return lines;
+}
+
+function legsWord(closes: number, trims: number): string {
+  const parts: string[] = [];
+  if (closes > 0) parts.push(`${closes} ${pluralize(closes, "cierre", "cierres")}`);
+  if (trims > 0) parts.push(`${trims} ${pluralize(trims, "recorte", "recortes")}`);
+  return parts.join(" y ");
+}
+
+/** "+$1,150" / "−$912": whole dollars with thousands separators, like the tile. */
+function signMoneyWhole(v: number): string {
+  const sign = v > 0 ? "+" : v < 0 ? "−" : "";
+  return `${sign}$${Math.round(Math.abs(v)).toLocaleString("en-US")}`;
 }
 
 function fmtPeriodLeg(label: string, leg: { pnl: number; pnlPct: number | null } | null): string {

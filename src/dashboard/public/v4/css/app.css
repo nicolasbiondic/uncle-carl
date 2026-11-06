@@ -426,6 +426,7 @@ tfoot tr.totals .muted { font-weight: 500; }
 .pb-bridge tr.sum td { font-weight: 600; }
 .pb-bridge tr.total td { font-weight: 800; font-size: var(--t-md); border-bottom: 0; border-top: 2px solid var(--border-2); padding-top: 9px; }
 .pb-h { font-size: var(--t-xs); color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: var(--s2); }
+.pb-note { margin: 0; font-size: var(--t-xs); }
 .pb-more { font-size: var(--t-xs); margin-top: var(--s2); } /* narrower than the 1060px candle modal — it's a short sleeve list */
 .ob-row { position: relative; display: flex; justify-content: space-between; gap: var(--s2); font-size: var(--t-xs); font-variant-numeric: tabular-nums; padding: 1px 4px; }
 .ob-row .ob-bar { position: absolute; right: 0; top: 0; bottom: 0; z-index: 0; }

@@ -6,8 +6,8 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ACTIVITY_LOG_RETENTION_MS, DECISION_PASS_RETENTION_MS, ORPHAN_ORDER_RETENTION_MS,
-  getDB, insertTrade, pruneOldData, pruneOrphanOrders, recordFill,
+  ACTIVITY_LOG_RETENTION_MS, DECISION_PASS_RETENTION_MS, ORPHAN_ORDER_RETENTION_MS, PNL_WINDOW_MARKS_RETENTION_MS,
+  getDB, getPnlWindowMarks, insertTrade, pruneOldData, pruneOrphanOrders, recordFill, savePnlWindowMarks,
 } from "./database";
 import { makeTestDb } from "../test-support/db";
 
@@ -28,6 +28,16 @@ describe("retention floors are at least 90 days", () => {
     expect(ORPHAN_ORDER_RETENTION_MS).toBeGreaterThanOrEqual(90 * DAY);
     expect(ACTIVITY_LOG_RETENTION_MS).toBeGreaterThanOrEqual(90 * DAY);
     expect(DECISION_PASS_RETENTION_MS).toBeGreaterThanOrEqual(90 * DAY);
+    expect(PNL_WINDOW_MARKS_RETENTION_MS).toBeGreaterThanOrEqual(90 * DAY);
+  });
+
+  test("pnl_window_marks: a 60-day-old window start survives the periodic prune, a 100-day-old one goes", () => {
+    const now = Date.now();
+    savePnlWindowMarks(now - 60 * DAY, now - 60 * DAY - 1000, [{ market: "stock", symbol: "AAPL", price: 300 }]);
+    savePnlWindowMarks(now - 100 * DAY, now - 100 * DAY - 1000, [{ market: "stock", symbol: "AAPL", price: 250 }, { market: "stock", symbol: "BAD", price: 0 }]);
+    pruneOldData();
+    expect(getPnlWindowMarks(now - 60 * DAY)).toHaveLength(1);
+    expect(getPnlWindowMarks(now - 100 * DAY)).toEqual([]);
   });
 
   test("orders: an unreferenced order is kept for 90 days (it used to be 7), a trade-linked one forever", () => {
