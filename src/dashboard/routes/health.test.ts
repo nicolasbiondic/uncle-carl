@@ -100,18 +100,12 @@ describe("GET /healthz/full — instance manifest exposure", () => {
   });
 });
 
-describe("GET /healthz/full — sleeveModes (registered kind vs effective/overridden mode)", () => {
-  test("a sleeve_modes row overriding a registered default shows BOTH — effectiveMode wins", async () => {
+describe("GET /healthz/full — sleeveModes (the governor's registered sleeves and evidence epochs)", () => {
+  test("a registered sleeve shows its evidence version and epoch (no live/shadow mode: removed 2026-11-07)", async () => {
     makeTestDb();
     _resetLastConstructedSleeveGovernorForTests();
-    // index.ts registers momentum_crypto shadow by default (docs.test.ts
-    // enforces this against README). The owner later hand-overrode it to
-    // live via scripts/set-sleeve-mode.ts (sleeve_modes row) — 2026-08-08 in
-    // prod. Reproduce both halves here: register() seeds the DEFAULT row,
-    // setMode() simulates the owner's later manual override.
     const governor = new SleeveGovernor();
-    governor.register({ sleeve: "momentum_crypto", kind: "shadow" });
-    governor.setMode("momentum_crypto", "live", "owner override 2026-08-08");
+    governor.register({ sleeve: "momentum_crypto", evidenceVersion: "v-test" });
 
     const app = express();
     registerHealthRoutes(app, am);
@@ -129,10 +123,13 @@ describe("GET /healthz/full — sleeveModes (registered kind vs effective/overri
       expect(Array.isArray(body.sleeveModes)).toBe(true);
       const row = body.sleeveModes.find((r: any) => r.sleeve === "momentum_crypto");
       expect(row).toBeDefined();
-      expect(row.registeredKind).toBe("shadow");
-      expect(row.effectiveMode).toBe("live");
-      expect(row.reason).toBe("owner override 2026-08-08");
+      expect(row.registered).toBe(true);
+      expect(row.evidenceVersion).toBe("v-test");
+      expect(typeof row.evidenceEpoch).toBe("number");
+      expect(row.reason).toBe("registered");
       expect(typeof row.updatedAt).toBe("number");
+      expect(row.effectiveMode).toBeUndefined();
+      expect(row.registeredKind).toBeUndefined();
     } finally {
       sessions.delete(sid);
       server.close();

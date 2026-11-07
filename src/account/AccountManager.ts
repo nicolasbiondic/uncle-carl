@@ -1540,12 +1540,11 @@ export class AccountManager {
   // sum was never audited anywhere. This logs it every 5min alongside the
   // snapshot write (same cadence, no new loop) — WARN only above the live
   // venue's account-wide cap; it does
-  // NOT block anything. The guards that DO block: per-sleeve
-  // MomentumEngine/MeanRevEngine.maxGrossExposureMult, and since 2026-08-20
-  // the shared-ACCOUNT pre-submit Reg-T mirror in
-  // AlpacaMomentumAdapter.openPosition (getRegTBuyingPower — broker truth,
-  // covers both sleeves plus manual/orphan exposure; enforced by
-  // AlpacaMomentumAdapter.sharedAccountGuard.test.ts).
+  // NOT block anything. The guards that DO block: the portfolio engine's
+  // per-sleeve maxGross and the Alpaca venue's account-wide 1.9× clip plus
+  // its pre-submit Reg-T mirror (venues/alpaca.ts, getRegTBuyingPower —
+  // broker truth, covers both sleeves plus manual/orphan exposure; the same
+  // guard lived in the retired AlpacaMomentumAdapter until 2026-11-07).
   private logAlpacaAccountGrossExposure(): void {
     if (!this.alpacaMainTruth || !isBrokerTruthAvailable("alpaca")) return;
     // Before the first updateAllStates the sleeves' stocksValue is the empty
@@ -2125,7 +2124,7 @@ export class AccountManager {
    *     paths (closes emit POSITION_CLOSED), so every event here is an entry;
    *   - the Binance adapters stamp market:"crypto" and install their native
    *     STOP_MARKET inline BEFORE persisting — nothing for this pass to do;
-   *   - ShadowAdapter emits no ORDER_FILLED at all (locked by the
+   *   - the retired ShadowAdapter emitted no ORDER_FILLED at all (locked by the
    *     source-scan test in alpacaNativeStops.test.ts).
    *  Runs inside the ORDER_FILLED listener, so it must never throw — the
    *  scheduled pass's own failure is caught and logged (the 60s timer pass

@@ -18,8 +18,10 @@
 //  • Without `volStop` (Binance sleeves: axis never swept) the action
 //    carries NO stopLossPct: legacy fixed distance, behavior unchanged.
 //  • MeanRevEngine passes it on DAILY bars (barsPerDay = 1).
-//  • AlpacaMomentumAdapter derives the stop PRICE from the REAL fill and
-//    persists trades.stop_loss; absent → NULL (legacy).
+//  • BinanceMomentumAdapter derives the stop PRICE from the REAL fill and
+//    persists trades.stop_loss (BinanceMomentumAdapter.volStopEntry.test.ts);
+//    the Alpaca adapter that did the same for the stock incumbents was
+//    retired 2026-11-07.
 //  • rowStopPct (AccountManager): row-stop precedence + protective-side
 //    validation — the derivation every stop consumer must share.
 
@@ -28,7 +30,6 @@ import { getDB } from "../../db/database";
 import { MomentumEngine, trailPctFromVol, type TrailStopConfig } from "./MomentumEngine";
 import { DEFAULT_TSM_CONFIG } from "./TimeSeriesMomentum";
 import { MeanRevEngine, type MeanRevLogger } from "../meanrev/MeanRevEngine";
-import { AlpacaMomentumAdapter } from "./AlpacaMomentumAdapter";
 import { rowStopPct } from "../../account/AccountManager";
 import { FakeBroker, ramp, silentLogger } from "../../test-support/momentum";
 import { daily, flatThen, FakeAdapter, MEANREV_ANCHOR } from "../../test-support/meanrev";
@@ -138,38 +139,6 @@ describe("MeanRevEngine → openPosition.stopLossPct (daily bars, barsPerDay = 1
 
     expect(adapter.opened).toHaveLength(1);
     expect("stopLossPct" in adapter.opened[0]).toBe(false);
-  });
-});
-
-describe("AlpacaMomentumAdapter — persists the stop PRICE from the REAL fill", () => {
-  function stubAlpaca(filledPrice: number) {
-    return {
-      isConnected: () => true,
-      getCachedPrice: () => 100,
-      getLatestPrice: async () => 100,
-      getExecutableQuote: async () => null,
-      getRegTBuyingPower: async () => null,
-      placeOrder: async (_sig: any, qty: number) => ({
-        id: "volstop-fill", quantity: qty, status: "filled",
-        filledPrice, filledQty: qty, externalId: "ext-volstop",
-      }),
-    } as any;
-  }
-
-  test("stopLossPct + buy fill 101 → trades.stop_loss = 101 × (1 − pct/100), anchored to FILL not decision price", async () => {
-    const res = await new AlpacaMomentumAdapter(stubAlpaca(101), { accountId: "momentum_stocks" })
-      .openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 1000, stopLossPct: 5 });
-    expect(res.ok).toBe(true);
-    const row = getDB().prepare(`SELECT stop_loss FROM trades WHERE id = 'volstop-fill'`).get() as any;
-    expect(row.stop_loss).toBeCloseTo(101 * 0.95, 10);
-  });
-
-  test("no stopLossPct → stop_loss NULL (legacy fixed-distance consumers unchanged)", async () => {
-    const res = await new AlpacaMomentumAdapter(stubAlpaca(101), { accountId: "momentum_stocks" })
-      .openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 1000 });
-    expect(res.ok).toBe(true);
-    const row = getDB().prepare(`SELECT stop_loss FROM trades WHERE id = 'volstop-fill'`).get() as any;
-    expect(row.stop_loss).toBeNull();
   });
 });
 

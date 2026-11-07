@@ -127,7 +127,6 @@ export function venueLabel(broker) {
 function modeChip(a, risk) {
   const mode = risk?.mode ?? (a.paused ? "paused" : "live");
   if (mode === "paused") return `<span class="chip" style="color:var(--warn)">${t("PAUSED", "PAUSADO")}</span>`;
-  if (mode === "shadow") return `<span class="chip" style="color:var(--muted)" title="${t("Simulated fills, zero capital at risk", "Operaciones simuladas, sin capital en riesgo")}">${t("SIMULATED", "SIMULADO")}</span>`;
   return `<span class="live"><span class="d"></span>${t("LIVE", "EN VIVO")}</span>`;
 }
 

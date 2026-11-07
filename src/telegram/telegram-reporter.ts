@@ -32,7 +32,7 @@ import { getTradingStats, getRecentTrades, getDB, RECONCILE_CLOSE_SQL, getETWind
 import { ALL_PROFILE_IDS } from "../config/riskProfiles";
 import {
   computeScorecard, openHistoricalReadonly, formatScorecardDigestLines,
-  bandEpisodeTransitions, MODEL_START,
+  bandEpisodeTransitions,
   type Scorecard, type BandStatus, type BandEpisodeState,
 } from "../portfolio/scorecard";
 import {
@@ -110,6 +110,9 @@ export function sleeveOfBandEpisodeKey(key: string): string {
   const i = key.indexOf("@");
   return i > 0 ? key.slice(0, i) : key;
 }
+
+/** Rolling episodes deliberately survive model cutovers. */
+export function rollingBandEpisodeKey(sleeve: string): string { return `${sleeve}@rolling20`; }
 
 /** One log line per unauthorized chat per this window (a flood of strangers must not flood the log). */
 export const IGNORED_CHAT_LOG_COOLDOWN_MS = 10 * 60_000;
@@ -914,7 +917,8 @@ export class TelegramReporter {
 
   /**
    * Ops alert ONCE per episode: pages when a sleeve's live cumulative return
-   * since its model start crosses BELOW the p5 of the validated OOS band
+   * since its model start OR over the last 20 completed grid sessions crosses
+   * BELOW the p5 of its validated OOS band (independent episodes)
    * (the automatic "rinde peor que lo validado" signal — the measurable
    * spirit of the pre-registered 60-session reversion criteria quoted in
    * src/portfolio/scorecard.ts), and again when it comes back inside.
@@ -929,7 +933,10 @@ export class TelegramReporter {
     // DENTRO" for its successor (RW2 cutover 2026-10-23). Keys of retired
     // versions stay in the stored map untouched.
     const current: Record<string, BandStatus> = {};
-    for (const e of sc.entities) if (e.kind === "sleeve" && e.band) current[bandEpisodeKey(e.id, e.band.modelVersion)] = e.band.status;
+    for (const e of sc.entities) if (e.kind === "sleeve") {
+      if (e.band) current[bandEpisodeKey(e.id, e.band.modelVersion)] = e.band.status;
+      if (e.rollingBand) current[rollingBandEpisodeKey(e.id)] = e.rollingBand.status;
+    }
 
     let prev: Partial<Record<string, BandEpisodeState>> = {};
     try { prev = JSON.parse(getSyncState(TelegramReporter.BAND_STATE_KEY) ?? "{}"); } catch {}
@@ -938,21 +945,22 @@ export class TelegramReporter {
     for (const tr0 of transitions) {
       const tr = { ...tr0, sleeve: sleeveOfBandEpisodeKey(tr0.sleeve) };
       const e = sc.entities.find(x => x.id === tr.sleeve);
-      const b = e?.band;
+      const rolling = tr0.sleeve === rollingBandEpisodeKey(tr.sleeve);
+      const b = rolling ? e?.rollingBand : e?.band;
+      const windowLabel = rolling ? "últimas 20 sesiones" : `modelo desde ${b?.modelStart ?? "?"}`;
       const fmt = (x: number | null | undefined) => x == null ? "—" : `${x >= 0 ? "+" : ""}${x.toFixed(1)}%`;
       if (tr.kind === "entered_below") {
         await this.sendOps(
           `📉 <b>Scorecard</b> · ${profileName(tr.sleeve)} POR DEBAJO de la banda OOS validada\n` +
-          `Retorno vivo ${fmt(b?.liveCumReturnPct)} en ${b?.horizonSessions ?? "?"} sesiones (modelo desde ${MODEL_START[tr.sleeve] ?? "?"}) ` +
+          `Retorno vivo ${fmt(b?.liveCumReturnPct)} en ${b?.horizonSessions ?? "?"} sesiones (${windowLabel}) ` +
           `vs banda p5/p50/p95 ${fmt(b?.cumReturnPct?.p5)} / ${fmt(b?.cumReturnPct?.p50)} / ${fmt(b?.cumReturnPct?.p95)}` +
           `${b?.selectionBias ? ` (ya ajustada por sesgo de selección del universo: −${b.selectionBias.sharpeHaircut.toFixed(2).replace(".", ",")} de Sharpe)` : ""}.\n` +
-          `Señal automática de "rinde peor que lo validado" — revisar el criterio de reversión pre-registrado (60 sesiones) ` +
-          `en src/index.ts / MeanRevEngine.ts. Aviso único por episodio.`
+          `Señal automática de "rinde peor que lo validado" — revisar y rediseñar manteniendo la operativa. Aviso único por episodio.`
         );
       } else {
         await this.sendOps(
           `✅ <b>Scorecard</b> · ${profileName(tr.sleeve)} volvió DENTRO de la banda OOS validada ` +
-          `(retorno vivo ${fmt(b?.liveCumReturnPct)} en ${b?.horizonSessions ?? "?"} sesiones).`
+          `(retorno vivo ${fmt(b?.liveCumReturnPct)} en ${b?.horizonSessions ?? "?"} sesiones; ${windowLabel}).`
         );
       }
     }

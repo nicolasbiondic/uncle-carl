@@ -43,11 +43,11 @@ describe("platform_portfolios registry", () => {
   test("seed is idempotent and never overwrites an owner-edited row", () => {
     const db = new Database(":memory:");
     initPlatformPortfolios(db, 1_000);
-    expect(loadPlatformPortfolioRows(db).length).toBe(5);
+    expect(loadPlatformPortfolioRows(db).length).toBe(builtinPortfolios().length);
     db.run("UPDATE platform_portfolios SET capital = 123, source = 'owner' WHERE id = 'momentum_crypto'");
     initPlatformPortfolios(db, 2_000); // second boot
     const rows = loadPlatformPortfolioRows(db);
-    expect(rows.length).toBe(5);
+    expect(rows.length).toBe(builtinPortfolios().length);
     const crypto = rows.find((r) => r.id === "momentum_crypto")!;
     expect(crypto.capital).toBe(123); // owner edit survived the reseed
     expect(crypto.source).toBe("owner");
@@ -57,8 +57,8 @@ describe("platform_portfolios registry", () => {
     const db = new Database(":memory:");
     initPlatformPortfolios(db);
     const rows = Object.fromEntries(loadPlatformPortfolioRows(db).map((r) => [r.id, r]));
-    expect(rows.momentum_btc.enabled).toBe(false); // flag-off sleeve
-    expect(rows.momentum_crypto.mode).toBe("live"); // registered default live since 2026-10-04 (was "shadow")
+    expect(rows.momentum_btc).toBeUndefined(); // engine retired 2026-11-07: no longer seeded
+    expect(rows.momentum_crypto.mode).toBe("live");
     for (const r of Object.values(rows)) {
       expect(r.status).toBe("active");
       expect(r.validation).toBe("validated");
@@ -82,10 +82,37 @@ describe("platform_portfolios registry", () => {
   test("archived rows are excluded from the definitions index.ts builds from", () => {
     const db = new Database(":memory:");
     initPlatformPortfolios(db);
-    db.run("UPDATE platform_portfolios SET status = 'archived' WHERE id = 'momentum_btc'");
+    db.run("UPDATE platform_portfolios SET status = 'archived' WHERE id = 'momentum_crypto_usdc'");
     const defs = loadPlatformPortfolioDefinitions(db);
-    expect(defs.map((d) => d.id)).not.toContain("momentum_btc");
-    expect(defs.length).toBe(4);
+    expect(defs.map((d) => d.id)).not.toContain("momentum_crypto_usdc");
+    expect(defs.length).toBe(builtinPortfolios().length - 1);
+  });
+
+  test("retired seeds (2026-11-07): an untouched pre-existing builtin row of a retired id is archived+disabled at boot, never deleted; an owner-edited one is left alone", () => {
+    const db = new Database(":memory:");
+    initPlatformPortfolios(db, 1_000); // a prod-like DB: the table exists, with the pre-2026-11-07 seeds still in it
+    const legacy = (id: string, template: string, account: string, source: string) => db.run(
+      `INSERT INTO platform_portfolios (id, name, template, account, capital, mode, enabled, params_json, status, validation, source, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 50000, 'live', 1, '{}', 'active', 'validated', ?, 1, 1)`, [id, id, template, account, source]);
+    legacy("momentum_btc", "momentum_tsm", "binance_coinm", "builtin");
+    legacy("momentum_stocks", "momentum_tsm", "alpaca_main", "builtin");
+    legacy("meanrev_stocks", "meanrev_connors", "alpaca_main", "owner");
+    initPlatformPortfolios(db, 2_000);
+    const byId = Object.fromEntries(loadPlatformPortfolioRows(db).map((r) => [r.id, r]));
+    for (const id of ["momentum_btc", "momentum_stocks"]) {
+      expect(byId[id]).toBeDefined(); // never deleted
+      expect(byId[id].status).toBe("archived");
+      expect(byId[id].enabled).toBe(false);
+      expect(byId[id].updatedAt).toBe(2_000);
+    }
+    expect(byId.meanrev_stocks.status).toBe("active"); // owner-edited: the owner's to archive
+    expect(byId.meanrev_stocks.enabled).toBe(true);
+    const defs = loadPlatformPortfolioDefinitions(db).map((d) => d.id);
+    expect(defs).not.toContain("momentum_btc");
+    expect(defs).not.toContain("momentum_stocks");
+    expect(defs).toContain("pe_momentum_stocks"); // the seed that replaced it
+    initPlatformPortfolios(db, 3_000); // idempotent
+    expect(loadPlatformPortfolioRows(db).find((r) => r.id === "momentum_stocks")!.updatedAt).toBe(2_000);
   });
 });
 
@@ -96,16 +123,16 @@ describe("boot seed refreshes untouched builtin rows (2026-10-04)", () => {
     // prod's row as seeded before 2026-10-04: momentum_crypto registered "shadow".
     db.run(`UPDATE platform_portfolios SET mode = 'shadow' WHERE id = 'momentum_crypto'`);
     // An owner edit on another builtin row.
-    const meanrev = loadPlatformPortfolioRows(db).find((r) => r.id === "meanrev_stocks")!;
+    const meanrev = loadPlatformPortfolioRows(db).find((r) => r.id === "pe_meanrev_stocks")!;
     updatePlatformPortfolio(db, { ...meanrev, capital: 55_000, source: "owner", updatedAt: 1_500 });
 
     initPlatformPortfolios(db, 2_000);
     const byId = Object.fromEntries(loadPlatformPortfolioRows(db).map((r) => [r.id, r]));
     expect(byId.momentum_crypto.mode).toBe("live");
     expect(byId.momentum_crypto.updatedAt).toBe(2_000);
-    expect(byId.meanrev_stocks.capital).toBe(55_000); // the owner's value survives the boot
-    expect(byId.meanrev_stocks.source).toBe("owner");
-    expect(byId.momentum_stocks.updatedAt).toBe(1_000); // equal to builtin → untouched
+    expect(byId.pe_meanrev_stocks.capital).toBe(55_000); // the owner's value survives the boot
+    expect(byId.pe_meanrev_stocks.source).toBe("owner");
+    expect(byId.pe_momentum_stocks.updatedAt).toBe(1_000); // equal to builtin → untouched
   });
 });
 
@@ -226,20 +253,19 @@ describe("boot applies pending edits: pending_restart → active (2026-10-23, RW
   test("every pending_restart row flips to active with the boot's timestamp; archived and active rows are untouched; idempotent", () => {
     const db = new Database(":memory:");
     initPlatformPortfolios(db);
-    db.run("UPDATE platform_portfolios SET status = 'pending_restart', updated_at = 1 WHERE id IN ('momentum_stocks', 'meanrev_stocks')");
-    db.run("UPDATE platform_portfolios SET status = 'archived', updated_at = 1 WHERE id = 'momentum_btc'");
-    db.run(`INSERT INTO platform_portfolios (id, name, template, account, capital, mode, enabled, params_json, status, validation, source, created_at, updated_at)
-            VALUES ('pe_momentum_stocks', 'pe', 'portfolio', 'alpaca_main', 50000, 'live', 1, '{"engine":"portfolio","sleeve":"momentum_stocks","runMode":"live"}', 'pending_restart', 'validated', 'owner', 1, 1)`);
+    db.run("UPDATE platform_portfolios SET status = 'pending_restart', updated_at = 1 WHERE id IN ('pe_meanrev_stocks', 'pe_momentum_stocks')");
+    db.run("UPDATE platform_portfolios SET status = 'archived', updated_at = 1 WHERE id = 'momentum_crypto_usdc'");
+    db.run("UPDATE platform_portfolios SET source = 'owner' WHERE id = 'pe_momentum_stocks'");
     const before = Object.fromEntries(loadPlatformPortfolioRows(db).map(r => [r.id, r.updatedAt]));
 
-    expect(markPendingPortfoliosActive(db, 777)).toEqual(["meanrev_stocks", "momentum_stocks", "pe_momentum_stocks"]);
+    expect(markPendingPortfoliosActive(db, 777)).toEqual(["pe_meanrev_stocks", "pe_momentum_stocks"]);
     const rows = Object.fromEntries(loadPlatformPortfolioRows(db).map(r => [r.id, r]));
-    for (const id of ["meanrev_stocks", "momentum_stocks", "pe_momentum_stocks"]) {
+    for (const id of ["pe_meanrev_stocks", "pe_momentum_stocks"]) {
       expect(rows[id].status).toBe("active");
       expect(rows[id].updatedAt).toBe(777);
     }
-    expect(rows.momentum_btc.status).toBe("archived");
-    expect(rows.momentum_btc.updatedAt).toBe(1);
+    expect(rows.momentum_crypto_usdc.status).toBe("archived");
+    expect(rows.momentum_crypto_usdc.updatedAt).toBe(1);
     expect(rows.momentum_crypto.status).toBe("active");
     expect(rows.momentum_crypto.updatedAt).toBe(before.momentum_crypto);
     // The pe_ row keeps everything that makes it run live: only the label moved.
@@ -248,7 +274,7 @@ describe("boot applies pending edits: pending_restart → active (2026-10-23, RW
     expect((rows.pe_momentum_stocks.params as any).runMode).toBe("live");
 
     expect(markPendingPortfoliosActive(db, 888)).toEqual([]);
-    expect(loadPlatformPortfolioRows(db).find(r => r.id === "momentum_stocks")!.updatedAt).toBe(777);
+    expect(loadPlatformPortfolioRows(db).find(r => r.id === "pe_momentum_stocks")!.updatedAt).toBe(777);
   });
 });
 

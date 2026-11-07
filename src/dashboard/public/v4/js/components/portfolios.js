@@ -157,8 +157,8 @@ export function portfolioRowHtml(p, writable) {
     <td>${esc(accountLabel(p.account))}</td>
     <td>$${num(p.capital, 0)}</td>
     <td>${Number(p.universeSize) || 0}</td>
-    <td>${esc(p.mode === "live" ? t("live", "en vivo") : p.mode === "shadow" ? t("simulated", "simulado") : "")}${disabled}</td>
-    <td>${bandChipHtml(p.band)}</td>
+    <td>${esc(p.mode === "live" ? t("live", "en vivo") : p.mode === "shadow" ? t("observer", "observador") : "")}${disabled}</td>
+    <td>${bandChipHtml(p.band)}${p.band?.rollingBand ? `<div>${t("Last 20 sessions", "Últimas 20 sesiones")}: ${bandChipHtml(p.band.rollingBand)}</div>` : ""}</td>
     ${actions}
   </tr>`;
 }
@@ -467,5 +467,4 @@ function closeEdit() {
   if (editModal) { editModal.remove(); editModal = null; }
   editingId = null;
 }
-
 

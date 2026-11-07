@@ -26,7 +26,6 @@ import { builtinPortfolio } from "./builtin";
 import { overlaySymbols } from "../portfolio-engine/contingency";
 import type { PlatformPortfolioRow } from "./store";
 import type {
-  MeanRevConnorsParams,
   MomentumTsmParams,
   PortfolioAccountId,
   PortfolioDefinition,
@@ -170,6 +169,10 @@ export function validateMomentumParams(
   },
 ): void {
   if (!p || typeof p !== "object") { errors.push("params: must be an object"); return; }
+  // 2026-11-07 (owner, audit C): the Alpaca momentum incumbent (AlpacaMomentumAdapter) was
+  // deleted; a momentum_tsm definition can only run on the Binance accounts. Stocks = template
+  // "portfolio" (written by scripts/portfolio-engine-cutover.ts).
+  if (account === "alpaca_main") errors.push("momentum_tsm: no engine runs this template on alpaca_main since 2026-11-07 — stock sleeves run on the portfolio engine (template \"portfolio\", scripts/portfolio-engine-cutover.ts)");
   if (!Array.isArray(p.universe) || p.universe.length < 1 || p.universe.length > 100 ||
     p.universe.some((s: unknown) => typeof s !== "string" || !s.length) ||
     new Set(p.universe).size !== p.universe.length) {
@@ -268,19 +271,10 @@ export function validateMomentumParams(
   }
 }
 
-export function validateMeanrevParams(p: any, account: PortfolioAccountId, errors: string[]): void {
-  if (!p || typeof p !== "object") { errors.push("params: must be an object"); return; }
-  if (account !== "alpaca_main") errors.push("meanrev_connors only runs on alpaca_main");
-  checkTrailStop("params.volStop", p.volStop, errors);
-  if (p.capacityGuard != null) {
-    if (!inRange(p.capacityGuard.maxAdvPct, 1e-6, 100)) errors.push("params.capacityGuard.maxAdvPct: expected (0, 100]");
-    if (!isInt(p.capacityGuard.lookbackBars, 2, 400)) errors.push("params.capacityGuard.lookbackBars: expected integer 2..400");
-  }
-  if (p.equitySemantics !== ACCOUNT_EQUITY_SEMANTICS.alpaca_main) {
-    errors.push(`params.equitySemantics: meanrev requires '${ACCOUNT_EQUITY_SEMANTICS.alpaca_main}' (shared Alpaca wallet, sleeve ledger)`);
-  }
-  if (typeof p.heartbeatName !== "string" || !p.heartbeatName) errors.push("params.heartbeatName: required");
-  if (typeof p.schedulerLabel !== "string" || !p.schedulerLabel) errors.push("params.schedulerLabel: required");
+/** Retired template (2026-11-07): the Connors engine is a research kernel only; meanrev_stocks
+ *  runs on the portfolio engine. Any write of meanrev_connors params is refused. */
+export function validateMeanrevParams(_p: any, _account: PortfolioAccountId, errors: string[]): void {
+  errors.push("meanrev_connors: retired template (2026-11-07) — no engine runs it; meanrev_stocks runs on the portfolio engine (template \"portfolio\", scripts/portfolio-engine-cutover.ts). Archive this row instead of editing it");
 }
 
 function checkIdentityParams(p: any, errors: string[]): void {
@@ -366,9 +360,6 @@ export function presetParamsFor(preset: string, id: string, capital: number): Po
     },
     governor: { evidenceVersion: `owner-${id}-v1` },
   };
-  if (VALIDATED_PRESETS[preset]?.template === "meanrev_connors") {
-    return { ...base, ...shared, schedulerLabel: id } as MeanRevConnorsParams;
-  }
   const { cutover: _droppedCutover, ...rest } = base; // one-shots never copy to new portfolios
   return { ...rest, ...shared } as MomentumTsmParams;
 }
@@ -410,9 +401,12 @@ export function validateCreatePortfolio(req: CreatePortfolioRequest, ctx: Portfo
       }
     }
   } else {
-    // Free template — honest by construction: NOT validated.
-    template = req.template === "momentum_tsm" || req.template === "meanrev_connors" ? req.template : null;
-    if (!template) errors.push("template: expected momentum_tsm|meanrev_connors (or use a validated preset)");
+    // Free template — honest by construction: NOT validated. meanrev_connors is retired
+    // (2026-11-07) and "portfolio" definitions come only from the cutover script.
+    template = req.template === "momentum_tsm" ? req.template : null;
+    if (!template) errors.push(req.template === "meanrev_connors"
+      ? "template: meanrev_connors is retired (2026-11-07) — meanrev_stocks runs on the portfolio engine"
+      : "template: expected momentum_tsm (or use a validated preset)");
     params = (req.params && typeof req.params === "object" ? req.params : null) as PortfolioParams | null;
     if (!params) errors.push("params: required for a free template");
     validation = "unvalidated";
@@ -420,8 +414,7 @@ export function validateCreatePortfolio(req: CreatePortfolioRequest, ctx: Portfo
 
   if (errors.length || !template || !params) return { ok: false, errors: errors.length ? errors : ["invalid request"] };
 
-  if (template === "momentum_tsm") validateMomentumParams(params, account, errors);
-  else validateMeanrevParams(params, account, errors);
+  validateMomentumParams(params, account, errors);
   checkIdentityParams(params, errors);
   if (errors.length) return { ok: false, errors };
 
@@ -431,7 +424,7 @@ export function validateCreatePortfolio(req: CreatePortfolioRequest, ctx: Portfo
     template,
     account,
     capital,
-    mode: "live", // owner rule: strategies trade; runtime mode overrides live in sleeve_modes
+    mode: "live", // owner rule: strategies trade (there is no other mode since 2026-11-07)
     enabled,
     params,
     status: "pending_restart", // applies on the NEXT boot, never live
@@ -477,8 +470,10 @@ export function validatePatchPortfolio(id: string, req: PatchPortfolioRequest, c
     } else {
       if (row.template === "momentum_tsm") {
         validateMomentumParams(params, row.account, errors, { permittedCutover: (existing.params as any)?.cutover });
-      } else {
+      } else if (row.template === "meanrev_connors") {
         validateMeanrevParams(params, row.account, errors);
+      } else {
+        errors.push("params: a portfolio-engine definition is written by scripts/portfolio-engine-cutover.ts (live = tested hash), not via the API");
       }
       checkIdentityParams(params, errors);
       if (!errors.length && JSON.stringify(params) !== JSON.stringify(existing.params)) {

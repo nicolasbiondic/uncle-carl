@@ -3,7 +3,7 @@
 // ══════════════════════════════════════════════
 //
 // Exercises the exported client-injected functions directly (no subprocess,
-// no stdin, no network) — same pattern as set-sleeve-mode.test.ts. The
+// no stdin, no network). The
 // guardrails under test: idempotency (no PATCH when already in the desired
 // state), write-then-verify (never trust the PATCH response alone),
 // confirmation policy (resuming must be hard to fat-finger), audit trail.

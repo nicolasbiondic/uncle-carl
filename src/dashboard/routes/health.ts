@@ -231,37 +231,35 @@ export function registerHealthRoutes(app: express.Application, am: AccountManage
         tradesToday = (db.prepare(`SELECT COUNT(*) c FROM trades WHERE entry_time >= ? AND ${RECONCILE_CLOSE_SQL} AND account_id IN (${v8AccountSlots})`).get(getETDayStart(), ...ALL_PROFILE_IDS) as any)?.c ?? -1;
       } catch {}
 
-      // Sleeve governor modes — REGISTERED (governor.register(..., kind:) in
-      // index.ts, the code default) vs EFFECTIVE (the sleeve_modes row, which
-      // wins whenever the owner has manually overridden it via
-      // scripts/set-sleeve-mode.ts — see SleeveGovernor.getMode). Audit fix
-      // (2026-09-09): README's sleeve table + docs.test.ts only ever enforced
-      // the REGISTERED default, so a manual override (e.g. momentum_crypto
-      // registered shadow, running live since 2026-08-08) was invisible from
-      // the repo. This field is the operative truth an external reader must
-      // use instead of the README table alone.
+      // Sleeve governor — the registered sleeves and their evidence epoch
+      // (sleeve_modes table). Until 2026-11-07 this surfaced a REGISTERED vs
+      // EFFECTIVE live/shadow mode per sleeve; the owner had the shadow mode
+      // removed (audit C), so every sleeve trades live and the field only
+      // says which sleeves the watchdog follows and since when.
       let sleeveModes: Array<{
         sleeve: string;
-        registeredKind: "live" | "shadow" | null;
-        effectiveMode: "live" | "shadow" | null;
+        registered: boolean;
+        evidenceVersion: string | null;
+        evidenceEpoch: number | null;
         reason: string | null;
         updatedAt: number | null;
       }> = [];
       try {
         const governor = getLastConstructedSleeveGovernor();
-        const rows: Array<{ sleeve: string; mode: string; updatedAt: number; reason: string | null }> = governor
-          ? governor.getModes().map(m => ({ sleeve: m.sleeve, mode: m.mode, updatedAt: m.updatedAt, reason: m.reason }))
-          : (db.prepare("SELECT sleeve, mode, updated_at, reason FROM sleeve_modes").all() as any[])
-              .map(r => ({ sleeve: r.sleeve, mode: r.mode, updatedAt: r.updated_at, reason: r.reason }));
+        const rows = governor
+          ? governor.getEvidence()
+          : (db.prepare("SELECT sleeve, updated_at, reason, evidence_epoch, evidence_version FROM sleeve_modes").all() as any[])
+              .map(r => ({ sleeve: r.sleeve, updatedAt: r.updated_at, reason: r.reason ?? null, evidenceEpoch: r.evidence_epoch ?? null, evidenceVersion: r.evidence_version ?? null }));
         const bySleeve = new Map(rows.map(r => [r.sleeve, r]));
-        const allSleeves = new Set<string>([...bySleeve.keys(), ...(governor?.getRegisteredSleeves() ?? [])]);
+        const registered = new Set(governor?.getRegisteredSleeves() ?? []);
+        const allSleeves = new Set<string>([...bySleeve.keys(), ...registered]);
         sleeveModes = Array.from(allSleeves).map(sleeve => {
           const row = bySleeve.get(sleeve);
-          const registeredKind = governor?.getRegisteredKind(sleeve) ?? (row?.mode as "live" | "shadow" | undefined) ?? null;
           return {
             sleeve,
-            registeredKind,
-            effectiveMode: (row?.mode as "live" | "shadow" | undefined) ?? registeredKind,
+            registered: registered.has(sleeve),
+            evidenceVersion: row?.evidenceVersion ?? null,
+            evidenceEpoch: row?.evidenceEpoch ?? null,
             reason: row?.reason ?? null,
             updatedAt: row?.updatedAt ?? null,
           };

@@ -102,10 +102,10 @@ print_checklist() {
  1. STOP THE BOT FIRST. This script refuses --apply while
     'systemctl --user is-active uncle-carl' reports active, unless
     --force-while-running is passed. If it's running: ./start.sh stop
- 2. After the restore completes, re-verify sleeve mode + risk-engine state
-    BEFORE restarting — a restored DB can carry a HALTED swap-guard or a
-    stale sleeve_modes row that no longer matches reality:
-      sqlite3 "$TARGET_DB" "SELECT sleeve, mode, reason, updated_at FROM sleeve_modes;"
+ 2. After the restore completes, re-verify the risk-engine state BEFORE
+    restarting — a restored DB can carry a HALTED swap-guard (sleeve_modes
+    only holds the governor's evidence epochs; its mode column is a fossil
+    nothing reads since 2026-11-07):
       grep -E '^RISK_ENGINE_STATE=' "$ROOT_DIR/.env" || echo "(RISK_ENGINE_STATE unset — default)"
  3. Run the orphan-exposure reconciler in DRY-RUN (its default — no --apply)
     and read its output before trusting the restored book:

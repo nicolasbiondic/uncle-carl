@@ -17,9 +17,11 @@
 // account must start flat (and, for COIN-M, with no cert-owned stop already
 // tracked) or the whole run refuses before touching anything.
 //
-// This is the certification gate referenced by MOMENTUM_USDC_ENABLED /
-// MOMENTUM_COINM_ENABLED in .env.example: run it with --execute on the SAME
-// testnet keys before flipping either flag to true.
+// This is the certification gate referenced by MOMENTUM_USDC_ENABLED in
+// .env.example: run it with --execute on the SAME testnet keys before flipping
+// the flag to true. (The COIN-M leg certifies the DAPI executor's round trip;
+// no engine opens COIN-M positions since 2026-11-07 — the wallet is account
+// truth only.)
 //
 // Usage:
 //   bun run scripts/certify-usdc-coinm.ts                       # dry-run (preflight only)

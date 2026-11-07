@@ -8,7 +8,12 @@ import { describe, expect, test } from "bun:test";
 import { MeanRevEngine, type MeanRevLogger } from "./MeanRevEngine";
 import { DAY, MEANREV_ANCHOR as ANCHOR, daily, flatThen, FakeAdapter } from "../../test-support/meanrev";
 import { makeTestDb } from "../../test-support/db";
-import { MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT } from "../../index";
+import { GROSS_CAP_HEADROOM } from "../../config/grossCap";
+import { DEFAULT_MEANREV_CONFIG } from "./MeanRevEngine";
+// The retired meanrev_stocks incumbent's backstop (slotPct × maxPositions × 1.15 headroom =
+// 0.966×) — the test's parametrization of the kernel's gross cap since the constant left
+// src/index.ts with that engine on 2026-11-07.
+const MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT = DEFAULT_MEANREV_CONFIG.slotPct * DEFAULT_MEANREV_CONFIG.maxPositions * GROSS_CAP_HEADROOM;
 
 const silent: MeanRevLogger = { info: () => {}, warn: () => {}, error: () => {} };
 

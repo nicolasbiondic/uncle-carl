@@ -77,6 +77,16 @@ describe("bandChipHtml", () => {
 });
 
 describe("portfolioRowHtml", () => {
+  test("rolling band is separate from the model and translated", () => {
+    const p = { ...P, band: { ...P.band, rollingBand: { status: "below", liveCumReturnPct: -9.4, p5Pct: -8 } } };
+    for (const [lang, label] of [["en", "Last 20 sessions"], ["es", "Últimas 20 sesiones"]]) {
+      store.state.lang = lang;
+      const html = portfolioRowHtml(p);
+      expect(html).toContain(label);
+      expect(html).toContain("var(--down)");
+      expect(html).toContain("−9%");
+    }
+  });
   test("carries every read-API field the spec lists", () => {
     store.state.lang = "en";
     const html = portfolioRowHtml(P);

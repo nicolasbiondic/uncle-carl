@@ -50,9 +50,7 @@ const SCANNED_DIRS = ["src/strategies", "src/risk"];
  * that chooses WHAT to trade belongs in the engine, where the seam is.
  */
 const EXEMPT_FILES = new Set([
-  "src/strategies/momentum/AlpacaMomentumAdapter.ts",
   "src/strategies/momentum/BinanceMomentumAdapter.ts",
-  "src/strategies/momentum/BinanceCoinMMomentumAdapter.ts",
 ]);
 
 /** A system-clock read: `Date.now` (called or passed as a function) or a
@@ -111,7 +109,7 @@ describe("clock seam enforcement — no raw system-clock reads in decision paths
         }
       }
     }
-    expect(filesScanned).toBeGreaterThan(10);
+    expect(filesScanned).toBeGreaterThanOrEqual(8); // 9 after the 2026-11-07 removal of the COIN-M and Alpaca adapters
     expect(markers).toBeGreaterThanOrEqual(4);
     // A renamed/deleted exempt file must not leave a stale exemption behind
     // that could silently blanket a future file of the same name.

@@ -4,7 +4,7 @@ import { join } from "path";
 import {
   fmtCircuitBreakerAlert, fmtPauseResolvedAlert, fmtErrorBurstAlert, fmtCloseAlert,
   fmtPnlPair, TelegramReporter, circuitProfileId, fmtRedesignRecommendation,
-  bandEpisodeKey, sleeveOfBandEpisodeKey,
+  bandEpisodeKey, sleeveOfBandEpisodeKey, rollingBandEpisodeKey,
 } from "./telegram-reporter";
 import { bandEpisodeTransitions } from "../portfolio/scorecard";
 
@@ -423,6 +423,18 @@ describe("owner rule: a failing strategy is redesigned, never switched off (2026
 });
 
 describe("scorecard band episodes are per MODEL VERSION (RW2 cutover 2026-10-23)", () => {
+  test("rolling band pages once and recovers once, even across a model cutover", () => {
+    const key = rollingBandEpisodeKey("momentum_stocks");
+    expect(sleeveOfBandEpisodeKey(key)).toBe("momentum_stocks");
+    const first = bandEpisodeTransitions({}, { [key]: "below", "momentum_stocks@old": "within" });
+    expect(first.transitions).toEqual([{ sleeve: key, kind: "entered_below" }]);
+    const cutover = bandEpisodeTransitions(first.next, { [key]: "below", "momentum_stocks@new": "insufficient_data" });
+    expect(cutover.transitions).toEqual([]);
+    expect(bandEpisodeTransitions(cutover.next, { [key]: "unavailable" }).transitions).toEqual([]);
+    const recovered = bandEpisodeTransitions(cutover.next, { [key]: "within" });
+    expect(recovered.transitions).toEqual([{ sleeve: key, kind: "recovered" }]);
+    expect(bandEpisodeTransitions(recovered.next, { [key]: "within" }).transitions).toEqual([]);
+  });
   test("the episode key is the version the band judges; the sleeve is recovered from it for the message", () => {
     expect(bandEpisodeKey("momentum_stocks", "momentum_stocks@pe-vt15")).toBe("momentum_stocks@pe-vt15");
     expect(bandEpisodeKey("momentum_stocks", null)).toBe("momentum_stocks");

@@ -186,6 +186,7 @@ export function scorecard(sc) {
         ${stat("Sharpe", w.sharpe == null ? "—" : num(w.sharpe, 2))}
         ${stat(t("Alpha per year", "Alfa anual"), w.alphaAnnPct == null ? "—" : pctSigned(w.alphaAnnPct))}
         ${stat(t("Vs the backtest", "Frente al backtest"), bandChip(e.band))}
+        ${stat(t("Last 20 sessions", "Últimas 20 sesiones"), `${pctSigned(e.rollingBand?.liveCumReturnPct)} ${bandChip(e.rollingBand)}`)}
         ${stat(t("Costs per side", "Costes por lado"), costCell(costBySleeve[e.id]))}
         ${tsLink}
       </div>

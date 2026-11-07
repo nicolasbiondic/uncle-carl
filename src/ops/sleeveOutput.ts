@@ -49,9 +49,10 @@
 //    from "blocked by regime/risk for weeks" — the alert text says so.
 //    "Tried to open and failed" is signal 1's job, not this one's.
 //
-// Covers live AND shadow sleeves: a shadow book's output IS the evidence the
-// SleeveGovernor needs for promotion (≥30 trades/90d) — an empty shadow book
-// blocks promotion forever, silently (crypto, and shadow_pairs before it).
+// Every sleeve is live (the shadow mode was removed 2026-11-07): a sleeve's
+// output IS the evidence the SleeveGovernor judges (≥30 trades/90d) — an
+// empty book stays unjudged forever, silently (crypto in 2026-07, and
+// shadow_pairs before it).
 
 import { eventBus, EVENTS } from "../utils/events";
 import { createLogger } from "../utils/logger";

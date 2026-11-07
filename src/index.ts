@@ -1,9 +1,9 @@
 // ══════════════════════════════════════════════════════════════
-//  🤖 Uncle Carl Trading Bot v8 — Momentum TSM
-//  Two sleeves, one validated engine:
-//    momentum_crypto — 8 Binance perps, 60min TSM rebalance, 24/7, slot 37.5%
-//    momentum_stocks — 11 Alpaca tickers, 60min TSM, market hours only, slot 50%
-//  TSM: entry +5% / exit −2%, maxLongs 4, 4% hard SL
+//  🤖 Uncle Carl Trading Bot v8
+//  Four live sleeves, two engines:
+//    momentum_crypto / momentum_crypto_usdc — MomentumEngine (TSM) over Binance perps
+//    momentum_stocks / meanrev_stocks       — portfolio engine over Alpaca (RW2),
+//      from the registry definition or, failing that, the code's built-in one
 // ══════════════════════════════════════════════════════════════
 
 import { existsSync, readFileSync, renameSync, writeFileSync } from "fs";
@@ -24,31 +24,26 @@ import { BrokerSync, registerSleeveOwnedSymbols } from "./sync/BrokerSync";
 import { buildBrokerSyncSources } from "./sync/brokerSyncSource";
 import { DailyReporter } from "./reports/DailyReporter";
 import { createLogger } from "./utils/logger";
-import { isMarketOpen } from "./utils/marketHours";
 import { VERSION_INFO } from "./utils/version";
-import { MomentumEngine, nextAlignedTickDelayMs, EARLY_BOOT_TICK_MIN_LEAD_MS, type ExposureControlConfig, type MomentumStatePersistence, type MomentumPersistedState, type TrailMark } from "./strategies/momentum/MomentumEngine";
+import { MomentumEngine, type ExposureControlConfig, type MomentumStatePersistence, type MomentumPersistedState, type TrailMark } from "./strategies/momentum/MomentumEngine";
 import { EQUITY_SEMANTICS, rebaseRiskState, RISK_STATE_VERSION, type EquitySemantics, type RiskState } from "./strategies/momentum/RiskGuard";
 import { BinanceMomentumAdapter } from "./strategies/momentum/BinanceMomentumAdapter";
-import { BinanceCoinMMomentumAdapter, COINM_INTERNAL_SYMBOL } from "./strategies/momentum/BinanceCoinMMomentumAdapter";
-import { AlpacaMomentumAdapter } from "./strategies/momentum/AlpacaMomentumAdapter";
 import { DEFAULT_TSM_CONFIG } from "./strategies/momentum/TimeSeriesMomentum";
 import { BinanceExecutor } from "./executor/binance-executor";
 import { isTransientBrokerFailure } from "./executor/transientFailure";
 import { setRuntimeLinkedAccounts } from "./platform/accounts/runtimeLinks";
 import { BinanceCoinMExecutor } from "./executor/binance-coinm-executor";
 import { USDC_SYMBOL_MAP } from "./executor/binance/quoteAsset";
-import { MeanRevEngine, MeanRevRetryController, DEFAULT_MEANREV_CONFIG, type MeanRevReport } from "./strategies/meanrev/MeanRevEngine";
-import { MOMENTUM_STOCKS_UNIVERSE, MOMENTUM_CRYPTO_UNIVERSE, RISK_PROFILES } from "./config/riskProfiles";
+import { MOMENTUM_CRYPTO_UNIVERSE, RISK_PROFILES } from "./config/riskProfiles";
 // Measured gross-backstop headroom (G diagnostic, applied 2026-10-07): the
 // five *_MAX_GROSS_EXPOSURE_MULT below are slot×count × this factor — see
 // src/config/grossCap.ts for the evidence and the rollback (set it to 1.0).
 import { GROSS_CAP_HEADROOM } from "./config/grossCap";
-import { getETDateKey, getETDayStart, insertActivity, getOpenTrades, getDB } from "./db/database";
+import { insertActivity, getOpenTrades, getDB } from "./db/database";
 import { liveBandReadings, type BandReading } from "./portfolio/scorecard";
 import { eventBus, EVENTS } from "./utils/events";
 import { SleeveGovernor } from "./governor/SleeveGovernor";
 import { SwitchingAdapter } from "./governor/SwitchingAdapter";
-import { ShadowAdapter } from "./governor/ShadowAdapter";
 import { FundingMonitor } from "./market/fundingMonitor";
 import { TreasurySweep, type TreasurySweepConfig } from "./treasury/TreasurySweep";
 import { createDecisionRecorder } from "./telemetry/decisionRecorder";
@@ -57,15 +52,15 @@ import { CorporateActionsMonitor } from "./market/corporateActions";
 import { heartbeats } from "./ops/heartbeat";
 import { publishInstanceManifest } from "./ops/instanceManifest";
 import { buildPortfolioPlan } from "./portfolios/factory";
-import { resolvePortfolioWiring, restoreIncumbentRows, sleevesWithTwoManagers, PORTFOLIO_SLEEVES, type SleeveManager } from "./portfolio-engine/live/cutover";
+import { resolvePortfolioWiring, restoreIncumbentRows, sleevesWithTwoManagers, fallbackDefinitions, PORTFOLIO_SLEEVES, type SleeveManager } from "./portfolio-engine/live/cutover";
 import { buildPortfolioEngines, startPortfolioEngines } from "./portfolio-engine/live/wiring";
 import { currentModelVersionId } from "./portfolio/modelVersions";
 import { stopPriceFromEntry } from "./account/BinanceSleeveReconciler";
 import { fapiClientOrderId } from "./executor/binance-executor";
-import { builtinPortfolio } from "./portfolios/builtin";
+import { builtinPortfolio, STOCK_SLEEVE_BUILTIN_DEFINITION } from "./portfolios/builtin";
 import { initPlatformPortfolios, loadPlatformPortfolioDefinitions, markPendingPortfoliosActive, resolvePortfoliosSource } from "./portfolios/store";
 import { portfolioEngineOwnedSymbols } from "./portfolios/validate";
-import type { MomentumPortfolioPlan, MeanRevPortfolioPlan, StatePersistenceSpec, PortfolioDefinition } from "./portfolios/types";
+import type { MomentumPortfolioPlan, StatePersistenceSpec, PortfolioDefinition } from "./portfolios/types";
 
 const log = createLogger("Main");
 
@@ -218,16 +213,15 @@ export function fileStatePersistence(path: string, currentBase: number, legacyBa
 }
 
 /**
- * Truth-only mode (flag OFF + no open DB exposure) must never run the
- * mutating startup stop reconcile: that reconcile cancels any owned stop it
- * finds once the account reads flat, but a truth-only wallet's flatness is
- * exactly the state where that stop-cancel would fire — a diagnostic-only
- * attachment must sync balance/mark truth and nothing else. Live (flag on)
- * and close-only (flag off, real exposure) modes keep the default (mutating)
- * reconcile unchanged.
+ * Truth-only mode (no open DB exposure) must never run the mutating startup
+ * stop reconcile: that reconcile cancels any owned stop it finds once the
+ * account reads flat, but a truth-only wallet's flatness is exactly the state
+ * where that stop-cancel would fire — a diagnostic-only attachment must sync
+ * balance/mark truth and nothing else. Close-only (real exposure left over
+ * from the retired engine) keeps the default (mutating) reconcile unchanged.
  */
-export function coinmSkipStartupStopReconcile(enabled: boolean, hasExposure: boolean): boolean {
-  return !enabled && !hasExposure;
+export function coinmSkipStartupStopReconcile(hasExposure: boolean): boolean {
+  return !hasExposure;
 }
 
 /**
@@ -263,180 +257,21 @@ export function startupBrokerHealth(
   return { operational: down.length === 0, down, unlinked };
 }
 
-// ══════════════════════════════════════════════════════════════
-// Sleeve gross-exposure caps (2026-08-19 audit fix).
-//
-// A sleeve's max THEORETICAL gross exposure — how much notional it can hold
-// at once, as a multiple of its own equity — is the product of
-// notionalPctPerSlot (size of one slot) and maxLongs (how many slots).
-// Before this block, momentum_stocks' two numbers lived in DIFFERENT files
-// (notionalPctPerSlot inline below; maxLongs never set here, so it silently
-// inherited DEFAULT_TSM_CONFIG.maxLongs from TimeSeriesMomentum.ts) and their
-// product — 2.0× — was never written down anywhere. The other three momentum
-// sleeves already declared both numbers together; momentum_stocks didn't.
-//
-// These constants are the SINGLE SOURCE fed into both the engine configs
-// below (so this file is still the one place sizing is decided) AND into
-// momentumExposureCaps.test.ts (imported from THIS module, not duplicated —
-// see that test's docstring for why scripts/walk-forward.test.ts's own
-// notionalPctPerSlot literal does NOT satisfy this: it locks the walk-forward
-// harness's config semantics, never production's actual wiring).
-//
-// momentum_stocks was DELIBERATELY at 2.0× until 2026-09-23, 1.0× since — see the notionalPctPerSlot
-// comment at its use below (2026-07-12 sweep, kept unchanged pending a
-// validated re-run). This block does not change that; it makes it visible
-// and gives it a runtime backstop (MomentumEngineConfig.maxGrossExposureMult)
-// that blocks the NEXT open if live exposure would exceed it — a pure
-// safety net: at today's config the backstop never binds, because
-// notionalPctPerSlot × maxLongs already can't exceed it by construction.
-// 4 → 8 slots (and 0.25 → 0.125 per slot, gross unchanged at 1.0×) on
-// 2026-09-25 together with the wide daily stops below — director decision on
-// the pure chain k8-s8 (experiments/momentum-stocks-daily-k8s8-pure-v1.json,
-// artifact 5a5a9577…): +307.6% / Sharpe 1.14 / maxDD 21.2% / PSR 0.997 / all
-// gates, vs the wired h126 kernel's own pure chain (77372b9c…) +306.3% / 1.07
-// / 24.1%; LOO worst Sharpe 1.07 vs 0.92; lower DD in all 3 folds. Each axis
-// alone was a trade-off (k8: SR 1.18 but DD 28.6%; s8: DD 17.4% but SR 1.00);
-// the combination was declared post-hoc before running (+2 trials, k8-s6
-// failed the DD criterion). Reversion criterion (pre-registered): back to
-// 4 × 0.25 / {3,20,2,12} if realized sleeve maxDD over the next 60 trading
-// days exceeds 20%.
-export const MOMENTUM_STOCKS_MAX_LONGS = 8;
-// 0.5 → 0.25 on 2026-09-23 (owner-delegated decision, quorum 3/3, AUDITS.md
-// 2026-09-23): the 2.0× came from a discredited pre-protocol sweep; the
-// pre-registered gross axis (momentum-stocks-sizing-v1, artifact 49757edd…)
-// selects gross-1x in all 3 outer folds — 9.9%/0.40/DD 14.5%/0 Reg-T
-// rejects vs 2×'s 7.6%/0.26/DD 25.8%/28 rejects. Caveat declared: that
-// manifest ran WITHOUT slotHysteresis (pre-registration error), so it
-// measures the gross axis on the pre-09-10 kernel. The sleeve still fails
-// 4 gates (bench, PSR, displacement, break-even) at any gross.
-// Since 2026-10-10: k = 1.5 (line E exposure grid, decided by the owner-
-// delegated AI quorum 2-1 — docs/reports/LE2-quorum-decision.md; pure chain
-// cb516547…: +563.2% / Sharpe 1.12 / maxDD 31.2% with 6.5% Reg-T interest).
-export const MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT = 0.1875; // 0.125 from 2026-09-25, 0.25 before (see MAX_LONGS above)
-export const MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT = MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT * MOMENTUM_STOCKS_MAX_LONGS * GROSS_CAP_HEADROOM; // 1.725× (1.15× hasta 2026-10-10; 1.0× hasta 2026-10-07 — G gross-cap)
-
-/**
- * OPT-IN daily-horizon mode for momentum_stocks (R2 research 2026-09-24,
- * momentum-stocks-horizon-v1 axis). null = the current 5m/hourly kernel,
- * byte-identical (this constant is the ONLY switch; the director decides).
- *
- * Setting e.g. `{ lookbackDays: 126, maLengthDays: 200 }` rewires the sleeve
- * to the simulator-validated daily kernel: Alpaca "1Day" bars (today's
- * partial bar stripped — AlpacaMomentumAdapterConfig.dropTodayDailyBar),
- * decision once per ET trading day ≥ 09:35 (the meanrev discipline: signal
- * on yesterday's COMPLETED daily bar, fill after today's open — this also
- * sidesteps the two live-parity bugs of the 5m kernel: the ~16min SIP cutoff
- * and the :35-vs-:00 tick phase, both irrelevant at daily granularity), TSM
- * horizon lookbackDays/maLengthDays, and DAILY vol windows for trail + hard
- * stop ({kSigma 3, lookbackBars 20 sessions, 2..12%} — the meanrev daily
- * parametrization; 78×5m bars don't exist on 1Day data).
- *
- * Evidence (pure OOS chains, 2017-06..2026-09, 11 symbols, 17/17 gates incl.
- * minOuterPsr 0.95 — blocked from formal approval ONLY by the permanent
- * pre-protocol trial-accounting incompleteness):
- *   h126-ma200 3987f38d…/77372b9c…: +306.3% / Sharpe 1.07 / DD 24.1% / PSR .997
- *   h252-ma200: +252.8% / 0.97 / DD 24.1% / PSR .992; SPY B&H +159.8% / 0.80.
- * Declared caveat: on the short 2024-01..2026-07 sub-window (476 obs,
- * certifiable Sharpe ≥ 1.20 — underpowered) the pure chains do NOT beat SPY
- * (h126 −9.9pp, h252 −3.9pp) though they dominate every 5m-kernel artifact.
- *
- * WIRED 2026-09-24 → h126-ma200 (director decision, owner-delegated: "no
- * pares hasta tener una mejora substancial del modelo"). Criterion declared
- * BEFORE reading the verdicts: beat the pure live 5m control (095903db…) on
- * Sharpe AND maxDD on the same folds, outer PSR ≥ 0.95 where the window has
- * power, no single-symbol/fold dependence. Met: 2024+ window 0.78/DD 14.7%
- * vs the control's 0.68/DD 15.0%; long window 17/17 gates; LOO worst (no
- * NVDA) Sharpe 0.92; inner selection 9/9 folds for the long horizons.
- * Survivorship caveat (declared): the equal-weight buy&hold of the SAME 11
- * survivors did +507%/Sharpe 1.15/DD 40% — the edge over the basket is the
- * drawdown cut, the edge over the 5m kernel is the axis (same universe).
- * Reversion criterion (pre-registered): revert to null if, after 60 trading
- * days live, realized sleeve maxDD exceeds 20% or the sleeve trails the
- * pure-chain h126 replay of the same live window by >10pp.
- */
+/** Daily TSM horizon of a momentum sleeve: a single return lookback or a blend
+ *  (mean of the listed lookbacks — Hurst–Ooi–Pedersen 2017), with the MA
+ *  trend-filter length, all in sessions. Used by momentum_crypto_usdc; the
+ *  Alpaca momentum_stocks kernel that introduced it (2026-09-24) was retired on
+ *  2026-11-07 with the stock incumbents (the sleeve runs on the portfolio
+ *  engine). The name is kept for the tests and modules that import it. */
 export type MomentumStocksDailyHorizon =
   | { lookbackDays: number; lookbackDaysList?: undefined; maLengthDays: number }
   | { lookbackDaysList: number[]; lookbackDays?: undefined; maLengthDays: number };
-// 2026-09-25: single 126-session lookback → blend of 63/126/252 (Hurst–Ooi–
-// Pedersen 2017: the average of 3-, 6- and 12-month returns is more robust
-// than any single horizon — and it removes the dependence on the h126 pick,
-// which was itself chosen among h14/h126/h252). Pure chain on the live k8-s8
-// kernel (experiments/momentum-stocks-daily-blend3-pure-v1.json, artifact
-// cc2f5d69…): +351.8% / Sharpe 1.19 / DD 21.19% / PSR 0.998 / all gates vs
-// k8-s8 h126 (5a5a9577…) +307.6% / 1.14 / 21.25%; foldPSR better in all 3
-// folds, LOO worst 1.13 vs 1.07. Declared caveats: the DD gain is noise
-// (0.06pp; fold 2 alone 17.4% vs 16.1%) and the inner selection preferred
-// h126 in 5/9 folds. Reversion criterion: back to { lookbackDays: 126 } if the
-// 60-session live check of the k8-s8 constants trips.
-export const MOMENTUM_STOCKS_DAILY_HORIZON: MomentumStocksDailyHorizon | null = { lookbackDaysList: [63, 126, 252], maLengthDays: 200 };
 
 /** Longest return horizon of the daily kernel (sizes the candle history). */
 export function dailyHorizonMaxLookback(h: MomentumStocksDailyHorizon): number {
   return h.lookbackDaysList ? Math.max(...h.lookbackDaysList) : h.lookbackDays;
 }
 
-/** Daily vol windows (sessions) for trail/volStop under the daily-horizon
- *  mode. {3, 20, 2..12} (the meanrev daily parametrization) until 2026-09-25;
- *  since then {8, 20, 5..30} — the k8 leg of the k8-s8 pure chain (see
- *  MOMENTUM_STOCKS_MAX_LONGS). 3σ daily (~3–4.5% on megacaps/ETFs) was noise
- *  for a 126-session trend: turnover 15–23×/yr → 3–5×/yr. */
-export const MOMENTUM_STOCKS_DAILY_VOL_STOP = { kSigma: 8, lookbackBars: 20, minPct: 5, maxPct: 30 } as const;
-
-/**
- * True when the daily-horizon momentum_stocks pass is due: market open,
- * ≥ 09:35 ET (decide on yesterday's completed daily bar, fill after today's
- * open — the scheduleDailyStockRun discipline) and not yet run today
- * (`lastRunKey` = ET date key of the last completed pass). Pure — tested in
- * src/index.dailyHorizon.test.ts without booting main().
- */
-export function momentumStocksDailyTickDue(nowMs: number, lastRunKey: string): boolean {
-  if (!isMarketOpen(nowMs)) return false;
-  if ((nowMs - getETDayStart(nowMs)) / 60_000 < 9 * 60 + 35) return false;
-  return getETDateKey(nowMs) !== lastRunKey;
-}
-
-/**
- * OPT-IN one-shot cutover for momentum_stocks (epoch ms; null = OFF,
- * byte-identical current behavior — the director flips it after review).
- *
- * Why: the 2026-09-25 first daily pass held META (40 sh, ~$31k) and AAPL
- * (75 sh, ~$25k) — both sized under the pre-2026-09-23 2× regime (0.5/slot)
- * and selected by the retired 5m/14d kernel. Together they filled the 1×
- * gross cap ($54.7k), so the h126 kernel's valid SMH/MSFT signals were
- * "BLOCKED by gross exposure cap": the live book could not express the
- * validated 4 × 0.25 model. Legacy positions never re-underwrite on their
- * own (slotHysteresis holds them while their signal stays valid).
- *
- * How to activate: set this to the boundary instant (e.g.
- * `Date.UTC(2026, 8, 25)` — entries BEFORE it are legacy) and deploy. On the
- * next daily tick the engine closes every universe position with
- * entryTime < boundary through the normal close path (close_reason
- * MODEL_CUTOVER, whitelisted in all adapters incl. Shadow), then ranks with
- * those symbols as NOT held — they are re-bought at the CURRENT slot size
- * only if they rank and pass the entry thresholds and the gross cap.
- * One-shot by construction (re-bought entries postdate the boundary); a
- * failed close retries next tick. Revert to null after the pass lands —
- * leaving it set is harmless but noisy in intent.
- * See MomentumEngineConfig.reunderwriteBefore for the mechanism.
- */
-// History: the 2026-09-26 cutover re-underwrote META/AAPL on the 09-28 pass;
-// the 2026-10-06 one (owner: "alinéalo") GOOGL only, on the 10-07 pass.
-// ACTIVE 2026-10-10 (line E, k = 1.5 — the quorum voted to resize the open
-// book): the WHOLE book, no symbol filter. Its 8 positions were sized at
-// 0.125/slot; the 10-12 pass closes them through the normal path
-// (MODEL_CUTOVER) and re-ranks them as not held, so whatever still passes the
-// entry rules is bought at 0.1875/slot. Parity re-anchors on that pass
-// (PARITY_EPOCHS) and the scorecard's model window starts the next session.
-export const MOMENTUM_STOCKS_CUTOVER_AT: number | null = Date.UTC(2026, 9, 11);
-export const MOMENTUM_STOCKS_CUTOVER_SYMBOLS: string[] | undefined = undefined;
-/** The cutover is only wired into an engine built BEFORE this instant, so a
- *  forgotten constant cannot re-underwrite anything later (e.g. an adopted
- *  orphan carrying an old broker timestamp). The window leaves room for a
- *  retry pass if the first close bounces; one-shot by entry time anyway. */
-export const MOMENTUM_STOCKS_CUTOVER_EXPIRES_AT = Date.UTC(2026, 9, 14);
-
-/** reunderwriteBefore for a momentum_stocks engine built at `nowMs`:
- *  the boundary while the cutover window is open, otherwise undefined. */
 /** Boot decision when a venue sleeve's executor cannot connect (preflight or
  *  init). No exposure → the sleeve stays off. Exposure + a configuration
  *  problem → refuse to boot: trading a misconfigured account is worse than
@@ -454,24 +289,6 @@ export function venueBootActionOnConnectFailure(
   if (!hasExposure) return "stay_off";
   return reason === null || isTransientBrokerFailure(reason) ? "attach_degraded" : "fail_boot";
 }
-
-export function momentumStocksCutoverFor(nowMs: number): number | undefined {
-  if (MOMENTUM_STOCKS_CUTOVER_AT === null) return undefined;
-  return nowMs < MOMENTUM_STOCKS_CUTOVER_EXPIRES_AT ? MOMENTUM_STOCKS_CUTOVER_AT : undefined;
-}
-
-/** Model identity for momentum_stocks' persisted RiskState (one-shot peak +
- *  loss-streak re-anchor on change — MomentumEngineConfig.modelVersion): the
- *  daily blend3 kernel's first pass (2026-09-28) must not inherit the 5m
- *  kernel's peak ($55.7k — a 2.8% drawdown it never produced) or its 2
- *  losing rebalances. Bump it only when the wired model itself changes.
- *  Bumped 2026-10-10 for line E's k = 1.5: the new sizing starts its own
- *  window from a fresh peak and streak, like its parity sim at the epoch. */
-export const MOMENTUM_STOCKS_MODEL_VERSION = "daily-blend3-k150-2026-10-12";
-/** SleeveGovernor evidence version: changing it restarts the evidence epoch.
- *  "v8-stocks" until 2026-10-10; k = 1.5 scales every P&L, so closes taken
- *  at k = 1 are not evidence against the k = 1.5 band. */
-export const MOMENTUM_STOCKS_EVIDENCE_VERSION = "v8.4-stocks-k150";
 
 export const MOMENTUM_CRYPTO_MAX_LONGS = DEFAULT_TSM_CONFIG.maxLongs;
 export const MOMENTUM_CRYPTO_NOTIONAL_PCT_PER_SLOT = 0.375;
@@ -572,18 +389,6 @@ export function momentumUsdcCutoverFor(nowMs: number): number | undefined {
   return nowMs < MOMENTUM_USDC_CUTOVER_EXPIRES_AT ? MOMENTUM_USDC_CUTOVER_AT : undefined;
 }
 
-export const MOMENTUM_BTC_MAX_LONGS = 1;
-export const MOMENTUM_BTC_NOTIONAL_PCT_PER_SLOT = 1;
-export const MOMENTUM_BTC_MAX_GROSS_EXPOSURE_MULT = MOMENTUM_BTC_NOTIONAL_PCT_PER_SLOT * MOMENTUM_BTC_MAX_LONGS * GROSS_CAP_HEADROOM; // 1.15× (1.0× hasta 2026-10-07 — G gross-cap, no medido: 1 slot)
-
-// meanrev_stocks doesn't override slotPct/maxPositions below — it inherits
-// MeanRevEngine's own DEFAULT_MEANREV_CONFIG, which is ALREADY the single
-// source (no cross-file emergence to fix). Re-derived here only so the
-// account-level exposure sum (see AccountManager) and the test lock have one
-// place to read every sleeve's cap from.
-export const MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT =
-  DEFAULT_MEANREV_CONFIG.slotPct * DEFAULT_MEANREV_CONFIG.maxPositions * GROSS_CAP_HEADROOM; // 0.966× desde 2026-10-07 (G gross-cap; 0.84× antes, 0.7× desde 09-24, 0.5× antes)
-
 /**
  * OPT-IN idle-cash treasury sweep for the shared Alpaca account (S3 research
  * 2026-09-27). null = OFF, byte-identical current behavior — the OWNER flips
@@ -638,9 +443,8 @@ export function momentumCryptoPortfolioPlan(): MomentumPortfolioPlan {
   return {
     template: "momentum_tsm",
     portfolioId: "momentum_crypto",
-    governorRegistration: { sleeve: "momentum_crypto", kind: "live", promotionEligible: false, evidenceVersion: MOMENTUM_CRYPTO_EVIDENCE_VERSION },
+    governorRegistration: { sleeve: "momentum_crypto", evidenceVersion: MOMENTUM_CRYPTO_EVIDENCE_VERSION },
     adapter: { kind: "binance_usdm", options: { breakoutShortSymbols: [...MOMENTUM_CRYPTO_UNIVERSE] } },
-    shadow: { strategy: "MOMENTUM", closeReason: "MOMENTUM_REBALANCE", timeframe: "1Hour", market: "crypto" },
     loggerContext: "Momentum:crypto",
     engineConfig: {
       mode: "time-series",
@@ -711,8 +515,7 @@ export function momentumCryptoPortfolioPlan(): MomentumPortfolioPlan {
       // that would take >1% of 20-day ADV$; blocks nothing. Irrelevant at
       // today's size (megacap/major-perp universes vs ~$7k slots) — this is
       // the audit trail for flipping to "enforce" before real capital. Same
-      // literal on all four wired sleeves; momentum_btc deliberately skipped
-      // (flag-off/truth-only). See MomentumEngineConfig.capacityGuard.
+      // literal on every wired momentum sleeve. See MomentumEngineConfig.capacityGuard.
       capacityGuard: { maxAdvPct: 1, lookbackBars: 20, mode: "observe" },
     },
     statePersistence: { path: "data/momentum-state-crypto.json", currentBase: 5_000, legacyBase: 10_000, equitySemantics: EQUITY_SEMANTICS.BINANCE_TOTAL_MARGIN },
@@ -736,9 +539,8 @@ export function momentumUsdcPortfolioPlan(): MomentumPortfolioPlan {
   return {
     template: "momentum_tsm",
     portfolioId: "momentum_crypto_usdc",
-    governorRegistration: { sleeve: "momentum_crypto_usdc", kind: "live", evidenceVersion: MOMENTUM_USDC_EVIDENCE_VERSION },
+    governorRegistration: { sleeve: "momentum_crypto_usdc", evidenceVersion: MOMENTUM_USDC_EVIDENCE_VERSION },
     adapter: { kind: "binance_usdm", options: { accountId: "momentum_crypto_usdc", quoteAsset: "USDC", candleTimeframe: "1Day", breakoutShortSymbols: Object.keys(USDC_SYMBOL_MAP) } },
-    shadow: { strategy: "MOMENTUM", closeReason: "MOMENTUM_REBALANCE", timeframe: "1Day", market: "crypto" },
     loggerContext: "Momentum:usdc",
     engineConfig: {
       mode: "time-series",
@@ -792,211 +594,6 @@ export function momentumUsdcPortfolioPlan(): MomentumPortfolioPlan {
   };
 }
 
-/** momentum_btc — COIN-M BTCUSD_PERP, single-symbol universe (only one
- *  slot exists — maxLongs=1 is redundant but explicit), 2x leverage. */
-export function momentumBtcPortfolioPlan(): MomentumPortfolioPlan {
-  return {
-    template: "momentum_tsm",
-    portfolioId: "momentum_btc",
-    governorRegistration: { sleeve: "momentum_btc", kind: "live", evidenceVersion: "v8.2-coinm-launch" },
-    adapter: { kind: "binance_coinm", options: { accountId: "momentum_btc" } },
-    shadow: { strategy: "MOMENTUM", closeReason: "MOMENTUM_REBALANCE", timeframe: "1Hour", market: "crypto" },
-    loggerContext: "Momentum:coinm",
-    engineConfig: {
-      mode: "time-series",
-      universe: [COINM_INTERNAL_SYMBOL],
-      rebalanceMinutes: 60,
-      heartbeatName: "momentum:btc",
-      historyBars: 754,
-      notionalPctPerSlot: MOMENTUM_BTC_NOTIONAL_PCT_PER_SLOT, // single symbol IS the one slot
-      tsm: { barMinutes: 60, maxLongs: MOMENTUM_BTC_MAX_LONGS },
-      regime: { barMinutes: 60 },
-      scorer: { barMinutes: 60 },
-      sharpeGate: { lookbackDays: 30, minSharpe: 0 },
-      risk: { equitySemantics: EQUITY_SEMANTICS.BINANCE_COINM_MARGIN },
-      maxGrossExposureMult: MOMENTUM_BTC_MAX_GROSS_EXPOSURE_MULT,
-    },
-    statePersistence: { path: "data/momentum-state-btc.json", currentBase: 1_000, legacyBase: 1_000, equitySemantics: EQUITY_SEMANTICS.BINANCE_COINM_MARGIN },
-    scheduler: { kind: "engine-start" },
-  };
-}
-
-/** momentum_stocks — 5Min bars with trading-day bar math (78 bars/session
- *  ⇒ barMinutesEq = 1440/78 so "lookbackDays" = trading days), or the
- *  DAILY-HORIZON kernel when MOMENTUM_STOCKS_DAILY_HORIZON is set (daily
- *  bars ⇒ barMinutesEq 1440, history sized max(lookback, MA) + 11 — the
- *  replay's own formula, one decision per ET trading day ≥ 09:35). */
-export function momentumStocksPortfolioPlan(): MomentumPortfolioPlan {
-  const dailyHorizon = MOMENTUM_STOCKS_DAILY_HORIZON;
-  const barMinutesEq = dailyHorizon ? 1440 : (24 * 60) / 78; // ≈ 18.4615 on 5m
-  const stocksHistoryBars = dailyHorizon
-    ? Math.max(dailyHorizonMaxLookback(dailyHorizon), dailyHorizon.maLengthDays) + 11
-    : Math.ceil((31 * 24 * 60) / barMinutesEq) + 10; // ≈ 2428 on 5m
-  return {
-    template: "momentum_tsm",
-    portfolioId: "momentum_stocks",
-    governorRegistration: { sleeve: "momentum_stocks", kind: "live", evidenceVersion: MOMENTUM_STOCKS_EVIDENCE_VERSION },
-    // Daily-horizon mode reads "1Day" bars with today's partial session
-    // stripped (dropTodayDailyBar — MomentumEngine has no MeanRevEngine-style
-    // strip of its own); default mode is the pre-existing 5Min adapter.
-    adapter: { kind: "alpaca", options: dailyHorizon ? { timeframe: "1Day", dropTodayDailyBar: true } : {} },
-    shadow: { strategy: "MOMENTUM", closeReason: "MOMENTUM_REBALANCE", timeframe: dailyHorizon ? "1Day" : "5Min", market: "stock" },
-    loggerContext: "Momentum:stocks",
-    engineConfig: {
-      mode: "time-series",
-      // Universe (incl. +SMH 2026-07-25) lives in riskProfiles.ts as an exported
-      // constant so riskProfiles.disjoint.test.ts can enforce no MEANREV overlap.
-      universe: MOMENTUM_STOCKS_UNIVERSE,
-      // informational — index.ts drives the tick in BOTH modes (hourly
-      // aligned loop, or the once-daily ≥09:35 scheduler under
-      // MOMENTUM_STOCKS_DAILY_HORIZON); engine.start() is never called,
-      // so this literal is never consumed (docs.test.ts counts it).
-      rebalanceMinutes: 60,
-      heartbeatName: "momentum:stocks", // start() NOT called — index.ts registers it; tick() beats it
-      historyBars: stocksHistoryBars,
-      // notionalPctPerSlot was 0.5 ("x2") until 2026-09-23 — see the
-      // MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT constant for the 1.0× decision.
-      // The 0.5 came from a 2026-07-12 exposure sweep on
-      // the OLD pre-nested backtest-momentum-wf. The rigorous nested-purged
-      // walk-forward for THIS sleeve and config (data/backtests/5d8602ee… /
-      // 92d5cd72…, 243 trades) CONTRADICTS that sweep: OOS folds
-      // −22.8/+41.2/−1.2%, stitched ≈+7.6% over ~2.5y (≈+2.9%/yr), Sharpe 0.26,
-      // maxDD 25.8% — one window IS negative, and at 2× gross the sizing drew 28
-      // Reg-T margin rejections in replay. Current sizing is NOT backed by the
-      // rigorous protocol; kept unchanged pending a validated re-run.
-      //
-      // notionalPctPerSlot × maxLongs = 1.0× gross since 2026-09-23 (2.0× before; see the
-      // MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT block above main() for the
-      // audit history: this product used to be invisible, maxLongs having
-      // never been declared here — it silently inherited
-      // DEFAULT_TSM_CONFIG.maxLongs from a different file entirely). Now
-      // explicit and backstopped by maxGrossExposureMult below.
-      notionalPctPerSlot: MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT,
-      // slotHysteresis: OWNER OVERRIDE 2026-09-10 (stocks ONLY — the same axis
-      // was REFUTED on crypto the same day, ledger
-      // authoritativeArtifactCryptoDisplacement). Evidence: artifact 205de58f
-      // (experiments/momentum-stocks-displacement-v1.json): no-displacement
-      // won the inner selection in all 3 outer folds (median Sharpe 2.54 vs
-      // 1.31) and stitched +35.4% / Sharpe 0.70 / 120 trades vs the
-      // incumbent's +7.6% / 0.26 / 244 on the same window — the first stocks
-      // artifact to beat SPY B&H on return (+4.2pp). NOT protocol-approved:
-      // minOuterPsr 0.825 < 0.95, and the excess lives in fold 1 (fold 0 was
-      // WORSE than the incumbent, −28.0 vs −22.8). certifiableSharpeAtPsr95 on
-      // this window is 1.20; nothing on stocks clears it. Mechanics: a held
-      // position with a still-valid signal is no longer closed because a
-      // marginally higher-ranked entrant took its slot (the GLD/QQQ ping-pong
-      // the 2026-09-06 model audit traced); it exits only on its own signal,
-      // trail, time or hard stop. Revert = delete this one key.
-      tsm: {
-        barMinutes: barMinutesEq,
-        maxLongs: MOMENTUM_STOCKS_MAX_LONGS,
-        slotHysteresis: true,
-        // Daily-horizon TSM lookback/MA (opt-in — see the constant's
-        // docstring for artifacts); absent = engine defaults 14/30.
-        ...(dailyHorizon
-          ? (dailyHorizon.lookbackDaysList
-            ? { lookbackDaysList: dailyHorizon.lookbackDaysList, maLengthDays: dailyHorizon.maLengthDays }
-            : { lookbackDays: dailyHorizon.lookbackDays, maLengthDays: dailyHorizon.maLengthDays })
-          : {}),
-      },
-      regime: { barMinutes: barMinutesEq },
-      scorer: { barMinutes: barMinutesEq },
-      // tsmTrail params also come from that same discredited 2026-07-12 sweep
-      // (its "+28.7→+32.9%/yr" claim); no nested-protocol evidence backs them.
-      tsmTrail: dailyHorizon ? { ...MOMENTUM_STOCKS_DAILY_VOL_STOP } : { kSigma: 3, lookbackBars: 78, minPct: 2, maxPct: 8 },
-      // Vol-scaled HARD stop — owner override 2026-08-28 (see
-      // MomentumEngine.volStop docstring for evidence + provenance). Spec is
-      // VERBATIM the vol-k3 candidate of locked artifact ff70c47e
-      // (experiments/momentum-stop-sizing-v1.json): the fixed profile 4% was
-      // that sweep's WORST setting (+7.55%/0.257 vs +30.12%/0.618) and
-      // bought no drawdown. Fixed 4% remains the FALLBACK for rows without a
-      // persisted stop (pre-override rows, degenerate history).
-      // Daily-horizon mode swaps both vol windows to daily sessions
-      // (the k8 {8, 20, 5..30} spec; 78 five-minute bars don't exist on
-      // 1Day data).
-      volStop: dailyHorizon ? { ...MOMENTUM_STOCKS_DAILY_VOL_STOP } : { kSigma: 3, lookbackBars: 78, minPct: 2, maxPct: 8 },
-      sharpeGate: { lookbackDays: 30, minSharpe: 0 },
-      risk: { equitySemantics: EQUITY_SEMANTICS.SLEEVE_LEDGER },
-      modelVersion: MOMENTUM_STOCKS_MODEL_VERSION,
-      maxGrossExposureMult: MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT,
-      // %ADV capacity check, observe-only — see the momentum_crypto block.
-      capacityGuard: { maxAdvPct: 1, lookbackBars: 20, mode: "observe" },
-      // One-shot legacy-position re-underwrite (null = absent = OFF) — see
-      // MOMENTUM_STOCKS_CUTOVER_AT's docstring above main().
-      ...(momentumStocksCutoverFor(Date.now()) !== undefined
-        ? { reunderwriteBefore: momentumStocksCutoverFor(Date.now()), ...(MOMENTUM_STOCKS_CUTOVER_SYMBOLS ? { reunderwriteSymbols: [...MOMENTUM_STOCKS_CUTOVER_SYMBOLS] } : {}) }
-        : {}),
-    },
-    statePersistence: { path: "data/momentum-state-stocks.json", currentBase: 50_000, legacyBase: 100_000, equitySemantics: EQUITY_SEMANTICS.SLEEVE_LEDGER },
-    // index.ts owns this loop (engine.start() not called) so main() registers
-    // the heartbeat; stocksEngine.tick() beats it on a successful in-hours
-    // rebalance. Daily-horizon mode registers at the daily cadence with the
-    // meanrev grace (MeanRevEngine's own convention for a once-a-day loop).
-    heartbeat: dailyHorizon
-      ? { name: "momentum:stocks", intervalMs: 86_400_000, graceMultiplier: 5 }
-      : { name: "momentum:stocks", intervalMs: 60 * 60_000 },
-    scheduler: dailyHorizon
-      ? { kind: "index-stocks-daily", markerPath: "data/daily-run-momentum-stocks.txt" }
-      : { kind: "index-stocks-hourly" },
-  };
-}
-
-/** meanrev_stocks — daily RSI2 mean-reversion, one pass per ET trading day
- *  shortly after the open (≥ 09:35, signals on yesterday's completed daily
- *  bar). Strategy knobs come from DEFAULT_MEANREV_CONFIG (already the
- *  single source); these are only index.ts's overrides.
- *
- *  Single source of truth: RISK_PROFILES.meanrev_stocks.initialEquity
- *  (itself env-driven via MEANREV_BASE_USD) instead of re-reading the
- *  env var here — was two knobs for the same capital number.
- *
- *  risk: SLEEVE_LEDGER — momentum_stocks and meanrev_stocks share one
- *  Alpaca wallet (see AGENTS.md "Shared Alpaca wallet"); the equity fed
- *  to RiskGuard must be THIS sleeve's own ledger (meanrevAdapter →
- *  AlpacaMomentumAdapter.getEquity(), accountId="meanrev_stocks"), never
- *  the aggregate account — otherwise one sleeve's drawdown would pause
- *  the other. DEFAULT_RISK_CONFIG kept unchanged: peakHalfLifeDays=30
- *  (anti-lockout) applies exactly as documented regardless of cadence;
- *  dailyLossCapPct=3% is structurally near-inert here (evaluateRisk
- *  runs once/day, so dayStartEquity is captured at the same instant as
- *  the comparison — it can only fire across same-day retries), which is
- *  fine because the meaningful breakers for a once-daily pass are the
- *  soft/hard peak-to-trough drawdown and the 5-losing-day streak, both
- *  unchanged from momentum's defaults. */
-export function meanrevStocksPortfolioPlan(): MeanRevPortfolioPlan {
-  return {
-    template: "meanrev_connors",
-    portfolioId: "meanrev_stocks",
-    governorRegistration: { sleeve: "meanrev_stocks", kind: "live", evidenceVersion: "v8-meanrev" },
-    adapter: { kind: "alpaca", options: { accountId: "meanrev_stocks", timeframe: "1Day", strategy: "MEANREV", closeReason: "MEANREV_EXIT" } },
-    shadow: { strategy: "MEANREV", closeReason: "MEANREV_EXIT", timeframe: "1Day", market: "stock" },
-    loggerContext: "MeanRev:stocks",
-    engineConfig: {
-      accountId: "meanrev_stocks",
-      baseUsd: RISK_PROFILES.meanrev_stocks.initialEquity,
-      heartbeatName: "meanrev:stocks",
-      risk: { equitySemantics: EQUITY_SEMANTICS.SLEEVE_LEDGER },
-      maxGrossExposureMult: MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT,
-      // Vol-scaled HARD stop — owner override 2026-08-28 (see
-      // MeanRevEngine.volStop docstring). Spec is VERBATIM the vol-k3
-      // candidate of locked artifact 9dcd9781
-      // (experiments/meanrev-stop-sizing-v2.json, daily bars): 0.725
-      // Sharpe vs the fixed 4%'s 0.561, at ~+3.5pp maxDD — tradeoff the
-      // owner accepted. Fixed 4% remains the fallback.
-      volStop: { kSigma: 3, lookbackBars: 20, minPct: 2, maxPct: 12 },
-      // %ADV capacity check, observe-only — see the momentum_crypto block.
-      capacityGuard: { maxAdvPct: 1, lookbackBars: 20, mode: "observe" },
-    },
-    statePersistence: {
-      path: "data/meanrev-state-stocks.json",
-      currentBase: RISK_PROFILES.meanrev_stocks.initialEquity,
-      legacyBase: RISK_PROFILES.meanrev_stocks.initialEquity,
-      equitySemantics: EQUITY_SEMANTICS.SLEEVE_LEDGER,
-    },
-    scheduler: { kind: "index-meanrev-daily", label: "meanrev" },
-  };
-}
-
 // ── factory consumption helpers (main() uses the FACTORY plans; the pure
 // functions above are the parity reference) ─────────────────────────────
 // F3b: PORTFOLIOS_SOURCE=code|db (default code). main() resolves the source
@@ -1030,13 +627,6 @@ function momentumPlanFor(id: string): MomentumPortfolioPlan {
   registerGrossCap(id, plan.engineConfig.maxGrossExposureMult, "equity");
   return plan;
 }
-function meanrevPlanFor(id: string): MeanRevPortfolioPlan {
-  const plan = buildPortfolioPlan(portfolioDefinition(id), Date.now());
-  if (plan.template !== "meanrev_connors") throw new Error(`portfolio '${id}': expected a meanrev_connors plan`);
-  // Dashboard exposure chips (display only); MeanRevEngine caps × baseUsd (the allocation).
-  registerGrossCap(id, plan.engineConfig.maxGrossExposureMult, "allocation");
-  return plan;
-}
 function persistenceFor(s: StatePersistenceSpec): MomentumStatePersistence {
   return fileStatePersistence(s.path, s.currentBase, s.legacyBase, s.equitySemantics);
 }
@@ -1063,10 +653,6 @@ async function main() {
     corporateActions?: CorporateActionsMonitor;
     cryptoEngine?: MomentumEngine;
     usdcEngine?: MomentumEngine;
-    coinmEngine?: MomentumEngine;
-    stocksTickTimer?: ReturnType<typeof setTimeout>;
-    stocksDailyInterval?: ReturnType<typeof setInterval>;
-    meanrevInterval?: ReturnType<typeof setInterval>;
     treasuryInterval?: ReturnType<typeof setInterval>;
     stopPortfolioEngines?: () => void;
   } = {};
@@ -1076,10 +662,6 @@ async function main() {
     heartbeats.stop(); // stop the checker first so teardown doesn't self-page
     handles.cryptoEngine?.stop();
     handles.usdcEngine?.stop();
-    handles.coinmEngine?.stop();
-    if (handles.stocksTickTimer) clearTimeout(handles.stocksTickTimer);
-    if (handles.stocksDailyInterval) clearInterval(handles.stocksDailyInterval);
-    if (handles.meanrevInterval) clearInterval(handles.meanrevInterval);
     if (handles.treasuryInterval) clearInterval(handles.treasuryInterval);
     handles.stopPortfolioEngines?.();
     handles.fundingMonitor?.stop();
@@ -1110,8 +692,8 @@ async function main() {
   console.log(`
 ╔══════════════════════════════════════════════════╗
 ║  🤖 Uncle Carl Trading Bot v8                    ║
-║  Momentum TSM — two sleeves, one engine          ║
-║  crypto: Binance perps 24/7 · stocks: Alpaca RTH ║
+║  crypto: Momentum TSM, Binance perps 24/7        ║
+║  stocks: portfolio engine, Alpaca RTH            ║
 ╚══════════════════════════════════════════════════╝
   `);
 
@@ -1163,14 +745,23 @@ async function main() {
     // label (owner edit, cutover script, un-archive) is applied now.
     const applied = markPendingPortfoliosActive(getDB());
     log.info(`📁 Portfolio source: db (${defs.length} platform_portfolios definitions${applied.length > 0 ? `; applied pending edits: ${applied.join(", ")}` : ""})`);
-    // BrokerSync ownership boundary (B-4): the live portfolio engines' symbols beyond the static
-    // incumbent universes (RW8's SH) are theirs to adopt — registered BEFORE BrokerSync starts below.
-    const owned = portfolioEngineOwnedSymbols(defs);
+  } else {
+    log.info("📁 Portfolio source: code (built-in definitions)");
+  }
+  // BrokerSync ownership boundary (B-4): the live portfolio engines' symbols beyond the static
+  // sleeve universes (RW8's SH) are theirs to adopt — registered BEFORE BrokerSync starts below.
+  // The registry's live definitions AND the code's built-in stock definitions (the fallback
+  // index.ts runs when the registry gives a stock sleeve no live engine, 8c): in the normal
+  // case both name the same model, so the union adds nothing; in a fallback or code-source boot
+  // it is the fallback engine's book that must not be filed under alpaca_main.
+  {
+    const owned = portfolioEngineOwnedSymbols([
+      ...(dbPortfolioDefs ? [...dbPortfolioDefs.values()] : []),
+      ...Object.values(STOCK_SLEEVE_BUILTIN_DEFINITION).map(id => builtinPortfolio(id)),
+    ]);
     registerSleeveOwnedSymbols("alpaca", owned.alpaca);
     registerSleeveOwnedSymbols("binance", owned.binance);
     if (owned.alpaca.length + owned.binance.length > 0) log.info(`📁 Portfolio-engine symbols registered as sleeve-owned: alpaca [${owned.alpaca.join(", ")}] binance [${owned.binance.join(", ")}]`);
-  } else {
-    log.info("📁 Portfolio source: code (built-in definitions)");
   }
 
   // 1b. F4a — runtime broker credentials. Registry mode resolves the two
@@ -1279,8 +870,8 @@ async function main() {
     log.error(`instance manifest publish failed (non-fatal): ${e?.message ?? e}`);
   }
 
-  // 4b. Optional certified sleeves (momentum_crypto_usdc / momentum_btc) —
-  // OFF by default (MOMENTUM_USDC_ENABLED / MOMENTUM_COINM_ENABLED). Each
+  // 4b. Optional certified sleeve (momentum_crypto_usdc) — OFF by default
+  // (MOMENTUM_USDC_ENABLED). The
   // executor runs its own read-only preflight BEFORE init(): refuses
   // anything but a testnet/demo host, one-way position mode, single-asset
   // margin mode, an existing balance row, and TRADING exchangeInfo filters.
@@ -1354,37 +945,34 @@ async function main() {
     }
   }
 
-  let coinmExecutor: BinanceCoinMExecutor | null = null;
-  let coinmLive = false; // only true when MOMENTUM_COINM_ENABLED=true (gates engine construction below)
+  // 4c. COIN-M (DAPI) wallet — ACCOUNT truth only. The momentum_btc ENGINE
+  // (BinanceCoinMMomentumAdapter, opt-in by MOMENTUM_COINM_ENABLED) was
+  // retired by the owner on 2026-11-07 (audit C, FLAG-DEAD: switched off since
+  // 2026-09-21, no return path by design): nothing in this process can OPEN a
+  // COIN-M position any more, and the flag is no longer read. What stays is
+  // the wallet: it holds BTC collateral, its equity is part of the owner's
+  // total (binance_coinm_main series, dashboard/Telegram broker truth), and a
+  // position left over from the engine's era would still be reconciled and
+  // closed by AccountManager.syncBinanceCoinM. Mandate 2026-07-19: "DAPI truth
+  // always exists independently of the trading flag."
+  //   · open momentum_btc DB rows → CLOSE-ONLY (reconcile/close, never open);
+  //   · none (prod today) → TRUTH-ONLY (read-only equity sync; see
+  //     attachCoinmExecutor and syncBinanceCoinM's truth-only guard for why
+  //     reconciliation must NOT run there: the account's own real DAPI
+  //     position would look like an "orphan" and be emergency-closed).
+  // F4b: COIN-M stays .env-configured (not in the accounts registry). A fresh
+  // registry-mode installation has NO COIN-M keys — attaching the DAPI-truth
+  // executor would only produce a spurious preflight ERROR on every boot.
+  // With no exposure and no keys there is no truth to sync: skip quietly.
+  // Same presence rule as assertRequiredConfig: .env.example's "your_*"
+  // placeholders count as missing (a fresh install copies them verbatim).
   {
-    const enabled = process.env.MOMENTUM_COINM_ENABLED === "true";
-    coinmLive = enabled;
     const hasExposure = getOpenTrades("momentum_btc").length > 0;
-    // DAPI truth (binance_coinm_main) is attached UNCONDITIONALLY — mandate
-    // 2026-07-19: "DAPI truth always exists independently of the trading
-    // flag." The account already carries a real DAPI balance regardless of
-    // whether momentum_btc has ever traded, and the consolidated total must
-    // reflect it rather than silently omitting a funded ledger. The flag
-    // (`enabled`) and `hasExposure` only decide WHICH of the three sleeve
-    // modes AccountManager runs: live (opens new positions), close-only
-    // (flag off but real DB exposure needs reconciling), or truth-only
-    // (flag off, no exposure — read-only equity sync; see attachCoinmExecutor
-    // and syncBinanceCoinM's truth-only guard for why reconciliation must
-    // NOT run in that case: it would treat the account's own real DAPI
-    // position as an unowned "orphan" and emergency-close it).
-    // F4b: COIN-M stays .env-configured (not in the accounts registry). A
-    // fresh registry-mode installation has NO COIN-M keys — attaching the
-    // DAPI-truth executor would only produce a spurious preflight ERROR on
-    // every boot. With the flag off, no exposure and no keys there is no
-    // truth to sync: skip quietly. Prod (keys present in .env) and any
-    // env-mode install are untouched: keys present → unchanged path.
-    // Same presence rule as assertRequiredConfig: .env.example's "your_*"
-    // placeholders count as missing (a fresh install copies them verbatim).
     const coinmKeysPresent =
       (credentialPresent(process.env.BINANCE_COINM_API_KEY) || credentialPresent(process.env.BINANCE_FUTURES_API_KEY)) &&
       (credentialPresent(process.env.BINANCE_COINM_SECRET_KEY) || credentialPresent(process.env.BINANCE_FUTURES_SECRET_KEY));
-    if (!enabled && !hasExposure && !coinmKeysPresent) {
-      log.info("momentum_btc/DAPI: no COIN-M keys configured — truth sync not started (flag off, no exposure)");
+    if (!hasExposure && !coinmKeysPresent) {
+      log.info("momentum_btc/DAPI: no COIN-M keys configured — truth sync not started (no exposure)");
     } else {
     const candidate = new BinanceCoinMExecutor();
     const pf = await candidate.preflight();
@@ -1396,22 +984,18 @@ async function main() {
       // read-only diagnostic wallet the operator can fix and restart for.
       log.error(`🚫 momentum_btc/DAPI preflight FAILED — binance_coinm_main truth unavailable: ${pf.reason}`);
       insertActivity(null, "circuit", `momentum_btc/DAPI preflight failed: ${pf.reason}`);
-    } else if (!(await candidate.init({ skipStartupStopReconcile: coinmSkipStartupStopReconcile(enabled, hasExposure) }))) {
+    } else if (!(await candidate.init({ skipStartupStopReconcile: coinmSkipStartupStopReconcile(hasExposure) }))) {
       if (hasExposure) throw new Error("momentum_btc: open DB exposure exists but executor.init() failed — refusing to boot with abandoned exposure");
       log.error("🚫 momentum_btc/DAPI init failed after preflight passed — binance_coinm_main truth unavailable");
       insertActivity(null, "circuit", "momentum_btc/DAPI init failed after preflight passed");
     } else {
-      coinmExecutor = candidate;
-      if (enabled) {
-        accountManager.attachCoinmExecutor(candidate, { live: true });
-        log.info("✅ momentum_btc preflight passed — executor connected");
-      } else if (hasExposure) {
+      if (hasExposure) {
         accountManager.attachCoinmExecutor(candidate, { live: false });
-        log.warn("⚠️ momentum_btc: flag OFF but open DB exposure exists — CLOSE-ONLY mode (reconcile/close only, no new entries)");
-        insertActivity(null, "circuit", "momentum_btc: flag OFF with open exposure — running close-only");
+        log.warn("⚠️ momentum_btc: open DB exposure exists but the COIN-M engine was retired (2026-11-07) — CLOSE-ONLY mode (reconcile/close only, no new entries)");
+        insertActivity(null, "circuit", "momentum_btc: open exposure with no engine — running close-only");
       } else {
         accountManager.attachCoinmExecutor(candidate, { truthOnly: true });
-        log.info("ℹ️ momentum_btc disabled (MOMENTUM_COINM_ENABLED=false, no exposure) — DAPI truth-only sync active (binance_coinm_main)");
+        log.info("ℹ️ momentum_btc: engine retired (2026-11-07), no exposure — DAPI truth-only sync active (binance_coinm_main)");
       }
     }
     }
@@ -1473,53 +1057,117 @@ async function main() {
 
   // 8b. RW2 — the portfolio engine (docs/reports/RW-reescritura-rentable.md §4, src/portfolio-engine/README.md).
   // Registry definitions with template "portfolio" (PORTFOLIOS_SOURCE=db) put the engine on an
-  // EXISTING sleeve: observer = computes and persists, sends nothing, the incumbent trades on;
-  // live = it REPLACES the incumbent (portfolioEnabled() above is false for the sleeve), adopts its
-  // rows and takes them out of the stop machinery. Engines are CONSTRUCTED here, before any incumbent:
-  // a definition that is misconfigured or cannot be built leaves its sleeve to the incumbent and pages
-  // (never two engines on one sleeve, never none because of a bad definition). Rollback = the
-  // definition back to observer / removed: the sleeve's PORTFOLIO rows are handed back to the
-  // incumbent below, before it starts. No definition → this whole block is a no-op.
+  // EXISTING sleeve: observer = computes and persists, sends nothing, whatever manages the sleeve
+  // trades on; live = it manages the sleeve (on crypto it REPLACES the incumbent MomentumEngine:
+  // portfolioEnabled() above is false for the sleeve), adopts its rows and takes them out of the
+  // stop machinery. Engines are CONSTRUCTED here, before any incumbent: a definition that is
+  // misconfigured or cannot be built does not run live, and pages (never two engines on one sleeve).
+  //   crypto: the incumbent keeps the sleeve; a rollback hands the PORTFOLIO rows back to it below.
+  //   stocks (8c): there is NO incumbent since 2026-11-07 — the fallback is the code's built-in
+  //   definition of the same live model; failing that, the sleeve has no manager and this pages.
   const portfolioAlert = (context: string, message: string) => {
     log.error(`🚨 ${context}: ${message}`);
     insertActivity(null, "circuit", `${context}: ${message}`);
     eventBus.emit(EVENTS.ERROR_BURST, { context, message, count: 1, windowMs: 0, firstAt: Date.now(), lastAt: Date.now() });
   };
-  const peWiring = resolvePortfolioWiring({
-    defs: dbPortfolioDefs ? [...dbPortfolioDefs.values()] : [],
-    venueReady: {
-      alpaca: alpacaVenueLinked ? null : "alpaca venue UNLINKED",
-      binance_usdm: binanceVenueLinked ? null : "binance venue UNLINKED",
-      binance_usdc: usdcExecutor && usdcLive ? null : "momentum_crypto_usdc executor not attached (MOMENTUM_USDC_ENABLED=true and a connected USDC pool required)",
-    },
-  });
-  const peBuilt = buildPortfolioEngines(peWiring, {
+  // An UNLINKED venue (no account linked yet — a fresh install — already a warning and a circuit
+  // activity in step 1b) makes every definition on it unrunnable: a known state, not a new incident,
+  // so it is a warning here, not a page. A live sleeve that stops deciding is paged by guardian G2.
+  const portfolioNotice = (context: string, message: string) => {
+    log.warn(`⚠️ ${context}: ${message}`);
+    insertActivity(null, "circuit", `${context}: ${message}`);
+  };
+  const peWiring_venueReady = {
+    alpaca: alpacaVenueLinked ? null : "alpaca venue UNLINKED",
+    binance_usdm: binanceVenueLinked ? null : "binance venue UNLINKED",
+    binance_usdc: usdcExecutor && usdcLive ? null : "momentum_crypto_usdc executor not attached (MOMENTUM_USDC_ENABLED=true and a connected USDC pool required)",
+  };
+  const peSources = {
     alpacaExecutor: alpacaVenueLinked ? accountManager.executor.alpaca : null,
     binanceTransports: {
       binance_usdm: binanceVenueLinked ? accountManager.executor.binance.venueTransport : null,
       binance_usdc: usdcExecutor ? usdcExecutor.venueTransport : null,
     },
+  };
+  const peWiring = resolvePortfolioWiring({
+    defs: dbPortfolioDefs ? [...dbPortfolioDefs.values()] : [],
+    venueReady: peWiring_venueReady,
   });
-  for (const p of peBuilt.problems) portfolioAlert("PortfolioCutover", `definition '${p.definitionId}' (${p.sleeve ?? "?"}) ${p.severity === "live_refused" ? "NOT live" : "ignored"}: ${p.message}`);
+  const peBuilt = buildPortfolioEngines(peWiring, peSources);
+  const venueUnlinked = (definitionId: string): boolean => {
+    const venue = (dbPortfolioDefs?.get(definitionId)?.params as { venue?: string } | undefined)?.venue;
+    return venue != null && (peWiring_venueReady as Record<string, string | null>)[venue] != null;
+  };
+  for (const p of peBuilt.problems) {
+    (venueUnlinked(p.definitionId) ? portfolioNotice : portfolioAlert)("PortfolioCutover", `definition '${p.definitionId}' (${p.sleeve ?? "?"}) ${p.severity === "live_refused" ? "NOT live" : "ignored"}: ${p.message}`);
+  }
+
+  // 8c. Stock sleeves run ONLY on the portfolio engine (owner, 2026-11-07, audit C: the TSM/Connors
+  // incumbents and their Alpaca adapter were deleted). When the registry gives a stock sleeve no
+  // live engine — no enabled definition (code source, deleted/disabled/archived row), a refused one
+  // (bad hash, unknown version, overlap…) or one that could not be built — the sleeve falls back to
+  // the code's BUILT-IN definition of the same current live model (src/portfolios/builtin.ts,
+  // pe_<sleeve>, hash-locked to its manifest) and pages: the model that trades is never silently
+  // another one, and the book is never left without a manager because of a registry problem. The
+  // registry's own definitions for that sleeve (including observers of it) are not started in a
+  // fallback boot — exactly one engine per sleeve. If even the built-in cannot run the sleeve has
+  // NO MANAGER: with the alpaca venue UNLINKED (no account linked — reported at step 1b; a fresh
+  // install, which also has no Alpaca rows: 1b refuses to boot with abandoned exposure) that is a
+  // warning; a fallback refused with the venue linked pages on EVERY boot. Either way guardian G2
+  // (decision liveness, scripts/guardian.ts) pages hourly a live sleeve that stops deciding; open
+  // rows are reported by restoreIncumbentRows below, never adopted by a stop machinery that no
+  // longer exists. Enforced: src/index.portfolioCutover.test.ts, src/portfolio-engine/live/cutover.test.ts,
+  // src/portfolios/builtinPortfolioEngine.test.ts, scripts/public-export/fresh-install.sh (0 ERROR lines).
+  const fallbackPlans: typeof peWiring.live = [];
+  for (const [sleeve, builtinId] of Object.entries(STOCK_SLEEVE_BUILTIN_DEFINITION)) {
+    if (peBuilt.live.has(sleeve)) continue;
+    const why = peBuilt.problems.filter(p => p.sleeve === sleeve).map(p => `${p.definitionId}: ${p.message}`).join("; ")
+      || (dbPortfolioDefs ? "no enabled live portfolio definition for the sleeve in platform_portfolios" : "PORTFOLIOS_SOURCE=code");
+    if (!alpacaVenueLinked) {
+      portfolioNotice("PortfolioCutover", `${sleeve}: NO MANAGER — alpaca venue UNLINKED, so neither the registry definition nor the built-in fallback can run (${why}); nobody decides for this sleeve until an Alpaca account is linked (a live sleeve that stops deciding is paged by guardian G2)`);
+      continue;
+    }
+    const builtin = builtinPortfolio(builtinId);
+    const fbVersion = (builtin.params as { strategyVersion?: string }).strategyVersion ?? builtinId;
+    if (dbPortfolioDefs) portfolioAlert("PortfolioCutover", `${sleeve}: the registry gives no live portfolio engine (${why}) — falling back to the code's built-in definition '${builtinId}' (${fbVersion}); fix platform_portfolios (scripts/portfolio-engine-cutover.ts) so the registry and the code agree`);
+    else log.info(`📁 ${sleeve}: PORTFOLIOS_SOURCE=code — built from the built-in portfolio-engine definition '${builtinId}' (${fbVersion})`);
+    const fbWiring = resolvePortfolioWiring({ defs: fallbackDefinitions(dbPortfolioDefs ? [...dbPortfolioDefs.values()] : [], sleeve, builtin), venueReady: peWiring_venueReady });
+    const fbBuilt = buildPortfolioEngines({ observers: [], live: fbWiring.live.filter(p => p.params.sleeve === sleeve), problems: fbWiring.problems.filter(p => p.sleeve === sleeve) }, peSources);
+    const engine = fbBuilt.live.get(sleeve);
+    if (!engine) {
+      portfolioAlert("PortfolioCutover", `${sleeve}: NO MANAGER — the built-in fallback '${builtinId}' could not run either (${fbBuilt.problems.map(p => p.message).join("; ") || "unknown"}); nobody decides for this sleeve and its open rows carry no stop — guardian G2 will keep paging until the code or the venue is fixed`);
+      continue;
+    }
+    peBuilt.live.set(sleeve, engine);
+    fallbackPlans.push(...fbWiring.live.filter(p => p.params.sleeve === sleeve));
+    // One engine per sleeve: the registry's observers of a sleeve in fallback are not started.
+    const dropped = peBuilt.observers.filter(e => e.accountId === sleeve);
+    if (dropped.length > 0) {
+      peBuilt.observers = peBuilt.observers.filter(e => e.accountId !== sleeve);
+      portfolioAlert("PortfolioCutover", `${sleeve}: ${dropped.length} observer definition(s) of the sleeve not started this boot (the built-in fallback is its only engine)`);
+    }
+  }
   portfolioCutoverSleeves = new Set(peBuilt.live.keys());
   accountManager.setPortfolioEngineSleeves(portfolioCutoverSleeves);
   // Resolve actual ownership BEFORE starting adoption / stop loops.
   log.info("Starting account manager...");
   await accountManager.start();
-  for (const plan of peWiring.live) {
+  const livePlans = [...peWiring.live, ...fallbackPlans];
+  for (const plan of livePlans) {
     const id = plan.params.sleeve ?? plan.portfolioId;
     if (!peBuilt.live.has(id)) continue;
     botNowEngines.push(() => ({ id, engine: "portfolio", maxGrossX: "maxGross" in plan.params.strategy ? plan.params.strategy.maxGross : null,
       cadenceMinutes: 1440, strategy: plan.params.strategy, version: plan.params.strategyVersion }));
   }
   for (const sleeve of portfolioCutoverSleeves) {
-    log.warn(`🔀 ${sleeve}: LIVE on the portfolio engine — the incumbent engine is not built (no entries, no exits)`);
-    insertActivity(sleeve, "system", `${sleeve} managed by the portfolio engine (live); incumbent engine not built this boot`);
+    const fromFallback = fallbackPlans.some(p => p.params.sleeve === sleeve);
+    log.warn(`🔀 ${sleeve}: LIVE on the portfolio engine${fromFallback ? " (built-in fallback definition)" : ""}${PORTFOLIO_SLEEVES[sleeve]?.incumbentStrategy ? " — the incumbent engine is not built (no entries, no exits)" : ""}`);
+    insertActivity(sleeve, "system", `${sleeve} managed by the portfolio engine (live${fromFallback ? ", built-in fallback definition" : ""})`);
   }
   {
+    // Only the crypto sleeves still have an incumbent MomentumEngine to fall back to; a stock sleeve
+    // without a live portfolio engine has NO manager (paged above and by restoreIncumbentRows).
     const incumbentExpected: Record<string, boolean> = {
-      momentum_stocks: alpacaVenueLinked && portfolioEnabled("momentum_stocks"),
-      meanrev_stocks: alpacaVenueLinked && process.env.MEANREV_ENABLED !== "false" && portfolioEnabled("meanrev_stocks"),
       momentum_crypto: binanceVenueLinked && portfolioEnabled("momentum_crypto"),
       momentum_crypto_usdc: !!usdcExecutor && usdcLive && portfolioEnabled("momentum_crypto_usdc"),
     };
@@ -1529,8 +1177,7 @@ async function main() {
     }
     await restoreIncumbentRows(managers, {
       alert: portfolioAlert,
-      // Binance arms its native stop at open only; a handed-back row needs one. Stocks: the 15s loop
-      // and the native-stop pass of AccountManager pick the re-tagged row up by themselves.
+      // Binance arms its native stop at open only; a handed-back row needs one.
       armStop: async (sleeve, row) => {
         const exec = sleeve === "momentum_crypto_usdc" ? usdcExecutor : sleeve === "momentum_crypto" ? accountManager.executor.binance : null;
         if (!exec) return true;
@@ -1540,10 +1187,11 @@ async function main() {
     });
   }
 
-  // 9. Momentum engines — ALWAYS ON (the only signal engine in v8).
-  const momentumLog = createLogger("Momentum");
-  // Per-sleeve logger contexts: four MomentumEngines + two MeanRevEngines
-  // used to share ONE anonymous "[Momentum]" context, so a line like
+  // 9. Momentum engines — the two Binance sleeves (the Alpaca momentum/meanrev
+  // incumbents were retired 2026-11-07; the stock sleeves run on the portfolio
+  // engine, 8b/8c above).
+  // Per-sleeve logger contexts: the MomentumEngines used to share ONE
+  // anonymous "[Momentum]" context, so a line like
   // "BLOCKED: soft drawdown 10.1% — paused 24h" could not be attributed
   // without reading all four risk-state files (2026-08-02, live incident of
   // exactly that). The context also shapes ERROR_BURST dedupe and the
@@ -1557,16 +1205,16 @@ async function main() {
     };
   };
 
-  // Sleeve governor — RECOMMENDS, never switches. Owner mandate 2026-08-08
-  // ("siempre live, no demo"): neither demotion nor promotion is automatic,
-  // because shadow books are not live-equivalent (no hard-SL simulation), so a
-  // sleeve parked there neither earns nor produces usable evidence — the worst
-  // of both. A bleeding sleeve emits RECOMMEND_REDESIGN and a profitable shadow
-  // one emits RECOMMEND_PROMOTE; a human decides with scripts/set-sleeve-mode.ts.
-  // Risk control that KEEPS a sleeve live is RiskGuard's drawdown pauses
-  // (declared per sleeve in SLEEVE_POLICY). Live sleeve adapters are wrapped in SwitchingAdapter so
-  // a demoted sleeve keeps managing residual real positions while opening only
-  // simulated ones.
+  // Sleeve governor — RECOMMENDS, never switches. Owner rules: a sleeve is
+  // never parked in shadow, paused indefinitely or switched off (2026-08-08
+  // "siempre live, no demo"; 2026-09-26 a failing strategy is REDESIGNED so
+  // it keeps trading). Since 2026-11-07 there is no shadow mode in the code
+  // at all (owner, audit C): the governor only keeps each sleeve's evidence
+  // epoch and emits RECOMMEND_REDESIGN when a matured live sleeve sits below
+  // its validated expectation band. Risk control that KEEPS a sleeve live is
+  // RiskGuard's sizing (declared per sleeve in SLEEVE_POLICY). Live momentum
+  // adapters are wrapped in SwitchingAdapter for the RiskEngine veto and the
+  // TRADING_ENABLED backstop on every opening order.
   // The governor judges each sleeve against its validated expectation band
   // (owner, 2026-10-04): the same scorecard the digest and the "POR DEBAJO"
   // page use, read-only, once per daily pass.
@@ -1576,144 +1224,12 @@ async function main() {
   // so it is registered here — the watchdog is never blind to a live book. Its evidence version is the
   // model version the engine stamps on its rows: the epoch restarts at the cutover (closes of the
   // retired model are not evidence against the new band), and the band it is judged against is the
-  // version's own artifact (scorecard ← modelVersions). Mode stays whatever sleeve_modes says (live).
+  // version's own artifact (scorecard ← modelVersions).
   for (const sleeve of portfolioCutoverSleeves) {
-    governor.register({ sleeve, kind: "live", evidenceVersion: currentModelVersionId(sleeve) ?? `portfolio:${sleeve}` });
+    governor.register({ sleeve, evidenceVersion: currentModelVersionId(sleeve) ?? `portfolio:${sleeve}` });
   }
-  const shadowFor = (sleeve: string, opts: { strategy: string; closeReason: string; timeframe: string; market: "stock" | "crypto" }) =>
-    new ShadowAdapter(accountManager.executor.alpaca, {
-      accountId: `shadow_${sleeve}`,
-      baseUsd: 50_000,
-      ...opts,
-    });
-
-  /** Once-per-ET-trading-day scheduler (≥ 09:35 ET, market open). Used by
-   *  the meanrev sleeve.
-   *
-   *  Retry control:
-   *  - Persisted per-date attempts in data/daily-run-<label>-retry.json.
-   *  - Incomplete universe data retries up to maxDataRetries with exponential
-   *    backoff, then entries are skipped for the day (exits still run once).
-   *  - Terminal action failures (buying-power/qty/suspended symbol) mark the
-   *    day failed/manual-review and stop resubmitting.
-   *  - Holidays remain no-ops; successful days are idempotent. */
-  const scheduleDailyStockRun = (
-    label: string,
-    run: (opts: { skipEntries: boolean }) => Promise<MeanRevReport>,
-    opts?: { maxDataRetries?: number },
-  ): ReturnType<typeof setInterval> => {
-    const markerPath = `data/daily-run-${label}.txt`;
-    const retry = new MeanRevRetryController(`data/daily-run-${label}-retry.json`, {
-      maxDataRetries: opts?.maxDataRetries ?? 3,
-    });
-    let lastRunKey = existsSync(markerPath) ? readFileSync(markerPath, "utf-8").trim() : "";
-    let running = false;
-    let terminalLogged = false;
-
-    const tick = async () => {
-      if (running) return;
-      if (!isMarketOpen()) return;
-      const minutesSinceETMidnight = (Date.now() - getETDayStart()) / 60_000;
-      if (minutesSinceETMidnight < 9 * 60 + 35) return; // ≥ 09:35 ET
-      const todayKey = getETDateKey();
-      if (lastRunKey === todayKey) return; // once per ET trading day
-
-      const decision = retry.shouldRun(todayKey, Date.now());
-      if (!decision.run) return;
-
-      running = true;
-      try {
-        retry.recordAttempt(todayKey, Date.now());
-        const report = await run({ skipEntries: decision.skipEntries });
-        for (const err of report.errors) momentumLog.warn(`${label}: ${err}`);
-        // Why the pass failed: an error, the terminal reason, or the first
-        // failed close/open (a blocked open carries no error — the warning
-        // used to print an empty reason).
-        const failedAction = report.closes.find((c) => !c.ok) ?? report.opens.find((o) => !o.ok);
-        const failureWhy = report.errors[0] ?? report.terminalReason
-          ?? (failedAction ? `${failedAction.symbol}: ${failedAction.detail ?? "failed"}` : undefined);
-
-        if (report.status === "terminal_action_failure") {
-          retry.markTerminal(todayKey, report.terminalReason ?? "unknown", Date.now());
-          if (!terminalLogged) {
-            const msg = `${label} daily run TERMINAL FAILURE: ${report.terminalReason ?? "unknown"} — manual review required`;
-            momentumLog.error(msg);
-            insertActivity(null, "circuit", msg);
-            eventBus.emit(EVENTS.ERROR_BURST, {
-              context: "MeanRevRetry",
-              message: msg,
-              count: 1,
-              windowMs: 0,
-              firstAt: Date.now(),
-              lastAt: Date.now(),
-            });
-            terminalLogged = true;
-          }
-          return;
-        }
-
-        if (report.status === "incomplete_data" || report.status === "action_failure") {
-          if (decision.skipEntries) {
-            // Exhausted retries; mark the day failed so we don't resubmit all day.
-            const reason = failureWhy ?? `${report.status} after retries`;
-            retry.markTerminal(todayKey, reason, Date.now());
-            const msg = `${label} daily run FAILED after retries: ${reason} — manual review required`;
-            momentumLog.error(msg);
-            insertActivity(null, "circuit", msg);
-            eventBus.emit(EVENTS.ERROR_BURST, {
-              context: "MeanRevRetry",
-              message: msg,
-              count: 1,
-              windowMs: 0,
-              firstAt: Date.now(),
-              lastAt: Date.now(),
-            });
-          } else {
-            momentumLog.warn(`${label} daily run ${report.status}: ${failureWhy ?? ""} — will retry`);
-          }
-          return;
-        }
-
-        // ok or entries_skipped
-        if (report.status === "entries_skipped") {
-          const msg = `${label}: entries skipped for ${todayKey} after data retries; exits processed`;
-          momentumLog.warn(msg);
-          insertActivity(null, "system", msg);
-        }
-        const tmp = `${markerPath}.tmp`;
-        writeFileSync(tmp, todayKey);
-        renameSync(tmp, markerPath);
-        lastRunKey = todayKey;
-        retry.markSuccess(todayKey);
-      } catch (e: any) {
-        momentumLog.error(`${label} daily run failed: ${e?.message ?? e}`);
-      } finally {
-        running = false;
-      }
-    };
-    setTimeout(() => { tick().catch(() => {}); }, 30_000); // boot run if conditions hold
-    return setInterval(() => { tick().catch(() => {}); }, 5 * 60_000);
-  };
 
   // 9a. Crypto sleeve — 8 perps, 1h bars, 60min rebalance, 24/7.
-  // Recent deployed-config windows are negative (2025 and 2026 YTD), so this
-  // registers shadow by default. ONE-TIME migration: earlier deploys ran
-  // this sleeve live and may have persisted a 'live' sleeve_modes row, which
-  // would silently override the registered shadow default below (a
-  // persisted row always wins over a registered fallback). Force shadow
-  // exactly once via migrateOnce — never again, so a later legitimate manual
-  // promotion back to live survives restarts instead of being reset every
-  // boot. That later promotion happened: the owner overrode this sleeve to
-  // live on 2026-08-08 via scripts/set-sleeve-mode.ts, which is exactly the
-  // "legitimate manual promotion" this migrateOnce guard was written to
-  // protect. Since 2026-10-04 the REGISTERED default below is "live" too
-  // (owner rule: a sleeve is never parked in shadow; with the old "shadow"
-  // default, a DB without its sleeve_modes row — restore, fresh install,
-  // fork — would have started it in shadow with nobody deciding it). The
-  // effective mode still lives in the sleeve_modes table (/healthz/full →
-  // sleeveModes); the migrateOnce below is refused by the governor anyway.
-  // Promotion recommendations are explicitly INELIGIBLE until the shadow
-  // simulator gains hard-SL parity and this evidenceVersion is bumped.
   // F3b: in db mode a disabled/archived row (owner action) means the
   // engine is NOT built — AccountManager's 15s stop-loss loop and
   // BrokerSync keep managing any open rows for the account regardless.
@@ -1726,30 +1242,19 @@ async function main() {
   } else if (!portfolioEnabled("momentum_crypto")) {
     log.warn("momentum_crypto: platform_portfolios row disabled or cut over to the portfolio engine — engine NOT built (stop-loss loop and broker syncs keep running)");
   } else {
-    governor.migrateOnce(
-      "2026-07-16_momentum_crypto_shadow_default",
-      "momentum_crypto",
-      "shadow",
-      "one-time migration: route new momentum_crypto targets to shadow (recent windows negative)",
-    );
     governor.register({
       sleeve: "momentum_crypto",
-      kind: "live",
-      promotionEligible: false,
       evidenceVersion: MOMENTUM_CRYPTO_EVIDENCE_VERSION,
     });
     const cryptoPlan = momentumPlanFor("momentum_crypto");
     if (cryptoPlan.adapter.kind !== "binance_usdm") throw new Error("momentum_crypto plan: expected a binance_usdm adapter");
     const cryptoAdapter = new SwitchingAdapter(
       "momentum_crypto",
-      governor,
       new BinanceMomentumAdapter(
         accountManager.executor.alpaca,
         accountManager.executor.binance,
         cryptoPlan.adapter.options,
       ),
-      shadowFor("momentum_crypto", cryptoPlan.shadow),
-      "momentum_crypto",
     );
     cryptoEngine = new MomentumEngine(
       // Engine config + provenance: momentumCryptoPortfolioPlan() above —
@@ -1784,21 +1289,17 @@ async function main() {
   if (usdcExecutor && usdcLive && portfolioEnabled("momentum_crypto_usdc")) {
     governor.register({
       sleeve: "momentum_crypto_usdc",
-      kind: "live",
       evidenceVersion: MOMENTUM_USDC_EVIDENCE_VERSION,
     });
     const usdcPlan = momentumPlanFor("momentum_crypto_usdc");
     if (usdcPlan.adapter.kind !== "binance_usdm") throw new Error("momentum_crypto_usdc plan: expected a binance_usdm adapter");
     const usdcAdapter = new SwitchingAdapter(
       "momentum_crypto_usdc",
-      governor,
       new BinanceMomentumAdapter(
         accountManager.executor.alpaca,
         usdcExecutor,
         usdcPlan.adapter.options,
       ),
-      shadowFor("momentum_crypto_usdc", usdcPlan.shadow),
-      "momentum_crypto_usdc",
     );
     usdcEngine = new MomentumEngine(
       // Engine config + provenance: momentumUsdcPortfolioPlan() above —
@@ -1816,239 +1317,13 @@ async function main() {
     log.info("🚀 momentum_crypto_usdc engine started (daily rebalance 00:00 UTC, 24/7, max 5 positions)");
   }
 
-  // 9a-btc. momentum_btc — COIN-M BTCUSD_PERP, single-symbol universe (only
-  // one slot exists — maxLongs=1 is redundant but explicit), 2x leverage.
-  // Wired only when the preflight above attached an executor.
-  let coinmEngine: MomentumEngine | null = null;
-  if (coinmExecutor && coinmLive && portfolioEnabled("momentum_btc")) {
-    governor.register({
-      sleeve: "momentum_btc",
-      kind: "live",
-      evidenceVersion: "v8.2-coinm-launch",
-    });
-    const coinmPlan = momentumPlanFor("momentum_btc");
-    if (coinmPlan.adapter.kind !== "binance_coinm") throw new Error("momentum_btc plan: expected a binance_coinm adapter");
-    const coinmAdapter = new SwitchingAdapter(
-      "momentum_btc",
-      governor,
-      new BinanceCoinMMomentumAdapter(coinmExecutor, coinmPlan.adapter.options),
-      shadowFor("momentum_btc", coinmPlan.shadow),
-      "momentum_btc",
-    );
-    coinmEngine = new MomentumEngine(
-      // Engine config: momentumBtcPortfolioPlan() above (parity-locked).
-      coinmPlan.engineConfig,
-      coinmAdapter,
-      sleeveLogger(coinmPlan.loggerContext),
-      persistenceFor(coinmPlan.statePersistence),
-    );
-    coinmEngine.setDecisionRecorder(createDecisionRecorder(), "momentum_btc");
-    botNowEngines.push(() => ({ id: "momentum_btc", engine: "momentum", maxGrossX: coinmPlan.engineConfig.maxGrossExposureMult ?? null,
-      cadenceMinutes: coinmPlan.engineConfig.rebalanceMinutes!, statePath: coinmPlan.statePersistence.path, risk: coinmEngine!.getRiskState() }));
-    handles.coinmEngine = coinmEngine;
-    await coinmEngine.start();
-    log.info("🚀 momentum_btc engine started (60min rebalance, 24/7, single position)");
-  }
-
-  // 9b. Stocks sleeve — factory plan; config + provenance in
-  // momentumStocksPortfolioPlan() above (parity-locked by
-  // src/portfolios/parity.test.ts). NOT engine.start(): index.ts owns the
-  // tick and ONLY fires it while the market is open — planRebalance on
-  // stale/empty candles would close every position.
-  let stocksEngine: MomentumEngine | null = null;
-  if (!alpacaVenueLinked) {
-    // F4b: registry mode without a linked alpaca account — no engine (see
-    // the registry block above; logged + activity row there).
-    log.warn("momentum_stocks: alpaca venue UNLINKED (ACCOUNTS_SOURCE=registry) — engine NOT built");
-  } else if (!portfolioEnabled("momentum_stocks")) {
-    // F3b: db mode, row disabled (owner action) — engine not built; the
-    // 15s stop-loss loop, broker-native stops and syncs keep managing any
-    // open rows for the shared Alpaca account.
-    log.warn("momentum_stocks: platform_portfolios row disabled or cut over to the portfolio engine — engine NOT built (stop-loss loop, native stops and broker syncs keep running)");
-  } else {
-    const dailyHorizon = MOMENTUM_STOCKS_DAILY_HORIZON;
-    const stocksPlan = momentumPlanFor("momentum_stocks");
-    if (stocksPlan.adapter.kind !== "alpaca") throw new Error("momentum_stocks plan: expected an alpaca adapter");
-    governor.register({
-      sleeve: "momentum_stocks",
-      kind: "live",
-      evidenceVersion: MOMENTUM_STOCKS_EVIDENCE_VERSION,
-    });
-    const stocksAdapter = new SwitchingAdapter(
-      "momentum_stocks",
-      governor,
-      new AlpacaMomentumAdapter(accountManager.executor.alpaca, stocksPlan.adapter.options),
-      shadowFor("momentum_stocks", stocksPlan.shadow),
-      "momentum_stocks",
-    );
-    const stocks = new MomentumEngine(
-      stocksPlan.engineConfig,
-      stocksAdapter,
-      sleeveLogger(stocksPlan.loggerContext),
-      persistenceFor(stocksPlan.statePersistence),
-    );
-    stocks.setDecisionRecorder(createDecisionRecorder(), "momentum_stocks");
-    botNowEngines.push(() => ({ id: "momentum_stocks", engine: "momentum", maxGrossX: stocksPlan.engineConfig.maxGrossExposureMult ?? null,
-      cadenceMinutes: 1440, statePath: stocksPlan.statePersistence.path, risk: stocks.getRiskState() }));
-    stocksEngine = stocks;
-    // index.ts owns this loop (engine.start() not called) so it registers the
-    // name; stocksEngine.tick() beats it on a successful in-hours rebalance.
-    // Daily-horizon mode registers at the daily cadence with the meanrev grace
-    // (MeanRevEngine's own registration convention for a once-a-day loop).
-    if (stocksPlan.heartbeat) {
-      heartbeats.register(
-        stocksPlan.heartbeat.name,
-        stocksPlan.heartbeat.intervalMs,
-        stocksPlan.heartbeat.graceMultiplier !== undefined ? { graceMultiplier: stocksPlan.heartbeat.graceMultiplier } : undefined,
-      );
-    }
-    if (stocksPlan.scheduler.kind === "index-stocks-daily") {
-      // ── Daily-horizon scheduler (opt-in) ─────────────────────────────
-      // One pass per ET trading day at ≥ 09:35 (momentumStocksDailyTickDue —
-      // the scheduleDailyStockRun discipline: decide on yesterday's COMPLETED
-      // daily bar, fill after today's open). Marker file = once-a-day
-      // idempotency across restarts; a throwing tick leaves the marker
-      // unwritten, so the 60s interval retries until the pass completes —
-      // and a persistently broken pass surfaces as a stale heartbeat page
-      // (tick() only beats on a successful rebalance).
-      const dailyMarkerPath = stocksPlan.scheduler.markerPath;
-      let lastDailyKey = existsSync(dailyMarkerPath) ? readFileSync(dailyMarkerPath, "utf-8").trim() : "";
-      let dailyRunning = false;
-      // A failing pass retries every 60s — one ERROR log a minute never reaches
-      // the logger's 10/60s burst threshold, and the 24h×5 heartbeat grace
-      // would take days to notice. Page ops once per ET day after
-      // DAILY_FAIL_PAGE_AFTER consecutive failed attempts (~10 min).
-      const DAILY_FAIL_PAGE_AFTER = 10;
-      let dailyFailStreak = 0;
-      let dailyFailPagedKey = "";
-      handles.stocksDailyInterval = setInterval(async () => {
-        if (!momentumStocksDailyTickDue(Date.now(), lastDailyKey)) { heartbeats.beat("momentum:stocks"); return; }
-        if (dailyRunning) return;
-        dailyRunning = true;
-        const todayKey = getETDateKey();
-        try {
-          await stocks.tick();
-          const tmp = `${dailyMarkerPath}.tmp`;
-          writeFileSync(tmp, todayKey);
-          renameSync(tmp, dailyMarkerPath);
-          lastDailyKey = todayKey;
-          dailyFailStreak = 0;
-        } catch (e: any) {
-          dailyFailStreak++;
-          momentumLog.error(`stocks daily tick failed (${dailyFailStreak}×): ${e?.message ?? e} — will retry`);
-          if (dailyFailStreak >= DAILY_FAIL_PAGE_AFTER && dailyFailPagedKey !== todayKey) {
-            dailyFailPagedKey = todayKey;
-            eventBus.emit(EVENTS.ERROR_BURST, {
-              context: "Momentum:stocks",
-              message: `momentum_stocks daily pass failing ${dailyFailStreak}× in a row today (${e?.message ?? e}) — no decision taken yet; open positions keep their stops`,
-              count: dailyFailStreak,
-              windowMs: dailyFailStreak * 60_000,
-              firstAt: Date.now() - dailyFailStreak * 60_000,
-              lastAt: Date.now(),
-            });
-          }
-        } finally {
-          dailyRunning = false;
-        }
-      }, 60_000);
-    } else {
-    const stocksTick = () => {
-      // Market closed: the loop is alive and correctly sitting out — beat so the
-      // ×2 grace doesn't false-page overnight/weekends. In-hours, tick() beats on
-      // success, so a throwing/wedged rebalance still goes stale and pages.
-      if (!isMarketOpen()) { heartbeats.beat("momentum:stocks"); return; } // CRITICAL: never tick when the market is closed
-      stocks.tick().catch((e: any) => momentumLog.error(`stocks tick failed: ${e?.message ?? e}`));
-    };
-    // Bar-close-aligned hourly scheduler (nextAlignedTickDelayMs, shared with
-    // MomentumEngine.start()): ticks fire at each :00 boundary + 15s so the
-    // decision reads the JUST-CLOSED hourly bar — the exact instant the
-    // backtest decides on — instead of a boot-random phase re-randomized on
-    // every deploy. Recursive setTimeout (not setInterval) re-anchors the
-    // delay to the boundary each cycle; handles.stocksTickTimer is refreshed
-    // every hop so shutdown always clears the CURRENT pending timeout.
-    const scheduleStocksTick = () => {
-      handles.stocksTickTimer = setTimeout(() => {
-        stocksTick();
-        scheduleStocksTick();
-      }, nextAlignedTickDelayMs(Date.now(), 60));
-    };
-    scheduleStocksTick();
-    // Early boot tick (30s, as before — positions need management after a
-    // restart) only when the next aligned tick is far away (>5min); if a
-    // boundary is imminent, the aligned tick IS the early tick.
-    if (nextAlignedTickDelayMs(Date.now(), 60) > EARLY_BOOT_TICK_MIN_LEAD_MS) {
-      setTimeout(stocksTick, 30_000); // first tick shortly after boot (if market open)
-    }
-    }
-    // Past-split applied to DB rows/positions/native stops (AccountManager) →
-    // rescale the trail watermarks too, or a pre-split peak (e.g. $1,200 across
-    // a 10:1 split) fires a spurious TRAIL_STOP on the first ~$120 tick.
-    // momentum_stocks is the only sleeve with tsmTrail (crypto perps don't
-    // split); scaleMarksForSplit is a silent no-op for unmarked symbols.
-    eventBus.on(EVENTS.CORPORATE_ACTION_APPLIED, ({ symbol, ratio }: { symbol: string; ratio: number }) => {
-      stocks.scaleMarksForSplit(symbol, ratio);
-    });
-    log.info(dailyHorizon
-      ? `🚀 momentum_stocks engine wired (DAILY-HORIZON mode: 1Day bars, h${dailyHorizon.lookbackDaysList ? dailyHorizon.lookbackDaysList.join('+') : dailyHorizon.lookbackDays}/ma${dailyHorizon.maLengthDays}, one pass per ET trading day ≥ 09:35)`
-      : "🚀 momentum_stocks engine wired (60min tick, bar-close aligned, market hours only)");
-  }
-
-  // 9c. MeanRev stocks sleeve — daily RSI2 mean-reversion, one pass per ET
-  // trading day shortly after the open (≥ 09:35, signals on yesterday's
-  // completed daily bar). Kill switch: MEANREV_ENABLED=false.
-  let meanrevInterval: ReturnType<typeof setInterval> | null = null;
-  if (!alpacaVenueLinked) {
-    log.warn("meanrev_stocks: alpaca venue UNLINKED (ACCOUNTS_SOURCE=registry) — engine NOT built");
-  } else if (process.env.MEANREV_ENABLED !== "false" && portfolioEnabled("meanrev_stocks")) {
-    governor.register({
-      sleeve: "meanrev_stocks",
-      kind: "live",
-      evidenceVersion: "v8-meanrev",
-    });
-    const meanrevPlan = meanrevPlanFor("meanrev_stocks");
-    const meanrevAdapter = new SwitchingAdapter(
-      "meanrev_stocks",
-      governor,
-      new AlpacaMomentumAdapter(accountManager.executor.alpaca, meanrevPlan.adapter.options),
-      shadowFor("meanrev_stocks", meanrevPlan.shadow),
-      "meanrev_stocks",
-    );
-    const meanrevEngine = new MeanRevEngine(
-      // Factory plan — engine config + provenance in
-      // meanrevStocksPortfolioPlan() above (parity-locked by
-      // src/portfolios/parity.test.ts). risk is re-asserted inline with the
-      // IDENTICAL value the plan carries (a no-op spread) because
-      // src/index.test.ts enforces the SLEEVE_LEDGER semantics on this
-      // construction site itself: the two stock sleeves share one Alpaca
-      // wallet, and one sleeve's drawdown must never pause the other.
-      { ...meanrevPlan.engineConfig, risk: { equitySemantics: EQUITY_SEMANTICS.SLEEVE_LEDGER } },
-      meanrevAdapter,
-      sleeveLogger(meanrevPlan.loggerContext),
-      undefined,
-      persistenceFor(meanrevPlan.statePersistence),
-    );
-    meanrevEngine.setDecisionRecorder(createDecisionRecorder());
-    botNowEngines.push(() => ({ id: "meanrev_stocks", engine: "meanrev", maxGrossX: meanrevPlan.engineConfig.maxGrossExposureMult ?? null,
-      cadenceMinutes: 1440, statePath: meanrevPlan.statePersistence.path, risk: meanrevEngine.getRiskState() }));
-    const meanrevLabel = meanrevPlan.scheduler.kind === "index-meanrev-daily" ? meanrevPlan.scheduler.label : "meanrev";
-    meanrevInterval = scheduleDailyStockRun(meanrevLabel, async ({ skipEntries }) => {
-      const report = await meanrevEngine.runDaily({ skipEntries });
-      for (const err of report.errors) momentumLog.warn(`meanrev: ${err}`);
-      return report;
-    });
-    handles.meanrevInterval = meanrevInterval;
-    log.info("🚀 meanrev_stocks engine wired (daily pass ≥ 09:35 ET)");
-  } else {
-    log.info("meanrev_stocks disabled (MEANREV_ENABLED=false, platform_portfolios row disabled or cut over to the portfolio engine)");
-  }
-
   // 9c-pe. Portfolio engines start LAST among the sleeve engines. Last line of defence first: a sleeve
   // whose portfolio engine is live must not have an incumbent (impossible by construction — the
-  // cutover set gates every incumbent above); if it ever happens the portfolio engine yields.
+  // cutover set gates every incumbent above, and the stock sleeves have none); if it ever happens
+  // the portfolio engine yields.
   {
     const incumbentBuilt = (sleeve: string): boolean => ({
       momentum_crypto: cryptoEngine !== null, momentum_crypto_usdc: usdcEngine !== null,
-      momentum_stocks: stocksEngine !== null, meanrev_stocks: meanrevInterval !== null,
     } as Record<string, boolean>)[sleeve] ?? false;
     for (const sleeve of sleevesWithTwoManagers(peBuilt.live.keys(), incumbentBuilt)) {
       portfolioAlert("PortfolioCutover", `${sleeve}: TWO managers (incumbent built AND portfolio engine live) — the portfolio engine is NOT started; the incumbent manages the sleeve`);
@@ -2118,9 +1393,7 @@ async function main() {
     });
     const states: Record<string, ReturnType<typeof toCircuit>> = {};
     if (cryptoEngine) states.momentum_crypto = toCircuit(cryptoEngine.getRiskState());
-    if (stocksEngine) states.momentum_stocks = toCircuit(stocksEngine.getRiskState());
     if (usdcEngine) states.momentum_crypto_usdc = toCircuit(usdcEngine.getRiskState());
-    if (coinmEngine) states.momentum_btc = toCircuit(coinmEngine.getRiskState());
     return states;
   });
 

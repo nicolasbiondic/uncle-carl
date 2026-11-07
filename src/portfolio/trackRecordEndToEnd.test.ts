@@ -9,7 +9,6 @@
 import express from "express";
 import { describe, expect, test, beforeAll } from "bun:test";
 import { makeTestDb, rawSnap } from "../test-support/db";
-import { SleeveGovernor } from "../governor/SleeveGovernor";
 import { registerAnalyticsRoutes } from "../dashboard/routes/analytics";
 import { registerMetricsEndpoint } from "../metrics/PrometheusExporter";
 import { getDailySleeveReturns } from "./sleeveReturns";
@@ -39,10 +38,7 @@ beforeAll(() => {
     rawSnap("momentum_crypto", equity, dayNoon + 4 * 3_600_000, 5);         // end-of-day mark
   }
 
-  // momentum_stocks: shadow sleeve (the exact sleeve whose evidence we want
-  // to accumulate) — mode row present, snapshots still flowing.
-  const gov = new SleeveGovernor();
-  gov.setMode("momentum_stocks", "shadow", "capital-allocation research demotion");
+  // momentum_stocks: an idle (flat) sleeve — snapshots still flowing.
   let se = 50_000;
   for (let i = 10; i >= 1; i--) {
     const dayNoon = T_END - i * DAY;
@@ -89,9 +85,8 @@ describe("seeded production-shaped series → returns + track record", () => {
     if (tr.obsNeeded != null) expect(tr.obsMissing).toBe(Math.max(0, tr.obsNeeded - tr.n));
   });
 
-  test("shadow sleeve carries its mode + fresh/stale distinction into the record", () => {
+  test("an idle sleeve carries the fresh/stale distinction into the record", () => {
     const rec = getSleeveTrackRecord("momentum_stocks", { now: T_END });
-    expect(rec.series.mode).toBe("shadow");
     expect(rec.series.equitySource).toBe("ledger");
     expect(rec.series.grid).toBe("trading_days");
     // Last seeded snapshot is ~1 day before T_END → the pipeline is NOT
@@ -129,11 +124,10 @@ describe("exposure surfaces publish the same numbers", () => {
       expect(typeof s.trackRecord.status).toBe("string");
       expect(s.trackRecord).toHaveProperty("psr");
       expect(s.trackRecord).toHaveProperty("obsMissing");
-      expect(s.series).toHaveProperty("mode");
       expect(s.series).toHaveProperty("seriesFresh");
     }
     const stocks = body.sleeves.find((s: any) => s.profileId === "momentum_stocks");
-    expect(stocks.series.mode).toBe("shadow");
+    expect(stocks.series.equitySource).toBe("ledger");
     const btc = body.sleeves.find((s: any) => s.profileId === "momentum_btc");
     expect(btc.trackRecord.status).toBe("no_data"); // never seeded — honestly empty
   });

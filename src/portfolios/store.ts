@@ -17,7 +17,7 @@
  * deep-equal to factory(builtin) for every sleeve.
  */
 import type { Database } from "bun:sqlite";
-import { builtinPortfolios } from "./builtin";
+import { builtinPortfolios, RETIRED_BUILTIN_IDS } from "./builtin";
 import type { PortfolioAccountId, PortfolioDefinition, PortfolioMode, PortfolioParams, PortfolioTemplate } from "./types";
 
 export type PortfoliosSource = "code" | "db";
@@ -111,6 +111,14 @@ export function initPlatformPortfolios(db: Database, nowMs: number = Date.now())
       refresh.run(def.name, def.template, def.account, def.capital, def.mode, def.enabled ? 1 : 0, paramsJson, nowMs, def.id);
     }
   }
+  // Seeds this code no longer ships and cannot run (RETIRED_BUILTIN_IDS):
+  // archived, disabled, never deleted. Only untouched seeds (source='builtin');
+  // an owner-edited row is the owner's to archive.
+  const retire = db.prepare(`
+    UPDATE platform_portfolios SET enabled = 0, status = 'archived', updated_at = ?
+    WHERE id = ? AND source = 'builtin' AND (status != 'archived' OR enabled != 0)
+  `);
+  for (const id of RETIRED_BUILTIN_IDS) retire.run(nowMs, id);
 }
 
 function rowToRecord(r: any): PlatformPortfolioRow {

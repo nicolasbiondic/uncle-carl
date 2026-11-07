@@ -38,7 +38,6 @@ import { registerBotNowRoutes } from "./routes/botNow";
 import type { BotNowRuntime } from "./botNow";
 import { loadPlatformPortfolioRows, resolvePortfoliosSource, insertPlatformPortfolio, updatePlatformPortfolio } from "../portfolios/store";
 import { liveBandReadings } from "../portfolio/scorecard";
-import { getLastConstructedSleeveGovernor } from "../governor/SleeveGovernor";
 import { getDB } from "../db/database";
 
 const log = createLogger("Dashboard");
@@ -318,7 +317,6 @@ export class DashboardServer {
       source: portfoliosSource,
       listPortfolios: () => loadPlatformPortfolioRows(getDB()),
       bandReadings: () => liveBandReadings(getDB()),
-      effectiveMode: (id) => getLastConstructedSleeveGovernor()?.getMode(id) ?? null,
       ...(portfoliosSource === "db" ? {
         write: {
           accounts: () => this.am.runtimeAccounts(),

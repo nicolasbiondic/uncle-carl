@@ -212,7 +212,7 @@ describe("create from a validated preset", () => {
       expect(VALIDATED_PRESETS[preset].portfolioEngine).toEqual(preset === "momentum_stocks"
         ? { version: "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger-sh50", candidate: "e1-lev-vt30-g250-maxhold5-stagger-sh50" }
         : { version: "meanrev_stocks@pe-vt15-mh5-stagger", candidate: "vt15-maxhold5-stagger" });
-      const rows = seededRows((r) => { const x = r.find((y) => y.id === preset)!; x.status = "archived"; x.enabled = false; });
+      const rows = seededRows((r) => { const x = r.find((y) => y.id === `pe_${preset}`)!; x.status = "archived"; x.enabled = false; });
       const out = validateCreatePortfolio(
         { id: `${preset}_v2`, name: "v2", account: "alpaca_main", capital: 1_000, preset },
         ctx(rows), NOW,
@@ -315,7 +315,7 @@ describe("free template — honest by construction", () => {
     if (out.ok) expect(out.row.validation).toBe("unvalidated");
   });
 
-  test("schema ranges bite: maxLongs, gross cap 2.0×, equity-semantics ↔ account, meanrev off-alpaca", () => {
+  test("schema ranges bite: maxLongs, gross cap 2.0×, equity-semantics ↔ account, retired templates (meanrev_connors; momentum_tsm on alpaca_main)", () => {
     const base = { id: "free_mom", name: "F", account: "binance_usdt" as const, capital: 1_000, template: "momentum_tsm" as const };
     const r1 = validateCreatePortfolio({ ...base, params: { ...freeParams(), maxLongs: 50 } }, ctx(seededRows()), NOW);
     expect(r1.ok).toBe(false);
@@ -325,12 +325,17 @@ describe("free template — honest by construction", () => {
     const r3 = validateCreatePortfolio({ ...base, params: { ...freeParams(), equitySemantics: EQUITY_SEMANTICS.SLEEVE_LEDGER } }, ctx(seededRows()), NOW);
     expect(r3.ok).toBe(false);
     if (!r3.ok) expect(r3.errors.join(" ")).toContain("equitySemantics");
+    // 2026-11-07: the Connors template and the Alpaca momentum adapter were retired with the stock
+    // incumbents — neither can be created any more (the stock sleeves run on the portfolio engine).
     const r4 = validateCreatePortfolio(
-      { id: "free_mr", name: "F", account: "binance_usdt", capital: 1_000, template: "meanrev_connors", params: presetParamsFor("meanrev_stocks", "free_mr", 1_000) },
+      { id: "free_mr", name: "F", account: "alpaca_main", capital: 1_000, template: "meanrev_connors", params: { volStop: { kSigma: 3, lookbackBars: 20, minPct: 2, maxPct: 12 } } },
       ctx(seededRows()), NOW,
     );
     expect(r4.ok).toBe(false);
-    if (!r4.ok) expect(r4.errors.join(" ")).toContain("alpaca_main");
+    if (!r4.ok) expect(r4.errors.join(" ")).toContain("meanrev_connors is retired");
+    const r4b = validateCreatePortfolio({ ...base, account: "alpaca_main", params: { ...freeParams(), universe: ["TLT"], equitySemantics: EQUITY_SEMANTICS.SLEEVE_LEDGER } }, ctx(seededRows()), NOW);
+    expect(r4b.ok).toBe(false);
+    if (!r4b.ok) expect(r4b.errors.join(" ")).toContain("no engine runs this template on alpaca_main");
     const r5 = validateCreatePortfolio({ ...base, params: { ...freeParams(), cutover: { at: 1, expiresAt: 2 } } as any }, ctx(seededRows()), NOW);
     expect(r5.ok).toBe(false);
     if (!r5.ok) expect(r5.errors.join(" ")).toContain("cutover");
@@ -340,9 +345,9 @@ describe("free template — honest by construction", () => {
 describe("PATCH — pending_restart lifecycle, unvalidated mark, owner-only archive", () => {
   test("replacing params marks the row unvalidated and pending_restart", () => {
     const rows = seededRows();
-    const stocks = rows.find((r) => r.id === "momentum_stocks")!;
-    const newParams = { ...(stocks.params as MomentumTsmParams), volStop: { kSigma: 6, lookbackBars: 20, minPct: 4, maxPct: 25 } };
-    const out = validatePatchPortfolio("momentum_stocks", { params: newParams }, ctx(rows), NOW);
+    const crypto = rows.find((r) => r.id === "momentum_crypto")!;
+    const newParams = { ...(crypto.params as MomentumTsmParams), volStop: { kSigma: 6, lookbackBars: 20, minPct: 4, maxPct: 25 } };
+    const out = validatePatchPortfolio("momentum_crypto", { params: newParams }, ctx(rows), NOW);
     expect(out.ok).toBe(true);
     if (!out.ok) return;
     expect(out.row.validation).toBe("unvalidated"); // edited away from the artifact
@@ -351,8 +356,8 @@ describe("PATCH — pending_restart lifecycle, unvalidated mark, owner-only arch
 
   test("identical params keep the validated mark (no-op is a no-op)", () => {
     const rows = seededRows();
-    const stocks = rows.find((r) => r.id === "momentum_stocks")!;
-    const out = validatePatchPortfolio("momentum_stocks", { params: stocks.params }, ctx(rows), NOW);
+    const crypto = rows.find((r) => r.id === "momentum_crypto")!;
+    const out = validatePatchPortfolio("momentum_crypto", { params: crypto.params }, ctx(rows), NOW);
     expect(out.ok).toBe(true);
     if (out.ok) {
       expect(out.row.validation).toBe("validated");
@@ -361,35 +366,48 @@ describe("PATCH — pending_restart lifecycle, unvalidated mark, owner-only arch
   });
 
   test("a real edit makes the row the owner's (the boot seed stops refreshing it); a no-op keeps it builtin", () => {
-    const edited = validatePatchPortfolio("meanrev_stocks", { capital: 55_000 }, ctx(seededRows()), NOW);
+    const edited = validatePatchPortfolio("pe_meanrev_stocks", { capital: 55_000 }, ctx(seededRows()), NOW);
     expect(edited.ok).toBe(true);
     if (edited.ok) expect(edited.row.source).toBe("owner");
-    const renamed = validatePatchPortfolio("momentum_stocks", { name: "Stocks (renamed)" }, ctx(seededRows()), NOW);
+    const renamed = validatePatchPortfolio("pe_momentum_stocks", { name: "Stocks (renamed)" }, ctx(seededRows()), NOW);
     if (renamed.ok) expect(renamed.row.source).toBe("owner");
     const rows = seededRows();
-    const noop = validatePatchPortfolio("momentum_stocks", { params: rows.find((r) => r.id === "momentum_stocks")!.params }, ctx(rows), NOW);
+    const noop = validatePatchPortfolio("momentum_crypto", { params: rows.find((r) => r.id === "momentum_crypto")!.params }, ctx(rows), NOW);
     if (noop.ok) expect(noop.row.source).toBe("builtin");
   });
 
   test("name-only edits need no restart", () => {
-    const out = validatePatchPortfolio("momentum_stocks", { name: "Stocks (renamed)" }, ctx(seededRows()), NOW);
+    const out = validatePatchPortfolio("pe_momentum_stocks", { name: "Stocks (renamed)" }, ctx(seededRows()), NOW);
     expect(out.ok).toBe(true);
     if (out.ok) expect(out.row.status).toBe("active");
   });
 
   test("capital edits re-check the account sum (shared Alpaca wallet)", () => {
-    const out = validatePatchPortfolio("meanrev_stocks", { capital: 70_000 }, ctx(seededRows()), NOW);
-    // 50k (momentum_stocks) + 70k > 110k equity → refused
+    const out = validatePatchPortfolio("pe_meanrev_stocks", { capital: 70_000 }, ctx(seededRows()), NOW);
+    // 50k (pe_momentum_stocks) + 70k > 110k equity → refused
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.errors.join(" ")).toContain("> account equity");
-    const ok = validatePatchPortfolio("meanrev_stocks", { capital: 55_000 }, ctx(seededRows()), NOW);
+    const ok = validatePatchPortfolio("pe_meanrev_stocks", { capital: 55_000 }, ctx(seededRows()), NOW);
     expect(ok.ok).toBe(true);
     if (ok.ok) expect(ok.row.status).toBe("pending_restart");
   });
 
+  test("a portfolio-engine definition's params cannot be edited via the API (the cutover script writes them with their hash); a retired-template row can only be archived", () => {
+    const rows = seededRows();
+    const pe = rows.find((r) => r.id === "pe_momentum_stocks")!;
+    const out = validatePatchPortfolio("pe_momentum_stocks", { params: { ...(pe.params as any), minOrderNotional: 1 } }, ctx(rows), NOW);
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.errors.join(" ")).toContain("scripts/portfolio-engine-cutover.ts");
+    const legacy: PlatformPortfolioRow = { ...pe, id: "meanrev_stocks", template: "meanrev_connors", enabled: false, status: "archived", params: { volStop: { kSigma: 3, lookbackBars: 20, minPct: 2, maxPct: 12 } } as any };
+    const edit = validatePatchPortfolio("meanrev_stocks", { params: legacy.params }, ctx([...rows, legacy]), NOW);
+    expect(edit.ok).toBe(false);
+    if (!edit.ok) expect(edit.errors.join(" ")).toContain("retired template");
+    expect(validatePatchPortfolio("meanrev_stocks", { archived: true }, ctx([...rows, { ...legacy, status: "active" }]), NOW).ok).toBe(true);
+  });
+
   test("archive/unarchive is an explicit owner flag; unknown id is a clean not-found", () => {
     const rows = seededRows();
-    const out = validatePatchPortfolio("momentum_btc", { archived: true }, ctx(rows), NOW);
+    const out = validatePatchPortfolio("momentum_crypto_usdc", { archived: true }, ctx(rows), NOW);
     expect(out.ok).toBe(true);
     if (out.ok) {
       expect(out.row.status).toBe("archived");
@@ -401,27 +419,27 @@ describe("PATCH — pending_restart lifecycle, unvalidated mark, owner-only arch
   });
 });
 
-describe("RW2: a portfolio-engine definition and its incumbent are ONE sleeve", () => {
-  const pe = (rows: PlatformPortfolioRow[], sleeve = "momentum_stocks"): PlatformPortfolioRow => {
-    const inc = rows.find((r) => r.id === sleeve)!;
+describe("RW2: a portfolio-engine definition and another definition of the SAME sleeve are ONE sleeve", () => {
+  const twin = (rows: PlatformPortfolioRow[], sleeve = "momentum_stocks"): PlatformPortfolioRow => {
+    const live = rows.find((r) => r.id === `pe_${sleeve}`)!;
     return {
-      ...inc, id: `pe_${sleeve}`, template: "portfolio", status: "active", source: "owner", validation: "unvalidated",
-      params: { engine: "portfolio", sleeve, strategy: { kind: "xassetTrend", universe: (inc.params as MomentumTsmParams).universe } } as any,
+      ...live, id: `pe_${sleeve}_obs`, status: "active", source: "owner", validation: "unvalidated",
+      params: { ...(live.params as any), runMode: "observer", strategyVersion: `${sleeve}@obs`, heartbeatName: "portfolio:obs" } as any,
     };
   };
-  test("editing the incumbent is not blocked by its own observer/live twin (same universe, same capital counted once)", () => {
+  test("editing the live definition is not blocked by its own observer twin (same universe, same capital counted once)", () => {
     const rows = seededRows();
-    rows.push(pe(rows));
-    const out = validatePatchPortfolio("momentum_stocks", { capital: rows.find((r) => r.id === "momentum_stocks")!.capital }, ctx(rows), NOW); // $110k equity: the two sleeves hold $100k; the twin must not add its $50k
+    rows.push(twin(rows));
+    const out = validatePatchPortfolio("pe_momentum_stocks", { capital: rows.find((r) => r.id === "pe_momentum_stocks")!.capital }, ctx(rows), NOW); // $110k equity: the two stock sleeves hold $100k; the twin must not add its $50k
     expect(out.ok).toBe(true);
   });
-  test("but a THIRD sleeve still collides with the twin's universe (the rule is not switched off)", () => {
+  test("but the capital rule is not switched off: the OTHER stock sleeve still counts against the account", () => {
     const rows = seededRows();
-    rows.push(pe(rows));
-    const out = validateCreatePortfolio(
-      { id: "stocks_clone", name: "clone", account: "alpaca_main", capital: 100, preset: "momentum_stocks" },
-      ctx(rows), NOW,
-    );
+    rows.push(twin(rows));
+    // $110k equity: pe_meanrev_stocks holds $50k, the twin is excluded → up to $60k fits, $61k does not.
+    expect(validatePatchPortfolio("pe_momentum_stocks", { capital: 60_000 }, ctx(rows), NOW).ok).toBe(true);
+    const out = validatePatchPortfolio("pe_momentum_stocks", { capital: 61_000 }, ctx(rows), NOW);
     expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.errors.join(" ")).toContain("> account equity");
   });
 });

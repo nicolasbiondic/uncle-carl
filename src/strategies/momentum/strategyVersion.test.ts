@@ -11,29 +11,12 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { getDB } from "../../db/database";
 import { makeTestDb } from "../../test-support/db";
 import { currentModelVersionId } from "../../portfolio/modelVersions";
-import { AlpacaMomentumAdapter } from "./AlpacaMomentumAdapter";
 import { BinanceMomentumAdapter } from "./BinanceMomentumAdapter";
 
 beforeAll(() => { makeTestDb(); });
 
 const versionOf = (id: string) =>
   (getDB().prepare(`SELECT strategy_version v FROM trades WHERE id = ?`).get(id) as any).v as string;
-
-function fakeAlpaca(orderId: string) {
-  return {
-    isConnected: () => true,
-    getCachedPrice: () => 100,
-    getLatestPrice: async () => 100,
-    getExecutableQuote: async () => ({ price: 100, timestamp: Date.now() }),
-    getRegTBuyingPower: async () => null,
-    placeOrder: async (signal: any, qty: number) => ({
-      id: orderId, symbol: signal.symbol, market: "stock", side: signal.side, type: "market", quantity: qty,
-      price: signal.price, status: "filled", externalId: `broker-${orderId}`, filledPrice: 100, filledQty: qty,
-      filledAt: Date.now(), submittedAt: Date.now() - 10, submittedPx: 100, createdAt: Date.now(), updatedAt: Date.now(), signal,
-    }),
-    closePosition: async () => ({ success: true, filledPrice: 110, filledQty: 10 }),
-  } as any;
-}
 
 function fakeBinance(orderId: string, nativeSymbol: string) {
   return {
@@ -51,16 +34,9 @@ function fakeBinance(orderId: string, nativeSymbol: string) {
 }
 
 describe("live adapters stamp the sleeve's model version on every row they open", () => {
-  for (const sleeve of ["momentum_stocks", "meanrev_stocks"]) {
-    test(`AlpacaMomentumAdapter (${sleeve})`, async () => {
-      const res = await new AlpacaMomentumAdapter(fakeAlpaca(`alp-${sleeve}`), { accountId: sleeve })
-        .openPosition({ symbol: "MSFT", side: "buy", notionalUsd: 1000 });
-      expect(res.ok).toBe(true);
-      expect(versionOf(`alp-${sleeve}`)).toBe(currentModelVersionId(sleeve)!);
-      expect(versionOf(`alp-${sleeve}`)).not.toBe("legacy");
-    });
-  }
-
+  // The stock sleeves' rows are stamped by the portfolio engine's Alpaca venue
+  // (src/portfolio-engine/live/venues/alpaca.ts, its own tests); the Alpaca
+  // momentum adapter was retired 2026-11-07.
   test("BinanceMomentumAdapter USDT (momentum_crypto)", async () => {
     const res = await new BinanceMomentumAdapter({} as any, fakeBinance("bin-usdt", "BTCUSDT"), { accountId: "momentum_crypto" })
       .openPosition({ symbol: "BTC/USD", side: "buy", notionalUsd: 1000 });
@@ -80,15 +56,12 @@ describe("live adapters stamp the sleeve's model version on every row they open"
     // current model's cutover pass.
     getDB().prepare(
       `INSERT INTO trades (id, symbol, market, side, strategy, entry_price, quantity, entry_time, status, account_id, profile_id, strategy_version)
-       VALUES ('old-meta', 'META', 'stock', 'buy', 'MOMENTUM', 90, 10, ?, 'open', 'momentum_stocks', 'momentum_stocks', 'momentum_stocks@pre-blend')`
+       VALUES ('old-eth', 'ETH/USD', 'crypto', 'buy', 'MOMENTUM', 90, 10, ?, 'open', 'momentum_crypto', 'momentum_crypto', 'momentum_crypto@pre-vt35')`
     ).run(Date.now() - 86_400_000);
-    const adapter = new AlpacaMomentumAdapter({
-      ...fakeAlpaca("alp-unused"),
-      getPositions: async () => [{ symbol: "META", qty: 10 }],
-    }, { accountId: "momentum_stocks" });
-    const closed = await adapter.closePosition({ symbol: "META", side: "buy", closeReason: "MODEL_CUTOVER" });
+    const adapter = new BinanceMomentumAdapter({} as any, fakeBinance("bin-unused", "ETHUSDT"), { accountId: "momentum_crypto" });
+    const closed = await adapter.closePosition({ symbol: "ETH/USD", side: "buy", closeReason: "MODEL_CUTOVER" });
     expect(closed.ok).toBe(true);
-    const row = getDB().prepare(`SELECT status, close_reason, strategy_version FROM trades WHERE id = 'old-meta'`).get() as any;
-    expect(row).toEqual({ status: "closed", close_reason: "MODEL_CUTOVER", strategy_version: "momentum_stocks@pre-blend" });
+    const row = getDB().prepare(`SELECT status, close_reason, strategy_version FROM trades WHERE id = 'old-eth'`).get() as any;
+    expect(row).toEqual({ status: "closed", close_reason: "MODEL_CUTOVER", strategy_version: "momentum_crypto@pre-vt35" });
   });
 });

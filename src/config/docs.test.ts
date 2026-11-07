@@ -4,7 +4,7 @@ import { join } from "path";
 import { ALL_PROFILE_IDS, MOMENTUM_STOCKS_UNIVERSE, MOMENTUM_CRYPTO_UNIVERSE } from "./riskProfiles";
 import { MEANREV_UNIVERSE } from "../strategies/meanrev/MeanRevEngine";
 import { USDC_SYMBOL_MAP } from "../executor/binance/quoteAsset";
-import { MOMENTUM_STOCKS_DAILY_HORIZON } from "../index";
+import { builtinPortfolio, STOCK_SLEEVE_BUILTIN_DEFINITION } from "../portfolios/builtin";
 
 // README.md's sleeve table is the canonical doc source (AGENTS.md points
 // here instead of duplicating it — one table, one place to drift). This
@@ -21,26 +21,34 @@ interface ReadmeRow {
   id: string;
   universeCount: number;
   cadence: string; // "60" or "daily"
-  mode: "live" | "shadow";
+  /** "live" trades; "inactive" = a historical sleeve with no engine (momentum_btc since 2026-11-07). */
+  state: "live" | "inactive";
 }
 
 function parseReadmeSleeveTable(readme: string): ReadmeRow[] {
-  const rowRe = /^\|\s*`([a-z_]+)`\s*\|[^|]+\|\s*(\d+)\s*\|\s*(\d+|daily)\s*\|\s*(live|shadow)/gm;
+  const rowRe = /^\|\s*`([a-z_]+)`\s*\|[^|]+\|\s*(\d+)\s*\|\s*(\d+|daily|—)\s*\|\s*(live|inactive)/gm;
   const rows: ReadmeRow[] = [];
   let m: RegExpExecArray | null;
   while ((m = rowRe.exec(readme))) {
-    rows.push({ id: m[1], universeCount: Number(m[2]), cadence: m[3], mode: m[4] as "live" | "shadow" });
+    rows.push({ id: m[1], universeCount: Number(m[2]), cadence: m[3], state: m[4] as "live" | "inactive" });
   }
   return rows;
 }
 
-// Parses `governor.register({ sleeve: "X", kind: "live"|"shadow", ... })`
-// blocks out of index.ts — the actual runtime source of truth for mode.
-function parseIndexTsGovernorKinds(indexTs: string): Record<string, "live" | "shadow"> {
-  const blockRe = /governor\.register\(\{\s*sleeve:\s*"([a-z_]+)",\s*kind:\s*"(live|shadow)"/g;
-  const out: Record<string, "live" | "shadow"> = {};
+/** The sleeves main() registers with the governor: the crypto momentum engines
+ *  by literal (`governor.register({ sleeve: "X", ...`) and the stock sleeves
+ *  through the portfolio-engine loop (`for (const sleeve of portfolioCutoverSleeves)`),
+ *  which every stock sleeve enters — registry definition or built-in fallback
+ *  (STOCK_SLEEVE_BUILTIN_DEFINITION). Every one of them trades live — there is
+ *  no mode since 2026-11-07. */
+function parseIndexTsRegisteredSleeves(indexTs: string): Set<string> {
+  const blockRe = /governor\.register\(\{\s*sleeve:\s*"([a-z_]+)",/g;
+  const out = new Set<string>();
   let m: RegExpExecArray | null;
-  while ((m = blockRe.exec(indexTs))) out[m[1]] = m[2] as "live" | "shadow";
+  while ((m = blockRe.exec(indexTs))) out.add(m[1]);
+  if (indexTs.includes("for (const sleeve of portfolioCutoverSleeves) {\n    governor.register({ sleeve, evidenceVersion:")) {
+    for (const sleeve of Object.keys(STOCK_SLEEVE_BUILTIN_DEFINITION)) out.add(sleeve);
+  }
   return out;
 }
 
@@ -48,7 +56,7 @@ const README = readFileSync(README_PATH, "utf-8");
 const INDEX_TS = readFileSync(INDEX_PATH, "utf-8");
 const readmeRows = parseReadmeSleeveTable(README);
 const readmeById = Object.fromEntries(readmeRows.map((r) => [r.id, r]));
-const indexKinds = parseIndexTsGovernorKinds(INDEX_TS);
+const indexRegistered = parseIndexTsRegisteredSleeves(INDEX_TS);
 
 describe("README sleeve table vs code (src/config/docs.test.ts)", () => {
   test("every ALL_PROFILE_IDS entry has a row in README's sleeve table", () => {
@@ -61,62 +69,55 @@ describe("README sleeve table vs code (src/config/docs.test.ts)", () => {
   });
 
   test("README universe counts match the code's universe constants", () => {
+    // The stock sleeves' universes are the canonical constants AND the ones
+    // their portfolio-engine definitions trade (locked to each other in
+    // src/portfolios/builtinPortfolioEngine.test.ts).
     expect(readmeById.momentum_stocks?.universeCount).toBe(MOMENTUM_STOCKS_UNIVERSE.length);
+    expect(readmeById.momentum_stocks?.universeCount).toBe((builtinPortfolio("pe_momentum_stocks").params as any).strategy.universe.length);
     expect(readmeById.meanrev_stocks?.universeCount).toBe(MEANREV_UNIVERSE.length);
+    expect(readmeById.meanrev_stocks?.universeCount).toBe((builtinPortfolio("pe_meanrev_stocks").params as any).strategy.universe.length);
     expect(readmeById.momentum_crypto?.universeCount).toBe(MOMENTUM_CRYPTO_UNIVERSE.length);
     expect(readmeById.momentum_crypto_usdc?.universeCount).toBe(Object.keys(USDC_SYMBOL_MAP).length);
-    expect(readmeById.momentum_btc?.universeCount).toBe(1); // single-symbol COIN-M sleeve
+    expect(readmeById.momentum_btc?.universeCount).toBe(0); // engine retired 2026-11-07: no universe trades
   });
 
-  test("README live/shadow mode matches governor.register(...) kind in index.ts", () => {
+  test("README state matches index.ts: a sleeve main() registers with the governor is live; one it never registers is inactive", () => {
     for (const id of ALL_PROFILE_IDS) {
-      expect(indexKinds[id], `governor.register kind missing for "${id}" in index.ts`).toBeDefined();
-      expect(readmeById[id]?.mode, `README row missing/malformed for "${id}"`).toBe(indexKinds[id]);
+      const expected = indexRegistered.has(id) ? "live" : "inactive";
+      expect(readmeById[id]?.state, `README row missing/malformed for "${id}"`).toBe(expected);
     }
+    // The owner rule as code: no "shadow" state exists anywhere for a sleeve
+    // to be parked in (ShadowAdapter, sleeve_modes routing and
+    // scripts/set-sleeve-mode.ts were removed 2026-11-07).
+    expect(INDEX_TS).not.toMatch(/kind:\s*"(live|shadow)"/);
+    expect(INDEX_TS).not.toContain("ShadowAdapter");
+    expect(README).not.toMatch(/\|\s*shadow\s*\|/);
   });
 
-  // Audit fix (2026-09-09): the table above is enforced against the
-  // REGISTERED default (governor.register(..., kind:)) only — it says
-  // nothing about a later manual override in the `sleeve_modes` table
-  // (scripts/set-sleeve-mode.ts), which is the sleeve's actual EFFECTIVE
-  // mode (SwitchingAdapter routes off SleeveGovernor.getMode(), which reads
-  // the DB row when present). Without this note, README's "shadow" for
-  // momentum_crypto reads as the operative truth when it registered shadow
-  // but has run LIVE since 2026-08-08. This doesn't (and can't) validate the
-  // override's CONTENT from static text — it only fails if the doc stops
-  // pointing readers at the one place that does (`/healthz/full`).
-  test("README documents that effective mode can diverge from the registered default", () => {
-    expect(README).toContain("Modo efectivo");
-    expect(README).toContain("/healthz/full");
-    expect(README).toContain("sleeveModes");
-  });
-
-  test("README cadence matches index.ts's rebalanceMinutes literal for the 4 momentum sleeves", () => {
-    // All 4 momentum engines (stocks/crypto/crypto_usdc/btc) are configured
-    // with the SAME `rebalanceMinutes: 60` literal today. If a future change
-    // gives one of them a different cadence without updating README (or vice
-    // versa), this count stops matching and the test fails — it caught the
-    // real "doc says 4h, code says 60min" contradiction on momentum_crypto.
-    // momentum_stocks keeps the (unconsumed) literal but is driven by the
-    // once-a-day ≥09:35 ET scheduler whenever MOMENTUM_STOCKS_DAILY_HORIZON
-    // is set — README must then say "daily".
-    // momentum_crypto_usdc runs the DAILY kernel since 2026-09-26 (U1,
-    // artifact 752767ae…): engine-driven `rebalanceMinutes: 1440` (one
-    // decision per UTC day at 00:00 + 15s via nextAlignedTickDelayMs) —
-    // README must say "daily" for it, like the stocks daily horizon.
-    const momentumSleeves = ["momentum_stocks", "momentum_crypto", "momentum_crypto_usdc", "momentum_btc"];
-    const dailySleeves = new Set<string>(["momentum_crypto_usdc", ...(MOMENTUM_STOCKS_DAILY_HORIZON ? ["momentum_stocks"] : [])]);
-    for (const id of momentumSleeves) {
-      const expected = dailySleeves.has(id) ? "daily" : "60";
-      expect(readmeById[id]?.cadence, `README cadence for "${id}"`).toBe(expected);
-    }
-    const rebalance60Count = (INDEX_TS.match(/rebalanceMinutes: 60,/g) ?? []).length;
-    expect(rebalance60Count).toBe(momentumSleeves.length - 1); // usdc wires 1440
+  test("README cadence matches the engines: crypto from index.ts's rebalanceMinutes literal, stocks from the portfolio engine's daily pass", () => {
+    // The two Binance momentum engines: momentum_crypto wires
+    // `rebalanceMinutes: 60`; momentum_crypto_usdc runs the DAILY kernel since
+    // 2026-09-26 (U1, artifact 752767ae…): engine-driven `rebalanceMinutes:
+    // 1440` (one decision per UTC day at 00:00 + 15s via
+    // nextAlignedTickDelayMs) — README must say "daily" for it. If a future
+    // change gives one of them a different cadence without updating README
+    // (or vice versa), the counts stop matching — this caught the real "doc
+    // says 4h, code says 60min" contradiction on momentum_crypto.
+    expect(readmeById.momentum_crypto?.cadence).toBe("60");
+    expect(readmeById.momentum_crypto_usdc?.cadence).toBe("daily");
+    expect((INDEX_TS.match(/rebalanceMinutes: 60,/g) ?? []).length).toBe(1); // momentum_crypto
     expect((INDEX_TS.match(/rebalanceMinutes: 1440,/g) ?? []).length).toBe(1); // the usdc daily kernel
+    expect(readmeById.momentum_btc?.cadence).toBe("—"); // no engine, no cadence
 
-    // meanrev_stocks is documented as "daily" and driven by the ≥09:35 ET
-    // scheduler, not rebalanceMinutes.
+    // The stock sleeves run on the portfolio engine: one pass per NYSE
+    // session ≥ 09:35 ET (src/portfolio-engine/live/schedule.ts), so README
+    // says "daily" for both. Their TSM/Connors incumbents (and index.ts's
+    // ≥09:35 schedulers) were retired 2026-11-07: no stock engine is wired
+    // in index.ts any more.
+    expect(readmeById.momentum_stocks?.cadence).toBe("daily");
     expect(readmeById.meanrev_stocks?.cadence).toBe("daily");
-    expect(INDEX_TS).toContain("9 * 60 + 35"); // ≥ 09:35 ET gate in scheduleDailyStockRun
+    expect(INDEX_TS).not.toContain("AlpacaMomentumAdapter");
+    expect(INDEX_TS).not.toContain("new MeanRevEngine(");
+    expect(INDEX_TS).toContain("STOCK_SLEEVE_BUILTIN_DEFINITION"); // the built-in fallback is wired
   });
 });

@@ -26,21 +26,18 @@
  * concurrent edit by parallel streams.
  *
  * Consumers: scripts/parity-check.ts (daily live↔replay decision monitor)
- * and scripts/rehearse-daily-pass.ts (next-pass dry run) build their
- * replay/engine configs from THESE derivations, so what they check is what
- * production actually runs — for a sleeve whose INCUMBENT runs. RW2
- * (2026-10-23): a sleeve on the portfolio engine (`managedBy: "portfolio"`,
- * from src/portfolio/modelVersions.ts) is not described by its incumbent
- * derivation; parity-check skips it and LIVE_SLEEVE_MANIFESTS names the RW2
- * manifest the registry definition is hash-locked to.
+ * builds its replay configs from THESE derivations for the two crypto
+ * sleeves, so what it checks is what production actually runs. The stock
+ * sleeves run on the portfolio engine (RW2, 2026-10-23) and since 2026-11-07
+ * have NO incumbent derivation at all (owner, audit C: the TSM/Connors
+ * engines were deleted) — liveSleeveConfig() throws for them; their "vivo =
+ * validado" lock is the registry/built-in definition's provenance hash
+ * (src/portfolio-engine/live/cutover.ts designHash,
+ * src/portfolios/builtinPortfolioEngine.test.ts) and LIVE_SLEEVE_MANIFESTS
+ * names the RW manifest that hash points at.
  */
 
 import {
-  MOMENTUM_STOCKS_MAX_LONGS,
-  MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT,
-  MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT,
-  MOMENTUM_STOCKS_DAILY_HORIZON,
-  MOMENTUM_STOCKS_DAILY_VOL_STOP,
   MOMENTUM_CRYPTO_MAX_LONGS,
   MOMENTUM_CRYPTO_NOTIONAL_PCT_PER_SLOT,
   MOMENTUM_CRYPTO_MAX_GROSS_EXPOSURE_MULT,
@@ -50,13 +47,11 @@ import {
   MOMENTUM_USDC_DAILY_HORIZON,
   MOMENTUM_USDC_DAILY_VOL_STOP,
   MOMENTUM_USDC_EXPOSURE_CONTROL,
-  MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT,
 } from "../index";
 import { USDC_SYMBOL_MAP } from "../executor/binance/quoteAsset";
-import { MOMENTUM_STOCKS_UNIVERSE, MOMENTUM_CRYPTO_UNIVERSE, RISK_PROFILES } from "./riskProfiles";
+import { MOMENTUM_CRYPTO_UNIVERSE, RISK_PROFILES } from "./riskProfiles";
 import { DEFAULT_TSM_CONFIG } from "../strategies/momentum/TimeSeriesMomentum";
 import { DEFAULT_RISK_CONFIG, type RiskGuardConfig } from "../strategies/momentum/RiskGuard";
-import { DEFAULT_MEANREV_CONFIG } from "../strategies/meanrev/MeanRevEngine";
 import type { BreakoutShortConfig, ExposureControlConfig, TimeStopConfig, TrailStopConfig, VolTargetConfig } from "../strategies/momentum/MomentumEngine";
 import { MODEL_VERSIONS, currentModelManifests, isPortfolioEngineSleeve } from "../portfolio/modelVersions";
 
@@ -112,10 +107,6 @@ export interface LiveCandidateConfig {
 // locks them against src/index.ts's source text; if the wiring changes,
 // change BOTH or the lock fails.
 
-/** momentum_stocks `tsm.slotHysteresis` (owner override 2026-09-10, stocks
- *  only; AGENTS.md falsifier: `rg 'slotHysteresis: true' src/index.ts` → 1). */
-export const MOMENTUM_STOCKS_SLOT_HYSTERESIS = true;
-
 /** momentum_crypto `volTarget` (vt-35, wired 2026-09-23; AGENTS.md
  *  falsifier: `rg 'volTarget: \{' src/index.ts` → 1). */
 export const MOMENTUM_CRYPTO_VOL_TARGET = { annualizedPct: 35, lookbackBars: 720, minScale: 0.33, maxScale: 1.5 };
@@ -126,12 +117,8 @@ export const MOMENTUM_CRYPTO_REGIME = { enabled: false };
 /** RW6 owner rule on both live crypto sleeves; source-text locked against index.ts. */
 export const MOMENTUM_CRYPTO_TIME_STOP = { maxHoldHours: 120 };
 
-/** Rolling-Sharpe gate on the daily/COIN-M sleeves; hourly crypto omits it. */
+/** Rolling-Sharpe gate on the daily USDC sleeve; hourly crypto omits it. */
 export const MOMENTUM_SLEEVE_SHARPE_GATE = { lookbackDays: 30, minSharpe: 0 };
-
-/** meanrev_stocks vol-scaled hard stop (owner override 2026-08-28,
- *  artifact 9dcd9781 vol-k3 on daily bars). */
-export const MEANREV_STOCKS_VOL_STOP = { kSigma: 3, lookbackBars: 20, minPct: 2, maxPct: 12 };
 
 // ── authoritative manifests ─────────────────────────────────────────────
 export const LIVE_SLEEVE_IDS = ["momentum_stocks", "meanrev_stocks", "momentum_crypto", "momentum_crypto_usdc"] as const;
@@ -144,11 +131,10 @@ export type LiveSleeveId = (typeof LIVE_SLEEVE_IDS)[number];
  * VALIDATED_PRESETS). Paths are repo-root relative.
  *
  * For a sleeve whose current version runs on the portfolio engine (RW2:
- * momentum_stocks / meanrev_stocks @pe-vt15 since 2026-10-23) this is the RW2
- * manifest whose candidate the registry definition hash-locks at boot
- * (src/portfolio-engine/live/cutover.ts) — NOT the incumbent derivation
- * below, which describes an engine that is not built. Provenance notes per
- * version live next to the table entries.
+ * momentum_stocks / meanrev_stocks since 2026-10-23) this is the RW manifest
+ * whose candidate the registry definition — and the built-in fallback — is
+ * hash-locked to at boot (src/portfolio-engine/live/cutover.ts). Provenance
+ * notes per version live next to the table entries.
  */
 export const LIVE_SLEEVE_MANIFESTS: Readonly<Record<LiveSleeveId, string>> = (() => {
   const current = currentModelManifests();
@@ -163,8 +149,8 @@ export const LIVE_SLEEVE_MANIFESTS: Readonly<Record<LiveSleeveId, string>> = (()
 
 /** The incumbent engine's manifest: the newest version of the sleeve NOT on
  *  the portfolio engine that names one. Equal to LIVE_SLEEVE_MANIFESTS while
- *  the incumbent runs; after a cutover it is what a rollback would return to
- *  and what the incumbent derivation below is locked against. */
+ *  the incumbent runs (both crypto sleeves today); for a crypto sleeve put on
+ *  the portfolio engine it is what a rollback would return to. */
 export function incumbentManifest(sleeve: LiveSleeveId): string {
   const list = MODEL_VERSIONS[sleeve] ?? [];
   for (let i = list.length - 1; i >= 0; i--) {
@@ -181,10 +167,9 @@ export function sleeveManagedBy(sleeve: LiveSleeveId): "incumbent" | "portfolio"
 
 export interface LiveSleeveConfig {
   sleeve: LiveSleeveId;
-  /** "incumbent": this derivation IS what trades. "portfolio": the sleeve
-   *  runs on the portfolio engine (RW2) — the incumbent engine is not built
-   *  and this derivation describes nothing that trades (it stays locked
-   *  against its manifest so a rollback returns to a validated config). */
+  /** "incumbent": this derivation IS what trades. "portfolio": the (crypto)
+   *  sleeve runs on the portfolio engine (RW2) — the incumbent engine is not
+   *  built and this derivation describes what a rollback returns to. */
   managedBy: "incumbent" | "portfolio";
   /** Manifest of the INCUMBENT config this derivation expresses
    *  (incumbentManifest). The manifest of what RUNS is LIVE_SLEEVE_MANIFESTS. */
@@ -212,83 +197,6 @@ export interface LiveSleeveConfig {
 export function effectiveRiskConfig(overrides?: Partial<RiskGuardConfig>): RiskGuardConfig {
   const { equitySemantics: _dropped, ...rest } = { ...DEFAULT_RISK_CONFIG, ...(overrides ?? {}) };
   return rest as RiskGuardConfig;
-}
-
-/** momentum_stocks — live wiring under MOMENTUM_STOCKS_DAILY_HORIZON.
- *  Throws if the daily horizon is switched off: the k8-s8 manifest only
- *  validates the daily kernel, so a revert to the 5m kernel MUST re-point
- *  LIVE_SLEEVE_MANIFESTS and re-derive (loud failure, never silent). */
-export function liveMomentumStocksConfig(): LiveSleeveConfig {
-  const horizon = MOMENTUM_STOCKS_DAILY_HORIZON;
-  if (!horizon) {
-    throw new Error(
-      "liveMomentumStocksConfig: MOMENTUM_STOCKS_DAILY_HORIZON is null (5m kernel) — " +
-      "the k8-s8 manifest no longer describes the live sleeve; re-derive against the 5m manifest",
-    );
-  }
-  return {
-    sleeve: "momentum_stocks",
-    managedBy: sleeveManagedBy("momentum_stocks"),
-    manifestPath: incumbentManifest("momentum_stocks"),
-    candidate: {
-      name: "live:momentum_stocks",
-      cadenceMin: 1440, // one decision per ET trading day ≥ 09:35
-      notionalPctPerSlot: MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT,
-      entryPct: DEFAULT_TSM_CONFIG.entryThresholdPct,
-      exitPct: DEFAULT_TSM_CONFIG.exitThresholdPct,
-      maxLongs: MOMENTUM_STOCKS_MAX_LONGS,
-      maxShorts: DEFAULT_TSM_CONFIG.maxShorts,
-      ...(horizon.lookbackDaysList
-        ? { lookbackDaysList: [...horizon.lookbackDaysList] }
-        : { lookbackDays: horizon.lookbackDays }),
-      maLengthDays: horizon.maLengthDays,
-      slotHysteresis: MOMENTUM_STOCKS_SLOT_HYSTERESIS,
-      hardStop: { mode: "volScaled", ...MOMENTUM_STOCKS_DAILY_VOL_STOP },
-      tsmTrail: { ...MOMENTUM_STOCKS_DAILY_VOL_STOP },
-      sharpeGate: { ...MOMENTUM_SLEEVE_SHARPE_GATE },
-      risk: { peakHalfLifeDays: DEFAULT_RISK_CONFIG.peakHalfLifeDays },
-      // Live-only runtime backstop — see the test's declared-exceptions list.
-      maxGrossExposureMult: MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT,
-    },
-    universe: [...MOMENTUM_STOCKS_UNIVERSE],
-    effectiveRisk: effectiveRiskConfig({ peakHalfLifeDays: DEFAULT_RISK_CONFIG.peakHalfLifeDays }),
-    initialEquity: RISK_PROFILES.momentum_stocks.initialEquity,
-    hardStopFallbackPct: RISK_PROFILES.momentum_stocks.stopLossPct / 100,
-  };
-}
-
-/** meanrev_stocks — DEFAULT_MEANREV_CONFIG is already the single source for
- *  the strategy knobs; index.ts adds only the vol stop + backstop. */
-export function liveMeanRevStocksConfig(): LiveSleeveConfig {
-  return {
-    sleeve: "meanrev_stocks",
-    managedBy: sleeveManagedBy("meanrev_stocks"),
-    manifestPath: incumbentManifest("meanrev_stocks"),
-    candidate: {
-      name: "live:meanrev_stocks",
-      cadenceMin: 1440,
-      hardStop: { mode: "volScaled", ...MEANREV_STOCKS_VOL_STOP },
-      meanrev: {
-        entryRsi: DEFAULT_MEANREV_CONFIG.entryRsi,
-        smaLong: DEFAULT_MEANREV_CONFIG.smaLong,
-        smaExit: DEFAULT_MEANREV_CONFIG.smaExit,
-        timeStopDays: DEFAULT_MEANREV_CONFIG.timeStopDays,
-        maxPositions: DEFAULT_MEANREV_CONFIG.maxPositions,
-        slotPct: DEFAULT_MEANREV_CONFIG.slotPct,
-        // rsiMethod / deterministicTieBreak: only forwarded when the live
-        // engine sets them (today both are undefined = legacy cutler +
-        // iteration-order tie-break, matching the manifest's absence).
-        ...(DEFAULT_MEANREV_CONFIG.rsiMethod !== undefined ? { rsiMethod: DEFAULT_MEANREV_CONFIG.rsiMethod } : {}),
-        ...(DEFAULT_MEANREV_CONFIG.deterministicTieBreak !== undefined
-          ? { deterministicTieBreak: DEFAULT_MEANREV_CONFIG.deterministicTieBreak }
-          : {}),
-      },
-    },
-    universe: [...DEFAULT_MEANREV_CONFIG.universe],
-    effectiveRisk: effectiveRiskConfig(DEFAULT_MEANREV_CONFIG.risk),
-    initialEquity: RISK_PROFILES.meanrev_stocks.initialEquity,
-    hardStopFallbackPct: RISK_PROFILES.meanrev_stocks.stopLossPct / 100,
-  };
 }
 
 /** momentum_crypto — 60min TSM, vt-35 sizing, no entry brakes + System 1 shorts (RW10). */
@@ -369,15 +277,19 @@ export function liveMomentumUsdcConfig(): LiveSleeveConfig {
   };
 }
 
+/** The sleeves with an incumbent-engine derivation (the two Binance momentum sleeves). */
+export const INCUMBENT_SLEEVE_IDS = ["momentum_crypto", "momentum_crypto_usdc"] as const;
+export type IncumbentSleeveId = (typeof INCUMBENT_SLEEVE_IDS)[number];
+
 export function liveSleeveConfig(sleeve: LiveSleeveId): LiveSleeveConfig {
   switch (sleeve) {
-    case "momentum_stocks": return liveMomentumStocksConfig();
-    case "meanrev_stocks": return liveMeanRevStocksConfig();
     case "momentum_crypto": return liveMomentumCryptoConfig();
     case "momentum_crypto_usdc": return liveMomentumUsdcConfig();
+    case "momentum_stocks":
+    case "meanrev_stocks":
+      throw new Error(`liveSleeveConfig(${sleeve}): the sleeve runs on the portfolio engine and has no incumbent derivation since 2026-11-07 — read its design from platform_portfolios (pe_${sleeve}) / src/portfolios/builtin.ts and its version from MODEL_VERSIONS`);
   }
 }
 
-/** meanrev_stocks gross backstop re-exported for the module's own test
- *  (slotPct × maxPositions must equal it — the "never binds" premise). */
-export { MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT, MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT, MOMENTUM_CRYPTO_MAX_GROSS_EXPOSURE_MULT };
+/** Gross backstop re-exported for the module's own test. */
+export { MOMENTUM_CRYPTO_MAX_GROSS_EXPOSURE_MULT };

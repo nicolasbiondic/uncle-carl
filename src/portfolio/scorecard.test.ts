@@ -20,11 +20,12 @@ import {
   readDailyMarks, readTrades, marksToDailyReturns, maxDrawdown, olsAlphaBeta,
   percentile, mulberry32, blockBootstrapBand, classifyBand,
   loadOosDailyReturns, clearArtifactCache, computeExpectationBand,
-  computeWindowMetrics, computeVersionRecords, computeScorecard, bandEpisodeTransitions,
+  computeWindowMetrics, computeVersionRecords, computeScorecard, computeRollingExpectationBand, bandEpisodeTransitions,
   formatScorecardDigestLines, type DailyMark, type ScorecardWindowMetrics,
   SELECTION_BIAS_HAIRCUT, selectionBiasDrift, expectationBandReadings, sleeveExpectationArtifacts,
 } from "./scorecard";
 import { MODEL_VERSIONS, currentModelVersion } from "./modelVersions";
+import { isTradingDay } from "../utils/marketHours";
 
 // ── Fixture DB (standalone minimal schema — never the app's global handle) ──
 
@@ -373,6 +374,17 @@ describe("sleeveExpectationArtifacts — the CURRENT model version's artifact, o
 });
 
 describe("loadOosDailyReturns", () => {
+  test.each(["missing", "corrupt"])("%s artifact is retried after repair without clearing the cache", kind => {
+    const dir = writeArtifactFixture([{ date: "2020-01-01", ret: 0.01 }]);
+    const path = join(dir, "runs.jsonl"), valid = readFileSync(path, "utf8");
+    const ref = { dir, shiftDays: 0, manifest: "fixture" };
+    try {
+      if (kind === "missing") rmSync(path, {}); else writeFileSync(path, "not JSON");
+      expect(loadOosDailyReturns(ref)).toBeNull();
+      writeFileSync(path, valid);
+      expect(loadOosDailyReturns(ref)).toEqual([0.01]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
   test("keeps only outer test folds at the manifest's base costs", () => {
     const dir = writeArtifactFixture([
       { date: "2020-01-01", ret: 0.01 }, { date: "2020-01-02", ret: -0.02 },
@@ -444,6 +456,51 @@ describe("computeExpectationBand", () => {
 });
 
 // ── Selection-bias haircut (S&P 500 PIT research, 2026-10-02) ────────────
+
+describe("rolling band — last 20 completed grid sessions, not the current version", () => {
+  test.each(SCORECARD_ENTITIES.filter(e => e.kind === "sleeve"))("$id survives a recent cutover with the same current OOS bootstrap and haircut", entity => {
+    const db = makeDb();
+    const now = Date.parse("2026-11-07T17:00:00Z");
+    // More than 20 sessions, includes weekends and October→November/DST.
+    for (let ms = Date.parse("2026-09-01T21:00:00Z"), i = 0; ms <= now; ms += 86_400_000, i++)
+      snap(db, entity.id, 100 * Math.pow(0.998, i), ms);
+    const dir = writeArtifactFixture(Array.from({ length: 80 }, (_, i) => ({ date: `2020-${i}`, ret: 0.002 + (i % 5) * 0.001 })));
+    try {
+      const artifacts = { [entity.id]: { dir, shiftDays: 0, manifest: "current-fixture" } };
+      const sc = computeScorecard({ db, now, artifacts });
+      const e = sc.entities.find(e => e.id === entity.id)!;
+      const b = e.rollingBand!;
+      expect(b.horizonSessions).toBe(20);
+      expect(b.status).toBe("below");
+      expect(b.modelVersion).toBe(currentModelVersion(entity.id)!.id);
+      expect(b.artifactDir).toBe(dir);
+      const marks = readDailyMarks(db, entity.id, entity.grid, now).slice(-21);
+      expect(b.liveCumReturnPct).toBeCloseTo((marks.at(-1)!.equity / marks[0].equity - 1) * 100, 10);
+      const expected = computeExpectationBand(entity.id, { nObs: 20, totalReturnPct: b.liveCumReturnPct, maxDrawdownPct: b.liveMaxDrawdownPct }, artifacts);
+      expect(b).toEqual({ ...expected, fromDate: marks[0].dateKey, toDate: marks.at(-1)!.dateKey }); // identical bootstrap AND selection-bias drift
+      expect(expectationBandReadings(sc)[entity.id].status).toBe("below");
+      expect(expectationBandReadings(sc)[entity.id].rollingBand!.modelStart).toBe(marks[0].dateKey);
+      expect(formatScorecardDigestLines(sc).find(l => l.includes("últimas 20 sesiones") && l.includes("POR DEBAJO"))).toBeDefined();
+      if (entity.grid === "trading_days") expect(marks.every(m => isTradingDay(m.dateKey))).toBe(true);
+      // Removing an interior close or the latest close cannot compress gaps or use a stale window.
+      for (const removed of [5, 20]) {
+        const gap = computeRollingExpectationBand(entity, marks.filter((_, i) => i !== removed), now, artifacts);
+        expect(gap.status).toBe("insufficient_data");
+        expect(gap.liveCumReturnPct).toBeNull();
+      }
+    } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+  });
+  test("governor is below if EITHER band is below (including a young/unavailable model)", () => {
+    const b = (status: string) => ({ status, liveCumReturnPct: -10, horizonSessions: 20, modelStart: "2026-11-06", reason: null, cumReturnPct: { p5: -5 } });
+    for (const [model, rolling] of [["within", "below"], ["insufficient_data", "below"], ["unavailable", "below"], ["below", "within"], ["below", "unavailable"]] as const) {
+      const sc: any = { entities: [{ id: "momentum_stocks", kind: "sleeve", band: b(model), rollingBand: b(rolling) }] };
+      const reading = expectationBandReadings(sc).momentum_stocks;
+      expect(reading.status).toBe("below");
+      expect(reading.modelBand!.status).toBe(model);
+      expect(reading.rollingBand!.status).toBe(rolling);
+    }
+  });
+});
 
 describe("selection-bias haircut", () => {
   const sharpeOf = (xs: number[], perYear: number) => {

@@ -4,17 +4,27 @@
 // puts the portfolio engine on an EXISTING sleeve (params.sleeve = the sleeve's trades.account_id;
 // the definition has its own id). Two modes, both by configuration:
 //   observer — the engine computes and persists its decisions on the sleeve's real rows and sends
-//              nothing; the incumbent engine keeps trading untouched.
-//   live     — exactly ONE engine manages the sleeve: the incumbent is not built (index.ts), the
-//              portfolio engine adopts the open rows (strategy PORTFOLIO: out of the stop machinery).
+//              nothing; whatever manages the sleeve keeps trading untouched.
+//   live     — exactly ONE engine manages the sleeve: the portfolio engine adopts the open rows
+//              (strategy PORTFOLIO: out of the stop machinery) and, on a crypto sleeve, the
+//              incumbent MomentumEngine is not built (index.ts).
 //
-// This module is the pure decision (resolvePortfolioWiring) plus the one DB operation rollback needs
-// (handBackPortfolioRows). The contract is FAIL CLOSED toward the incumbent: any doubt about a live
+// This module is the pure decision (resolvePortfolioWiring) plus the one DB operation a crypto
+// rollback needs (handBackPortfolioRows). The contract is FAIL CLOSED: any doubt about a live
 // definition (unknown sleeve, mismatched account/venue/symbols, two definitions for one sleeve, a
 // design that no longer matches its tested hash, a version the scorecard does not know, a universe
 // that collides with another sleeve of the shared wallet, a venue that is not available) means the
-// definition does not run live, the incumbent keeps managing the sleeve, and a problem is returned
-// so index.ts can page. Never two engines on one sleeve, never none because of a bad definition.
+// definition does not run live and a problem is returned so index.ts can page. Never two engines on
+// one sleeve. What then manages the sleeve depends on the venue:
+//   crypto  — the incumbent MomentumEngine keeps the sleeve (it is built whenever no live
+//             definition replaced it; a rollback hands the PORTFOLIO rows back to it).
+//   stocks  — since 2026-11-07 (owner, audit C) there is NO incumbent: the TSM/Connors engines
+//             were deleted. index.ts falls back to the code's built-in definition of the same
+//             current live model (src/portfolios/builtin.ts, pe_<sleeve>; fallbackDefinitions
+//             below) and pages. If that cannot run either (alpaca venue unlinked), the sleeve has
+//             NO manager: index.ts pages on every boot and guardian G2 (decision liveness) pages
+//             hourly until it is fixed. Open rows are never silently abandoned, never silently
+//             adopted by a stop machinery that no longer exists.
 
 import { createHash } from "node:crypto";
 import { getDB, insertActivity, PORTFOLIO_ENGINE_STRATEGY } from "../../db/database";
@@ -28,17 +38,19 @@ import type { PortfolioStrategyConfig, VenueId } from "../types";
 export interface SleeveTarget {
   account: PortfolioAccountId;
   venue: VenueId;
-  /** trades.strategy the incumbent engine writes (what rollback hands the rows back to). */
-  incumbentStrategy: "MOMENTUM" | "MEANREV";
+  /** trades.strategy the incumbent engine writes (what a rollback hands the rows back to).
+   *  null = the sleeve has no incumbent any more (stocks since 2026-11-07): rows are never
+   *  handed back; the fallback is another portfolio-engine definition. */
+  incumbentStrategy: "MOMENTUM" | null;
   /** Symbol space of the sleeve's rows. Strategy symbols must live in it, or an adopted row and
    *  the design's symbol would be two different positions. */
   symbolOk: (symbol: string) => boolean;
 }
 
-/** The sleeves the portfolio engine may replace (RW2). COIN-M (momentum_btc) is not one. */
+/** The sleeves the portfolio engine may run on (RW2). COIN-M (momentum_btc) is not one. */
 export const PORTFOLIO_SLEEVES: Readonly<Record<string, SleeveTarget>> = {
-  momentum_stocks: { account: "alpaca_main", venue: "alpaca", incumbentStrategy: "MOMENTUM", symbolOk: s => !s.includes("/") },
-  meanrev_stocks: { account: "alpaca_main", venue: "alpaca", incumbentStrategy: "MEANREV", symbolOk: s => !s.includes("/") },
+  momentum_stocks: { account: "alpaca_main", venue: "alpaca", incumbentStrategy: null, symbolOk: s => !s.includes("/") },
+  meanrev_stocks: { account: "alpaca_main", venue: "alpaca", incumbentStrategy: null, symbolOk: s => !s.includes("/") },
   momentum_crypto: { account: "binance_usdt", venue: "binance_usdm", incumbentStrategy: "MOMENTUM", symbolOk: s => s.endsWith("/USD") },
   momentum_crypto_usdc: { account: "binance_usdc", venue: "binance_usdc", incumbentStrategy: "MOMENTUM", symbolOk: s => s.endsWith("/USDC") },
 };
@@ -117,7 +129,7 @@ export function resolvePortfolioWiring(input: ResolveInput): PortfolioWiring {
     const target = sleeve ? PORTFOLIO_SLEEVES[sleeve] : undefined;
     if (!sleeve || !target) errors.push(`params.sleeve '${sleeve ?? ""}' is not one of ${Object.keys(PORTFOLIO_SLEEVES).join(", ")}`);
     else {
-      if (def.id === sleeve) errors.push("the definition id must not be the sleeve id (that row belongs to the incumbent)");
+      if (def.id === sleeve) errors.push("the definition id must not be the sleeve id (that id names the sleeve's own ledger/legacy row)");
       if (def.account !== target.account) errors.push(`account ${def.account} ≠ ${target.account} (the account of ${sleeve})`);
       if (p.venue !== target.venue) errors.push(`venue ${p.venue} ≠ ${target.venue} (the venue of ${sleeve})`);
     }
@@ -152,7 +164,7 @@ export function resolvePortfolioWiring(input: ResolveInput): PortfolioWiring {
     const lives = entries.filter(e => e.params.runMode === "live");
     if (lives.length > 0 && entries.length > 1) {
       for (const e of entries) refuse(e.def, sleeve, e.params.runMode === "live" ? "live_refused" : "ignored",
-        `${entries.length} enabled portfolio definitions target ${sleeve} (${entries.map(x => x.def.id).join(", ")}) and one is live: ambiguous, none runs; the incumbent manages the sleeve`);
+        `${entries.length} enabled portfolio definitions target ${sleeve} (${entries.map(x => x.def.id).join(", ")}) and one is live: ambiguous, none runs`);
       continue;
     }
     const seenVersion = new Set<string>();
@@ -215,7 +227,7 @@ function liveRefusals(
   const mine = new Set(portfolioUniverse("portfolio", p));
   for (const o of defs) {
     if (o.id === e.def.id || o.account !== e.def.account || !o.enabled) continue;
-    if (o.id === e.sleeve) continue; // its own incumbent: replaced, not a neighbour
+    if (o.id === e.sleeve) continue; // its own incumbent/legacy row: the same sleeve, not a neighbour
     if (isPe(o)) {
       const op = o.params as PortfolioEngineParams;
       if (op.sleeve === e.sleeve || op.runMode !== "live") continue;
@@ -226,17 +238,32 @@ function liveRefusals(
   return errors;
 }
 
-// ── rollback: the rows go back to the incumbent ──────────────────────────────
+// ── stock sleeves: fallback to the code's built-in definition ───────────────
+
+/** The definitions to resolve when the registry gave `sleeve` no live portfolio engine: every
+ *  registry definition that is NOT about this sleeve (so the shared-wallet overlap and heartbeat
+ *  checks still run against the neighbours) plus the code's built-in definition of the sleeve's
+ *  current live model. The registry's own definitions for the sleeve (the refused/broken live one
+ *  and any observer of it) are left out: a fallback boot runs exactly ONE engine on the sleeve. */
+export function fallbackDefinitions(defs: readonly PortfolioDefinition[], sleeve: string, builtin: PortfolioDefinition): PortfolioDefinition[] {
+  const isAboutSleeve = (d: PortfolioDefinition) =>
+    d.id === builtin.id || (isPe(d) && (d.params as PortfolioEngineParams)?.sleeve === sleeve);
+  return [...defs.filter(d => !isAboutSleeve(d)), builtin];
+}
+
+// ── rollback (crypto sleeves): the rows go back to the incumbent ─────────────
 
 export interface HandedBackRow { id: string; symbol: string; quantity: number; entryPrice: number; market: string }
 
 /** Rows of the sleeve tagged PORTFOLIO whose manager is the incumbent again: re-tag them to the
  *  incumbent's strategy so the 15s stop loop, the broker-native stop pass and the incumbent's own
  *  close lookups (strategy IN (own, SYNC_RECOVERY)) see them. strategy_version stays: a row belongs
- *  to the version that OPENED it. Idempotent. */
+ *  to the version that OPENED it. Idempotent. Refuses a sleeve with no incumbent (stocks). */
 export function handBackPortfolioRows(sleeve: string): HandedBackRow[] {
   const target = PORTFOLIO_SLEEVES[sleeve];
   if (!target) throw new Error(`handBackPortfolioRows: '${sleeve}' is not a portfolio-engine sleeve`);
+  if (!target.incumbentStrategy) throw new Error(`handBackPortfolioRows: '${sleeve}' has no incumbent engine (retired 2026-11-07) — nothing to hand rows back to`);
+  const incumbentStrategy = target.incumbentStrategy;
   const db = getDB();
   return db.transaction((): HandedBackRow[] => {
     const rows = db.prepare(
@@ -245,10 +272,10 @@ export function handBackPortfolioRows(sleeve: string): HandedBackRow[] {
     const upd = db.prepare(`UPDATE trades SET strategy = ? WHERE id = ? AND status = 'open' AND strategy = ?`);
     const out: HandedBackRow[] = [];
     for (const r of rows) {
-      upd.run(target.incumbentStrategy, r.id, PORTFOLIO_ENGINE_STRATEGY);
+      upd.run(incumbentStrategy, r.id, PORTFOLIO_ENGINE_STRATEGY);
       out.push({ id: r.id, symbol: r.symbol, quantity: r.quantity, entryPrice: r.entry_price, market: r.market });
       insertActivity(sleeve, "system",
-        `portfolio engine no longer manages ${sleeve}: ${r.symbol} (${r.quantity} @ $${Number(r.entry_price).toFixed(4)}) handed back to the incumbent as ${target.incumbentStrategy} (stops re-armed by its machinery)`);
+        `portfolio engine no longer manages ${sleeve}: ${r.symbol} (${r.quantity} @ $${Number(r.entry_price).toFixed(4)}) handed back to the incumbent as ${incumbentStrategy} (stops re-armed by its machinery)`);
     }
     return out;
   })();
@@ -260,7 +287,8 @@ export function countOpenPortfolioRows(sleeve: string): number {
   return Number(r?.c) || 0;
 }
 
-/** Who manages each sleeve this boot, for the hand-back / orphan step. */
+/** Who manages each sleeve this boot, for the hand-back / orphan step. "incumbent" exists only for
+ *  the crypto sleeves (a stock sleeve is "portfolio_live" or "none"). */
 export type SleeveManager = "portfolio_live" | "incumbent" | "none";
 
 export interface RestoreDeps {
@@ -278,19 +306,26 @@ export interface RestoreReport {
 }
 
 /** Boot step, BEFORE any incumbent engine starts:
- *   - sleeve managed by the incumbent  → its PORTFOLIO rows are handed back (+ stops re-armed);
+ *   - sleeve managed by the incumbent (crypto) → its PORTFOLIO rows are handed back (+ stops re-armed);
  *   - sleeve managed by the portfolio engine → nothing (it adopts what is not its own);
- *   - sleeve with no manager (incumbent gated off, venue unlinked…) but PORTFOLIO rows → alert. */
+ *   - sleeve with no manager (venue unlinked, every definition refused…) but PORTFOLIO rows → alert.
+ *     For a stock sleeve this is the loud "NO MANAGER" page: nothing can take the rows over. */
 export async function restoreIncumbentRows(managers: Readonly<Record<string, SleeveManager>>, deps: RestoreDeps): Promise<RestoreReport> {
   const report: RestoreReport = { handedBack: {}, orphaned: {}, unprotected: [] };
   for (const sleeve of Object.keys(PORTFOLIO_SLEEVES)) {
     const manager = managers[sleeve] ?? "none";
     if (manager === "portfolio_live") continue;
+    if (manager === "incumbent" && !PORTFOLIO_SLEEVES[sleeve].incumbentStrategy) {
+      throw new Error(`restoreIncumbentRows: '${sleeve}' cannot be managed by an incumbent (none exists since 2026-11-07)`);
+    }
     if (manager === "none") {
       const n = countOpenPortfolioRows(sleeve);
       if (n > 0) {
         report.orphaned[sleeve] = n;
-        deps.alert("PortfolioCutover", `${sleeve}: ${n} open PORTFOLIO row(s) but no engine manages the sleeve (incumbent not running, portfolio engine not live) — they carry no stop; re-enable the incumbent or the portfolio engine`);
+        const fix = PORTFOLIO_SLEEVES[sleeve].incumbentStrategy
+          ? "re-enable the incumbent or the portfolio engine"
+          : "the sleeve has NO incumbent (retired 2026-11-07): link the venue / fix the registry definition so the portfolio engine (or its built-in fallback) runs";
+        deps.alert("PortfolioCutover", `${sleeve}: ${n} open PORTFOLIO row(s) but no engine manages the sleeve — they carry no stop and nobody decides; ${fix}`);
       }
       continue;
     }

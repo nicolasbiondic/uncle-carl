@@ -22,7 +22,6 @@ import { currentModelVersion } from "../../portfolio/modelVersions";
 import { builtinPortfolio } from "../../portfolios/builtin";
 import { openHistoricalReadonly } from "../../portfolio/scorecard";
 import { DEFAULT_RISK_CONFIG, type RiskState } from "../../strategies/momentum/RiskGuard";
-import { getLastConstructedSleeveGovernor } from "../../governor/SleeveGovernor";
 
 // ── Sleeve risk-state file reader (dashboard-only, READ-ONLY) ──────────────
 // Each engine persists its own RiskState to one of these files (index.ts's
@@ -385,8 +384,8 @@ export function registerProfileRoutes(app: express.Application, am: AccountManag
   });
 
   // ── GET /api/v2/sleeves/risk (2026-09-24) ───────────────────────────────
-  // Per-sleeve WHY-paused detail for the broker modal: state (live/shadow/
-  // paused), cause, current DD vs the soft/hard thresholds RiskGuard actually
+  // Per-sleeve WHY-paused detail for the broker modal: state (live/paused),
+  // cause, current DD vs the soft/hard thresholds RiskGuard actually
   // enforces (DEFAULT_RISK_CONFIG — the same constants evaluateRisk uses),
   // resume ETA, and realized vs unrealized P&L. Gross/cap utilization is
   // already derivable client-side from dashboard.accounts + open positions
@@ -395,7 +394,6 @@ export function registerProfileRoutes(app: express.Application, am: AccountManag
     try {
       const circuits = am.getCircuits();
       const summaries = am.getAccountSummaries();
-      const governor = getLastConstructedSleeveGovernor();
       const result = summaries.map((s: any) => {
         const id = s.id as RiskProfileId;
         const circuit = circuits[id] ?? { paused: false, reason: "", resumeAt: 0 };
@@ -421,8 +419,7 @@ export function registerProfileRoutes(app: express.Application, am: AccountManag
           ? Math.max(0, (persisted.peakEquity - currentEquity) / persisted.peakEquity) : null;
         const dailyLossPct = persisted && persisted.dayStartEquity > 0 && Number.isFinite(currentEquity)
           ? (persisted.dayStartEquity - currentEquity) / persisted.dayStartEquity : null;
-        const governorMode = governor ? governor.getMode(id, "live") : "live";
-        const mode: "live" | "shadow" | "paused" = circuit.paused ? "paused" : governorMode;
+        const mode: "live" | "paused" = circuit.paused ? "paused" : "live";
         return {
           id,
           label: s.label,

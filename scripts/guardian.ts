@@ -7,6 +7,7 @@
  * the supplied snapshot, not when those bars originally arrived.
  * G7 (audit F-2): every cron job's success marker (data/cron-markers, src/ops/cronJobs.ts)
  * is fresh for its schedule; a stale job pages once per episode. Skipped with --now.
+ * G8: current live model artifacts exist and runs.jsonl is readable (no cached result).
  * 0 healthy; 1 invariant violation; 2 operational failure of a check (takes precedence;
  * paged here as an OP:<check> episode); 3 the guardian itself could not run (DB, state file,
  * Telegram) — paged once per episode by scripts/lib/cron-job.sh via guardian.sh.
@@ -15,10 +16,11 @@
 // No import-time dotenv: bun loads .env when guardian.sh runs it from the repo root,
 // and an import must not repopulate a test process's cleared environment.
 import { Database } from "bun:sqlite";
-import { readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, unlinkSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { countExecutedOrders, getETDateKey, getETDayStart } from "../src/db/database";
 import { MODEL_VERSIONS } from "../src/portfolio/modelVersions";
+import { sleeveExpectationArtifacts } from "../src/portfolio/scorecard";
 import { maxHoldExpired } from "../src/portfolio-engine/decide";
 import { portfolioDecisionSymbols } from "../src/portfolio-engine/live/PortfolioEngine";
 import { STOCKS_RUN_MINUTES_ET } from "../src/portfolio-engine/live/schedule";
@@ -35,7 +37,7 @@ const HOUR = 3_600_000;
 const STOCKS = ["momentum_stocks", "meanrev_stocks"] as const;
 // Explicit owner-rule scope; do not silently stop checking a disabled sleeve.
 const LIVE_SLEEVE_IDS = [...STOCKS, "momentum_crypto", "momentum_crypto_usdc"] as const;
-type Check = "G1" | "G2" | "G3" | "G4" | "G5" | "G6" | "G7";
+type Check = "G1" | "G2" | "G3" | "G4" | "G5" | "G6" | "G7" | "G8";
 export interface Finding { key: string; check: Check; message: string }
 export interface GuardianResult {
   violations: Finding[];
@@ -265,6 +267,24 @@ export async function evaluateGuardian(opts: {
       add("G7", s.name, `cron ${s.name}: no success since its run due ${new Date(s.dueRunMs!).toISOString()} (last ok ${s.lastOkMs ? new Date(s.lastOkMs).toISOString() : "never"})`);
   });
   else result.reports.push("G7 skipped (--now: markers are not historical)");
+  // G8 — research artifacts are gitignored: deploying code is not enough.
+  // Read the filesystem on EVERY check, not the scorecard's positive memo.
+  if (!opts.historical) await run("G8", () => {
+    const artifacts = sleeveExpectationArtifacts();
+    for (const sleeve of LIVE_SLEEVE_IDS) {
+      const v = MODEL_VERSIONS[sleeve].at(-1)!;
+      const ref = artifacts[sleeve];
+      try {
+        if (!ref) throw new Error("no authoritative artifact configured");
+        const dir = resolve(opts.root ?? resolve(import.meta.dir, ".."), ref.dir);
+        if (!statSync(dir).isDirectory()) throw new Error("artifact path is not a directory");
+        if (!readFileSync(resolve(dir, "runs.jsonl"), "utf8").trim()) throw new Error("runs.jsonl is empty");
+      } catch (e) {
+        add("G8", sleeve, `${v.id}: expectation artifact missing/unreadable (${ref?.dir ?? "none"}): ${e instanceof Error ? e.message : e}`);
+      }
+    }
+  });
+  else result.reports.push("G8 skipped (--now: host artifacts are not historical)");
   return result;
 }
 
@@ -293,7 +313,7 @@ function readState(path: string): EpisodeState {
   try {
     const s = JSON.parse(readFileSync(path, "utf8"));
     if (s.version !== 1 || !s.active || typeof s.active !== "object" || Array.isArray(s.active)) throw new Error("invalid guardian state");
-    for (const v of Object.values(s.active) as any[]) if (!v || !/^G[1-7]$/.test(v.check) || typeof v.message !== "string" || !Number.isFinite(v.since)) throw new Error("invalid guardian episode");
+    for (const v of Object.values(s.active) as any[]) if (!v || !/^G[1-8]$/.test(v.check) || typeof v.message !== "string" || !Number.isFinite(v.since)) throw new Error("invalid guardian episode");
     return s;
   } catch (e: any) { if (e.code === "ENOENT") return { version: 1, active: {} }; throw e; }
 }

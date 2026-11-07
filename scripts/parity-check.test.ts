@@ -27,7 +27,6 @@ import {
   normalizeLiveDecisions,
   normalizeSeedPositions,
   PARITY_EPOCHS,
-  portfolioEngineLiveSleeves,
   renderSummary,
   clampToFundingTail,
   splitAcknowledged,
@@ -788,43 +787,17 @@ describe("acknowledged divergences (explained once, never re-paged)", () => {
   });
 });
 
-describe("portfolio-engine registry dispatch (never the incumbent's replay)", () => {
-  function registryDb(rows: Array<{ id: string; template?: string; enabled?: number; mode?: string; status?: string; params: any }>): Database {
-    const db = new Database(":memory:");
-    db.exec(`CREATE TABLE platform_portfolios (
-      id TEXT PRIMARY KEY, name TEXT NOT NULL, template TEXT NOT NULL, account TEXT NOT NULL, capital REAL NOT NULL,
-      mode TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, params_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active',
-      validation TEXT NOT NULL DEFAULT 'validated', source TEXT NOT NULL DEFAULT 'builtin', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
-    const ins = db.prepare(`INSERT INTO platform_portfolios (id, name, template, account, capital, mode, enabled, params_json, status, created_at, updated_at) VALUES (?, ?, ?, 'alpaca_main', 50000, ?, ?, ?, ?, 0, 0)`);
-    for (const r of rows) ins.run(r.id, r.id, r.template ?? "portfolio", r.mode ?? "live", r.enabled ?? 1, JSON.stringify(r.params), r.status ?? "pending_restart");
-    return db;
-  }
-  const live = (sleeve: string) => ({ engine: "portfolio", sleeve, runMode: "live", strategyVersion: `${sleeve}@pe-vt15` });
-
-  test("enabled + template portfolio + mode live + runMode live → the sleeve is listed with its definition and version", () => {
-    const db = registryDb([
-      { id: "momentum_stocks", template: "momentum_tsm", params: { engineConfig: {} } },
-      { id: "pe_momentum_stocks", params: live("momentum_stocks") },
-      { id: "pe_meanrev_stocks", params: live("meanrev_stocks") },
-    ]);
-    const m = portfolioEngineLiveSleeves(db);
-    expect([...m.keys()].sort()).toEqual(["meanrev_stocks", "momentum_stocks"]);
-    expect(m.get("momentum_stocks")).toEqual({ definitionId: "pe_momentum_stocks", strategyVersion: "momentum_stocks@pe-vt15" });
-  });
-  test("observer, disabled, archived, mode≠live or runMode≠live definitions do NOT count (the incumbent still trades)", () => {
-    const db = registryDb([
-      { id: "pe_a", params: { ...live("momentum_stocks"), runMode: "observer" }, mode: "shadow" },
-      { id: "pe_b", params: live("meanrev_stocks"), enabled: 0 },
-      { id: "pe_c", params: live("momentum_crypto"), status: "archived" },
-      { id: "pe_d", params: live("momentum_crypto_usdc"), mode: "shadow" },
-      { id: "pe_e", params: { ...live("momentum_crypto"), runMode: "live" }, template: "momentum_tsm" },
-    ]);
-    expect(portfolioEngineLiveSleeves(db).size).toBe(0);
-  });
-  test("a trading DB without platform_portfolios (fixtures, pre-F3b) means no cutover anywhere", () => {
-    const db = new Database(":memory:");
-    db.exec("CREATE TABLE trades (id TEXT)");
-    expect(portfolioEngineLiveSleeves(db).size).toBe(0);
+describe("stock sleeves always dispatch to the portfolio-engine replay (the incumbent replay path was deleted 2026-11-07)", () => {
+  test("the monitor has no incumbent daily replay for the stock sleeves and reads no registry to decide the dispatch", () => {
+    const src = readFileSync(join(import.meta.dir, "parity-check.ts"), "utf8");
+    expect(src).not.toContain("runMeanRevReplay");
+    expect(src).not.toContain("export async function checkSleeve(");
+    expect(src).not.toContain("portfolioEngineLiveSleeves");
+    expect(src).toContain('isStock(sleeve)\n          ? checkPortfolioSleeve(sleeve, tradingDbPath, histPath, rootDir, since ?? epochOverride)');
+    // liveSleeveConfigs has nothing to say about the stock sleeves any more
+    for (const sleeve of ["momentum_stocks", "meanrev_stocks"] as const) {
+      expect(() => liveSleeveConfig(sleeve)).toThrow(/no incumbent derivation since 2026-11-07/);
+    }
   });
   test("renderSummary prints portfolio decisions and still renders crypto unchanged", () => {
     const text = renderSummary([

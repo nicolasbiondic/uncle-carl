@@ -36,11 +36,6 @@ export interface PlatformPortfoliosDeps {
   /** Scorecard expectation-band readings (index.ts's governorBandReadings,
    *  src/portfolio/scorecard.ts). Injected: the route never opens DBs. */
   bandReadings: () => Record<string, BandReading>;
-  /** The governor's effective mode for a sleeve (sleeve_modes row first).
-   *  Absent/null = show the registered default. momentum_crypto registers
-   *  "shadow" by default but has been live since the owner's 2026-08-08
-   *  override: showing the default would misstate a live sleeve. */
-  effectiveMode?: (id: string) => string | null;
   write?: PlatformPortfoliosWriteDeps;
 }
 
@@ -49,6 +44,7 @@ export interface PlatformPortfolioBandView {
   liveCumReturnPct: number | null;
   p5Pct: number | null;
   reason: string | null;
+  rollingBand?: PlatformPortfolioBandView;
 }
 
 export interface PlatformPortfolioView {
@@ -65,11 +61,10 @@ export interface PlatformPortfolioView {
   account: string;
   capital: number;
   universeSize: number;
-  /** EFFECTIVE mode: the governor's persisted sleeve_modes row when the
-   *  runtime has one, else the registered default. */
+  /** The registry label: "live" trades; "shadow" is an OBSERVER portfolio-
+   *  engine definition (computes, sends nothing). Not a runtime mode: the
+   *  governor's live/shadow sleeve mode was removed 2026-11-07. */
   mode: string;
-  /** The registered default kind (used only when no sleeve_modes row exists). */
-  defaultMode: string;
   enabled: boolean;
   status: string;
   validation: string;
@@ -115,7 +110,6 @@ export function platformPortfolioView(
   row: PlatformPortfolioRow,
   origin: PortfoliosSource,
   band: BandReading | null,
-  effectiveMode: string | null = null,
   managers: Record<string, string> = {},
 ): PlatformPortfolioView {
   const peSleeve = row.template === "portfolio" ? (row.params as PortfolioEngineParams).sleeve ?? null : null;
@@ -128,15 +122,17 @@ export function platformPortfolioView(
     account: row.account,
     capital: row.capital,
     universeSize: universeSizeOf(row),
-    mode: effectiveMode ?? row.mode,
-    defaultMode: row.mode,
+    mode: row.mode,
     enabled: row.enabled,
     status: row.status,
     validation: row.validation,
     rowSource: row.source,
     origin,
     band: band
-      ? { status: band.status, liveCumReturnPct: band.liveCumReturnPct, p5Pct: band.p5Pct, reason: band.reason }
+      ? { status: (band.modelBand ?? band).status, liveCumReturnPct: (band.modelBand ?? band).liveCumReturnPct,
+          p5Pct: (band.modelBand ?? band).p5Pct, reason: (band.modelBand ?? band).reason,
+          ...(band.rollingBand ? { rollingBand: { status: band.rollingBand.status, liveCumReturnPct: band.rollingBand.liveCumReturnPct,
+            p5Pct: band.rollingBand.p5Pct, reason: band.rollingBand.reason } } : {}) }
       : null,
     params: row.params,
   };
@@ -148,13 +144,14 @@ export interface PlatformPortfoliosMetaPreset {
   /** Template of the VALIDATED model ("portfolio" for a sleeve on the portfolio engine). */
   template: string;
   account: string;
-  /** The builtin incumbent's template — the one `exampleParams` belong to
-   *  (equals `template` unless the validated model is a portfolio-engine design). */
+  /** The built-in definition's template — the one `exampleParams` belong to
+   *  (equals `template`: since 2026-11-07 the stock sleeves' built-ins ARE
+   *  portfolio-engine definitions; the TSM/Connors incumbents are gone). */
   incumbentTemplate: string;
   /** false when the validated model runs on the portfolio engine: the create
    *  form lists it disabled (scripts/portfolio-engine-cutover.ts creates it). */
   creatable: boolean;
-  /** The builtin incumbent's params — the UI prefills a free-template textarea
+  /** The built-in definition's params — the UI prefills a free-template textarea
    *  with the example sharing that template (never a blank editor). */
   exampleParams: unknown;
 }
@@ -172,7 +169,9 @@ export interface PlatformPortfoliosMeta {
  *  portfolio" form. Tested in portfolios.route.test.ts. */
 export function platformPortfoliosMeta(deps: PlatformPortfoliosDeps): PlatformPortfoliosMeta {
   const presets = Object.entries(VALIDATED_PRESETS).map(([id, meta]) => {
-    const def = builtinPortfolio(id);
+    // The built-in definition of the preset: the sleeve's own row for the crypto momentum engines,
+    // the pe_<sleeve> portfolio-engine definition for the stock sleeves (2026-11-07).
+    const def = builtinPortfolio(meta.portfolioEngine ? `pe_${id}` : id);
     return {
       id, name: def.name, template: meta.template, account: def.account,
       incumbentTemplate: def.template, creatable: !meta.portfolioEngine, exampleParams: def.params,
@@ -201,14 +200,11 @@ export function registerPlatformPortfoliosRoutes(app: express.Application, deps:
       } catch {
         bands = {};
       }
-      const modeOf = (id: string): string | null => {
-        try { return deps.effectiveMode?.(id) ?? null; } catch { return null; }
-      };
       const rows = deps.listPortfolios();
       const managers = portfolioManagers(rows);
       res.json(rows.map((r) => {
         const sleeve = r.template === "portfolio" ? (r.params as PortfolioEngineParams).sleeve ?? r.id : r.id;
-        return platformPortfolioView(r, deps.source, bands[sleeve] ?? null, modeOf(sleeve), managers);
+        return platformPortfolioView(r, deps.source, bands[sleeve] ?? null, managers);
       }));
     } catch (e: any) {
       res.status(500).json({ error: e?.message ?? "platform portfolios unavailable" });

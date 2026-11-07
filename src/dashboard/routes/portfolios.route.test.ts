@@ -52,53 +52,55 @@ const BELOW: BandReading = {
 describe("universeSizeOf / platformPortfolioView (pure)", () => {
   const rows = Object.fromEntries(seededRows().map((r) => [r.id, r]));
 
-  test("universe sizes mirror the canonical constants per template", () => {
+  test("universe sizes mirror the canonical constants per template (incl. the retired templates of pre-2026-11-07 rows)", () => {
     expect(universeSizeOf(rows.momentum_crypto)).toBe(MOMENTUM_CRYPTO_UNIVERSE.length);
-    expect(universeSizeOf(rows.momentum_stocks)).toBe(MOMENTUM_STOCKS_UNIVERSE.length);
-    expect(universeSizeOf(rows.meanrev_stocks)).toBe(MEANREV_UNIVERSE.length);
-    expect(universeSizeOf(rows.momentum_btc)).toBe(1);
+    expect(universeSizeOf(rows.pe_momentum_stocks)).toBe(MOMENTUM_STOCKS_UNIVERSE.length + 1); // + SH (RW8 hedge)
+    expect(universeSizeOf(rows.pe_meanrev_stocks)).toBe(MEANREV_UNIVERSE.length);
+    expect(universeSizeOf({ template: "meanrev_connors", params: {} as any })).toBe(MEANREV_UNIVERSE.length); // archived legacy row
   });
 
-  test("mode is the governor's EFFECTIVE mode; the registered default stays visible as defaultMode", () => {
-    // A row whose registered default differs from the governor's effective
-    // mode (momentum_crypto registered "shadow" until 2026-10-04 while live).
-    const legacy = { ...rows.momentum_crypto, mode: "shadow" as const };
-    const v = platformPortfolioView(legacy, "code", null, "live");
-    expect(v.mode).toBe("live");
-    expect(v.defaultMode).toBe("shadow");
-    expect(platformPortfolioView(legacy, "code", null).mode).toBe("shadow"); // no governor → the default
-    expect(rows.momentum_crypto.mode).toBe("live"); // registered default since 2026-10-04
+  test("mode is the registry label as stored (no governor override: the live/shadow sleeve mode was removed 2026-11-07)", () => {
+    const observerLabelled = { ...rows.momentum_crypto, mode: "shadow" as const };
+    expect(platformPortfolioView(observerLabelled, "code", null).mode).toBe("shadow");
+    expect(rows.momentum_crypto.mode).toBe("live");
   });
 
   test("view carries id/name/template/account/capital/mode/origin and the band", () => {
-    const v = platformPortfolioView(rows.momentum_stocks, "code", BELOW);
+    const v = platformPortfolioView(rows.pe_momentum_stocks, "code", BELOW);
     expect(v).toEqual({
-      id: "momentum_stocks",
+      id: "pe_momentum_stocks",
       sleeve: "momentum_stocks",
       managedBy: null,
-      name: rows.momentum_stocks.name,
-      template: "momentum_tsm",
+      name: rows.pe_momentum_stocks.name,
+      template: "portfolio",
       account: "alpaca_main",
       capital: RISK_PROFILES.momentum_stocks.initialEquity,
-      universeSize: MOMENTUM_STOCKS_UNIVERSE.length,
+      universeSize: MOMENTUM_STOCKS_UNIVERSE.length + 1,
       mode: "live",
-      defaultMode: "live",
       enabled: true,
       status: "active",
       validation: "validated",
       rowSource: "builtin",
       origin: "code",
       band: { status: "below", liveCumReturnPct: -3.2, p5Pct: -1.1, reason: null },
-      params: rows.momentum_stocks.params,
+      params: rows.pe_momentum_stocks.params,
     });
   });
 
   test("no band reading → band null (never fabricated)", () => {
-    expect(platformPortfolioView(rows.momentum_btc, "db", null).band).toBeNull();
-    expect(platformPortfolioView(rows.momentum_btc, "db", null).origin).toBe("db");
+    expect(platformPortfolioView(rows.momentum_crypto_usdc, "db", null).band).toBeNull();
+    expect(platformPortfolioView(rows.momentum_crypto_usdc, "db", null).origin).toBe("db");
   });
 
-  test("RW2: a LIVE portfolio-engine definition manages its sleeve — the incumbent row says so, the definition carries the sleeve and its universe size", () => {
+  test("model and rolling display readings remain separate even if only rolling is below", () => {
+    const model = { ...BELOW, status: "within" as const, liveCumReturnPct: 1 };
+    const view = platformPortfolioView(rows.pe_momentum_stocks, "code", { ...BELOW, modelBand: model, rollingBand: BELOW });
+    expect(view.band?.status).toBe("within");
+    expect(view.band?.liveCumReturnPct).toBe(1);
+    expect(view.band?.rollingBand).toEqual({ status: "below", liveCumReturnPct: -3.2, p5Pct: -1.1, reason: null });
+  });
+
+  test("RW2: a LIVE portfolio-engine definition manages its sleeve — a legacy row of the sleeve says so, the definition carries the sleeve and its universe size", () => {
     const pe: PlatformPortfolioRow = {
       id: "pe_momentum_stocks", name: "momentum_stocks on the portfolio engine (vt15)", template: "portfolio", account: "alpaca_main",
       capital: 50_000, mode: "live", enabled: true, status: "active", validation: "validated", source: "owner", createdAt: 1, updatedAt: 1,
@@ -107,26 +109,29 @@ describe("universeSizeOf / platformPortfolioView (pure)", () => {
         strategy: { kind: "volManaged", universe: ["SPY", "QQQ", "IWM"], inceptionGuardBars: 252, volLookback: 63, covLookback: 21, portfolioVolTarget: 0.15, annualization: 252, maxWeightPerName: 0.25, maxGross: 1 } } as any,
     };
     const observer: PlatformPortfolioRow = { ...pe, id: "pe_obs", mode: "shadow", params: { ...(pe.params as any), runMode: "observer" } };
-    const all = [rows.momentum_stocks, rows.meanrev_stocks, pe, observer];
+    // pre-2026-11-07 legacy incumbent rows (archived at boot today; still listed by the read API)
+    const legacyMomentum: PlatformPortfolioRow = { ...pe, id: "momentum_stocks", template: "momentum_tsm", source: "builtin", params: { universe: ["SPY"] } as any };
+    const legacyMeanrev: PlatformPortfolioRow = { ...pe, id: "meanrev_stocks", template: "meanrev_connors", source: "builtin", params: {} as any };
+    const all = [legacyMomentum, legacyMeanrev, pe, observer];
     const managers = portfolioManagers(all);
     expect(managers).toEqual({ momentum_stocks: "pe_momentum_stocks" }); // the observer manages nothing
     expect(portfolioManagers([{ ...pe, enabled: false }])).toEqual({});
     expect(portfolioManagers([{ ...pe, status: "archived" }])).toEqual({});
 
-    const incumbent = platformPortfolioView(rows.momentum_stocks, "db", BELOW, "live", managers);
+    const incumbent = platformPortfolioView(legacyMomentum, "db", BELOW, managers);
     expect(incumbent.managedBy).toBe("pe_momentum_stocks");
     expect(incumbent.enabled).toBe(true); // nothing is "disabled": the book is managed by the definition
-    const def = platformPortfolioView(pe, "db", BELOW, "live", managers);
+    const def = platformPortfolioView(pe, "db", BELOW, managers);
     expect(def.sleeve).toBe("momentum_stocks");
     expect(def.managedBy).toBeNull();
     expect(def.universeSize).toBe(3);
     expect(def.band?.status).toBe("below"); // the sleeve's band, looked up by params.sleeve
-    expect(platformPortfolioView(rows.meanrev_stocks, "db", null, "live", managers).managedBy).toBeNull();
+    expect(platformPortfolioView(legacyMeanrev, "db", null, managers).managedBy).toBeNull();
   });
 });
 
 describe("GET /api/platform/portfolios", () => {
-  test("lists the five seeded portfolios with their band readings", async () => {
+  test("lists the seeded portfolios with their band readings", async () => {
     const rows = seededRows();
     await withApp(
       { source: "code", listPortfolios: () => rows, bandReadings: () => ({ momentum_stocks: BELOW }) },
@@ -134,12 +139,11 @@ describe("GET /api/platform/portfolios", () => {
         const res = await fetch(`${base}/api/platform/portfolios`);
         expect(res.status).toBe(200);
         const body = (await res.json()) as any[];
-        expect(body.length).toBe(5);
+        expect(body.length).toBe(rows.length);
         const byId = Object.fromEntries(body.map((p) => [p.id, p]));
-        expect(byId.momentum_stocks.band.status).toBe("below");
+        expect(byId.pe_momentum_stocks.band.status).toBe("below"); // the sleeve's band, by params.sleeve
         expect(byId.momentum_crypto.band).toBeNull();
         expect(byId.momentum_crypto.mode).toBe("live");
-        expect(byId.momentum_btc.enabled).toBe(false);
         for (const p of body) expect(p.origin).toBe("code");
       },
     );
@@ -159,7 +163,7 @@ describe("GET /api/platform/portfolios", () => {
         const res = await fetch(`${base}/api/platform/portfolios`);
         expect(res.status).toBe(200);
         const body = (await res.json()) as any[];
-        expect(body.length).toBe(5);
+        expect(body.length).toBe(rows.length);
         for (const p of body) {
           expect(p.band).toBeNull();
           expect(p.origin).toBe("db");
@@ -177,7 +181,7 @@ describe("GET /api/platform/portfolios", () => {
           method: "POST", headers: { "content-type": "application/json" }, body: "{}",
         });
         expect(post.status).toBe(501);
-        const patch = await fetch(`${base}/api/platform/portfolios/momentum_btc`, {
+        const patch = await fetch(`${base}/api/platform/portfolios/momentum_crypto_usdc`, {
           method: "PATCH", headers: { "content-type": "application/json" }, body: "{}",
         });
         expect(patch.status).toBe(501);
@@ -220,11 +224,11 @@ describe("GET /api/platform/portfolios/meta", () => {
         // portfolio-engine design — listed, not creatable from the form; the
         // builtin incumbent's params stay as the free-template example.
         expect(byId.momentum_stocks.template).toBe("portfolio");
-        expect(byId.momentum_stocks.incumbentTemplate).toBe("momentum_tsm");
+        expect(byId.momentum_stocks.incumbentTemplate).toBe("portfolio"); // the built-in IS the portfolio definition since 2026-11-07
         expect(byId.momentum_stocks.creatable).toBe(false);
         expect(byId.momentum_stocks.account).toBe("alpaca_main");
         expect(byId.meanrev_stocks.template).toBe("portfolio");
-        expect(byId.meanrev_stocks.incumbentTemplate).toBe("meanrev_connors");
+        expect(byId.meanrev_stocks.incumbentTemplate).toBe("portfolio");
         expect(byId.meanrev_stocks.creatable).toBe(false);
         expect(byId.momentum_crypto.template).toBe("momentum_tsm");
         expect(byId.momentum_crypto.creatable).toBe(true);
@@ -316,9 +320,9 @@ describe("F3d — POST/PATCH with real registry plumbing (in-memory db)", () => 
   test("PATCH marks an edited live portfolio unvalidated + pending_restart; 404 on unknown id", async () => {
     const { db, deps } = writeDeps();
     await withApp(deps, async (base) => {
-      const stocks = loadPlatformPortfolioRows(db).find((r) => r.id === "momentum_stocks")!;
-      const params = { ...(stocks.params as any), volStop: { kSigma: 6, lookbackBars: 20, minPct: 4, maxPct: 25 } };
-      const res = await fetch(`${base}/api/platform/portfolios/momentum_stocks`, {
+      const usdc = loadPlatformPortfolioRows(db).find((r) => r.id === "momentum_crypto_usdc")!; // the enabled momentum_tsm row of this fixture
+      const params = { ...(usdc.params as any), volStop: { kSigma: 6, lookbackBars: 20, minPct: 4, maxPct: 25 } };
+      const res = await fetch(`${base}/api/platform/portfolios/momentum_crypto_usdc`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ params }),
@@ -327,7 +331,7 @@ describe("F3d — POST/PATCH with real registry plumbing (in-memory db)", () => 
       const body = (await res.json()) as any;
       expect(body.validation).toBe("unvalidated");
       expect(body.status).toBe("pending_restart");
-      const row = loadPlatformPortfolioRows(db).find((r) => r.id === "momentum_stocks")!;
+      const row = loadPlatformPortfolioRows(db).find((r) => r.id === "momentum_crypto_usdc")!;
       expect(row.validation).toBe("unvalidated");
       expect(row.status).toBe("pending_restart");
 
@@ -341,13 +345,13 @@ describe("F3d — POST/PATCH with real registry plumbing (in-memory db)", () => 
   test("PATCH archive is the owner's explicit action and persists", async () => {
     const { db, deps } = writeDeps();
     await withApp(deps, async (base) => {
-      const res = await fetch(`${base}/api/platform/portfolios/momentum_btc`, {
+      const res = await fetch(`${base}/api/platform/portfolios/momentum_crypto_usdc`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ archived: true }),
       });
       expect(res.status).toBe(200);
-      const row = loadPlatformPortfolioRows(db).find((r) => r.id === "momentum_btc")!;
+      const row = loadPlatformPortfolioRows(db).find((r) => r.id === "momentum_crypto_usdc")!;
       expect(row.status).toBe("archived");
       expect(row.enabled).toBe(false);
     });

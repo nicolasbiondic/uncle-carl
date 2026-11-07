@@ -223,8 +223,6 @@ export interface SleeveTrackRecord {
     zeroReturnCount: number;
     firstDate: string | null;
     lastDate: string | null;
-    mode: "live" | "shadow" | null;
-    modeSince: number | null;
     lastSnapshotAt: number | null;
     seriesFresh: boolean;
     status: "ok" | "stale" | "no_data";
@@ -244,7 +242,6 @@ export function getSleeveTrackRecord(profileId: string, opts: SleeveReturnOption
       gaps: s.gaps, zeroReturnCount: s.zeroReturnCount,
       firstDate: s.returns[0]?.dateKey ?? null,
       lastDate: s.returns[s.returns.length - 1]?.dateKey ?? null,
-      mode: s.mode, modeSince: s.modeSince,
       lastSnapshotAt: s.lastSnapshotAt, seriesFresh: s.seriesFresh, status: s.status,
     },
     trackRecord: tr,

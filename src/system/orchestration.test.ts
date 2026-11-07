@@ -289,15 +289,11 @@ describe("§B TRADING_ENABLED=false composed: blocks ONLY opens (index.ts:213-21
   test("real MomentumEngine→SwitchingAdapter chain: tick opens NOTHING but still closes; adapter backstop blocks a direct open", async () => {
     await withEnv({ TRADING_ENABLED: "false" }, async () => {
       const real = new FakeBroker();
-      const shadow = new FakeBroker();
       real.setCandles("UP", ramp(100, 130));     // strong gainer → would open
       real.setCandles("LOSER", ramp(100, 80));   // held loser → must close
       real.positions = [{ symbol: "LOSER", side: "buy", quantity: 1, notional: 3000 }];
-      seedOpenTrade("orch-b1-loser", "orch_b1_live", { symbol: "LOSER" }); // live DB row → close routes to REAL broker
-      const adapter = new SwitchingAdapter(
-        "orch_b1", { getMode: () => "live" }, real, shadow, "orch_b1_live",
-        new RiskEngine({}, memRiskPersistence()),
-      );
+      seedOpenTrade("orch-b1-loser", "orch_b1_live", { symbol: "LOSER" }); // live DB row
+      const adapter = new SwitchingAdapter("orch_b1", real, new RiskEngine({}, memRiskPersistence()));
       const engine = new MomentumEngine(
         { universe: ["UP", "LOSER"], notionalPctPerSlot: 0.3, scorer: { topLongs: 1, minLongScore: 0.001 } },
         adapter, silentLogger,
@@ -306,7 +302,6 @@ describe("§B TRADING_ENABLED=false composed: blocks ONLY opens (index.ts:213-21
       const report = await engine.tick();
       expect(report.blockedReason ?? "").toContain("TRADING_ENABLED=false");
       expect(real.opened).toEqual([]);   // no real open reached the broker
-      expect(shadow.opened).toEqual([]); // and none was silently re-routed to shadow
       expect(real.closed.map(a => a.symbol)).toEqual(["LOSER"]); // closes stay fully active
 
       // Defense in depth: even a path that bypasses the engine gate is
@@ -320,10 +315,7 @@ describe("§B TRADING_ENABLED=false composed: blocks ONLY opens (index.ts:213-21
     // chain opens — proving the block above was the flag, not the fixture.
     const real2 = new FakeBroker();
     real2.setCandles("UP", ramp(100, 130));
-    const adapter2 = new SwitchingAdapter(
-      "orch_b1b", { getMode: () => "live" }, real2, new FakeBroker(), "orch_b1b_live",
-      new RiskEngine({}, memRiskPersistence()),
-    );
+    const adapter2 = new SwitchingAdapter("orch_b1b", real2, new RiskEngine({}, memRiskPersistence()));
     const engine2 = new MomentumEngine(
       { universe: ["UP"], notionalPctPerSlot: 0.3, scorer: { topLongs: 1, minLongScore: 0.001 } },
       adapter2, silentLogger,
@@ -399,9 +391,7 @@ describe("§C RISK_ENGINE_STATE=HALTED + TRADING_ENABLED=false simultaneously: e
       const real = new FakeBroker();
       const risk = new RiskEngine({}, memRiskPersistence()); // persisted ACTIVE — env override must win
       expect(risk.getState().tradingState).toBe("HALTED");   // read fresh, no caching
-      const adapter = new SwitchingAdapter(
-        "orch_c1", { getMode: () => "live" }, real, new FakeBroker(), "orch_c1_live", risk,
-      );
+      const adapter = new SwitchingAdapter("orch_c1", real, risk);
 
       // Open: denied by the RISK veto (which runs BEFORE the TRADING_ENABLED
       // backstop — locking the documented gate order).

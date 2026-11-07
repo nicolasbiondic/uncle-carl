@@ -1,14 +1,17 @@
-// Cutover semantics (pure): who may run on which sleeve, how a misconfiguration fails closed toward the
-// incumbent, the design hash, rollback hand-back, orphan alerts, the claim table of the Binance venue.
+// Cutover semantics (pure): who may run on which sleeve, how a misconfiguration fails closed (toward the
+// incumbent on crypto; toward the built-in fallback / NO MANAGER on stocks since 2026-11-07), the design
+// hash, rollback hand-back, orphan alerts, the stock fallback definition set, the claim table of the
+// Binance venue.
 
 import { describe, test, expect, beforeAll, beforeEach } from "bun:test";
 import { getDB, PORTFOLIO_ENGINE_STRATEGY } from "../../db/database";
 import { makeTestDb, seedOpenTrade } from "../../test-support/db";
-import { builtinPortfolios } from "../../portfolios/builtin";
+import { builtinPortfolio, builtinPortfolios } from "../../portfolios/builtin";
+import { MOMENTUM_STOCKS_UNIVERSE } from "../../config/riskProfiles";
 import type { PortfolioDefinition } from "../../portfolios/types";
 import { portfolioUniverse } from "../../portfolios/validate";
 import {
-  PORTFOLIO_SLEEVES, countOpenPortfolioRows, designHash, handBackPortfolioRows, isCryptoDesign, resolvePortfolioWiring,
+  PORTFOLIO_SLEEVES, countOpenPortfolioRows, designHash, fallbackDefinitions, handBackPortfolioRows, isCryptoDesign, resolvePortfolioWiring,
   restoreIncumbentRows, sleevesWithTwoManagers, type ResolveInput,
 } from "./cutover";
 import type { PortfolioStrategyConfig, VolManagedConfig } from "../types";
@@ -31,7 +34,17 @@ import { claimPortfolioOrderId } from "./persistence";
 import { XASSET, peDefinition, peVersions } from "./testSupport";
 
 const READY = { alpaca: null, binance_usdm: null, binance_usdc: null } as const;
-const incumbents = (): PortfolioDefinition[] => builtinPortfolios();
+/** A registry as prod had it before 2026-11-07: the crypto incumbents' rows plus the two LEGACY stock
+ *  incumbent rows (momentum_tsm / meanrev_connors — retired templates, archived at boot today but
+ *  still what the overlap/heartbeat rules treat as "the sleeve's own row"). The built-in pe_ stock
+ *  definitions are NOT part of this base: each test adds the definitions it is about. */
+const incumbents = (): PortfolioDefinition[] => [
+  ...builtinPortfolios().filter(d => d.template !== "portfolio"),
+  { id: "momentum_stocks", name: "legacy TSM", template: "momentum_tsm", account: "alpaca_main", capital: 50_000, mode: "live", enabled: true,
+    params: { universe: [...MOMENTUM_STOCKS_UNIVERSE], heartbeatName: "momentum:stocks" } as any },
+  { id: "meanrev_stocks", name: "legacy Connors", template: "meanrev_connors", account: "alpaca_main", capital: 50_000, mode: "live", enabled: true,
+    params: { heartbeatName: "meanrev:stocks" } as any },
+];
 function resolve(extra: PortfolioDefinition[], over: Partial<ResolveInput> = {}) {
   return resolvePortfolioWiring({
     defs: [...incumbents(), ...extra], venueReady: READY,
@@ -70,7 +83,7 @@ describe("live = exactly one engine per sleeve", () => {
     expect(w.live.map(p => p.params.sleeve)).toEqual(["momentum_stocks"]);
     expect(w.observers.map(p => p.params.sleeve)).toEqual(["momentum_crypto_usdc"]);
   });
-  test("two definitions on one sleeve with one live: ambiguous, NONE runs, the incumbent keeps the sleeve", () => {
+  test("two definitions on one sleeve with one live: ambiguous, NONE runs", () => {
     const w = resolve([
       peDefinition("momentum_stocks", { runMode: "live" }),
       peDefinition("momentum_stocks", { id: "pe_momentum_stocks_b", runMode: "observer", params: { strategyVersion: "momentum_stocks@other", heartbeatName: "portfolio:other" } }),
@@ -96,7 +109,7 @@ describe("live = exactly one engine per sleeve", () => {
   });
 });
 
-describe("misconfiguration fails closed (live refused, incumbent keeps managing)", () => {
+describe("misconfiguration fails closed (live refused)", () => {
   const refused = (def: PortfolioDefinition, over: Partial<ResolveInput> = {}) => resolve([def], over);
 
   test("unknown sleeve / sleeve missing / definition id = sleeve id", () => {
@@ -178,7 +191,7 @@ describe("misconfiguration fails closed (live refused, incumbent keeps managing)
     expect(w.live).toEqual([]);
     expect(msgs(w)).toContain("MODEL_VERSIONS");
   });
-  test("venue not available: live refused (the incumbent runs)", () => {
+  test("venue not available: live refused", () => {
     const w = resolve([peDefinition("momentum_crypto_usdc", { runMode: "live" })], { venueReady: { ...READY, binance_usdc: "USDC executor not attached" } });
     expect(w.live).toEqual([]);
     expect(msgs(w)).toContain("USDC executor not attached");
@@ -209,6 +222,45 @@ describe("misconfiguration fails closed (live refused, incumbent keeps managing)
   });
 });
 
+describe("stock sleeves: the built-in fallback definition (owner 2026-11-07 — no incumbent exists)", () => {
+  test("fallbackDefinitions keeps every neighbour, drops the registry's own definitions of the sleeve (live, observers) and appends the built-in", () => {
+    const builtin = builtinPortfolio("pe_momentum_stocks");
+    const registry = [
+      ...incumbents(),
+      peDefinition("momentum_stocks", { runMode: "live" }),                                            // the broken/refused live one (same id as the built-in)
+      peDefinition("momentum_stocks", { id: "pe_obs", params: { strategyVersion: "momentum_stocks@obs", heartbeatName: "portfolio:obs" } }), // an observer of the sleeve
+      peDefinition("meanrev_stocks", { runMode: "live" }),                                             // the other stock sleeve: untouched
+    ];
+    const defs = fallbackDefinitions(registry, "momentum_stocks", builtin);
+    expect(defs.map(d => d.id)).toEqual([...incumbents().map(d => d.id), "pe_meanrev_stocks", "pe_momentum_stocks"]);
+    expect(defs[defs.length - 1]).toBe(builtin);
+  });
+
+  test("the built-in definition resolves LIVE on its own against the real MODEL_VERSIONS (same current model, provenance hash intact) next to the other stock sleeve's live definition", () => {
+    const builtin = builtinPortfolio("pe_momentum_stocks");
+    const w = resolvePortfolioWiring({ defs: fallbackDefinitions([...incumbents(), builtinPortfolio("pe_meanrev_stocks")], "momentum_stocks", builtin), venueReady: READY });
+    expect(w.problems).toEqual([]);
+    expect(w.live.map(p => p.portfolioId).sort()).toEqual(["pe_meanrev_stocks", "pe_momentum_stocks"]);
+    // Venue unlinked → the fallback is refused too: that is the NO MANAGER case index.ts pages.
+    const dark = resolvePortfolioWiring({ defs: fallbackDefinitions(incumbents(), "momentum_stocks", builtin), venueReady: { ...READY, alpaca: "alpaca venue UNLINKED" } });
+    expect(dark.live).toEqual([]);
+    expect(msgs(dark)).toContain("UNLINKED");
+  });
+
+  test("a stock sleeve has no incumbent: handBackPortfolioRows refuses, restoreIncumbentRows refuses the 'incumbent' manager and pages NO MANAGER with open rows", async () => {
+    seedOpenTrade("pf_s", "momentum_stocks", { symbol: "SPY", strategy: PORTFOLIO_ENGINE_STRATEGY });
+    expect(PORTFOLIO_SLEEVES.momentum_stocks.incumbentStrategy).toBeNull();
+    expect(PORTFOLIO_SLEEVES.meanrev_stocks.incumbentStrategy).toBeNull();
+    expect(() => handBackPortfolioRows("momentum_stocks")).toThrow(/no incumbent engine/);
+    await expect(restoreIncumbentRows({ momentum_stocks: "incumbent" }, { alert: () => {} })).rejects.toThrow(/cannot be managed by an incumbent/);
+    const alerts: string[] = [];
+    const report = await restoreIncumbentRows({ momentum_stocks: "none", meanrev_stocks: "portfolio_live" }, { alert: (_c, m) => alerts.push(m) });
+    expect(report.orphaned).toEqual({ momentum_stocks: 1 });
+    expect(alerts.some(a => a.includes("momentum_stocks: 1 open PORTFOLIO row") && a.includes("NO incumbent"))).toBe(true);
+    expect((getDB().prepare("SELECT strategy FROM trades WHERE id='pf_s'").get() as any).strategy).toBe(PORTFOLIO_ENGINE_STRATEGY); // never re-tagged
+  });
+});
+
 describe("sleeve table", () => {
   test("the sleeves the portfolio engine may run on; row symbol spaces", () => {
     expect(Object.keys(PORTFOLIO_SLEEVES).sort()).toEqual(["meanrev_stocks", "momentum_crypto", "momentum_crypto_usdc", "momentum_stocks"]);
@@ -218,42 +270,41 @@ describe("sleeve table", () => {
   });
 });
 
-describe("rollback: PORTFOLIO rows go back to the incumbent", () => {
+describe("rollback (crypto sleeves): PORTFOLIO rows go back to the incumbent", () => {
   test("handBackPortfolioRows re-tags to the incumbent strategy, keeps strategy_version, is idempotent and sleeve-scoped", () => {
-    seedOpenTrade("pf_a", "momentum_stocks", { symbol: "SPY", strategy: PORTFOLIO_ENGINE_STRATEGY });
-    seedOpenTrade("pf_b", "meanrev_stocks", { symbol: "TLT", strategy: PORTFOLIO_ENGINE_STRATEGY });
-    seedOpenTrade("own", "momentum_stocks", { symbol: "AAPL", strategy: "MOMENTUM" });
-    getDB().exec("UPDATE trades SET strategy_version = 'momentum_stocks@pe-x' WHERE id = 'pf_a'");
-    const rows = handBackPortfolioRows("momentum_stocks");
+    seedOpenTrade("pf_a", "momentum_crypto", { symbol: "ETH/USD", market: "crypto", strategy: PORTFOLIO_ENGINE_STRATEGY });
+    seedOpenTrade("pf_b", "momentum_crypto_usdc", { symbol: "BTC/USDC", market: "crypto", strategy: PORTFOLIO_ENGINE_STRATEGY });
+    seedOpenTrade("own", "momentum_crypto", { symbol: "SOL/USD", market: "crypto", strategy: "MOMENTUM" });
+    getDB().exec("UPDATE trades SET strategy_version = 'momentum_crypto@pe-x' WHERE id = 'pf_a'");
+    const rows = handBackPortfolioRows("momentum_crypto");
     expect(rows.map(r => r.id)).toEqual(["pf_a"]);
     const a = getDB().prepare("SELECT strategy, strategy_version, status FROM trades WHERE id='pf_a'").get() as any;
-    expect(a).toEqual({ strategy: "MOMENTUM", strategy_version: "momentum_stocks@pe-x", status: "open" });
-    expect(countOpenPortfolioRows("meanrev_stocks")).toBe(1); // other sleeve untouched
-    expect(handBackPortfolioRows("momentum_stocks")).toEqual([]);
-    expect(handBackPortfolioRows("meanrev_stocks").map(r => r.id)).toEqual(["pf_b"]);
-    expect((getDB().prepare("SELECT strategy FROM trades WHERE id='pf_b'").get() as any).strategy).toBe("MEANREV");
+    expect(a).toEqual({ strategy: "MOMENTUM", strategy_version: "momentum_crypto@pe-x", status: "open" });
+    expect(countOpenPortfolioRows("momentum_crypto_usdc")).toBe(1); // other sleeve untouched
+    expect(handBackPortfolioRows("momentum_crypto")).toEqual([]);
+    expect(handBackPortfolioRows("momentum_crypto_usdc").map(r => r.id)).toEqual(["pf_b"]);
+    expect((getDB().prepare("SELECT strategy FROM trades WHERE id='pf_b'").get() as any).strategy).toBe("MOMENTUM");
     expect(() => handBackPortfolioRows("momentum_btc")).toThrow();
   });
 
   test("restoreIncumbentRows: incumbent → hand back + arm stops; portfolio_live → untouched; none → alert, never silent", async () => {
-    seedOpenTrade("pf_s", "momentum_stocks", { symbol: "SPY", strategy: PORTFOLIO_ENGINE_STRATEGY });
     seedOpenTrade("pf_c", "momentum_crypto_usdc", { symbol: "BTC/USDC", market: "crypto", strategy: PORTFOLIO_ENGINE_STRATEGY, quantity: 0.5, entryPrice: 100 });
     seedOpenTrade("pf_m", "meanrev_stocks", { symbol: "TLT", strategy: PORTFOLIO_ENGINE_STRATEGY });
     seedOpenTrade("pf_x", "momentum_crypto", { symbol: "ETH/USD", market: "crypto", strategy: PORTFOLIO_ENGINE_STRATEGY });
     const alerts: string[] = [];
     const armed: string[] = [];
     const report = await restoreIncumbentRows(
-      { momentum_stocks: "incumbent", momentum_crypto_usdc: "incumbent", meanrev_stocks: "portfolio_live", momentum_crypto: "none" },
-      { alert: (_c, m) => alerts.push(m), armStop: async (sleeve, row) => { armed.push(`${sleeve}:${row.symbol}`); return sleeve !== "momentum_stocks"; } },
+      { momentum_stocks: "portfolio_live", momentum_crypto_usdc: "incumbent", meanrev_stocks: "portfolio_live", momentum_crypto: "none" },
+      { alert: (_c, m) => alerts.push(m), armStop: async (sleeve, row) => { armed.push(`${sleeve}:${row.symbol}`); return false; } },
     );
-    expect(Object.keys(report.handedBack).sort()).toEqual(["momentum_crypto_usdc", "momentum_stocks"]);
-    expect(armed.sort()).toEqual(["momentum_crypto_usdc:BTC/USDC", "momentum_stocks:SPY"]);
-    expect(report.unprotected).toEqual(["momentum_stocks:SPY"]);
+    expect(Object.keys(report.handedBack)).toEqual(["momentum_crypto_usdc"]);
+    expect(armed).toEqual(["momentum_crypto_usdc:BTC/USDC"]);
+    expect(report.unprotected).toEqual(["momentum_crypto_usdc:BTC/USDC"]);
     expect(report.orphaned).toEqual({ momentum_crypto: 1 });
-    expect(alerts.some(a => a.includes("momentum_crypto: 1 open PORTFOLIO row"))).toBe(true);
-    expect(alerts.some(a => a.includes("momentum_stocks SPY") && a.includes("could NOT be armed"))).toBe(true);
+    expect(alerts.some(a => a.includes("momentum_crypto: 1 open PORTFOLIO row") && a.includes("re-enable the incumbent"))).toBe(true);
+    expect(alerts.some(a => a.includes("momentum_crypto_usdc BTC/USDC") && a.includes("could NOT be armed"))).toBe(true);
     const strat = (id: string) => (getDB().prepare("SELECT strategy FROM trades WHERE id = ?").get(id) as any).strategy;
-    expect([strat("pf_s"), strat("pf_c"), strat("pf_m"), strat("pf_x")]).toEqual(["MOMENTUM", "MOMENTUM", PORTFOLIO_ENGINE_STRATEGY, PORTFOLIO_ENGINE_STRATEGY]);
+    expect([strat("pf_c"), strat("pf_m"), strat("pf_x")]).toEqual(["MOMENTUM", PORTFOLIO_ENGINE_STRATEGY, PORTFOLIO_ENGINE_STRATEGY]);
   });
 });
 

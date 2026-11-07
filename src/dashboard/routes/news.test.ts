@@ -40,7 +40,7 @@ test("context reads open holdings and active enabled portfolio universes, includ
     db.run("CREATE TABLE trades (symbol TEXT, status TEXT)");
     db.run("INSERT INTO trades VALUES ('BTC/COIN-M', 'open'), ('NVDA', 'closed')");
     initPlatformPortfolios(db);
-    db.prepare("UPDATE platform_portfolios SET template = 'portfolio', status = 'active', enabled = 1, params_json = ? WHERE id = 'momentum_stocks'")
+    db.prepare("UPDATE platform_portfolios SET template = 'portfolio', status = 'active', enabled = 1, params_json = ? WHERE id = 'pe_momentum_stocks'")
       .run(JSON.stringify({ runMode: "live", strategy: { kind: "volManaged", universe: ["TLT"], regimeOverlay: {
         signals: [{ kind: "maTrend", symbol: "SPY", sampling: "daily", period: 200 }], combine: "any",
         hedge: { symbol: "SH", fraction: 0.1 },
@@ -49,13 +49,13 @@ test("context reads open holdings and active enabled portfolio universes, includ
     expect(result.heldSymbols).toEqual(["BTC/COIN-M"]);
     expect(result.tradedSymbols).toContain("TLT");
     expect(result.tradedSymbols).toContain("SH");
-    db.run("UPDATE platform_portfolios SET params_json = json_set(params_json, '$.runMode', 'observer') WHERE id = 'momentum_stocks'");
+    db.run("UPDATE platform_portfolios SET params_json = json_set(params_json, '$.runMode', 'observer') WHERE id = 'pe_momentum_stocks'");
     expect(newsRelevanceContext(db, "db").tradedSymbols).not.toContain("TLT");
-    db.run("UPDATE platform_portfolios SET params_json = json_set(params_json, '$.runMode', 'live') WHERE id = 'momentum_stocks'");
+    db.run("UPDATE platform_portfolios SET params_json = json_set(params_json, '$.runMode', 'live') WHERE id = 'pe_momentum_stocks'");
     // Disabled definitions and pending owner edits must not become live topics.
-    db.run("UPDATE platform_portfolios SET enabled = 0 WHERE id = 'momentum_stocks'");
+    db.run("UPDATE platform_portfolios SET enabled = 0 WHERE id = 'pe_momentum_stocks'");
     expect(newsRelevanceContext(db, "db").tradedSymbols).not.toContain("TLT");
-    db.run("UPDATE platform_portfolios SET enabled = 1, status = 'pending_restart' WHERE id = 'momentum_stocks'");
+    db.run("UPDATE platform_portfolios SET enabled = 1, status = 'pending_restart' WHERE id = 'pe_momentum_stocks'");
     expect(newsRelevanceContext(db, "db").tradedSymbols).not.toContain("TLT");
     expect(newsRelevanceContext(db, "code").tradedSymbols).toContain("NVDA");
   } finally { db.close(); }

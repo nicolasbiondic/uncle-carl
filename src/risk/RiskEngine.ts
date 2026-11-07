@@ -17,8 +17,9 @@
 //     MomentumEngine/MeanRevEngine, upstream of the adapter.
 //   - isTradingEnabled() (src/config): global maintenance kill-switch,
 //     TRADING_ENABLED=false, blocks ONLY opens, checked live (no caching).
-//   - SleeveGovernor/SwitchingAdapter: routes a sleeve's orders to a real or
-//     simulated (shadow) adapter based on live-evidence demotion.
+//   - SwitchingAdapter: the wrapper in front of every momentum sleeve's real
+//     broker adapter (it routed to a simulated book until 2026-11-07; today
+//     it only hosts this veto and the TRADING_ENABLED backstop).
 //
 // What did NOT exist before this module: a single place with STATE (halt /
 // reduce-only-mode), per-order notional caps, submit rate limiting, and a

@@ -1,6 +1,6 @@
 import { describe, expect, test, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, chmodSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHmac } from "node:crypto";
@@ -21,6 +21,15 @@ const configs: StockConfigs = {
 
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "guardian-"));
+  // No dependency on research artifacts or the developer checkout's data.
+  const artifactEnv = ["MOMENTUM_STOCKS", "MEANREV_STOCKS", "MOMENTUM_CRYPTO", "MOMENTUM_CRYPTO_USDC"].map(id => `SCORECARD_ARTIFACT_${id}`);
+  const savedEnv = artifactEnv.map(k => process.env[k]);
+  for (const key of artifactEnv) {
+    const artifact = join(dir, key);
+    mkdirSync(artifact);
+    writeFileSync(join(artifact, "runs.jsonl"), "{}\n");
+    process.env[key] = artifact;
+  }
   const path = join(dir, "trading.db"), histPath = join(dir, "historical.db");
   const db = new Database(path), hist = new Database(histPath);
   db.exec(`CREATE TABLE trades (id TEXT, account_id TEXT, symbol TEXT, side TEXT, quantity REAL, entry_time INTEGER,
@@ -55,13 +64,53 @@ function fixture() {
     db.query("INSERT INTO trades VALUES (?,?,?,?,?,?,?,?,?,?)").run(...Object.values(r));
   }
   const run = (overrides: Partial<Parameters<typeof evaluateGuardian>[0]> = {}) => evaluateGuardian({ db, hist, now: NOW, root, noBroker: true, cronMarkerDir: join(dir, "cron-markers"), cronTz: "Etc/GMT+5", ...overrides });
-  return { dir, path, histPath, db, hist, trade, decision, run, close() { db.close(); hist.close(); rmSync(dir, { recursive: true, force: true }); } };
+  return { dir, path, histPath, db, hist, trade, decision, run, close() {
+    db.close(); hist.close(); rmSync(dir, { recursive: true, force: true });
+    artifactEnv.forEach((k, i) => { if (savedEnv[i] === undefined) delete process.env[k]; else process.env[k] = savedEnv[i]; });
+  } };
 }
 const findings = (r: GuardianResult, check: string) => r.violations.filter(f => f.check === check);
 function closeOrder(qty = 10, filled = 0, id = "close") {
   return { intent: { symbol: "ABBV", side: "sell", qty, maxHold: "close" }, clientOrderId: id,
     result: { ok: filled === qty, filledQty: filled, status: filled === qty ? "filled" : "canceled" }, applied: true };
 }
+
+describe("G8 — current model expectation artifacts", () => {
+  test.each(["missing directory", "missing runs.jsonl", "runs.jsonl is a directory", "empty runs.jsonl", "unreadable runs.jsonl"])("%s pages once, recovers once after copy (no restart)", async kind => {
+    const f = fixture();
+    try {
+      const dir = process.env.SCORECARD_ARTIFACT_MOMENTUM_STOCKS!, runs = join(dir, "runs.jsonl");
+      expect(findings(await f.run(), "G8")).toEqual([]);
+      if (kind === "missing directory") rmSync(dir, { recursive: true });
+      else if (kind === "missing runs.jsonl") rmSync(runs);
+      else if (kind === "runs.jsonl is a directory") { rmSync(runs); mkdirSync(runs); }
+      else if (kind === "unreadable runs.jsonl") chmodSync(runs, 0o000);
+      else writeFileSync(runs, "");
+      const failed = await f.run();
+      expect(failed.evaluated).toContain("G8");
+      expect(findings(failed, "G8")).toEqual([{ key: "G8:momentum_stocks", check: "G8", message: expect.stringContaining("momentum_stocks@") }]);
+      const first = episodeTransitions(emptyState(), failed, NOW);
+      expect(first.events).toEqual([expect.stringContaining("PAGE G8:momentum_stocks")]);
+      expect(episodeTransitions(first.state, await f.run(), NOW + HOUR).events).toEqual([]);
+      rmSync(dir, { recursive: true, force: true }); mkdirSync(dir);
+      writeFileSync(runs, "{}\n");
+      const clear = episodeTransitions(first.state, await f.run(), NOW + 2 * HOUR);
+      expect(clear.events).toEqual([expect.stringContaining("CLEARED G8:momentum_stocks")]);
+      expect(episodeTransitions(clear.state, await f.run(), NOW + 3 * HOUR).events).toEqual([]);
+    } finally { f.close(); }
+  });
+  test("all four live sleeves are checked; historical runs do not judge today's host artifacts", async () => {
+    const f = fixture();
+    try {
+      for (const key of ["MOMENTUM_STOCKS", "MEANREV_STOCKS", "MOMENTUM_CRYPTO", "MOMENTUM_CRYPTO_USDC"])
+        rmSync(process.env[`SCORECARD_ARTIFACT_${key}`]!, { recursive: true });
+      expect(findings(await f.run(), "G8")).toHaveLength(4);
+      const historical = await f.run({ historical: true, configs });
+      expect(historical.evaluated).not.toContain("G8");
+      expect(historical.reports.join("\n")).toContain("G8 skipped");
+    } finally { f.close(); }
+  });
+});
 
 describe("G7 — cron dead-man's switch (audit F-2)", () => {
   const mark = (dir: string, name: string, ms: number) => {

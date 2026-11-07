@@ -77,13 +77,13 @@ export interface RiskProfile {
    * broker-set API leverage (BinanceMomentumAdapter/BinanceCoinMMomentumAdapter
    * call setLeverage independently — this is documentation of that number,
    * not its source). For alpaca sleeves there is no broker API leverage call;
-   * this instead declares the sleeve's REAL gross exposure multiple of its
-   * own equity (notionalPctPerSlot × maxLongs for momentum_stocks — see
-   * index.ts's MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT; slotPct ×
-   * maxPositions for meanrev_stocks). momentum_stocks was left at 1 here
-   * pre-2026-08-19 despite running at 2.0× gross via Reg-T margin — a lying
-   * field is worse than none; kept accurate from here on, locked by
-   * exposureCaps.test.ts.
+   * this instead declares the sleeve's REAL gross exposure cap as a multiple
+   * of its own equity: since 2026-10-23 (RW2) the portfolio-engine
+   * definition's strategy.maxGross (src/portfolios/builtin.ts pe_<sleeve>;
+   * the shared account is additionally clipped at ALPACA_ACCOUNT_MAX_GROSS).
+   * momentum_stocks was left at 1 here pre-2026-08-19 despite running at
+   * 2.0× gross via Reg-T margin — a lying field is worse than none; kept
+   * accurate from here on, locked by exposureCaps.test.ts.
    */
   leverage: number;
 }
@@ -96,11 +96,11 @@ export const RISK_PROFILES: Record<RiskProfileId, RiskProfile> = {
     emoji: "📈",
     initialEquity: 50_000, // its ALLOCATION of the shared Alpaca wallet (meanrev_stocks owns the other 50k)
     stopLossPct: 4,
-    // 1.5× since 2026-10-10 — notionalPctPerSlot(0.1875) × maxLongs(8), line E
-    // (index.ts's MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT). 1.0× from
-    // 2026-09-23, 2 from launch. Locked to the real product by
-    // riskProfiles.exposureCaps.test.ts.
-    leverage: 1.5,
+    // 2.5× since 2026-10-24 (Q5: the portfolio engine's maxGross, clipped at
+    // 1.9× of the shared account). 1.5× from 2026-10-10 (line E), 1.0× from
+    // 2026-09-23, 2 from launch — the retired TSM incumbent's products. Locked
+    // to the built-in portfolio definition by riskProfiles.exposureCaps.test.ts.
+    leverage: 2.5,
   },
   momentum_crypto: {
     id: "momentum_crypto",

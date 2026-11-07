@@ -185,10 +185,6 @@ export function buildBotNow(deps: BotNowDeps): { asOf: number; portfolios: BotNo
       ) rn FROM portfolio_decisions WHERE mode = 'live' AND decided_at <= ?1) WHERE rn = 1
     )) ORDER BY decided_at DESC, id DESC`).all(now, since) as any[])
     .map(row => ({ ...row, parsedOrders: json(row.orders_json, []) as PersistedOrder[] }));
-  // The governor owns this table; a fresh installation may not have built
-  // it yet. Never initialize/migrate it from a dashboard read.
-  const modes = db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sleeve_modes'").get()
-    ? db.query("SELECT sleeve, mode, reason FROM sleeve_modes").all() as any[] : [];
   const events = buildEvents(db, now, peRows, orders, activities);
   const portfolios = deps.summaries.map((summary): BotNowPortfolio => {
     const runtime = deps.runtime.find(r => r.id === summary.id);
@@ -207,7 +203,6 @@ export function buildBotNow(deps: BotNowDeps): { asOf: number; portfolios: BotNo
       p.currentPrice > 0 ? p.currentPrice : p.avgEntryPrice, p.contractSize) ?? 0), 0)
       : stocks && snap ? Math.max(0, snap.equity - snap.cash) : rows.reduce((sum, r) => sum + (notionalUsd(summary.broker, r.symbol, r.quantity, r.entry_price) ?? 0), 0);
     const grossX = equityUsd > 0 ? investedUsd / equityUsd : 0;
-    const shadow = engine !== "portfolio" && modes.some(m => m.sleeve === summary.id && m.mode === "shadow");
     const persisted = runtime?.statePath ? (deps.readState ?? readState)(runtime.statePath) : null;
     // Portfolio engines do NOT run the incumbent RiskGuard or read its old
     // state files. Those fossil pauses/peaks must not describe the live book.
@@ -230,7 +225,6 @@ export function buildBotNow(deps: BotNowDeps): { asOf: number; portfolios: BotNo
     let blocked: BotNowPortfolio["blocked"] = null;
     const paused = risk?.pausedUntil > now;
     if (!runtime || summary.mode === "close-only") blocked = { reason: "maintenance", detail: "Motor no activo; solo conciliación y protección de posiciones", until: null };
-    else if (shadow) blocked = { reason: "shadow", detail: "Las nuevas órdenes se simulan; no se envían al broker", until: null };
     else if (paused) blocked = { reason: botBlockReason(risk.pauseReason), detail: risk.pauseReason, until: risk.pausedUntil };
     else if (pe?.status === "failed" || pe?.status === "skipped_stale") blocked = { reason: pe.status, detail: pe.note ?? pe.status, until: null };
     else if (pass?.block_note && Object.values(json(pass.blocks)).some(n => Number(n) > 0)) blocked = { reason: botBlockReason(pass.block_note), detail: pass.block_note, until: null };
@@ -241,7 +235,7 @@ export function buildBotNow(deps: BotNowDeps): { asOf: number; portfolios: BotNo
       blocked = { reason: "no_signal", detail: `Sin señal larga en ${pass.universe} activos${first?.at ? `; observado desde ${new Date(first.at).toISOString()}` : " en la última decisión"}`, until: null };
     }
     else if (stocks && !isMarketOpen(now)) blocked = { reason: "market_closed", detail: lastDecision ? "NYSE cerrado; el libro sigue abierto" : "NYSE cerrado; la versión actual espera su primera decisión", until: nextDecisionAt };
-    const state: BotNowPortfolio["state"] = !runtime || summary.mode === "close-only" || shadow || paused ? "paused"
+    const state: BotNowPortfolio["state"] = !runtime || summary.mode === "close-only" || paused ? "paused"
       : pe?.status === "failed" || pe?.status === "skipped_stale" ? "error"
       : !lastDecision ? "waiting_first_pass" : positions === 0 ? "flat" : grossX < 0.9 ? "partly_invested" : "invested";
     const lastScale = activities.find(a => a.account_id === summary.id && /exposure control: λ ([\d.]+)/.test(a.message));

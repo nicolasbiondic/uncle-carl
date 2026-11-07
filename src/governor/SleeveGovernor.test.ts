@@ -2,10 +2,7 @@ import { describe, expect, test, beforeAll } from "bun:test";
 import { getDB } from "../db/database";
 import { SleeveGovernor, redesignVerdict } from "./SleeveGovernor";
 import type { BandReading } from "../portfolio/scorecard";
-import { SwitchingAdapter } from "./SwitchingAdapter";
 import { eventBus, EVENTS } from "../utils/events";
-import type { MomentumBrokerAdapter } from "../strategies/momentum/MomentumEngine";
-import type { CurrentPosition } from "../strategies/momentum/Rebalancer";
 import { makeTestDb, rawSnap } from "../test-support/db";
 
 beforeAll(() => {
@@ -31,24 +28,10 @@ function seedMany(account: string, n: number, pnlEach: number | null, opts: { ex
   for (let i = 0; i < n; i++) seedClosed(account, pnlEach, opts);
 }
 
-function seedOpenLiveRow(account: string, symbol: string) {
-  getDB().prepare(
-    `INSERT INTO trades (id, symbol, market, side, strategy, entry_price, quantity, entry_time, status, account_id, profile_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?)`
-  ).run(`gov_${seq++}`, symbol, "stock", "buy", "TEST", 100, 1, Date.now(), "open", account, account);
-}
-
-function fakeAdapter(name: string, positions: CurrentPosition[] = []) {
-  const calls: string[] = [];
-  const adapter: MomentumBrokerAdapter = {
-    getOpenPositions: async () => { calls.push("positions"); return positions; },
-    getEquity: async () => { calls.push("equity"); return name === "real" ? 111 : 999; },
-    getRealisedPnlSince: async () => { calls.push("pnl"); return name === "real" ? 11 : 99; },
-    openPosition: async () => { calls.push("open"); return { ok: true, reason: name }; },
-    closePosition: async () => { calls.push("close"); return { ok: true, reason: name }; },
-    fetchCandles: async () => { calls.push("candles"); return []; },
-  };
-  return { adapter, calls };
+/** The compatibility column every governor row carries; nothing reads it. */
+function persistedMode(sleeve: string): string | null {
+  const row = getDB().prepare(`SELECT mode FROM sleeve_modes WHERE sleeve = ?`).get(sleeve) as any;
+  return row?.mode ?? null;
 }
 
 function activityCount(sleeve: string, like: string): number {
@@ -58,11 +41,11 @@ function activityCount(sleeve: string, like: string): number {
   return row?.c ?? 0;
 }
 
-describe("SleeveGovernor — demotion is RECOMMENDATION-ONLY (owner mandate: always live)", () => {
+describe("SleeveGovernor — a bleed is RECOMMENDATION-ONLY (owner mandate: always live)", () => {
   test("without a band, live equity loss is not hidden by realizing pre-window gains", () => {
     const sleeve = "momentum_crypto";
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    gov.register({ sleeve, kind: "live" });
+    const gov = new SleeveGovernor();
+    gov.register({ sleeve });
     gov.setEvidenceEpoch(sleeve, Date.now() - 91 * DAY);
     seedMany(sleeve, 30, 100, { closeReason: "MODEL_CUTOVER" });
     rawSnap(sleeve, 5000, Date.now() - 91 * DAY, 5);
@@ -72,7 +55,7 @@ describe("SleeveGovernor — demotion is RECOMMENDATION-ONLY (owner mandate: alw
       const row = getDB().prepare("SELECT message FROM activity_log WHERE account_id=? AND message LIKE 'RECOMMEND_REDESIGN%' ORDER BY id DESC LIMIT 1").get(sleeve) as { message: string };
       expect(row.message).toContain("PnL $-100.00 (MtM");
       expect(row.message).toContain("realized $3000.00");
-      expect(gov.getMode(sleeve)).toBe("live");
+      expect(persistedMode(sleeve)).toBe("live");
     } finally {
       for (const table of ["trades", "activity_log"]) getDB().prepare(`DELETE FROM ${table} WHERE account_id=?`).run(sleeve);
       getDB().prepare("DELETE FROM equity_snapshots WHERE profile_id=?").run(sleeve);
@@ -80,8 +63,8 @@ describe("SleeveGovernor — demotion is RECOMMENDATION-ONLY (owner mandate: alw
     }
   });
   test("live sleeve meeting every bleed criterion → RECOMMEND_REDESIGN (never a demotion), mode NEVER changes", () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    gov.register({ sleeve: "gov_demote", kind: "live" });
+    const gov = new SleeveGovernor();
+    gov.register({ sleeve: "gov_demote" });
     gov.setEvidenceEpoch("gov_demote", Date.now() - 91 * DAY);
     seedMany("gov_demote", 30, -5);
 
@@ -89,9 +72,8 @@ describe("SleeveGovernor — demotion is RECOMMENDATION-ONLY (owner mandate: alw
     eventBus.once(EVENTS.CIRCUIT_BREAKER, (e: any) => { event = e; });
     gov.evaluate();
 
-    // REVERT CANARY: if evaluate() ever calls setMode("shadow") again, this
-    // is the line that fails.
-    expect(gov.getMode("gov_demote")).toBe("live");
+    // REVERT CANARY: if evaluate() ever writes a mode again, this line fails.
+    expect(persistedMode("gov_demote")).toBe("live");
     expect(activityCount("gov_demote", "SLEEVE DEMOTED%")).toBe(0);
     // The recommendation is loud: activity row + CIRCUIT_BREAKER (→ Telegram).
     expect(activityCount("gov_demote", "RECOMMEND_REDESIGN%")).toBe(1);
@@ -101,32 +83,32 @@ describe("SleeveGovernor — demotion is RECOMMENDATION-ONLY (owner mandate: alw
     // Exactly once: a second daily pass inside the cooldown re-emits nothing.
     gov.evaluate();
     expect(activityCount("gov_demote", "RECOMMEND_REDESIGN%")).toBe(1);
-    expect(gov.getMode("gov_demote")).toBe("live");
+    expect(persistedMode("gov_demote")).toBe("live");
   });
 
   test("29 trades is below the minimum — no recommendation", () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    gov.register({ sleeve: "gov_29", kind: "live" });
+    const gov = new SleeveGovernor();
+    gov.register({ sleeve: "gov_29" });
     gov.setEvidenceEpoch("gov_29", Date.now() - 91 * DAY);
     seedMany("gov_29", 29, -5);
     gov.evaluate();
-    expect(gov.getMode("gov_29")).toBe("live");
+    expect(persistedMode("gov_29")).toBe("live");
     expect(activityCount("gov_29", "RECOMMEND_REDESIGN%")).toBe(0);
   });
 
   test("losses older than the evidence epoch don't count", () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    gov.register({ sleeve: "gov_old", kind: "live" });
+    const gov = new SleeveGovernor();
+    gov.register({ sleeve: "gov_old" });
     gov.setEvidenceEpoch("gov_old", Date.now() - 30 * DAY);
     seedMany("gov_old", 30, -5, { exitTime: Date.now() - 31 * DAY });
     gov.evaluate();
-    expect(gov.getMode("gov_old")).toBe("live");
+    expect(persistedMode("gov_old")).toBe("live");
     expect(activityCount("gov_old", "RECOMMEND_REDESIGN%")).toBe(0);
   });
 
   test("reconciled close_reasons are excluded from the tally", () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    gov.register({ sleeve: "gov_rec", kind: "live" });
+    const gov = new SleeveGovernor();
+    gov.register({ sleeve: "gov_rec" });
     gov.setEvidenceEpoch("gov_rec", Date.now() - 91 * DAY);
     seedMany("gov_rec", 30, -5, { closeReason: "BROKER_GONE_404" });
     seedMany("gov_rec", 10, -5, { closeReason: "MANUAL_CLOSE_UNRECONCILED" });
@@ -138,12 +120,12 @@ describe("SleeveGovernor — demotion is RECOMMENDATION-ONLY (owner mandate: alw
     seedMany("gov_rec", 30, -5);
     gov.evaluate();
     expect(activityCount("gov_rec", "RECOMMEND_REDESIGN%")).toBe(1);
-    expect(gov.getMode("gov_rec")).toBe("live");
+    expect(persistedMode("gov_rec")).toBe("live");
   });
 
   test("null-pnl rows are excluded from the tally", () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    gov.register({ sleeve: "gov_null", kind: "live" });
+    const gov = new SleeveGovernor();
+    gov.register({ sleeve: "gov_null" });
     gov.setEvidenceEpoch("gov_null", Date.now() - 91 * DAY);
     seedMany("gov_null", 30, null);
     gov.evaluate();
@@ -153,23 +135,23 @@ describe("SleeveGovernor — demotion is RECOMMENDATION-ONLY (owner mandate: alw
     seedMany("gov_null", 30, -5);
     gov.evaluate();
     expect(activityCount("gov_null", "RECOMMEND_REDESIGN%")).toBe(1);
-    expect(gov.getMode("gov_null")).toBe("live");
+    expect(persistedMode("gov_null")).toBe("live");
   });
 
   test("profitable live sleeve: no recommendation", () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    gov.register({ sleeve: "gov_win", kind: "live" });
+    const gov = new SleeveGovernor();
+    gov.register({ sleeve: "gov_win" });
     gov.setEvidenceEpoch("gov_win", Date.now() - 91 * DAY);
     seedMany("gov_win", 40, +5);
     gov.evaluate();
-    expect(gov.getMode("gov_win")).toBe("live");
+    expect(persistedMode("gov_win")).toBe("live");
     expect(activityCount("gov_win", "RECOMMEND_REDESIGN%")).toBe(0);
   });
 
   test("windowStats uses a rolling 90d window, not lifetime from epoch", () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
+    const gov = new SleeveGovernor();
     const sleeve = "gov_rolling";
-    gov.register({ sleeve, kind: "live" });
+    gov.register({ sleeve });
     gov.setEvidenceEpoch(sleeve, Date.now() - 200 * DAY); // mature, well past 90d
     // Outside the 90d window: a lifetime-since-epoch bug would still count
     // these. Rolling must not.
@@ -180,18 +162,18 @@ describe("SleeveGovernor — demotion is RECOMMENDATION-ONLY (owner mandate: alw
     gov.evaluate();
 
     // Lifetime sum would be -150 (recommend). Rolling 90d sum is +150 (quiet).
-    expect(gov.getMode(sleeve)).toBe("live");
+    expect(persistedMode(sleeve)).toBe("live");
     expect(activityCount(sleeve, "RECOMMEND_REDESIGN%")).toBe(0);
   });
 
   test("maturation guard is preserved: epoch <90d old is never evaluated", () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
+    const gov = new SleeveGovernor();
     const sleeve = "gov_immature";
-    gov.register({ sleeve, kind: "live" });
+    gov.register({ sleeve });
     gov.setEvidenceEpoch(sleeve, Date.now() - 10 * DAY);
     seedMany(sleeve, 30, -5, { exitTime: Date.now() - 5 * DAY });
     gov.evaluate();
-    expect(gov.getMode(sleeve)).toBe("live");
+    expect(persistedMode(sleeve)).toBe("live");
     expect(activityCount(sleeve, "RECOMMEND_REDESIGN%")).toBe(0);
   });
 });
@@ -201,14 +183,14 @@ describe("SleeveGovernor — judged against the validated expectation band (owne
     ({ status, liveCumReturnPct: live, p5Pct: p5, horizonSessions: 40, modelStart: "2026-09-23", reason: status === "insufficient_data" ? "solo 3 sesiones vivas (mínimo 5)" : null });
 
   function matured(sleeve: string, pnlEach: number, band: (() => Record<string, BandReading>) | undefined) {
-    const gov = new SleeveGovernor({ cacheMs: 0, bandReadings: band });
-    gov.register({ sleeve, kind: "live" });
+    const gov = new SleeveGovernor({ bandReadings: band });
+    gov.register({ sleeve });
     gov.setEvidenceEpoch(sleeve, Date.now() - 91 * DAY);
     seedMany(sleeve, 30, pnlEach);
     return gov;
   }
 
-  test("below the band → RECOMMEND_REDESIGN even with a positive 90d P&L, stating the band; the mode never changes", () => {
+  test("below the band → RECOMMEND_REDESIGN even with a positive 90d P&L, stating the band; nothing else changes", () => {
     const gov = matured("gov_band_below", +5, () => ({ gov_band_below: reading("below") }));
     let event: any = null;
     eventBus.once(EVENTS.CIRCUIT_BREAKER, (e: any) => { event = e; });
@@ -217,7 +199,7 @@ describe("SleeveGovernor — judged against the validated expectation band (owne
     expect(event?.action).toBe("recommend_redesign");
     expect(event?.reason).toContain("below its validated expectation band");
     expect(event?.reason).toContain("p5 -7.20%");
-    expect(gov.getMode("gov_band_below")).toBe("live");
+    expect(persistedMode("gov_band_below")).toBe("live");
   });
 
   test("within or above the band → no recommendation, even with a negative 90d P&L (the old rule paged here)", () => {
@@ -254,18 +236,18 @@ describe("SleeveGovernor — judged against the validated expectation band (owne
   test("the provider runs at most once per pass, and only when a sleeve reaches the decision", () => {
     let calls = 0;
     const provider = () => { calls++; return { gov_once_a: reading("within"), gov_once_b: reading("within") }; };
-    const gov = new SleeveGovernor({ cacheMs: 0, bandReadings: provider });
+    const gov = new SleeveGovernor({ bandReadings: provider });
     for (const s of ["gov_once_a", "gov_once_b"]) {
-      gov.register({ sleeve: s, kind: "live" });
+      gov.register({ sleeve: s });
       gov.setEvidenceEpoch(s, Date.now() - 91 * DAY);
       seedMany(s, 30, -5);
     }
-    gov.register({ sleeve: "gov_once_young", kind: "live" }); // immature: never needs a band
+    gov.register({ sleeve: "gov_once_young" }); // immature: never needs a band
     gov.evaluate();
     expect(calls).toBe(1);
 
-    const idle = new SleeveGovernor({ cacheMs: 0, bandReadings: provider });
-    idle.register({ sleeve: "gov_once_idle", kind: "live" });
+    const idle = new SleeveGovernor({ bandReadings: provider });
+    idle.register({ sleeve: "gov_once_idle" });
     idle.evaluate();
     expect(calls).toBe(1); // nobody matured → no scorecard computed
   });
@@ -281,149 +263,63 @@ describe("SleeveGovernor — judged against the validated expectation band (owne
   });
 });
 
-describe("SleeveGovernor — migrateOnce cannot send a sleeve to shadow", () => {
-  test("a shadow migration on a live sleeve is neutralized: mode stays live, migration marked applied", () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    gov.register({ sleeve: "gov_mig_live", kind: "live" });
-    expect(gov.getMode("gov_mig_live")).toBe("live");
-
-    gov.migrateOnce("test_shadow_mig", "gov_mig_live", "shadow", "deploy-time shadow default");
-
-    // REVERT CANARY: the pre-mandate migrateOnce called setMode("shadow") here.
-    expect(gov.getMode("gov_mig_live")).toBe("live");
-    // Audit trail of the refusal exists…
-    expect(activityCount("gov_mig_live", "%NEUTRALIZED%")).toBe(1);
-    // …and the migration is marked applied (idempotent: re-run adds nothing).
-    gov.migrateOnce("test_shadow_mig", "gov_mig_live", "shadow", "deploy-time shadow default");
-    expect(gov.getMode("gov_mig_live")).toBe("live");
-    expect(activityCount("gov_mig_live", "%NEUTRALIZED%")).toBe(1);
-  });
-
-  test("a migration to LIVE still works (only the shadow direction is forbidden)", () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    gov.setMode("gov_mig_up", "shadow", "legacy persisted shadow row");
-    gov.register({ sleeve: "gov_mig_up", kind: "live" });
-    expect(gov.getMode("gov_mig_up")).toBe("shadow"); // persisted row wins
-
-    gov.migrateOnce("test_live_mig", "gov_mig_up", "live", "owner mandate: all sleeves live");
-    expect(gov.getMode("gov_mig_up")).toBe("live");
-  });
-});
-
-describe("SleeveGovernor — promotion is recommendation-only and gated", () => {
-  test("promotion-eligible shadow sleeve with ≥30 winners → RECOMMEND_PROMOTE, stays shadow", () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    gov.register({ sleeve: "shadow_rec_prom", kind: "shadow", promotionEligible: true, evidenceVersion: "v1" });
-    gov.setEvidenceEpoch("shadow_rec_prom", Date.now() - 91 * DAY);
-    seedMany("shadow_rec_prom", 30, +5);
+describe("SleeveGovernor — there is no mode: a sleeve can neither be demoted nor promoted (owner rule, shadow mode removed 2026-11-07)", () => {
+  test("the API exposes no setMode/getMode/migrateOnce and evaluate() never writes a mode", () => {
+    const gov = new SleeveGovernor() as any;
+    expect(gov.setMode).toBeUndefined();
+    expect(gov.getMode).toBeUndefined();
+    expect(gov.migrateOnce).toBeUndefined();
+    gov.register({ sleeve: "gov_nomode", evidenceVersion: "v1" });
+    gov.setEvidenceEpoch("gov_nomode", Date.now() - 91 * DAY);
+    seedMany("gov_nomode", 30, -5);
     gov.evaluate();
-    expect(gov.getMode("shadow_rec_prom")).toBe("shadow");
-    expect(activityCount("shadow_rec_prom", "RECOMMEND_PROMOTE%")).toBe(1);
+    // The persisted row carries the compatibility value 'live' and nothing else; the
+    // recommendation never touches it.
+    const row = getDB().prepare("SELECT mode FROM sleeve_modes WHERE sleeve = ?").get("gov_nomode") as any;
+    expect(row.mode).toBe("live");
+    expect(activityCount("gov_nomode", "RECOMMEND_REDESIGN%")).toBe(1);
+    expect(activityCount("gov_nomode", "RECOMMEND_PROMOTE%")).toBe(0);
+    expect(activityCount("gov_nomode", "SLEEVE DEMOTED%")).toBe(0);
   });
 
-  test("direct shadow sleeves registered WITHOUT promotionEligible are not promotion-eligible by default", () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    for (const sleeve of ["shadow_example_a", "shadow_example_b", "shadow_example_c"]) {
-      gov.register({ sleeve, kind: "shadow" });
-      gov.setEvidenceEpoch(sleeve, Date.now() - 91 * DAY);
-      seedMany(sleeve, 30, +5);
-    }
+  test("a legacy 'shadow' row in sleeve_modes (restored backup) changes nothing: the sleeve is judged on its own live book", () => {
+    const gov = new SleeveGovernor();
+    getDB().prepare("INSERT INTO sleeve_modes (sleeve, mode, updated_at, reason) VALUES (?, 'shadow', ?, 'legacy row')").run("gov_legacy_shadow", Date.now());
+    gov.register({ sleeve: "gov_legacy_shadow", evidenceVersion: "v1" });
+    gov.setEvidenceEpoch("gov_legacy_shadow", Date.now() - 91 * DAY);
+    seedMany("gov_legacy_shadow", 30, -5);            // the live book bleeds
+    seedMany("shadow_gov_legacy_shadow", 30, +5);     // a stale shadow_ book would have said "promote"
     gov.evaluate();
-    for (const sleeve of ["shadow_example_a", "shadow_example_b", "shadow_example_c"]) {
-      expect(gov.getMode(sleeve)).toBe("shadow");
-      expect(activityCount(sleeve, "RECOMMEND_PROMOTE%")).toBe(0);
-    }
-  });
-
-  test("<90 days since evidence epoch → no recommendation even with 30 winners", () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    gov.register({ sleeve: "shadow_young", kind: "shadow", promotionEligible: true, evidenceVersion: "v1" });
-    gov.setEvidenceEpoch("shadow_young", Date.now() - 89 * DAY);
-    seedMany("shadow_young", 30, +5);
-    gov.evaluate();
-    expect(gov.getMode("shadow_young")).toBe("shadow");
-    expect(activityCount("shadow_young", "RECOMMEND_PROMOTE%")).toBe(0);
+    expect(activityCount("gov_legacy_shadow", "RECOMMEND_REDESIGN%")).toBe(1);
+    expect(activityCount("gov_legacy_shadow", "RECOMMEND_PROMOTE%")).toBe(0);
   });
 
   test("changing evidenceVersion resets the epoch and excludes legacy rows", () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    gov.register({ sleeve: "shadow_version", kind: "shadow", promotionEligible: true, evidenceVersion: "v1" });
-    gov.setEvidenceEpoch("shadow_version", Date.now() - 91 * DAY);
-    seedMany("shadow_version", 30, +5);
+    const gov = new SleeveGovernor();
+    gov.register({ sleeve: "gov_version", evidenceVersion: "v1" });
+    gov.setEvidenceEpoch("gov_version", Date.now() - 91 * DAY);
+    seedMany("gov_version", 30, -5);
     gov.evaluate();
-    expect(activityCount("shadow_version", "RECOMMEND_PROMOTE%")).toBe(1);
+    expect(activityCount("gov_version", "RECOMMEND_REDESIGN%")).toBe(1);
 
-    // New evidence regime: legacy rows must not count toward the new gate.
-    gov.register({ sleeve: "shadow_version", kind: "shadow", promotionEligible: true, evidenceVersion: "v2" });
+    // New evidence regime: the epoch restarts now, so the sleeve is immature again
+    // and the legacy losers are not evidence against the new model.
+    getDB().prepare("DELETE FROM activity_log WHERE account_id = ?").run("gov_version");
+    gov.register({ sleeve: "gov_version", evidenceVersion: "v2" });
+    const meta = getDB().prepare("SELECT evidence_version, evidence_epoch FROM sleeve_modes WHERE sleeve = ?").get("gov_version") as any;
+    expect(meta.evidence_version).toBe("v2");
+    expect(Date.now() - meta.evidence_epoch).toBeLessThan(60_000);
     gov.evaluate();
-    expect(activityCount("shadow_version", "RECOMMEND_PROMOTE%")).toBe(1);
+    expect(activityCount("gov_version", "RECOMMEND_REDESIGN%")).toBe(0);
   });
 
-  test("a DEMOTED live sleeve is judged on its shadow_ book for re-promotion", () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    gov.register({ sleeve: "gov_repromote", kind: "live", promotionEligible: true, evidenceVersion: "v1" });
-    gov.setEvidenceEpoch("gov_repromote", Date.now() - 91 * DAY);
-    gov.setMode("gov_repromote", "shadow", "test demotion");
-    // Winners live in the shadow book, not the (dead) live book.
-    seedMany("shadow_gov_repromote", 30, +5);
-    gov.evaluate();
-    expect(gov.getMode("gov_repromote")).toBe("shadow");
-    expect(activityCount("gov_repromote", "RECOMMEND_PROMOTE%")).toBe(1);
-  });
-});
-
-describe("SleeveGovernor — manual demotion preserves real-position drain", () => {
-  test("after a HUMAN demotion (setMode), SwitchingAdapter still closes a residual real position via the real broker", async () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    const sleeve = "gov_drain";
-    gov.register({ sleeve, kind: "live" });
-    seedOpenLiveRow(sleeve, "AAPL");
-
-    // evaluate() no longer demotes (owner mandate); the only demotion path
-    // left is the human one — scripts/set-sleeve-mode.ts → setMode().
-    gov.setMode(sleeve, "shadow", "manual demotion (human, set-sleeve-mode.ts)");
-    expect(gov.getMode(sleeve)).toBe("shadow");
-
-    const real = fakeAdapter("real");
-    const shadow = fakeAdapter("shadow");
-    const sw = new SwitchingAdapter(sleeve, gov, real.adapter, shadow.adapter, sleeve);
-    const res = await sw.closePosition({ symbol: "AAPL", side: "buy" });
-    expect(res.reason).toBe("real");
-    expect(real.calls).toContain("close");
-    expect(shadow.calls).not.toContain("close");
-  });
-});
-
-describe("SleeveGovernor — getMode defaults and caching", () => {
-  test("no row → registered default; unregistered → provided default → 'live'", () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    gov.register({ sleeve: "gov_defaults", kind: "shadow" });
-    expect(gov.getMode("gov_defaults")).toBe("shadow");
-    expect(gov.getMode("gov_unknown", "shadow")).toBe("shadow");
-    expect(gov.getMode("gov_unknown2")).toBe("live");
-  });
-
-  test("setMode is visible immediately; external DB writes hide behind the cache TTL", () => {
-    const gov = new SleeveGovernor({ cacheMs: 60_000 });
-    gov.setMode("gov_cache", "shadow", "test");
-    expect(gov.getMode("gov_cache")).toBe("shadow"); // cache primed by setMode
-
-    // External write (another process / manual ops) — cached value survives.
-    getDB().prepare(`UPDATE sleeve_modes SET mode = 'live' WHERE sleeve = 'gov_cache'`).run();
-    expect(gov.getMode("gov_cache")).toBe("shadow");
-
-    // Fresh governor (cold cache) sees the DB truth.
-    const gov2 = new SleeveGovernor({ cacheMs: 0 });
-    expect(gov2.getMode("gov_cache")).toBe("live");
-  });
-
-  test("getModes surfaces persisted rows for /healthz/full", () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    gov.setMode("gov_surface", "shadow", "why not");
-    const modes = gov.getModes();
-    const row = modes.find(m => m.sleeve === "gov_surface");
-    expect(row?.mode).toBe("shadow");
-    expect(row?.reason).toBe("why not");
-    expect(row?.promotionEligible).toBe(false);
+  test("getEvidence surfaces the persisted epochs for /healthz/full", () => {
+    const gov = new SleeveGovernor();
+    gov.register({ sleeve: "gov_surface", evidenceVersion: "v-surface" });
+    const row = gov.getEvidence().find(m => m.sleeve === "gov_surface");
+    expect(row?.evidenceVersion).toBe("v-surface");
+    expect(typeof row?.evidenceEpoch).toBe("number");
+    expect(row?.reason).toBe("registered");
+    expect(gov.getRegisteredSleeves()).toContain("gov_surface");
   });
 });

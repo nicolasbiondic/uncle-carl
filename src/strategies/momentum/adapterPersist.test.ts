@@ -15,7 +15,6 @@
 import { describe, test, expect, beforeAll } from "bun:test";
 import { getDB } from "../../db/database";
 import { eventBus, EVENTS } from "../../utils/events";
-import { AlpacaMomentumAdapter } from "./AlpacaMomentumAdapter";
 import { BinanceMomentumAdapter } from "./BinanceMomentumAdapter";
 import { makeTestDb, seedOpenTrade } from "../../test-support/db";
 
@@ -33,45 +32,6 @@ function captureBurst(): { fired: boolean; ctx?: string } {
   eventBus.once(EVENTS.ERROR_BURST, (d: any) => { cap.fired = true; cap.ctx = d?.context; });
   return cap;
 }
-
-describe("AlpacaMomentumAdapter.openPosition — persist failure after a real fill", () => {
-  function fakeAlpaca(close: { success: boolean; filledPrice: number; reason?: string }) {
-    const calls = { close: 0 };
-    return {
-      calls,
-      isConnected: () => true,
-      getCachedPrice: () => 100,
-      getLatestPrice: async () => 100,
-      getExecutableQuote: async () => ({ price: 100, timestamp: Date.now() }),
-      getRegTBuyingPower: async () => null, // unknown → fail-open (guard has its own tests)
-      placeOrder: async (_sig: any, qty: number) => ({
-        id: "dup-alpaca", quantity: qty, filledPrice: 100, filledQty: qty, status: "filled", externalId: "broker-dup",
-      }),
-      closePosition: async () => { calls.close++; return close; },
-    } as any;
-  }
-
-  test("emergency-closes and returns db_persist_failed_position_closed when the close succeeds", async () => {
-    const alp = fakeAlpaca({ success: true, filledPrice: 100 });
-    const burst = captureBurst();
-    const res = await new AlpacaMomentumAdapter(alp).openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 1000 });
-    expect(res).toEqual({ ok: false, reason: "db_persist_failed_position_closed" });
-    expect(alp.calls.close).toBe(1);          // exactly one emergency close (after 1 retry)
-    expect(burst.fired).toBe(true);           // paged
-    expect(burst.ctx).toBe("AlpacaMomentumAdapter");
-    // and NO phantom AAPL row was left behind
-    const n = getDB().prepare(`SELECT COUNT(*) c FROM trades WHERE symbol = 'AAPL' AND status = 'open'`).get() as any;
-    expect(n.c).toBe(0);
-  });
-
-  test("returns { ok:false } (no reason) and logs ORPHAN when the emergency close also fails", async () => {
-    const alp = fakeAlpaca({ success: false, filledPrice: 0, reason: "http_403" });
-    const res = await new AlpacaMomentumAdapter(alp).openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 1000 });
-    expect(res.ok).toBe(false);
-    expect(res.reason).toBeUndefined();
-    expect(alp.calls.close).toBe(1);
-  });
-});
 
 describe("BinanceMomentumAdapter.openPosition — persist failure after a real fill", () => {
   // opts.flatAfterClose controls the ALWAYS-reread getPositions call after
@@ -198,89 +158,8 @@ describe("BinanceMomentumAdapter close confirmation", () => {
 });
 
 describe("v8 execution telemetry", () => {
-  test("Alpaca records the signal, filled order, and fill", async () => {
-    const alpaca = {
-      isConnected: () => true,
-      getCachedPrice: () => 100,
-      getLatestPrice: async () => 100,
-      getExecutableQuote: async () => ({ price: 100, timestamp: Date.now() }),
-      getRegTBuyingPower: async () => null, // unknown → fail-open (guard has its own tests)
-      placeOrder: async (signal: any, qty: number) => ({
-        id: "telemetry-alpaca", symbol: signal.symbol, market: "stock", side: signal.side,
-        type: "market", quantity: qty, price: signal.price, status: "filled",
-        externalId: "broker-alpaca", filledPrice: 101, filledQty: qty, filledAt: Date.now(),
-        submittedAt: Date.now() - 10, submittedPx: 100,
-        createdAt: Date.now(), updatedAt: Date.now(), signal,
-      }),
-    } as any;
 
-    const result = await new AlpacaMomentumAdapter(alpaca, { accountId: "momentum_stocks" })
-      .openPosition({ symbol: "MSFT", side: "buy", notionalUsd: 1000 });
 
-    expect(result).toEqual({ ok: true });
-    expect((getDB().prepare(`SELECT COUNT(*) c FROM signals WHERE account_id='momentum_stocks' AND symbol='MSFT'`).get() as any).c).toBe(1);
-    expect(getDB().prepare(`SELECT status FROM orders WHERE id='telemetry-alpaca'`).get()).toEqual({ status: "filled" });
-    expect((getDB().prepare(`SELECT COUNT(*) c FROM fills WHERE order_id='broker-alpaca'`).get() as any).c).toBe(1);
-  });
-
-  test("Alpaca entry fill's expected_px is the DECISION price (getCachedPrice), NOT order.submittedPx — three independent values so slippage_bps actually measures something", async () => {
-    // Decision (cached) 100 != submitted-at-order-time 100.5 != filled 101.
-    // Before the fix expected_px was order.submittedPx (100.5), so
-    // slippage_bps ≈ (101-100.5)/100.5*10000 ≈ 50bps — half the true
-    // decision-to-fill slippage.
-    const alpaca = {
-      isConnected: () => true,
-      getCachedPrice: () => 100,
-      getLatestPrice: async () => 100,
-      getExecutableQuote: async () => null,
-      getRegTBuyingPower: async () => null, // unknown → fail-open (guard has its own tests)
-      placeOrder: async (signal: any, qty: number) => ({
-        id: "expected-px-alpaca", symbol: signal.symbol, market: "stock", side: signal.side,
-        type: "market", quantity: qty, price: signal.price, status: "filled",
-        externalId: "broker-expected-px", filledPrice: 101, filledQty: qty, filledAt: Date.now(),
-        submittedAt: Date.now() - 10, submittedPx: 100.5,
-        createdAt: Date.now(), updatedAt: Date.now(), signal,
-      }),
-    } as any;
-
-    const result = await new AlpacaMomentumAdapter(alpaca, { accountId: "momentum_stocks" })
-      .openPosition({ symbol: "NVDA", side: "buy", notionalUsd: 1000 });
-
-    expect(result).toEqual({ ok: true });
-    const fill = getDB().prepare(
-      `SELECT expected_px, submitted_px, filled_px, slippage_bps FROM fills WHERE order_id='broker-expected-px'`
-    ).get() as any;
-    expect(fill.expected_px).toBe(100);      // decision price, NOT submittedPx
-    expect(fill.submitted_px).toBe(100.5);   // still recorded, just no longer aliased to expected_px
-    expect(fill.filled_px).toBe(101);
-    expect(fill.slippage_bps).toBeCloseTo(100, 5); // (101-100)/100 * 10000, not (101-100.5)/100.5*10000 ≈ 50
-  });
-
-  test("Alpaca entry expected_px falls back to getLatestPrice when getCachedPrice has no price yet", async () => {
-    const alpaca = {
-      isConnected: () => true,
-      getCachedPrice: () => 0,           // nothing cached
-      getLatestPrice: async () => 100,   // sizing/decision price comes from here
-      getExecutableQuote: async () => null,
-      getRegTBuyingPower: async () => null, // unknown → fail-open (guard has its own tests)
-      placeOrder: async (signal: any, qty: number) => ({
-        id: "expected-px-fallback-alpaca", symbol: signal.symbol, market: "stock", side: signal.side,
-        type: "market", quantity: qty, price: signal.price, status: "filled",
-        externalId: "broker-expected-px-fallback", filledPrice: 101, filledQty: qty, filledAt: Date.now(),
-        submittedAt: Date.now() - 10, submittedPx: 100.5,
-        createdAt: Date.now(), updatedAt: Date.now(), signal,
-      }),
-    } as any;
-
-    const result = await new AlpacaMomentumAdapter(alpaca, { accountId: "momentum_stocks" })
-      .openPosition({ symbol: "AMD", side: "buy", notionalUsd: 1000 });
-
-    expect(result).toEqual({ ok: true });
-    const fill = getDB().prepare(
-      `SELECT expected_px FROM fills WHERE order_id='broker-expected-px-fallback'`
-    ).get() as any;
-    expect(fill.expected_px).toBe(100); // getLatestPrice fallback, still NOT submittedPx (100.5)
-  });
 
   test("Binance entry fill's expected_px is the DECISION price (getPrice), NOT order.submittedPx", async () => {
     const binance = {

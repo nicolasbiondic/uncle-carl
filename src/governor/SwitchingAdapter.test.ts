@@ -1,11 +1,8 @@
 import { describe, expect, test, beforeAll, afterEach } from "bun:test";
-import { getDB } from "../db/database";
 import { SwitchingAdapter } from "./SwitchingAdapter";
 import { makeTestDb } from "../test-support/db";
-import { SleeveGovernor } from "./SleeveGovernor";
 import { RiskEngine } from "../risk/RiskEngine";
 import type { MomentumBrokerAdapter } from "../strategies/momentum/MomentumEngine";
-import type { SleeveMode } from "./SleeveGovernor";
 import type { CurrentPosition } from "../strategies/momentum/Rebalancer";
 import type { RiskEngineState } from "../risk/RiskEngine";
 
@@ -24,8 +21,8 @@ function fakeAdapter(name: string, positions: CurrentPosition[] = []) {
   const calls: string[] = [];
   const adapter: MomentumBrokerAdapter = {
     getOpenPositions: async () => { calls.push("positions"); return positions; },
-    getEquity: async () => { calls.push("equity"); return name === "real" ? 111 : 999; },
-    getRealisedPnlSince: async () => { calls.push("pnl"); return name === "real" ? 11 : 99; },
+    getEquity: async () => { calls.push("equity"); return 111; },
+    getRealisedPnlSince: async () => { calls.push("pnl"); return 11; },
     openPosition: async () => { calls.push("open"); return { ok: true, reason: name }; },
     closePosition: async () => { calls.push("close"); return { ok: true, reason: name }; },
     fetchCandles: async () => { calls.push("candles"); return []; },
@@ -33,64 +30,49 @@ function fakeAdapter(name: string, positions: CurrentPosition[] = []) {
   return { adapter, calls };
 }
 
-let seq = 0;
-function seedOpenLiveRow(account: string, symbol: string) {
-  getDB().prepare(
-    `INSERT INTO trades (id, symbol, market, side, strategy, entry_price, quantity, entry_time, status, account_id, profile_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?)`
-  ).run(`sw_${seq++}`, symbol, "stock", "buy", "TEST", 100, 1, Date.now(), "open", account, account);
-}
-
-function makeSwitching(mode: () => SleeveMode, liveAccount: string, riskEngine?: RiskEngine) {
+function makeSwitching(riskEngine?: RiskEngine) {
   const real = fakeAdapter("real", [{ symbol: "AAPL", side: "buy", quantity: 1, notional: 100 }]);
-  const shadow = fakeAdapter("shadow", [{ symbol: "MSFT", side: "buy", quantity: 2, notional: 200 }]);
   const sw = riskEngine
-    ? new SwitchingAdapter("sleeve_x", { getMode: () => mode() }, real.adapter, shadow.adapter, liveAccount, riskEngine)
-    : new SwitchingAdapter("sleeve_x", { getMode: () => mode() }, real.adapter, shadow.adapter, liveAccount);
-  return { sw, real, shadow };
+    ? new SwitchingAdapter("sleeve_x", real.adapter, riskEngine)
+    : new SwitchingAdapter("sleeve_x", real.adapter);
+  return { sw, real };
 }
 
-test("strict overlay UTC history reaches the real data source in shadow mode; legacy calls retain two arguments", async () => {
-  const { sw, real, shadow } = makeSwitching(() => "shadow", "idle-daily");
+test("strict overlay UTC history reaches the real data source; legacy calls retain two arguments", async () => {
+  const { sw, real } = makeSwitching();
   const calls: unknown[][] = [];
   real.adapter.fetchDailyCloses = async (...args) => { calls.push(args); return [100]; };
   expect(await sw.fetchDailyCloses("BTC/USD", 611, { strictUtc: true })).toEqual([100]);
   expect(await sw.fetchDailyCloses("BTC/USD", 65)).toEqual([100]);
   expect(calls).toEqual([["BTC/USD", 611, { strictUtc: true }], ["BTC/USD", 65]]);
-  expect(shadow.calls).toEqual([]);
 });
 
-test("Turtle daily OHLC always routes to real data; role/N and every exit label survive switching", async () => {
-  for (const mode of ["live", "shadow"] as const) {
-    const account = `switch-turtle-${mode}`, { sw, real, shadow } = makeSwitching(() => mode, account);
-    const dataCalls: unknown[][] = [];
-    real.adapter.fetchDailyBars = async (...args) => { dataCalls.push(args); return []; };
-    await sw.fetchDailyBars("BTC/USD", 55); expect(dataCalls).toEqual([["BTC/USD", 55]]);
-    const candleCalls: unknown[][] = [];
-    real.adapter.fetchCandles = async (...args) => { candleCalls.push(args); return []; };
-    await sw.fetchCandles("BTC/USD", 50, { strictVenue: true });
-    expect(candleCalls).toEqual([["BTC/USD", 50, { strictVenue: true }]]);
-    const target = mode === "live" ? real.adapter : shadow.adapter;
-    const opens: any[] = [], closes: any[] = [];
-    target.openPosition = async a => { opens.push(a); return { ok: true }; };
-    target.closePosition = async a => { closes.push(a); return { ok: true }; };
-    const a = { symbol: "BTC/USD", side: "sell" as const, notionalUsd: 100, role: "breakout-short" as const, breakout: { n: 2, stopN: 2, quantity: 1 } };
-    await sw.openPosition(a); expect(opens).toEqual([a]);
-    const long = { ...a, side: "buy" as const, role: "breakout-long" as const };
-    await sw.openPosition(long); expect(opens).toEqual([a, long]);
-    if (mode === "live") seedOpenLiveRow(account, "BTC/USD");
-    for (const closeReason of ["BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN", "BREAKOUT_SHORT_TIME_STOP"]) await sw.closePosition({ symbol: "BTC/USD", side: "sell", closeReason });
-    expect(closes.map(c => c.closeReason)).toEqual(["BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN", "BREAKOUT_SHORT_TIME_STOP"]);
-    for (const closeReason of ["BREAKOUT_LONG_EXIT", "BREAKOUT_LONG_STOP", "BREAKOUT_LONG_PRIORITY", "BREAKOUT_LONG_DRAWDOWN", "BREAKOUT_LONG_TIME_STOP"]) await sw.closePosition({ symbol: "BTC/USD", side: "buy", closeReason });
-    expect(closes.slice(5).map(c => c.closeReason)).toEqual(["BREAKOUT_LONG_EXIT", "BREAKOUT_LONG_STOP", "BREAKOUT_LONG_PRIORITY", "BREAKOUT_LONG_DRAWDOWN", "BREAKOUT_LONG_TIME_STOP"]);
-  }
+test("Turtle daily OHLC routes to real data; role/N and every exit label survive the wrapper", async () => {
+  const { sw, real } = makeSwitching();
+  const dataCalls: unknown[][] = [];
+  real.adapter.fetchDailyBars = async (...args) => { dataCalls.push(args); return []; };
+  await sw.fetchDailyBars("BTC/USD", 55); expect(dataCalls).toEqual([["BTC/USD", 55]]);
+  const candleCalls: unknown[][] = [];
+  real.adapter.fetchCandles = async (...args) => { candleCalls.push(args); return []; };
+  await sw.fetchCandles("BTC/USD", 50, { strictVenue: true });
+  expect(candleCalls).toEqual([["BTC/USD", 50, { strictVenue: true }]]);
+  const opens: any[] = [], closes: any[] = [];
+  real.adapter.openPosition = async a => { opens.push(a); return { ok: true }; };
+  real.adapter.closePosition = async a => { closes.push(a); return { ok: true }; };
+  const a = { symbol: "BTC/USD", side: "sell" as const, notionalUsd: 100, role: "breakout-short" as const, breakout: { n: 2, stopN: 2, quantity: 1 } };
+  await sw.openPosition(a); expect(opens).toEqual([a]);
+  const long = { ...a, side: "buy" as const, role: "breakout-long" as const };
+  await sw.openPosition(long); expect(opens).toEqual([a, long]);
+  for (const closeReason of ["BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN", "BREAKOUT_SHORT_TIME_STOP"]) await sw.closePosition({ symbol: "BTC/USD", side: "sell", closeReason });
+  expect(closes.map(c => c.closeReason)).toEqual(["BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN", "BREAKOUT_SHORT_TIME_STOP"]);
+  for (const closeReason of ["BREAKOUT_LONG_EXIT", "BREAKOUT_LONG_STOP", "BREAKOUT_LONG_PRIORITY", "BREAKOUT_LONG_DRAWDOWN", "BREAKOUT_LONG_TIME_STOP"]) await sw.closePosition({ symbol: "BTC/USD", side: "buy", closeReason });
+  expect(closes.slice(5).map(c => c.closeReason)).toEqual(["BREAKOUT_LONG_EXIT", "BREAKOUT_LONG_STOP", "BREAKOUT_LONG_PRIORITY", "BREAKOUT_LONG_DRAWDOWN", "BREAKOUT_LONG_TIME_STOP"]);
 });
 
 // Maintenance kill-switch backstop (TRADING_ENABLED=false, src/config/
-// index.ts): even in mode=live, openPosition must never reach the real
-// adapter on a host explicitly configured not to open new positions.
-// closePosition is untouched by the switch — existing positions must always
-// be manageable.
+// index.ts): openPosition must never reach the real adapter on a host
+// explicitly configured not to open new positions. closePosition is
+// untouched by the switch — existing positions must always be manageable.
 describe("SwitchingAdapter — TRADING_ENABLED=false backstop (defense in depth)", () => {
   // Restore to DELETED, not to a load-time snapshot: the preload guarantees
   // the var is unset when the suite starts, and a snapshot taken after some
@@ -100,224 +82,72 @@ describe("SwitchingAdapter — TRADING_ENABLED=false backstop (defense in depth)
     delete process.env.TRADING_ENABLED;
   });
 
-  test("mode=live, TRADING_ENABLED=false → openPosition never reaches the real adapter", async () => {
+  test("TRADING_ENABLED=false → openPosition never reaches the real adapter", async () => {
     process.env.TRADING_ENABLED = "false";
-    const { sw, real, shadow } = makeSwitching(() => "live", "sw_acct_notrade_a");
+    const { sw, real } = makeSwitching();
     const res = await sw.openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 1000 });
     expect(res.ok).toBe(false);
     expect(res.reason).toBe("trading_disabled");
     expect(real.calls).not.toContain("open");
-    expect(shadow.calls).not.toContain("open");
   });
 
-  test("mode=live, TRADING_ENABLED=false → closePosition STILL reaches the real adapter (closes always work)", async () => {
+  test("TRADING_ENABLED=false → closePosition STILL reaches the real adapter (closes always work)", async () => {
     process.env.TRADING_ENABLED = "false";
-    seedOpenLiveRow("sw_acct_notrade_b", "AAPL");
-    const { sw, real } = makeSwitching(() => "live", "sw_acct_notrade_b");
+    const { sw, real } = makeSwitching();
     const res = await sw.closePosition({ symbol: "AAPL", side: "buy" });
     expect(res.reason).toBe("real");
     expect(real.calls).toContain("close");
   });
 
-  test("mode=live, TRADING_ENABLED unset → openPosition reaches the real adapter (default preserved)", async () => {
+  test("TRADING_ENABLED unset → openPosition reaches the real adapter (default preserved)", async () => {
     delete process.env.TRADING_ENABLED;
-    const { sw, real } = makeSwitching(() => "live", "sw_acct_notrade_c");
+    const { sw, real } = makeSwitching();
     const res = await sw.openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 1000 });
     expect(res.reason).toBe("real");
     expect(real.calls).toContain("open");
   });
 });
 
-describe("SwitchingAdapter — open routing by governor mode", () => {
-  test("mode=live → real adapter opens", async () => {
-    const { sw, real, shadow } = makeSwitching(() => "live", "sw_acct_a");
-    const res = await sw.openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 1000 });
-    expect(res.reason).toBe("real");
-    expect(real.calls).toContain("open");
-    expect(shadow.calls).not.toContain("open");
-  });
-
-  test("mode=shadow → shadow adapter opens", async () => {
-    const { sw, real, shadow } = makeSwitching(() => "shadow", "sw_acct_b");
-    const res = await sw.openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 1000 });
-    expect(res.reason).toBe("shadow");
-    expect(shadow.calls).toContain("open");
-    expect(real.calls).not.toContain("open");
-  });
-});
-
-describe("SwitchingAdapter — close prefers the real broker when a live row exists", () => {
-  test("open live DB row → real close even in shadow mode (never strand a broker position)", async () => {
-    seedOpenLiveRow("sw_acct_c", "AAPL");
-    const { sw, real, shadow } = makeSwitching(() => "shadow", "sw_acct_c");
-    const res = await sw.closePosition({ symbol: "AAPL", side: "buy" });
-    expect(res.reason).toBe("real");
-    expect(real.calls).toContain("close");
-    expect(shadow.calls).not.toContain("close");
-  });
-
-  test("no live row → shadow close", async () => {
-    const { sw, real, shadow } = makeSwitching(() => "shadow", "sw_acct_d");
-    const res = await sw.closePosition({ symbol: "AAPL", side: "buy" });
-    expect(res.reason).toBe("shadow");
-    expect(shadow.calls).toContain("close");
-    expect(real.calls).not.toContain("close");
-  });
-});
-
-describe("SwitchingAdapter — positions union and pass-throughs", () => {
-  test("mode=live → live rows only", async () => {
-    const { sw } = makeSwitching(() => "live", "sw_acct_e");
-    const pos = await sw.getOpenPositions();
-    expect(pos.map(p => p.symbol)).toEqual(["AAPL"]);
-  });
-
-  test("mode=shadow → live rows PLUS shadow rows (engine keeps managing residual real exits)", async () => {
-    const { sw } = makeSwitching(() => "shadow", "sw_acct_f");
-    const pos = await sw.getOpenPositions();
-    expect(pos.map(p => p.symbol)).toEqual(["AAPL", "MSFT"]);
-  });
-
-  test("equity / realised pnl / candles always delegate to the real adapter", async () => {
-    const { sw, real, shadow } = makeSwitching(() => "shadow", "sw_acct_g");
+describe("SwitchingAdapter — every order and every read reaches the real broker (no shadow routing since 2026-11-07)", () => {
+  test("open / close / positions / equity / realised pnl / candles all delegate to the real adapter", async () => {
+    const { sw, real } = makeSwitching();
+    expect((await sw.openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 1000 })).reason).toBe("real");
+    expect((await sw.closePosition({ symbol: "AAPL", side: "buy" })).reason).toBe("real");
+    expect((await sw.getOpenPositions()).map(p => p.symbol)).toEqual(["AAPL"]);
     expect(await sw.getEquity()).toBe(111);
     expect(await sw.getRealisedPnlSince(0)).toBe(11);
     await sw.fetchCandles("AAPL", 100);
-    expect(real.calls).toEqual(expect.arrayContaining(["equity", "pnl", "candles"]));
-    expect(shadow.calls).not.toContain("equity");
-    expect(shadow.calls).not.toContain("candles");
-  });
-});
-
-// ── Regression: SwitchingAdapter used to pass an explicit "live" default to
-// getMode(), which overrode a registered kind:"shadow" fallback whenever no
-// sleeve_modes row existed. Uses the REAL SleeveGovernor (not the fake
-// ModeSource above) so the fallback + persistence + migration logic is
-// exercised end to end. 2026-08-08 (owner mandate "always live"): migrateOnce
-// REFUSES the shadow direction — the tests below lock the neutralization at
-// the order-routing level.
-describe("SwitchingAdapter + real SleeveGovernor — shadow-migration regression", () => {
-  test("no persisted row → registered shadow kind wins (not a hardcoded 'live' default)", async () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    gov.register({ sleeve: "regr_no_row", kind: "shadow" });
-    const real = fakeAdapter("real");
-    const shadow = fakeAdapter("shadow");
-    const sw = new SwitchingAdapter("regr_no_row", gov, real.adapter, shadow.adapter, "regr_no_row");
-
-    const res = await sw.openPosition({ symbol: "BTC/USD", side: "buy", notionalUsd: 1000 });
-    expect(res.reason).toBe("shadow");
-    expect(shadow.calls).toContain("open");
-    expect(real.calls).not.toContain("open");
+    expect(real.calls).toEqual(expect.arrayContaining(["open", "close", "positions", "equity", "pnl", "candles"]));
   });
 
-  test("a shadow migration against a persisted 'live' row is NEUTRALIZED — orders keep routing to the real broker", async () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    // A live sleeve with a persisted row, exactly like prod's five sleeves.
-    getDB().prepare(
-      `INSERT INTO sleeve_modes (sleeve, mode, updated_at, reason) VALUES ('regr_legacy', 'live', ?, 'human-promoted live sleeve')`
-    ).run(Date.now());
-    gov.register({ sleeve: "regr_legacy", kind: "shadow" });
-
-    const real1 = fakeAdapter("real");
-    const shadow1 = fakeAdapter("shadow");
-    const swBefore = new SwitchingAdapter("regr_legacy", gov, real1.adapter, shadow1.adapter, "regr_legacy");
-    const resBefore = await swBefore.openPosition({ symbol: "BTC/USD", side: "buy", notionalUsd: 1000 });
-    expect(resBefore.reason).toBe("real"); // persisted live row wins over the registered fallback
-
-    // A deploy-time shadow migration (the index.ts 2026-07-16 pattern) fires,
-    // e.g. because a restored DB lost its governor_migrations marker. Owner
-    // mandate: it must NOT be able to shadow a live sleeve on its own.
-    gov.migrateOnce("regr_legacy_migration", "regr_legacy", "shadow", "deploy-time shadow migration");
-    const real2 = fakeAdapter("real");
-    const shadow2 = fakeAdapter("shadow");
-    const swAfter = new SwitchingAdapter("regr_legacy", gov, real2.adapter, shadow2.adapter, "regr_legacy");
-    const resAfter = await swAfter.openPosition({ symbol: "BTC/USD", side: "buy", notionalUsd: 1000 });
-    // REVERT CANARY: pre-mandate migrateOnce would route this to "shadow".
-    expect(resAfter.reason).toBe("real");
-    expect(real2.calls).toContain("open");
-    expect(shadow2.calls).not.toContain("open");
-  });
-
-  test("a neutralized migration is idempotent and never clobbers a later manual promotion", () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    gov.register({ sleeve: "regr_promote", kind: "shadow" });
-    gov.migrateOnce("regr_promote_migration", "regr_promote", "shadow", "initial migration");
-    // No persisted row was written — the registered shadow fallback still applies.
-    expect(gov.getMode("regr_promote")).toBe("shadow");
-
-    // A human promotes it to live via setMode (set-sleeve-mode.ts path).
-    gov.setMode("regr_promote", "live", "manual promotion (human)");
-    expect(gov.getMode("regr_promote")).toBe("live");
-
-    // A restart re-runs migrateOnce with the SAME name — must be a no-op.
-    gov.migrateOnce("regr_promote_migration", "regr_promote", "shadow", "initial migration");
-    expect(gov.getMode("regr_promote")).toBe("live");
-  });
-
-  test("cache expiry / repeated reads reflect DB truth, not a stale hardcoded default", async () => {
-    const gov = new SleeveGovernor({ cacheMs: 1 }); // effectively-instant expiry
-    gov.register({ sleeve: "regr_cache", kind: "shadow" });
-    const real = fakeAdapter("real");
-    const shadow = fakeAdapter("shadow");
-    const sw = new SwitchingAdapter("regr_cache", gov, real.adapter, shadow.adapter, "regr_cache");
-
-    for (let i = 0; i < 3; i++) {
-      const res = await sw.openPosition({ symbol: "BTC/USD", side: "buy", notionalUsd: 1000 });
-      expect(res.reason).toBe("shadow");
-      await new Promise(r => setTimeout(r, 5)); // let the cache expire between reads
-    }
-  });
-
-  test("an existing real broker position is still closed via the real adapter after demotion", async () => {
-    const gov = new SleeveGovernor({ cacheMs: 0 });
-    gov.register({ sleeve: "regr_real_pos", kind: "shadow" });
-    seedOpenLiveRow("regr_real_pos", "BTC/USD");
-
-    const real = fakeAdapter("real");
-    const shadow = fakeAdapter("shadow");
-    const sw = new SwitchingAdapter("regr_real_pos", gov, real.adapter, shadow.adapter, "regr_real_pos");
-
-    const res = await sw.closePosition({ symbol: "BTC/USD", side: "buy" });
-    expect(res.reason).toBe("real");
-    expect(real.calls).toContain("close");
-    expect(shadow.calls).not.toContain("close");
+  test("the wrapper takes no mode source and no shadow adapter (revert canary)", () => {
+    expect(SwitchingAdapter.length).toBeLessThanOrEqual(3); // (sleeve, real, riskEngine?)
   });
 });
 
 // ── RiskEngine veto integration (block 8) ──────────────────────────────
 describe("SwitchingAdapter — RiskEngine veto in openPosition", () => {
   test("default (no explicit riskEngine passed) → behaves exactly as before (byte-identical, no-op)", async () => {
-    const { sw, real } = makeSwitching(() => "live", "sw_acct_risk_default");
+    const { sw, real } = makeSwitching();
     const res = await sw.openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 1000 });
     expect(res.reason).toBe("real");
     expect(real.calls).toContain("open");
   });
 
-  test("HALTED riskEngine → openPosition denied BEFORE reaching either adapter (real or shadow)", async () => {
+  test("HALTED riskEngine → openPosition denied BEFORE reaching the adapter", async () => {
     const risk = new RiskEngine({}, fakeRiskPersistence());
     risk.setTradingState("HALTED", "test incident");
-    const { sw, real, shadow } = makeSwitching(() => "live", "sw_acct_risk_halt", risk);
+    const { sw, real } = makeSwitching(risk);
     const res = await sw.openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 1000 });
     expect(res.ok).toBe(false);
     expect(res.reason).toBe("TRADING_STATE_HALTED");
     expect(real.calls).not.toContain("open");
-    expect(shadow.calls).not.toContain("open");
-  });
-
-  test("HALTED riskEngine → applies even in mode=shadow (veto is upstream of mode routing)", async () => {
-    const risk = new RiskEngine({}, fakeRiskPersistence());
-    risk.setTradingState("HALTED", "test incident");
-    const { sw, shadow } = makeSwitching(() => "shadow", "sw_acct_risk_halt_shadow", risk);
-    const res = await sw.openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 1000 });
-    expect(res.ok).toBe(false);
-    expect(res.reason).toBe("TRADING_STATE_HALTED");
-    expect(shadow.calls).not.toContain("open");
   });
 
   test("REDUCING riskEngine → openPosition denied (an open always increases exposure)", async () => {
     const risk = new RiskEngine({}, fakeRiskPersistence());
     risk.setTradingState("REDUCING", "test wind-down");
-    const { sw, real } = makeSwitching(() => "live", "sw_acct_risk_reducing", risk);
+    const { sw, real } = makeSwitching(risk);
     const res = await sw.openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 1000 });
     expect(res.ok).toBe(false);
     expect(res.reason).toBe("TRADING_STATE_REDUCING");
@@ -326,13 +156,13 @@ describe("SwitchingAdapter — RiskEngine veto in openPosition", () => {
 
   test("ACTIVE riskEngine with a notional cap → over-cap open denied, under-cap open allowed", async () => {
     const risk = new RiskEngine({ maxNotionalPerOrderUsd: 500 }, fakeRiskPersistence());
-    const { sw: swOver, real: realOver } = makeSwitching(() => "live", "sw_acct_risk_cap_a", risk);
+    const { sw: swOver, real: realOver } = makeSwitching(risk);
     const over = await swOver.openPosition({ symbol: "AAPL", side: "buy", notionalUsd: 501 });
     expect(over.ok).toBe(false);
     expect(over.reason).toBe("NOTIONAL_EXCEEDS_MAXIMUM");
     expect(realOver.calls).not.toContain("open");
 
-    const { sw: swUnder, real: realUnder } = makeSwitching(() => "live", "sw_acct_risk_cap_b", risk);
+    const { sw: swUnder, real: realUnder } = makeSwitching(risk);
     const under = await swUnder.openPosition({ symbol: "MSFT", side: "buy", notionalUsd: 500 });
     expect(under.ok).toBe(true);
     expect(realUnder.calls).toContain("open");
@@ -341,12 +171,10 @@ describe("SwitchingAdapter — RiskEngine veto in openPosition", () => {
 
 describe("SwitchingAdapter — RiskEngine veto NEVER applies to closePosition, in any TradingState", () => {
   for (const state of ["ACTIVE", "HALTED", "REDUCING"] as const) {
-    test(`state=${state} → closePosition still reaches the real adapter for an open live row`, async () => {
+    test(`state=${state} → closePosition still reaches the real adapter`, async () => {
       const risk = new RiskEngine({}, fakeRiskPersistence());
       if (state !== "ACTIVE") risk.setTradingState(state, `test ${state}`);
-      const acct = `sw_acct_risk_close_${state}`;
-      seedOpenLiveRow(acct, "AAPL");
-      const { sw, real } = makeSwitching(() => "live", acct, risk);
+      const { sw, real } = makeSwitching(risk);
       const res = await sw.closePosition({ symbol: "AAPL", side: "buy" });
       expect(res.ok).toBe(true);
       expect(res.reason).toBe("real");

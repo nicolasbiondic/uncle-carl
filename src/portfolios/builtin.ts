@@ -1,22 +1,23 @@
 /**
- * The built-in portfolios: the five hand-wired sleeves of src/index.ts
- * expressed as DATA, with the exact values production wires today
- * (F3a, 2026-10-04 — docs/platform/PLAN.md).
+ * The built-in portfolios: every sleeve expressed as DATA, with the exact
+ * values production runs today (F3a, 2026-10-04 — docs/platform/PLAN.md).
  *
- * Direction of truth: these literals MUST stay equal to what the pure plan
- * functions in src/index.ts produce — src/portfolios/parity.test.ts
- * deep-equals buildPortfolioPlan(each definition) against them. Changing a
- * sleeve's wiring therefore means changing BOTH src/index.ts (where
- * AGENTS.md's rg falsifiers and scripts/liveSleeveConfigs.test.ts lock the
- * source text) AND this file, or the parity test fails.
+ * Direction of truth, crypto sleeves (momentum_tsm): these literals MUST stay
+ * equal to what the pure plan functions in src/index.ts produce —
+ * src/portfolios/parity.test.ts deep-equals buildPortfolioPlan(each
+ * definition) against them. Changing a sleeve's wiring therefore means
+ * changing BOTH src/index.ts (where AGENTS.md's rg falsifiers and
+ * scripts/liveSleeveConfigs.test.ts lock the source text) AND this file.
+ * Stock sleeves (template "portfolio", since 2026-11-07): the literal is the
+ * manifest candidate of the sleeve's CURRENT model version, locked by
+ * src/portfolios/builtinPortfolioEngine.test.ts.
  *
  * This module deliberately does NOT import from "../index": index.ts
  * imports the factory (which imports this file), and a back-edge would hit
  * the TDZ on index's exported consts during module evaluation.
  */
-import { MOMENTUM_STOCKS_UNIVERSE, MOMENTUM_CRYPTO_UNIVERSE, RISK_PROFILES } from "../config/riskProfiles";
+import { MOMENTUM_CRYPTO_UNIVERSE, RISK_PROFILES } from "../config/riskProfiles";
 import { USDC_SYMBOL_MAP } from "../executor/binance/quoteAsset";
-import { COINM_INTERNAL_SYMBOL } from "../strategies/momentum/BinanceCoinMMomentumAdapter";
 import { DEFAULT_TSM_CONFIG } from "../strategies/momentum/TimeSeriesMomentum";
 import { EQUITY_SEMANTICS } from "../strategies/momentum/RiskGuard";
 import type { PortfolioDefinition } from "./types";
@@ -33,9 +34,6 @@ export function builtinPortfolios(): PortfolioDefinition[] {
       template: "momentum_tsm",
       account: "binance_usdt",
       capital: RISK_PROFILES.momentum_crypto.initialEquity,
-      // Registered DEFAULT is shadow (recent windows negative at launch);
-      // the owner promoted the sleeve to live 2026-08-08 via sleeve_modes —
-      // that persisted row, not this default, is the effective mode.
       mode: "live",
       enabled: true,
       params: {
@@ -60,7 +58,7 @@ export function builtinPortfolios(): PortfolioDefinition[] {
         heartbeatName: "momentum:crypto",
         loggerContext: "Momentum:crypto",
         state: { path: "data/momentum-state-crypto.json", currentBase: 5_000, legacyBase: 10_000 },
-        governor: { promotionEligible: false, evidenceVersion: "v8.5-crypto-corroff" },
+        governor: { evidenceVersion: "v8.5-crypto-corroff" },
       },
     },
     {
@@ -106,88 +104,117 @@ export function builtinPortfolios(): PortfolioDefinition[] {
         governor: { evidenceVersion: "v8.6-usdc-xc-dd" },
       },
     },
+    // ── Stock sleeves: PORTFOLIO-ENGINE definitions (RW2, live since 2026-10-23).
+    // These are the code's copy of the CURRENT live model of each stock sleeve:
+    // byte-equal to the registry row scripts/portfolio-engine-cutover.ts wrote
+    // in prod (pe_<sleeve>, source "owner"), i.e. the manifest candidate named
+    // by the LAST entry of MODEL_VERSIONS[sleeve] (src/portfolio/modelVersions.ts),
+    // with the provenance hash that cutover.ts re-checks at boot (live = tested).
+    // Purpose (owner, 2026-11-07, audit C): the TSM/Connors incumbents that used
+    // to be the fallback when a DB definition was missing, invalid or could not
+    // build are deleted; index.ts now falls back to THIS definition instead and
+    // pages. Locked against the manifest + MODEL_VERSIONS by
+    // src/portfolios/builtinPortfolioEngine.test.ts: changing the live model =
+    // append the version, run the cutover script AND update this literal.
     {
-      id: "momentum_btc",
-      name: "Momentum TSM — Binance COIN-M BTC perp",
-      template: "momentum_tsm",
-      account: "binance_coinm",
-      capital: RISK_PROFILES.momentum_btc.initialEquity,
-      mode: "live",
-      enabled: false, // MOMENTUM_COINM_ENABLED defaults false — flag-off sleeve
-      params: {
-        universe: [COINM_INTERNAL_SYMBOL],
-        rebalanceMinutes: 60,
-        barMinutes: 60,
-        historyBars: 754,
-        maxLongs: 1, // single symbol IS the one slot
-        notionalPctPerSlot: 1,
-        sharpeGate: { lookbackDays: 30, minSharpe: 0 },
-        equitySemantics: EQUITY_SEMANTICS.BINANCE_COINM_MARGIN,
-        heartbeatName: "momentum:btc",
-        loggerContext: "Momentum:coinm",
-        state: { path: "data/momentum-state-btc.json", currentBase: 1_000, legacyBase: 1_000 },
-        governor: { evidenceVersion: "v8.2-coinm-launch" },
-      },
-    },
-    {
-      id: "momentum_stocks",
-      name: "Momentum TSM daily — Alpaca stocks/ETFs",
-      template: "momentum_tsm",
+      id: "pe_momentum_stocks",
+      name: "momentum_stocks on the portfolio engine (e1-lev-vt30-g250-maxhold5-stagger-sh50)",
+      template: "portfolio",
       account: "alpaca_main",
       capital: RISK_PROFILES.momentum_stocks.initialEquity,
       mode: "live",
       enabled: true,
       params: {
-        universe: MOMENTUM_STOCKS_UNIVERSE,
-        rebalanceMinutes: 60, // informational — index.ts drives the tick (docs.test counts it)
-        barMinutes: 1440,
-        // Daily blend3 kernel (k8-s8 + blend, artifacts 5a5a9577…/cc2f5d69…).
-        horizon: { lookbackDaysList: [63, 126, 252], maLengthDays: 200 },
-        maxLongs: 8,
-        notionalPctPerSlot: 0.1875, // k = 1.5 since 2026-10-10 (line E quorum; MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT)
-        slotHysteresis: true, // owner override 2026-09-10, stocks only
-        tsmTrail: { kSigma: 8, lookbackBars: 20, minPct: 5, maxPct: 30 },
-        volStop: { kSigma: 8, lookbackBars: 20, minPct: 5, maxPct: 30 },
-        sharpeGate: { lookbackDays: 30, minSharpe: 0 },
-        capacityGuard: { maxAdvPct: 1, lookbackBars: 20, mode: "observe" },
-        equitySemantics: EQUITY_SEMANTICS.SLEEVE_LEDGER,
-        modelVersion: "daily-blend3-k150-2026-10-12",
-        // Line E resize 2026-10-10: the whole book re-underwritten at the new
-        // slot on the 10-12 pass (see MOMENTUM_STOCKS_CUTOVER_AT in index.ts).
-        cutover: { at: Date.UTC(2026, 9, 11), expiresAt: Date.UTC(2026, 9, 14) },
-        heartbeatName: "momentum:stocks",
-        loggerContext: "Momentum:stocks",
-        state: { path: "data/momentum-state-stocks.json", currentBase: 50_000, legacyBase: 100_000 },
-        governor: { evidenceVersion: "v8.4-stocks-k150" },
+        engine: "portfolio",
+        sleeve: "momentum_stocks",
+        strategy: {
+          kind: "volManaged",
+          universe: ["SPY", "QQQ", "IWM", "GLD", "AAPL", "MSFT", "NVDA", "META", "GOOGL", "AMZN", "SMH"],
+          inceptionGuardBars: 252,
+          volLookback: 63,
+          covLookback: 21,
+          portfolioVolTarget: 0.3,
+          annualization: 252,
+          perAssetCap: 0.25,
+          maxGross: 2.5,
+          // Q5/RW8: SPY 200-day switch (1 % band); risk-off = core to cash + SH at 0.5× core gross.
+          regimeOverlay: { signals: [{ kind: "maTrend", symbol: "SPY", period: 200, sampling: "daily", bandPct: 1 }], combine: "any", coreScale: 0, hedge: { symbol: "SH", fraction: 0.5 } },
+          fastVolLookback: 5,
+          maxHoldSessions: 5,
+          maxHoldStagger: true,
+        },
+        venue: "alpaca",
+        runMode: "live",
+        strategyVersion: "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger-sh50",
+        heartbeatName: "portfolio:momentum_stocks",
+        loggerContext: "Portfolio:momentum_stocks",
+        minOrderNotional: 5,
+        rebalanceBand: 0.01,
+        provenance: {
+          manifest: "experiments/rw8-e1-lev-vt30-g250-maxhold5-stagger-sh50-v1.json",
+          candidate: "e1-lev-vt30-g250-maxhold5-stagger-sh50",
+          designSha256: "928a8a4bf29add0a9b999e7da6ce46b61949f7c3b69597460b4382ee36f9a89b",
+        },
       },
     },
     {
-      id: "meanrev_stocks",
-      name: "Connors RSI(2) mean-reversion — Alpaca stocks/ETFs",
-      template: "meanrev_connors",
+      id: "pe_meanrev_stocks",
+      name: "meanrev_stocks on the portfolio engine (vt15-maxhold5-stagger)",
+      template: "portfolio",
       account: "alpaca_main",
       capital: RISK_PROFILES.meanrev_stocks.initialEquity,
       mode: "live",
-      enabled: true, // runtime additionally gated by MEANREV_ENABLED !== "false" (unchanged)
+      enabled: true,
       params: {
-        // Strategy knobs live in DEFAULT_MEANREV_CONFIG (single source);
-        // these are the only index.ts overrides.
-        volStop: { kSigma: 3, lookbackBars: 20, minPct: 2, maxPct: 12 }, // vol-k3, artifact 9dcd9781
-        capacityGuard: { maxAdvPct: 1, lookbackBars: 20, mode: "observe" },
-        equitySemantics: EQUITY_SEMANTICS.SLEEVE_LEDGER,
-        heartbeatName: "meanrev:stocks",
-        loggerContext: "MeanRev:stocks",
-        schedulerLabel: "meanrev",
-        state: {
-          path: "data/meanrev-state-stocks.json",
-          currentBase: RISK_PROFILES.meanrev_stocks.initialEquity,
-          legacyBase: RISK_PROFILES.meanrev_stocks.initialEquity,
+        engine: "portfolio",
+        sleeve: "meanrev_stocks",
+        strategy: {
+          kind: "volManaged",
+          universe: ["ABBV", "AVGO", "BAC", "CAT", "COST", "CVX", "DIS", "GE", "HD", "HON", "JNJ", "JPM", "KO", "LLY", "MA", "MCD", "MRK", "NFLX", "NKE", "ORCL", "PG", "QCOM", "UNH", "V", "WMT", "XLE", "XLF", "XLI", "XLP", "XLV", "XOM", "SLV"],
+          inceptionGuardBars: 252,
+          volLookback: 63,
+          covLookback: 21,
+          portfolioVolTarget: 0.15,
+          annualization: 252,
+          perAssetCap: 0.1,
+          maxGross: 1,
+          maxHoldSessions: 5,
+          maxHoldStagger: true,
         },
-        governor: { evidenceVersion: "v8-meanrev" },
+        venue: "alpaca",
+        runMode: "live",
+        strategyVersion: "meanrev_stocks@pe-vt15-mh5-stagger",
+        heartbeatName: "portfolio:meanrev_stocks",
+        loggerContext: "Portfolio:meanrev_stocks",
+        minOrderNotional: 5,
+        rebalanceBand: 0.01,
+        provenance: {
+          manifest: "experiments/rw7-e2-meanrev-maxhold5-stagger-v1.json",
+          candidate: "vt15-maxhold5-stagger",
+          designSha256: "4d5d114b00b41b499940e93229c77813f244646091bb8f5629a77ae557e6c686",
+        },
       },
     },
   ];
 }
+
+/** Ids of definitions this file USED to seed and no longer does. A registry
+ *  row with one of these ids and source='builtin' (i.e. never edited by the
+ *  owner) is archived at boot by initPlatformPortfolios — never deleted, so
+ *  the history stays readable — because no engine in this code can run it:
+ *   - momentum_btc: the COIN-M momentum engine was retired 2026-11-07
+ *     (owner, audit C). The wallet's truth sync does not depend on a row.
+ *   - momentum_stocks / meanrev_stocks: the TSM/Connors incumbent rows. Their
+ *     engines (AlpacaMomentumAdapter, the live MeanRevEngine wiring) were
+ *     retired the same day; the sleeves run on the pe_<sleeve> definitions. */
+export const RETIRED_BUILTIN_IDS: readonly string[] = ["momentum_btc", "momentum_stocks", "meanrev_stocks"];
+
+/** The stock sleeves and the built-in portfolio-engine definition each one
+ *  falls back to when the registry gives it no live engine (index.ts). */
+export const STOCK_SLEEVE_BUILTIN_DEFINITION: Readonly<Record<"momentum_stocks" | "meanrev_stocks", string>> = {
+  momentum_stocks: "pe_momentum_stocks",
+  meanrev_stocks: "pe_meanrev_stocks",
+};
 
 /** One built-in definition by id; throws on an unknown id (never silent). */
 export function builtinPortfolio(id: string): PortfolioDefinition {

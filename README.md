@@ -41,27 +41,23 @@ leave your machine.
 
 ## Sleeves (shipped defaults)
 
-This table is the canonical sleeve/broker/universe/cadence/mode reference —
+This table is the canonical sleeve/broker/universe/cadence/state reference —
 enforced against the code by `src/config/docs.test.ts`, so it can't silently
-drift. The registered **mode** below is the shipped default; the owner of
-an installation can override a sleeve's *effective* mode at runtime via
-`sleeve_modes`; every shipped sleeve is registered live.
+drift. Every sleeve with an engine trades live: there is no shadow
+(simulated) mode to park a sleeve in.
 
-The actual effective mode ("Modo efectivo", shown in the dashboard) always
-lives at `GET /healthz/full` → `sleeveModes`, not in this static table.
-
-| Sleeve | Broker | Universe (symbols) | Cadence (min) | Registered mode |
+| Sleeve | Broker | Universe (symbols) | Cadence (min) | State |
 |---|---|---|---|---|
 | `momentum_stocks` | Alpaca | 11 | daily | live |
 | `meanrev_stocks` | Alpaca | 32 | daily | live |
 | `momentum_crypto` | Binance USDT perps | 8 | 60 | live |
 | `momentum_crypto_usdc` | Binance USDC perps | 13 | daily | live (opt-in: `MOMENTUM_USDC_ENABLED`) |
-| `momentum_btc` | Binance COIN-M | 1 | 60 | live (opt-in: `MOMENTUM_COINM_ENABLED`) |
+| `momentum_btc` | Binance COIN-M | 0 | — | inactive (engine retired; the COIN-M wallet is still synced for its balance) |
 
-Start on paper/testnet accounts: every sleeve trades its account once the
-bot runs.
-`momentum_crypto_usdc` and `momentum_btc` are off by default (`MOMENTUM_*_ENABLED`
-gates) until their connection preflight passes.
+The two stock sleeves run on the portfolio engine (`src/portfolio-engine/`,
+vol-managed portfolios); the two crypto sleeves on the time-series momentum
+engine. Start on paper/testnet accounts. `momentum_crypto_usdc` is off by
+default (`MOMENTUM_USDC_ENABLED`) until its connection preflight passes.
 
 ## Quick start
 

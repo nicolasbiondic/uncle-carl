@@ -51,9 +51,22 @@ function observePasses(n: number, version = VERSION) {
   }
 }
 
+/** A registry as prod had it BEFORE a stock sleeve's first cutover: the code's seeds minus the two
+ *  built-in pe_ stock definitions (2026-11-07: builtin.ts now seeds them; these tests exercise the
+ *  script writing them from scratch) plus the legacy incumbent rows the script used to read capital
+ *  from (archived by today's seed; re-inserted active here so the overlap rules see a neighbour). */
+function seedPreCutoverRegistry(db = getDB()) {
+  initPlatformPortfolios(db);
+  db.exec("DELETE FROM platform_portfolios WHERE id IN ('pe_momentum_stocks', 'pe_meanrev_stocks')");
+  const legacy = db.prepare(`INSERT OR REPLACE INTO platform_portfolios (id, name, template, account, capital, mode, enabled, params_json, status, validation, source, created_at, updated_at)
+    VALUES (?, ?, ?, 'alpaca_main', 50000, 'live', 1, ?, 'active', 'validated', 'builtin', 1, 1)`);
+  legacy.run("momentum_stocks", "legacy TSM", "momentum_tsm", JSON.stringify({ universe: ["SPY", "QQQ", "IWM", "GLD", "AAPL", "MSFT", "NVDA", "META", "GOOGL", "AMZN", "SMH"], heartbeatName: "momentum:stocks" }));
+  legacy.run("meanrev_stocks", "legacy Connors", "meanrev_connors", JSON.stringify({ heartbeatName: "meanrev:stocks" }));
+}
+
 beforeEach(() => {
   makeTestDb();
-  initPlatformPortfolios(getDB());
+  seedPreCutoverRegistry();
 });
 
 describe("dry-run is the default and writes nothing", () => {
@@ -62,13 +75,13 @@ describe("dry-run is the default and writes nothing", () => {
     expect(plan.ok).toBe(true);
     expect(plan.write.action).toBe("insert");
     expect(plan.lines.join("\n")).toContain("WILL CREATE pe_momentum_stocks as OBSERVER");
-    expect(plan.lines.join("\n")).toContain("the incumbent keeps trading");
+    expect(plan.lines.join("\n")).toContain("the live portfolio engine keeps trading"); // stocks: no incumbent since 2026-11-07
     expect(peRow()).toBeUndefined();
   });
 
   test("CLI: no --apply → exit 0, prints DRY-RUN, DB file unchanged; --apply writes and says to restart", () => {
     const path = join(tmp, "dry.db");
-    initDatabase(path); initPlatformPortfolios(getDB()); getDB().close();
+    initDatabase(path); seedPreCutoverRegistry(getDB()); getDB().close();
     const out: string[] = [];
     const log = console.log; console.log = (...a: any[]) => { out.push(a.join(" ")); };
     try {
@@ -165,9 +178,11 @@ describe("refusals (nothing written)", () => {
     writeFileSync(path, JSON.stringify({ ...m, candidates: [cand] }));
     refused({ sleeve: "momentum_crypto", manifest: path, candidate: cand.name }, "live would not be tested");
   });
-  test("no incumbent registry row to read the capital from", () => {
+  test("no legacy row: capital comes from RISK_PROFILES (the stock sleeves have no incumbent row to read since 2026-11-07); no table at all is refused", () => {
     getDB().exec("DELETE FROM platform_portfolios WHERE id = 'momentum_stocks'");
-    refused({}, "no registry row 'momentum_stocks'");
+    const plan = planCutover(getDB(), base());
+    expect(plan.ok).toBe(true);
+    expect(plan.lines.join("\n")).toContain("capital $50000 (no incumbent engine: portfolio engine only)");
     getDB().exec("DROP TABLE platform_portfolios");
     refused({}, "platform_portfolios does not exist");
   });
@@ -205,9 +220,10 @@ describe("live: the same design observed first, the version registered", () => {
     expect(plan.write.action).toBe("update");
     const text = plan.lines.join("\n");
     expect(text).toContain("observed passes of momentum_stocks@pe-vt12-band0: 3");
-    expect(text).toContain("incumbent engine of momentum_stocks is NOT built");
+    expect(text).toContain("the portfolio engine runs THIS design on momentum_stocks");
     expect(text).toContain("no close, no rebuy");
     expect(text).toContain("fail-closed");
+    expect(text).toContain("falls back to the code's built-in definition");
     applyCutover(getDB(), plan);
     expect(peRow()).toMatchObject({ mode: "live", status: "pending_restart" });
     expect((peRow()!.params as PortfolioEngineParams).runMode).toBe("live");
@@ -495,7 +511,7 @@ describe("RW8: momentum_stocks cuts over atomically from RW7; meanrev stays unch
 });
 
 describe("rollback", () => {
-  test("live → rollback sets observer + shadow, keeps the design, reports the rows handed back at the next boot", () => {
+  test("live → rollback sets observer + shadow, keeps the design; on a stock sleeve it says the BUILT-IN definition takes over at the next boot and the rows stay with the portfolio engine (no incumbent since 2026-11-07)", () => {
     applyCutover(getDB(), planCutover(getDB(), base()));
     observePasses(3);
     applyCutover(getDB(), planCutover(getDB(), base({ mode: "live" }), { modelVersions: versions() }));
@@ -504,15 +520,27 @@ describe("rollback", () => {
     expect(plan.ok).toBe(true);
     const text = plan.lines.join("\n");
     expect(text).toContain("back to observer");
-    expect(text).toContain("1 open PORTFOLIO row(s) are re-tagged to MOMENTUM");
+    expect(text).toContain("runs the code's BUILT-IN definition of the current model");
+    expect(text).toContain("PAGES on every boot");
+    expect(text).toContain("1 open PORTFOLIO row(s) stay with the portfolio engine");
+    expect(text).not.toContain("re-tagged");
     expect(text).toContain("SPY 3 (PORTFOLIO)");
     applyCutover(getDB(), plan);
     const row = peRow()!;
     expect(row).toMatchObject({ mode: "shadow", enabled: true, status: "pending_restart" });
     expect((row.params as PortfolioEngineParams).runMode).toBe("observer");
     expect((row.params as PortfolioEngineParams).provenance?.candidate).toBe("vt12-band0");
-    // the incumbent definition is never touched
+    // the legacy row is never touched
     expect(loadPlatformPortfolioRows(getDB()).find(r => r.id === "momentum_stocks")!.template).toBe("momentum_tsm");
+  });
+  test("crypto sleeve rollback still describes the hand-back to the incumbent MomentumEngine", () => {
+    const d3 = JSON.parse(readFileSync(D3, "utf-8")).candidates[0].name;
+    const cryptoArgs = base({ sleeve: "momentum_crypto", manifest: D3, candidate: d3 });
+    applyCutover(getDB(), planCutover(getDB(), cryptoArgs));
+    const plan = planCutover(getDB(), base({ sleeve: "momentum_crypto", mode: "rollback", remove: true, manifest: undefined, candidate: undefined }));
+    expect(plan.ok).toBe(true);
+    expect(plan.lines.join("\n")).toContain("the incumbent manages momentum_crypto again");
+    expect(plan.lines.join("\n")).toContain("re-tagged to MOMENTUM");
   });
   test("--remove deletes the definition; with none there is nothing to do", () => {
     applyCutover(getDB(), planCutover(getDB(), base()));
@@ -523,6 +551,6 @@ describe("rollback", () => {
     const none = planCutover(getDB(), base({ mode: "rollback", manifest: undefined, candidate: undefined }));
     expect(none.ok).toBe(true);
     expect(none.write).toEqual({ action: "none" });
-    expect(none.lines.join("\n")).toContain("the incumbent already manages the sleeve");
+    expect(none.lines.join("\n")).toContain("the built-in definition already manages the sleeve");
   });
 });

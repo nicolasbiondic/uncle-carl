@@ -5,20 +5,21 @@
  * model than the validated replay with nobody noticing, because this
  * monitor only covered the two daily stock sleeves).
  *
- * READ-ONLY. Replays the LIVE config (src/config/liveSleeveConfigs.ts — the
- * derivation locked against both index.ts and the authoritative manifests)
- * with the REAL simulators (scripts/backtest-momentum-wf.ts runWithConfig /
- * scripts/meanrev-replay.ts runMeanRevReplay) over data/historical.db, from
- * each sleeve's PARITY EPOCH to the last bar for which EVERY universe
+ * READ-ONLY. For the two crypto sleeves it replays the LIVE config
+ * (src/config/liveSleeveConfigs.ts — the derivation locked against both
+ * index.ts and the authoritative manifests) with the REAL simulator
+ * (scripts/backtest-momentum-wf.ts runWithConfig) over data/historical.db,
+ * from each sleeve's PARITY EPOCH to the last bar for which EVERY universe
  * symbol has a completed bar, and compares the ENTRY decisions, the EXIT
  * decisions and the holdings against the trades table of data/trading.db
- * (opened readonly).
+ * (opened readonly). For the two stock sleeves it replays the portfolio
+ * engine's exact decisions (below) — since 2026-11-07 that is the ONLY
+ * engine they can run on (the TSM/Connors incumbents and their daily replay
+ * path here were deleted with them; owner, audit C).
  *
  * Two sleeve shapes, one comparison contract:
- *   - momentum_stocks / meanrev_stocks: DAILY bars (alpaca_wide/1d), ET
- *     trading sessions, decision stamps compared at day granularity
- *     (MATCH_TOLERANCE_DAYS calendar days) with an end-of-WINDOW holdings
- *     check. See checkSleeve.
+ *   - momentum_stocks / meanrev_stocks: the portfolio-engine decision replay
+ *     (checkPortfolioSleeve), one live decision per NYSE session.
  *   - momentum_crypto: HOURLY bars (binance_futures/1h), 24/7, decision
  *     stamps compared at MATCH_TOLERANCE_HOURS_CRYPTO-hour granularity
  *     (the live tick fires at bar-close + 15s, but the FIRST tick after a
@@ -58,13 +59,10 @@
  * ModelVersion.since; --since replays older versions using THEIR manifests.
  *
  * Epochs (PARITY_EPOCHS — the monitor's sleeve list IS this map's keys):
- *   momentum_stocks 2026-09-28 — first daily pass after MODEL_CUTOVER
- *     re-underwrites the legacy 2×-regime positions (META/AAPL).
- *   meanrev_stocks  2026-09-29 — first pass with the IEX sizing-price fix
- *     (737836d, deployed after the 09-28 pass, which skipped ABBV on "no
- *     price"). Same reasoning as the earlier 09-25 → 09-28 move (the QCOM
- *     same-day-retry fix): an epoch before a fix re-pages the fixed
- *     divergence every day.
+ *   momentum_stocks / meanrev_stocks — keys only (the stock sleeves are
+ *     always dispatched to the portfolio replay, whose epoch is the current
+ *     ModelVersion.since or --since); the dates are the retired incumbent
+ *     replay's last epochs, kept for --epoch investigations of that era.
  *   momentum_crypto 2026-10-23T09:00:00Z — RW3's cutover (correlation brake
  *     OFF, MOMENTUM_CRYPTO_MODEL_VERSION vt35-corroff-2026-10-23): the first
  *     pass of the new model, on a flat book with the RiskState re-anchored
@@ -116,7 +114,6 @@ import { getETDateKey, getETDayBounds } from "../src/db/database";
 import { liveSleeveConfig, type LiveSleeveId } from "../src/config/liveSleeveConfigs";
 import { runWithConfig, type ClosedTrade, type ReplayResult, type SeedPosition } from "./backtest-momentum-wf";
 import { MODEL_CUTOVER_CLOSE_REASON } from "../src/strategies/momentum/MomentumEngine";
-import { runMeanRevReplay } from "./meanrev-replay";
 import { candidateToReplayConfig, type CandidateConfig, type ExperimentManifest } from "./walk-forward";
 import { MODEL_VERSIONS, currentModelVersion } from "../src/portfolio/modelVersions";
 import { decide } from "../src/portfolio-engine/decide";
@@ -151,35 +148,6 @@ export const PARITY_EPOCHS: Partial<Record<LiveSleeveId, string>> = {
   // (declared in its manifest) — normalizeLiveDecisions.
   momentum_crypto_usdc: "2026-11-05T12:00:00Z",
 };
-
-// ── sleeves managed by the portfolio engine (RW2) ─────────────────────────
-/**
- * Sleeves whose LIVE manager is the portfolio engine, read from the trading
- * DB's registry: enabled `platform_portfolios` rows with template
- * "portfolio", params.runMode "live" and mode "live" (the same predicate
- * src/portfolio-engine/live/cutover.ts resolves at boot) → params.sleeve.
- * Dispatches those sleeves to exact portfolio decision replay, not the
- * incumbent's entry/exit simulator. A DB without the table
- * (pre-F3b, fixtures) means no cutover anywhere → empty map.
- *
- * See checkPortfolioSleeve. Registry detection is retained for rollbacks.
- */
-export function portfolioEngineLiveSleeves(db: Database): Map<string, { definitionId: string; strategyVersion: string | null }> {
-  const out = new Map<string, { definitionId: string; strategyVersion: string | null }>();
-  const has = db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'platform_portfolios'`).get();
-  if (!has) return out;
-  const rows = db.prepare(
-    `SELECT id, params_json FROM platform_portfolios
-     WHERE template = 'portfolio' AND enabled = 1 AND mode = 'live' AND status != 'archived'`,
-  ).all() as Array<{ id: string; params_json: string }>;
-  for (const r of rows) {
-    let p: any;
-    try { p = JSON.parse(r.params_json); } catch { continue; }
-    if (p?.runMode !== "live" || typeof p?.sleeve !== "string") continue;
-    out.set(p.sleeve, { definitionId: r.id, strategyVersion: typeof p.strategyVersion === "string" ? p.strategyVersion : null });
-  }
-  return out;
-}
 
 /** Live symbols → the replay's universe symbols. momentum_crypto_usdc
  *  trades BASE/USDC perps while its validated replay runs the BASE/USD
@@ -771,118 +739,8 @@ export function compareCryptoReplay(
   };
 }
 
-/** Last session (ET date key + max bar ts) covered by EVERY universe symbol
- *  — a lagging symbol must clamp the window, or the replay fails closed.
- *  Also surfaces which symbols are stale relative to the freshest one. */
-function lastCompleteSession(
-  hist: Database,
-  m: ExperimentManifest,
-): { key: string; ts: number; stale: Array<{ symbol: string; lastBar: string }> } | null {
-  const placeholders = m.data.universe.map(() => "?").join(",");
-  const rows = hist.prepare(
-    `SELECT symbol, MAX(timestamp) AS mx FROM historical_bars
-     WHERE source = ? AND timeframe = ? AND symbol IN (${placeholders})
-     GROUP BY symbol`,
-  ).all(m.data.source, m.data.timeframe, ...m.data.universe) as Array<{ symbol: string; mx: number }>;
-  if (rows.length === 0) return null;
-  const missing = m.data.universe.filter(s => !rows.some(r => r.symbol === s));
-  if (missing.length > 0) {
-    return { key: "0000-00-00", ts: 0, stale: missing.map(symbol => ({ symbol, lastBar: "(no bars)" })) };
-  }
-  const minTs = Math.min(...rows.map(r => r.mx));
-  const maxTs = Math.max(...rows.map(r => r.mx));
-  const stale = rows
-    .filter(r => maxTs - r.mx > STALE_SYMBOL_DAYS * 86_400_000)
-    .map(r => ({ symbol: r.symbol, lastBar: getETDateKey(r.mx) }));
-  return { key: getETDateKey(minTs), ts: minTs, stale };
-}
-
-export async function checkSleeve(
-  sleeve: LiveSleeveId,
-  tradingDbPath: string,
-  histPath: string,
-  rootDir: string,
-  epochOverride?: string,
-): Promise<SleeveParityResult> {
-  const epoch = epochOverride ?? PARITY_EPOCHS[sleeve];
-  if (!epoch) throw new Error(`checkSleeve: no PARITY_EPOCHS entry for "${sleeve}" and no --epoch override given`);
-  const liveCfg = liveSleeveConfig(sleeve);
-  const manifest: ExperimentManifest = JSON.parse(readFileSync(join(rootDir, liveCfg.manifestPath), "utf-8"));
-
-  const hist = new Database(histPath, { readonly: true });
-  let last: { key: string; ts: number } | null;
-  try {
-    last = lastCompleteSession(hist, manifest);
-  } finally {
-    hist.close();
-  }
-  if (!last || last.key < epoch) {
-    return { sleeve, status: "nothing_yet", epoch, lastSession: last?.key, staleSymbols: last?.stale ?? [], divergences: [] };
-  }
-
-  const [epochStart] = getETDayBounds(epoch);
-  const [, endMs] = getETDayBounds(last.key); // exclusive end of the last complete session
-  // Momentum daily replays stamp the decision for live-day D at the CLOSE
-  // of D's previous bar (+barMinutes): the epoch-day pass decides on the
-  // last bar BEFORE the epoch. Start the window exactly at that bar's
-  // decision instant, so the epoch pass is produced and nothing earlier is.
-  // Meanrev's replay timeline IS the live pass dates: start at the epoch.
-  const isMeanrev = sleeve === "meanrev_stocks";
-  let fromMs = epochStart;
-  if (!isMeanrev) {
-    const hist2 = new Database(histPath, { readonly: true });
-    try {
-      const prev = hist2.prepare(
-        `SELECT MAX(timestamp) AS ts FROM historical_bars
-         WHERE source = ? AND timeframe = ? AND symbol = ? AND timestamp < ?`,
-      ).get(manifest.data.source, manifest.data.timeframe, manifest.data.refSymbol, epochStart) as { ts: number | null };
-      if (prev.ts !== null) fromMs = prev.ts + manifest.data.barMinutes * 60_000;
-    } finally {
-      hist2.close();
-    }
-  }
-  const win = {
-    label: `parity:${sleeve}`,
-    from: new Date(fromMs).toISOString(),
-    to: new Date(last.ts + 12 * 3_600_000).toISOString(),
-  };
-
-  const cfg = candidateToReplayConfig(manifest, liveCfg.candidate as CandidateConfig, "base", histPath);
-
-  // Seed the sim's book with live positions already open AT THE EPOCH
-  // (OPEN.md P2 "el libro del sim arranca vacío en el epoch") — read from
-  // the same trading.db connection the live decisions come from, open for
-  // the rest of this function.
-  const tradingDb = new Database(tradingDbPath, { readonly: true });
-  let sim: SleeveDecisions;
-  let live: SleeveDecisions;
-  try {
-    const seeds = extractSeedPositions(tradingDb, sleeve, epochStart);
-    const result: ReplayResult | null = isMeanrev
-      ? await runMeanRevReplay(cfg, win, undefined, seeds)
-      : await runWithConfig(cfg, win, undefined, seeds);
-    if (!result) {
-      return { sleeve, status: "nothing_yet", epoch, lastSession: last.key, staleSymbols: last.stale, divergences: [] };
-    }
-    sim = extractSimDecisions(result.closedTrades, endMs, getETDateKey, seeds);
-    live = extractLiveDecisions(tradingDb, sleeve, epochStart, endMs);
-  } finally {
-    tradingDb.close();
-  }
-  return {
-    sleeve,
-    status: "compared",
-    epoch,
-    lastSession: last.key,
-    staleSymbols: last.stale,
-    sim,
-    live,
-    divergences: compareDecisions(sim, live),
-  };
-}
-
-/** momentum_crypto — 24/7 hourly binance_futures replay. Unlike checkSleeve
- *  (daily ET sessions), the epoch IS the exact instant (no day-bounds
+/** momentum_crypto — 24/7 hourly binance_futures replay. Unlike the stock
+ *  sleeves (ET sessions), the epoch IS the exact instant (no day-bounds
  *  snapping) and the comparison window is bounded by the last bar TIMESTAMP
  *  common to every universe symbol (the tick loop's own decision instant,
  *  not a padded session end — crypto bar-density validation is strict, see
@@ -1131,31 +989,23 @@ async function main() {
   // entry there.
   const sleeves = (Object.keys(PARITY_EPOCHS) as LiveSleeveId[])
     .filter(s => !only || s === only);
-  // Dispatch portfolio-engine sleeves to their own decision replay — read once, from the same
-  // readonly trading.db the live decisions come from. An unreadable DB
-  // degrades to "no cutover" (empty map, logged), exactly like a DB that
-  // predates the table — the per-sleeve checks below then fail on their own.
-  let peLive: ReturnType<typeof portfolioEngineLiveSleeves> = new Map();
-  try {
-    const regDb = new Database(tradingDbPath, { readonly: true });
-    try { peLive = portfolioEngineLiveSleeves(regDb); } finally { regDb.close(); }
-  } catch (e: any) {
-    console.error(`parity-check: could not read platform_portfolios (${e?.message ?? e}) — assuming no portfolio-engine cutover`);
-  }
+  // The stock sleeves run ONLY on the portfolio engine (registry definition or the code's built-in
+  // fallback — both the same current model version): always the exact decision replay, whatever
+  // the registry says. No registry read is needed: checkPortfolioSleeve resolves each decision's
+  // design from MODEL_VERSIONS + its manifest.
+  const isStock = (s: LiveSleeveId) => s === "momentum_stocks" || s === "meanrev_stocks";
   const results: SleeveParityResult[] = [];
   for (const sleeve of sleeves) {
     // One sleeve's failure must not blind the monitor to the others
     // (2026-09-29: a momentum_crypto funding-tail throw aborted all four).
     try {
       results.push(
-        peLive.has(sleeve) && (sleeve === "momentum_stocks" || sleeve === "meanrev_stocks")
+        isStock(sleeve)
           ? checkPortfolioSleeve(sleeve, tradingDbPath, histPath, rootDir, since ?? epochOverride)
-          : sleeve === "momentum_crypto" || sleeve === "momentum_crypto_usdc"
-          ? await checkMomentumCryptoSleeve(tradingDbPath, histPath, rootDir, epochOverride, sleeve)
-          : await checkSleeve(sleeve, tradingDbPath, histPath, rootDir, epochOverride),
+          : await checkMomentumCryptoSleeve(tradingDbPath, histPath, rootDir, epochOverride, sleeve),
       );
     } catch (e: any) {
-      results.push({ sleeve, status: "error", epoch: peLive.has(sleeve) ? since ?? epochOverride ?? currentModelVersion(sleeve)?.since ?? "?" : epochOverride ?? PARITY_EPOCHS[sleeve] ?? "?", error: e?.message ?? String(e), staleSymbols: [], divergences: [] });
+      results.push({ sleeve, status: "error", epoch: isStock(sleeve) ? since ?? epochOverride ?? currentModelVersion(sleeve)?.since ?? "?" : epochOverride ?? PARITY_EPOCHS[sleeve] ?? "?", error: e?.message ?? String(e), staleSymbols: [], divergences: [] });
     }
   }
 

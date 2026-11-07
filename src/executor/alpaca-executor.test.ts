@@ -1472,7 +1472,7 @@ describe("stock bars budgets are sized for SIP, not for IEX", () => {
 });
 
 // ── Shared-account Reg-T buying power read (2026-08-20) ────────────────────
-// Feeds AlpacaMomentumAdapter's pre-submit entry guard: the stock sleeves are
+// Feeds the portfolio engine's Alpaca venue pre-submit guard (venues/alpaca.ts; the retired AlpacaMomentumAdapter's before 2026-11-07): the stock sleeves are
 // DB-ledger divisions of one real account, and this is the only cross-sleeve
 // truth about remaining capacity. null = unknown (callers FAIL OPEN — the
 // broker stays the enforcer); a parseable value is returned as-is, including

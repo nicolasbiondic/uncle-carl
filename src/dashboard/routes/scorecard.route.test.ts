@@ -62,12 +62,15 @@ describe("GET /api/v2/scorecard", () => {
       for (const e of body.entities) {
         if (e.kind === "sleeve") {
           expect(e.band).not.toBeNull();
+          expect(e.rollingBand).not.toBeNull();
+          expect(e.rollingBand.status).toBe("insufficient_data");
           // Empty DB ⇒ h=0 ⇒ never "below"/"within"/"above"; and the route
           // must not have needed any artifact on disk to answer.
           expect(["insufficient_data", "unavailable"]).toContain(e.band.status);
           expect(e.windows.map((w: any) => w.window)).toEqual(["model", "30d", "90d", "v8"]);
         } else {
           expect(e.band).toBeNull();
+          expect(e.rollingBand).toBeNull();
           expect(e.windows.map((w: any) => w.window)).toEqual(["30d", "90d", "v8"]);
         }
       }

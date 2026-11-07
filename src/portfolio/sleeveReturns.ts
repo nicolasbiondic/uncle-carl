@@ -41,16 +41,15 @@
 //    The two series are honest for their sleeve but are not identically
 //    sourced; `equitySource` labels each.
 //
-// Shadow sleeves: a sleeve demoted to shadow keeps SNAPSHOTTING (the 5-min
-// snapshot loop is mode-independent) — its real-equity series stays valid
-// for whatever is still open, it just stops moving on new entries. So
-// "flat because shadow" and "silent because broken" are distinguished by
-// DATA FLOW, not by price movement: `seriesFresh` (last snapshot within
-// stalenessMs) plus `mode` (from sleeve_modes). shadow+fresh = healthy,
-// idle by design; anything+stale = the measurement pipeline itself is down.
+// Liveness of the measurement: "flat because idle" and "silent because
+// broken" are distinguished by DATA FLOW, not by price movement:
+// `seriesFresh` (last snapshot within stalenessMs). fresh = the pipeline is
+// writing (a flat series is idle by design); stale = the measurement
+// pipeline itself is down. (Until 2026-11-07 this also carried the sleeve's
+// live/shadow governor mode; the shadow mode no longer exists.)
 // ══════════════════════════════════════════════
 
-import { getDB, getDisplayEquitySeries, getETDateKey } from "../db/database";
+import { getDisplayEquitySeries, getETDateKey } from "../db/database";
 import { RISK_PROFILES, LEDGER_SLEEVE_BROKERS, type RiskProfileId } from "../config/riskProfiles";
 import { isTradingDay } from "../utils/marketHours";
 
@@ -91,13 +90,10 @@ export interface SleeveReturnSeries {
   gaps: ReturnGap[];
   /** Exact-0 observations on valid grid days (e.g. positionless days). */
   zeroReturnCount: number;
-  /** Governor mode from sleeve_modes; null = no row / table (ungoverned). */
-  mode: "live" | "shadow" | null;
-  modeSince: number | null;
   lastSnapshotAt: number | null;
   /** Last snapshot within stalenessMs of now — the pipeline is writing. */
   seriesFresh: boolean;
-  /** "ok" = data flowing (even if shadow/flat); "stale" = snapshot pipeline
+  /** "ok" = data flowing (even if flat); "stale" = snapshot pipeline
    *  silent (broken or decommissioned); "no_data" = series empty. */
   status: "ok" | "stale" | "no_data";
 }
@@ -123,18 +119,6 @@ export function nextGridDay(key: string, tradingDays: boolean): string {
   return utcMsToKey(ms);
 }
 
-function getSleeveMode(sleeve: string): { mode: "live" | "shadow" | null; modeSince: number | null } {
-  try {
-    const row = getDB().prepare(`SELECT mode, updated_at FROM sleeve_modes WHERE sleeve = ?`).get(sleeve) as
-      | { mode: string; updated_at: number | null } | undefined;
-    if (row?.mode === "live" || row?.mode === "shadow") return { mode: row.mode, modeSince: row.updated_at ?? null };
-  } catch {
-    // sleeve_modes may not exist (governor never constructed) — mode unknown,
-    // NOT an error: the series itself is still fully usable.
-  }
-  return { mode: null, modeSince: null };
-}
-
 export interface SleeveReturnOptions {
   /** Injectable clock (tests). */
   now?: number;
@@ -153,14 +137,12 @@ export function getDailySleeveReturns(profileId: string, opts: SleeveReturnOptio
   const obsPerYear = tradingDays ? 252 : 365;
   const equitySource: SleeveReturnSeries["equitySource"] =
     broker != null && LEDGER_SLEEVE_BROKERS.has(broker) ? "ledger" : "broker_truth";
-  const { mode, modeSince } = getSleeveMode(profileId);
-
   const series = getDisplayEquitySeries(profileId); // semantics-aware, synthetic=0 only, ASC
   const lastSnapshotAt = series.length > 0 ? series[series.length - 1].snapshot_time : null;
   const seriesFresh = lastSnapshotAt != null && now - lastSnapshotAt <= stalenessMs;
 
   const base: Omit<SleeveReturnSeries, "returns" | "nObservations" | "nDailyMarks" | "gaps" | "zeroReturnCount" | "status"> = {
-    profileId, grid, obsPerYear, equitySource, mode, modeSince, lastSnapshotAt, seriesFresh,
+    profileId, grid, obsPerYear, equitySource, lastSnapshotAt, seriesFresh,
   };
 
   if (series.length === 0) {

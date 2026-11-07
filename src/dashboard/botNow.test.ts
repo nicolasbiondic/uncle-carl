@@ -101,12 +101,6 @@ describe("bot now: states and live sources", () => {
     const f = fixture(); f.deps.runtime = [];
     expect(f.build().portfolios[0]).toMatchObject({ state: "paused", maxGrossX: null, nextDecisionAt: null, blocked: { reason: "maintenance" } });
   });
-  test("persisted sleeve mode reports simulated routing instead of claiming broker entries", () => {
-    const f = fixture(); f.pass();
-    f.db.exec("CREATE TABLE sleeve_modes(sleeve TEXT PRIMARY KEY, mode TEXT, reason TEXT)");
-    f.db.query("INSERT INTO sleeve_modes VALUES (?,?,?)").run("momentum_crypto", "shadow", "synthetic routing override");
-    expect(f.build().portfolios[0]).toMatchObject({ state: "paused", blocked: { reason: "shadow" } });
-  });
   test("new portfolio version waits its first pass while retaining the inherited book", () => {
     const f = fixture("momentum_stocks", "portfolio");
     f.pe({ strategy_version: "momentum_stocks@pe-vt15" });

@@ -1,36 +1,47 @@
 // ══════════════════════════════════════════════
-// MeanRev Engine (v8 — "meanrev_stocks" sleeve)
+// MeanRev Engine — Connors RSI(2) daily mean-reversion KERNEL (research/replay)
 // ══════════════════════════════════════════════
 //
-// Daily mean-reversion on stocks (Connors-style RSI2). Backtest-validated in
-// scripts/backtest-meanrev.ts (positive in all 6 walk-forward windows
-// 2019-2026) — the RSI/SMA math below is copied verbatim from that script.
+// Until 2026-11-07 this class was also the LIVE engine of the meanrev_stocks
+// sleeve (index.ts built it over AlpacaMomentumAdapter and scheduled one
+// pass per ET trading day). The sleeve has run on the portfolio engine since
+// 2026-10-23 (RW2) and the owner had the incumbent removed (audit C,
+// "límpialo"): index.ts no longer constructs this engine and nothing in the
+// bot can trade with it. The class stays because the research harness runs
+// the REAL engine over a simulated broker — scripts/meanrev-replay.ts
+// (SimMeanRevBroker), scripts/walk-forward.ts, scripts/backtest-momentum-wf.ts
+// and the manifests/ledger that name them (experiments/*.json) — and
+// scripts/parity-check.ts's history relies on its decisions being
+// reproducible. It is pure in the sense that matters: every broker and
+// clock access goes through the injected MeanRevBrokerAdapter / deps.now.
+// MEANREV_UNIVERSE and DEFAULT_MEANREV_CONFIG below are still the single
+// source for the sleeve's universe (riskProfiles.disjoint.test.ts, BrokerSync,
+// AccountManager adoption, the dashboard) and for the replay's defaults.
+//
+// Backtest-validated in scripts/backtest-meanrev.ts (positive in all 6
+// walk-forward windows 2019-2026) — the RSI/SMA math below is copied verbatim
+// from that script.
 //
 // Rules (long-only, no leverage):
 //   Entry (signal on YESTERDAY's completed daily bar, fill after today's
 //   open): RSI(2) < entryRsi AND close > SMA(200). Rank by lowest RSI.
 //   Exit: yesterday's close > SMA(5), OR held ≥ timeStopDays trading days.
-//   Hard SL 4% intraday: AccountManager.checkAllStopLoss (15s loop) via
-//   profile.stopLossPct — NOT reimplemented here.
+//   Hard SL: the replay's SimMeanRevBroker models the fixed/vol stop; the
+//   live 15 s loop that used to enforce it on this sleeve's rows is gone
+//   with the incumbent (portfolio-engine rows carry no stop by design).
 //   Sizing: slot = baseUsd × slotPct (fixed notional, NO equity feedback),
 //   max maxPositions concurrent.
 //   Portfolio breaker: the SAME RiskGuard the momentum sleeves use
 //   (../momentum/RiskGuard) gates NEW entries only — evaluated once per
 //   daily pass, right before the entries section, on the sleeve's own
-//   equity (broker.getEquity(), sleeve-ledger — never the shared Alpaca
-//   account total; see the "portfolio risk gate" comment in runDaily).
-//   Exits (SMA_EXIT/TIME_STOP) below are NEVER gated by it — a paused
-//   sleeve still manages every open position, it only stops opening new
-//   ones. This matters here specifically because entries are correlated BY
-//   DESIGN (RSI2<5 fires market-wide on crash days — the slots (7 since 2026-09-24) enter
-//   together); before this, the only cap on that was structural (maxPositions ×
-//   slotPct).
+//   equity (broker.getEquity()). Exits (SMA_EXIT/TIME_STOP) are NEVER gated
+//   by it — a paused book still manages every open position, it only stops
+//   opening new ones. Entries are correlated BY DESIGN (RSI2<5 fires
+//   market-wide on crash days — the slots enter together).
 //
-// One pass per trading day: index.ts schedules runDaily() shortly after the
-// open (≥ 09:35 ET). Universe is DISJOINT from momentum_stocks by design —
-// same broker wallet, no position netting.
+// One pass per trading day (runDaily). Universe is DISJOINT from
+// momentum_stocks by design — same broker wallet, no position netting.
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from "fs";
 import type { OHLCV } from "../../utils/types";
 import type { CurrentPosition } from "../momentum/Rebalancer";
 import { getDB, getETDateKey, getETDayBounds } from "../../db/database";
@@ -128,127 +139,6 @@ export function isTerminalActionFailure(reason?: string): boolean {
   return TERMINAL_ACTION_SUBSTRINGS.some((s) => r.includes(s));
 }
 
-export interface MeanRevRetryAttempt {
-  count: number;
-  firstAt: number;
-  lastAt: number;
-  terminal?: boolean;
-  terminalReason?: string;
-}
-
-export interface MeanRevRetryState {
-  lastSuccessDate?: string;
-  attempts: Record<string, MeanRevRetryAttempt>;
-}
-
-export interface MeanRevRetryPolicy {
-  maxDataRetries: number;
-  baseBackoffMs: number;
-  backoffMultiplier: number;
-  maxBackoffMs: number;
-}
-
-export const DEFAULT_MEANREV_RETRY_POLICY: MeanRevRetryPolicy = {
-  maxDataRetries: 3,
-  baseBackoffMs: 5 * 60 * 1000,
-  backoffMultiplier: 2,
-  maxBackoffMs: 60 * 60 * 1000,
-};
-
-export interface MeanRevRetryDecision {
-  run: boolean;
-  skipEntries: boolean;
-  reason?: "success" | "terminal" | "backoff";
-  waitMs?: number;
-}
-
-/** Small persisted per-date retry state for meanrev daily runs. */
-export class MeanRevRetryController {
-  private state: MeanRevRetryState;
-  private policy: MeanRevRetryPolicy;
-
-  constructor(
-    private statePath: string,
-    policy?: Partial<MeanRevRetryPolicy>,
-    private fs: {
-      existsSync: (p: string) => boolean;
-      readFileSync: (p: string, enc: string) => string;
-      writeFileSync: (p: string, data: string) => void;
-      renameSync: (old: string, neu: string) => void;
-    } = { existsSync, readFileSync: (p, enc) => readFileSync(p, enc as BufferEncoding), writeFileSync, renameSync },
-  ) {
-    this.policy = { ...DEFAULT_MEANREV_RETRY_POLICY, ...policy };
-    this.state = this.load();
-  }
-
-  private load(): MeanRevRetryState {
-    if (!this.fs.existsSync(this.statePath)) return { attempts: {} };
-    try {
-      const raw = this.fs.readFileSync(this.statePath, "utf-8");
-      const parsed = JSON.parse(raw) as MeanRevRetryState;
-      return { ...parsed, attempts: parsed.attempts ?? {} };
-    } catch {
-      return { attempts: {} };
-    }
-  }
-
-  save(): void {
-    const tmp = `${this.statePath}.tmp`;
-    this.fs.writeFileSync(tmp, JSON.stringify(this.state, null, 2));
-    this.fs.renameSync(tmp, this.statePath);
-  }
-
-  shouldRun(todayKey: string, now: number): MeanRevRetryDecision {
-    if (this.state.lastSuccessDate === todayKey) return { run: false, skipEntries: false, reason: "success" };
-    const attempt = this.state.attempts[todayKey];
-    if (attempt?.terminal) return { run: false, skipEntries: false, reason: "terminal" };
-    if (!attempt) return { run: true, skipEntries: false };
-    if (attempt.count >= this.policy.maxDataRetries) return { run: true, skipEntries: true };
-    const backoff = Math.min(
-      this.policy.baseBackoffMs * Math.pow(this.policy.backoffMultiplier, attempt.count - 1),
-      this.policy.maxBackoffMs,
-    );
-    if (now - attempt.lastAt < backoff) {
-      return { run: false, skipEntries: false, reason: "backoff", waitMs: backoff - (now - attempt.lastAt) };
-    }
-    return { run: true, skipEntries: false };
-  }
-
-  recordAttempt(todayKey: string, now: number): void {
-    const a = this.state.attempts[todayKey] ?? { count: 0, firstAt: now, lastAt: now };
-    a.count++;
-    a.lastAt = now;
-    this.state.attempts[todayKey] = a;
-    this.save();
-  }
-
-  markSuccess(todayKey: string): void {
-    this.state.lastSuccessDate = todayKey;
-    delete this.state.attempts[todayKey];
-    this.save();
-  }
-
-  markTerminal(todayKey: string, reason: string, now: number): void {
-    const a = this.state.attempts[todayKey] ?? { count: 1, firstAt: now, lastAt: now };
-    a.terminal = true;
-    a.terminalReason = reason;
-    a.lastAt = now;
-    this.state.attempts[todayKey] = a;
-    this.save();
-  }
-
-  getAttempt(todayKey: string): MeanRevRetryAttempt | undefined {
-    return this.state.attempts[todayKey];
-  }
-
-  getLastSuccessDate(): string | undefined {
-    return this.state.lastSuccessDate;
-  }
-}
-
-// ── Contracts ────────────────────────────────────────────────────────────
-
-/** Open position as reported by the adapter; entryTime feeds the time stop. */
 export type MeanRevPosition = CurrentPosition & { entryTime?: number };
 
 export interface MeanRevBrokerAdapter {

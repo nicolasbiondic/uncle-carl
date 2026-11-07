@@ -23,20 +23,25 @@ import type {
   SharpeGateConfig,
   CapacityGuardConfig,
 } from "../strategies/momentum/MomentumEngine";
-import type { MeanRevEngineConfig } from "../strategies/meanrev/MeanRevEngine";
 import type { EquitySemantics } from "../strategies/momentum/RiskGuard";
-import type { AlpacaMomentumAdapterConfig } from "../strategies/momentum/AlpacaMomentumAdapter";
 import type { BinanceMomentumAdapterConfig } from "../strategies/momentum/BinanceMomentumAdapter";
-import type { BinanceCoinMMomentumAdapterConfig } from "../strategies/momentum/BinanceCoinMMomentumAdapter";
 import type { PortfolioStrategyConfig, VenueId } from "../portfolio-engine/types";
 
+/** "meanrev_connors" is RETIRED (2026-11-07): no engine runs it any more (the
+ *  meanrev_stocks sleeve runs on the portfolio engine). The literal stays in
+ *  the union only so registry rows seeded before that date (archived at boot,
+ *  never deleted) still type-check when read. "momentum_tsm" runs on the
+ *  Binance accounts only — its Alpaca adapter was retired the same day. */
 export type PortfolioTemplate = "momentum_tsm" | "meanrev_connors" | "portfolio";
 
 /** Broker accounts the runtime knows how to wire today. */
 export type PortfolioAccountId = "alpaca_main" | "binance_usdt" | "binance_usdc" | "binance_coinm";
 
-/** Registered governor DEFAULT mode. A persisted sleeve_modes row (owner
- *  action via scripts/set-sleeve-mode.ts) still overrides it at runtime. */
+/** Registry label of a definition: "live" trades; "shadow" is the label the
+ *  cutover script gives an OBSERVER portfolio-engine definition (computes,
+ *  sends nothing). It is a platform_portfolios column, not a runtime mode:
+ *  the governor's live/shadow sleeve mode was removed on 2026-11-07 (owner,
+ *  audit C) — no sleeve can be routed to a simulated book any more. */
 export type PortfolioMode = "live" | "shadow";
 
 export interface PortfolioStateSpec {
@@ -46,7 +51,6 @@ export interface PortfolioStateSpec {
 }
 
 export interface PortfolioGovernorSpec {
-  promotionEligible?: boolean;
   evidenceVersion: string;
 }
 
@@ -169,7 +173,7 @@ export interface PortfolioDefinition {
   capital: number;
   mode: PortfolioMode;
   /** Registry-level flag. Runtime env gates (MOMENTUM_USDC_ENABLED /
-   *  MOMENTUM_COINM_ENABLED / MEANREV_ENABLED) still apply unchanged. */
+   *  MEANREV_ENABLED) still apply unchanged. */
   enabled: boolean;
   params: PortfolioParams;
 }
@@ -177,16 +181,7 @@ export interface PortfolioDefinition {
 // ── build plan: what index.ts's main() consumes ─────────────────────────
 
 export type AdapterSpec =
-  | { kind: "alpaca"; options: Partial<AlpacaMomentumAdapterConfig> }
-  | { kind: "binance_usdm"; options: Partial<BinanceMomentumAdapterConfig> }
-  | { kind: "binance_coinm"; options: Partial<BinanceCoinMMomentumAdapterConfig> };
-
-export interface ShadowSpec {
-  strategy: string;
-  closeReason: string;
-  timeframe: string;
-  market: "stock" | "crypto";
-}
+  | { kind: "binance_usdm"; options: Partial<BinanceMomentumAdapterConfig> };
 
 export interface StatePersistenceSpec {
   path: string;
@@ -197,8 +192,6 @@ export interface StatePersistenceSpec {
 
 export interface GovernorRegistrationSpec {
   sleeve: string;
-  kind: PortfolioMode;
-  promotionEligible?: boolean;
   evidenceVersion: string;
 }
 
@@ -208,33 +201,15 @@ export interface HeartbeatSpec {
   graceMultiplier?: number;
 }
 
-export type SchedulerSpec =
-  | { kind: "engine-start" }
-  | { kind: "index-stocks-daily"; markerPath: string }
-  | { kind: "index-stocks-hourly" }
-  | { kind: "index-meanrev-daily"; label: string };
+/** Every momentum plan today is engine-driven (engine.start()); the index.ts
+ *  stock schedulers went with the Alpaca incumbents on 2026-11-07. */
+export type SchedulerSpec = { kind: "engine-start" };
 
 export interface MomentumPortfolioPlan {
   template: "momentum_tsm";
   portfolioId: string;
   engineConfig: Partial<MomentumEngineConfig>;
   adapter: AdapterSpec;
-  shadow: ShadowSpec;
-  loggerContext: string;
-  statePersistence: StatePersistenceSpec;
-  governorRegistration: GovernorRegistrationSpec;
-  scheduler: SchedulerSpec;
-  /** Present only when index.ts drives the tick loop itself (alpaca momentum:
-   *  engine.start() is never called, so main() registers the heartbeat). */
-  heartbeat?: HeartbeatSpec;
-}
-
-export interface MeanRevPortfolioPlan {
-  template: "meanrev_connors";
-  portfolioId: string;
-  engineConfig: Partial<MeanRevEngineConfig>;
-  adapter: { kind: "alpaca"; options: Partial<AlpacaMomentumAdapterConfig> };
-  shadow: ShadowSpec;
   loggerContext: string;
   statePersistence: StatePersistenceSpec;
   governorRegistration: GovernorRegistrationSpec;
@@ -252,4 +227,4 @@ export interface PortfolioEnginePlan {
   heartbeat: HeartbeatSpec;
 }
 
-export type PortfolioBuildPlan = MomentumPortfolioPlan | MeanRevPortfolioPlan | PortfolioEnginePlan;
+export type PortfolioBuildPlan = MomentumPortfolioPlan | PortfolioEnginePlan;

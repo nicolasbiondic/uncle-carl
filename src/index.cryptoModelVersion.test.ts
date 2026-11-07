@@ -8,7 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { MOMENTUM_CRYPTO_EVIDENCE_VERSION, MOMENTUM_CRYPTO_MODEL_VERSION, MOMENTUM_STOCKS_MODEL_VERSION, momentumCryptoPortfolioPlan } from "./index";
+import { MOMENTUM_CRYPTO_EVIDENCE_VERSION, MOMENTUM_CRYPTO_MODEL_VERSION, momentumCryptoPortfolioPlan } from "./index";
 import { builtinPortfolio } from "./portfolios/builtin";
 import { currentModelVersion } from "./portfolio/modelVersions";
 import { evaluateRisk, DEFAULT_RISK_CONFIG, type RiskState } from "./strategies/momentum/RiskGuard";
@@ -132,16 +132,11 @@ describe("momentum_crypto modelVersion wiring", () => {
   });
 });
 
-describe("momentum_stocks modelVersion wiring (2026-09-28; bumped 2026-10-10 for line E k = 1.5)", () => {
-  test("the daily blend3 kernel has its own model identity, passed once to the stocks engine", () => {
-    expect(MOMENTUM_STOCKS_MODEL_VERSION).toBe("daily-blend3-k150-2026-10-12");
-    const src = readFileSync(join(import.meta.dir, "index.ts"), "utf8");
-    expect((src.match(/modelVersion: MOMENTUM_STOCKS_MODEL_VERSION,/g) ?? []).length).toBe(1);
-  });
-
-  test("the persisted prod state (5m kernel's peak + 2 losing rebalances) starts the daily kernel clean", () => {
+describe("model re-anchor on a persisted state (the retired momentum_stocks incumbent's 2026-09-28 case, kept as the mechanism's regression)", () => {
+  test("a persisted state with the old kernel's peak + 2 losing rebalances starts the new model clean", () => {
     const now = Date.UTC(2026, 8, 28, 13, 36, 0);
-    // data/momentum-state-stocks.json on prod, 2026-09-28 (last pass 09-25).
+    // data/momentum-state-stocks.json on prod, 2026-09-28 (last pass 09-25) — the
+    // engine that read it was retired 2026-11-07; the re-anchor rule is RiskGuard's.
     const prod: RiskState = {
       peakEquity: 55707.93946170168,
       dayStartEquity: 54690.038478999995,

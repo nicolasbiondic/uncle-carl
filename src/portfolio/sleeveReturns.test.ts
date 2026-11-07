@@ -20,7 +20,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeTestDb, rawSnap } from "../test-support/db";
 import { registerEquitySemanticsTransition } from "../db/database";
-import { SleeveGovernor } from "../governor/SleeveGovernor";
 import { getDailySleeveReturns, nextGridDay } from "./sleeveReturns";
 
 /** Epoch ms for `hourET` (0-23, EST winter) on YYYY-MM-DD. */
@@ -170,17 +169,13 @@ describe("observation grid per sleeve nature", () => {
   });
 });
 
-describe("shadow sleeve vs broken pipeline vs empty series", () => {
-  test("shadow + fresh snapshots → mode=shadow, seriesFresh, status ok (idle by design, NOT broken)", () => {
+describe("idle sleeve vs broken pipeline vs empty series", () => {
+  test("flat + fresh snapshots → seriesFresh, status ok (idle by design, NOT broken)", () => {
     makeTestDb();
-    const gov = new SleeveGovernor();
-    gov.setMode("momentum_stocks", "shadow", "test demotion");
     const now = et("2026-01-13", 12);
     rawSnap("momentum_stocks", 50_000, et("2026-01-12", 22), 5);
     rawSnap("momentum_stocks", 50_000, now - 10 * 60_000, 5); // snapshot loop still writing
     const s = getDailySleeveReturns("momentum_stocks", { now });
-    expect(s.mode).toBe("shadow");
-    expect(s.modeSince).not.toBeNull();
     expect(s.seriesFresh).toBe(true);
     expect(s.status).toBe("ok");
   });
@@ -192,7 +187,6 @@ describe("shadow sleeve vs broken pipeline vs empty series", () => {
     const s = getDailySleeveReturns("momentum_crypto", { now });
     expect(s.seriesFresh).toBe(false);
     expect(s.status).toBe("stale");
-    expect(s.mode).toBeNull(); // no sleeve_modes row — ungoverned, honestly unknown
   });
 
   test("empty series → status no_data (a third, distinct state)", () => {

@@ -76,11 +76,11 @@ function printEntity(e: EntityScorecard): void {
     const m = v.markedToMarket;
     console.log(`versión ${v.versionId}: MtM ${money(m?.pnl ?? null)} (${m ? `${m.fromDate}→${m.toDate}` : "sin marcas"}) · realizado de sus filas ${money(v.realizedPnl)}`);
   }
-  if (e.band) {
-    const b = e.band;
+  for (const [label, b] of [["modelo actual", e.band], ["últimas 20 sesiones", e.rollingBand]] as const) {
+    if (!b) continue;
     if (b.cumReturnPct) {
       console.log(
-        `banda (h=${b.horizonSessions} sesiones, artefacto ${b.manifest}): ` +
+        `banda ${label} (h=${b.horizonSessions} sesiones, artefacto ${b.manifest}): ` +
         `ret p5/p50/p95 = ${f(b.cumReturnPct.p5, 2, "%")} / ${f(b.cumReturnPct.p50, 2, "%")} / ${f(b.cumReturnPct.p95, 2, "%")} · ` +
         `maxDD p5/p50/p95 = ${f(b.maxDDPct!.p5, 2, "%")} / ${f(b.maxDDPct!.p50, 2, "%")} / ${f(b.maxDDPct!.p95, 2, "%")} · ` +
         `vivo ret ${f(b.liveCumReturnPct, 2, "%")} / DD ${f(b.liveMaxDrawdownPct, 2, "%")} → ESTADO: ${b.status.toUpperCase()}`
@@ -92,7 +92,7 @@ function printEntity(e: EntityScorecard): void {
         );
       }
     } else {
-      console.log(`banda: ${b.status}${b.reason ? ` (${b.reason})` : ""}`);
+      console.log(`banda ${label}: ${b.status}${b.reason ? ` (${b.reason})` : ""}`);
     }
   }
 }

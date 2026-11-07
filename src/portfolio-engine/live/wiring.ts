@@ -1,9 +1,11 @@
 // ═══ Portfolio engine — build the engines a resolved wiring asks for (src/index.ts's one call) ═══
 //
 // resolvePortfolioWiring (cutover.ts) decides; this builds. Every engine is CONSTRUCTED before the
-// incumbents are (index.ts), because a live engine that cannot be built (no venue client, no
-// historical.db, bad symbols) must leave its sleeve to the incumbent: the incumbent is gated off only
-// for sleeves whose engine exists. start() afterwards only sets timers (heartbeat + tick loop).
+// crypto incumbents are (index.ts), because a live engine that cannot be built (no venue client, no
+// historical.db, bad symbols) must not leave its sleeve half-managed: on crypto the incumbent is
+// gated off only for sleeves whose engine exists; on stocks (no incumbent since 2026-11-07) index.ts
+// falls back to the built-in definition or pages NO MANAGER. start() afterwards only sets timers
+// (heartbeat + tick loop).
 
 import type { Database } from "bun:sqlite";
 import type { AlpacaExecutor } from "../../executor/alpaca-executor";
@@ -71,7 +73,7 @@ export function buildPortfolioEngines(wiring: PortfolioWiring, src: EngineSource
       } catch (e: any) {
         out.problems.push({
           definitionId: plan.portfolioId, sleeve, severity: isLive ? "live_refused" : "ignored",
-          message: `engine could not be built (${e?.message ?? e})${isLive ? ": the incumbent keeps managing the sleeve" : ""}`,
+          message: `engine could not be built (${e?.message ?? e})${isLive ? ": not live (crypto: the incumbent keeps the sleeve; stocks: the built-in fallback or NO MANAGER)" : ""}`,
         });
       }
     }

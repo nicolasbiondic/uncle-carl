@@ -15,19 +15,14 @@
  */
 import type { MomentumEngineConfig } from "../strategies/momentum/MomentumEngine";
 import { breakoutSymbols } from "../strategies/momentum/MomentumEngine";
-import { DEFAULT_MEANREV_CONFIG } from "../strategies/meanrev/MeanRevEngine";
 // Neutral module (no index.ts back-edge): the same measured headroom both
 // wiring paths multiply into the gross backstop — see its docstring.
 import { GROSS_CAP_HEADROOM } from "../config/grossCap";
 import { DEFAULT_ADAPTER_CONFIG as DEFAULT_BINANCE_ADAPTER_CONFIG } from "../strategies/momentum/BinanceMomentumAdapter";
-import { DEFAULT_ALPACA_ADAPTER_CONFIG } from "../strategies/momentum/AlpacaMomentumAdapter";
 import type {
   AdapterSpec,
   DailyHorizonSpec,
   GovernorRegistrationSpec,
-  HeartbeatSpec,
-  MeanRevConnorsParams,
-  MeanRevPortfolioPlan,
   MomentumPortfolioPlan,
   MomentumTsmParams,
   PortfolioBuildPlan,
@@ -36,7 +31,6 @@ import type {
   PortfolioEngineParams,
   PortfolioEnginePlan,
   SchedulerSpec,
-  ShadowSpec,
 } from "./types";
 
 /** Longest return horizon of a daily kernel (same math as index.ts's
@@ -52,13 +46,8 @@ export function cutoverReunderwriteBefore(cutover: PortfolioCutoverSpec | undefi
   return nowMs < cutover.expiresAt ? cutover.at : undefined;
 }
 
-function governorRegistration(def: PortfolioDefinition, governor: { promotionEligible?: boolean; evidenceVersion: string }): GovernorRegistrationSpec {
-  return {
-    sleeve: def.id,
-    kind: def.mode,
-    ...(governor.promotionEligible !== undefined ? { promotionEligible: governor.promotionEligible } : {}),
-    evidenceVersion: governor.evidenceVersion,
-  };
+function governorRegistration(def: PortfolioDefinition, governor: { evidenceVersion: string }): GovernorRegistrationSpec {
+  return { sleeve: def.id, evidenceVersion: governor.evidenceVersion };
 }
 
 function buildMomentumPlan(def: PortfolioDefinition, nowMs: number): MomentumPortfolioPlan {
@@ -113,30 +102,13 @@ function buildMomentumPlan(def: PortfolioDefinition, nowMs: number): MomentumPor
   };
 
   let adapter: AdapterSpec;
-  let shadowTimeframe: string;
   let scheduler: SchedulerSpec;
-  let heartbeat: HeartbeatSpec | undefined;
   switch (def.account) {
     case "alpaca_main":
-      adapter = {
-        kind: "alpaca",
-        options: {
-          ...(def.id !== DEFAULT_ALPACA_ADAPTER_CONFIG.accountId ? { accountId: def.id } : {}),
-          // Daily kernel reads "1Day" bars with today's forming session
-          // stripped (MomentumEngine has no MeanRevEngine-style strip).
-          ...(horizon ? { timeframe: "1Day", dropTodayDailyBar: true } : {}),
-        },
-      };
-      shadowTimeframe = horizon ? "1Day" : "5Min";
-      // index.ts owns the stock tick (engine.start() never called): market
-      // hours only, so main() registers the heartbeat and drives the loop.
-      scheduler = horizon
-        ? { kind: "index-stocks-daily", markerPath: `data/daily-run-${def.id.replace(/_/g, "-")}.txt` }
-        : { kind: "index-stocks-hourly" };
-      heartbeat = horizon
-        ? { name: p.heartbeatName, intervalMs: 86_400_000, graceMultiplier: 5 }
-        : { name: p.heartbeatName, intervalMs: 60 * 60_000 };
-      break;
+      // The Alpaca momentum incumbent (AlpacaMomentumAdapter, index.ts's
+      // stock tick) was retired on 2026-11-07 (owner, audit C): the stock
+      // sleeves run on the portfolio engine (template "portfolio").
+      throw new Error(`portfolio '${def.id}': no momentum_tsm engine runs on alpaca_main since 2026-11-07 — stock sleeves run on the portfolio engine (template "portfolio")`);
     case "binance_usdt":
       adapter = {
         kind: "binance_usdm",
@@ -145,7 +117,6 @@ function buildMomentumPlan(def: PortfolioDefinition, nowMs: number): MomentumPor
           ...(p.breakoutShort ? { breakoutShortSymbols: [...breakoutSymbols(p.breakoutShort)] } : {}),
         },
       };
-      shadowTimeframe = p.barMinutes === 1440 ? "1Day" : "1Hour";
       scheduler = { kind: "engine-start" };
       break;
     case "binance_usdc":
@@ -156,67 +127,23 @@ function buildMomentumPlan(def: PortfolioDefinition, nowMs: number): MomentumPor
           ...(p.breakoutShort ? { breakoutShortSymbols: [...breakoutSymbols(p.breakoutShort)] } : {}),
         },
       };
-      shadowTimeframe = p.barMinutes === 1440 ? "1Day" : "1Hour";
       scheduler = { kind: "engine-start" };
       break;
     case "binance_coinm":
-      adapter = { kind: "binance_coinm", options: { accountId: def.id } };
-      shadowTimeframe = p.barMinutes === 1440 ? "1Day" : "1Hour";
-      scheduler = { kind: "engine-start" };
-      break;
+      // The momentum_btc engine (BinanceCoinMMomentumAdapter) was retired on
+      // 2026-11-07 (owner, audit C). The COIN-M wallet is account truth only.
+      throw new Error(`portfolio '${def.id}': no engine runs on binance_coinm (the COIN-M momentum engine was retired 2026-11-07)`);
   }
-
-  const shadow: ShadowSpec = {
-    strategy: "MOMENTUM",
-    closeReason: "MOMENTUM_REBALANCE",
-    timeframe: shadowTimeframe,
-    market: def.account === "alpaca_main" ? "stock" : "crypto",
-  };
 
   return {
     template: "momentum_tsm",
     portfolioId: def.id,
     engineConfig,
     adapter,
-    shadow,
     loggerContext: p.loggerContext,
     statePersistence: { path: p.state.path, currentBase: p.state.currentBase, legacyBase: p.state.legacyBase, equitySemantics: p.equitySemantics },
     governorRegistration: governorRegistration(def, p.governor),
     scheduler,
-    ...(heartbeat ? { heartbeat } : {}),
-  };
-}
-
-function buildMeanRevPlan(def: PortfolioDefinition): MeanRevPortfolioPlan {
-  if (def.account !== "alpaca_main") {
-    throw new Error(`portfolio '${def.id}': meanrev_connors only runs on alpaca_main (shared-wallet sleeve)`);
-  }
-  const p = def.params as MeanRevConnorsParams;
-  return {
-    template: "meanrev_connors",
-    portfolioId: def.id,
-    engineConfig: {
-      accountId: def.id,
-      baseUsd: def.capital,
-      heartbeatName: p.heartbeatName,
-      risk: { equitySemantics: p.equitySemantics },
-      // DEFAULT_MEANREV_CONFIG is the single source for slotPct/maxPositions;
-      // the backstop is their product × measured headroom (same derivation as
-      // index.ts's MEANREV_STOCKS_MAX_GROSS_EXPOSURE_MULT — identical FP
-      // result; G diagnostic, applied 2026-10-07).
-      maxGrossExposureMult: DEFAULT_MEANREV_CONFIG.slotPct * DEFAULT_MEANREV_CONFIG.maxPositions * GROSS_CAP_HEADROOM,
-      volStop: { ...p.volStop },
-      ...(p.capacityGuard ? { capacityGuard: { ...p.capacityGuard } } : {}),
-    },
-    adapter: {
-      kind: "alpaca",
-      options: { accountId: def.id, timeframe: "1Day", strategy: "MEANREV", closeReason: "MEANREV_EXIT" },
-    },
-    shadow: { strategy: "MEANREV", closeReason: "MEANREV_EXIT", timeframe: "1Day", market: "stock" },
-    loggerContext: p.loggerContext,
-    statePersistence: { path: p.state.path, currentBase: p.state.currentBase, legacyBase: p.state.legacyBase, equitySemantics: p.equitySemantics },
-    governorRegistration: governorRegistration(def, p.governor),
-    scheduler: { kind: "index-meanrev-daily", label: p.schedulerLabel },
   };
 }
 
@@ -239,7 +166,11 @@ function buildPortfolioEnginePlan(def: PortfolioDefinition): PortfolioEnginePlan
 export function buildPortfolioPlan(def: PortfolioDefinition, nowMs: number): PortfolioBuildPlan {
   switch (def.template) {
     case "momentum_tsm": return buildMomentumPlan(def, nowMs);
-    case "meanrev_connors": return buildMeanRevPlan(def);
+    case "meanrev_connors":
+      // Retired template (2026-11-07): the Connors engine is a research kernel
+      // only (src/strategies/meanrev/MeanRevEngine.ts); meanrev_stocks runs on
+      // the portfolio engine. A pre-2026-11-07 registry row is archived at boot.
+      throw new Error(`portfolio '${def.id}': template 'meanrev_connors' is retired (2026-11-07) — meanrev_stocks runs on the portfolio engine (template "portfolio")`);
     // RW: the portfolio engine's plan is pure data + heartbeat; the engine
     // itself is built by src/portfolio-engine/live/factory.ts with the venue.
     case "portfolio": return buildPortfolioEnginePlan(def);

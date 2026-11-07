@@ -1,7 +1,6 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   MeanRevEngine,
-  MeanRevRetryController,
   isTerminalActionFailure,
   type MeanRevLogger,
 } from "./MeanRevEngine";
@@ -10,7 +9,7 @@ import { INITIAL_RISK_STATE, EQUITY_SEMANTICS, type RiskState } from "../momentu
 import { fileStatePersistence } from "../../index";
 import { isTradingDay, getPreviousTradingDay } from "../../utils/marketHours";
 import type { OHLCV } from "../../utils/types";
-import { mkdtempSync, existsSync, readFileSync } from "fs";
+import { mkdtempSync, existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { DAY, MEANREV_ANCHOR as ANCHOR, daily, flatThen, FakeAdapter } from "../../test-support/meanrev";
@@ -684,81 +683,6 @@ describe("MeanRevEngine — risk anchor advances independent of pass outcome (C-
   });
 });
 
-describe("MeanRevRetryController", () => {
-  let tmpDir: string;
-  let statePath: string;
-
-  beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), "meanrev-retry-"));
-    statePath = join(tmpDir, "retry.json");
-  });
-
-  afterEach(() => {
-    // bun-types' fs shim omits rmSync typings; require dodges the type error.
-    try { require("fs").rmSync(tmpDir, { recursive: true, force: true }); } catch {}
-  });
-
-  test("restart preserves attempt cap", () => {
-    const today = "2026-07-17";
-    const c1 = new MeanRevRetryController(statePath, { maxDataRetries: 2 });
-    c1.recordAttempt(today, 1_000);
-    c1.recordAttempt(today, 2_000);
-
-    const c2 = new MeanRevRetryController(statePath, { maxDataRetries: 2 });
-    expect(c2.getAttempt(today)?.count).toBe(2);
-    expect(c2.shouldRun(today, 3_000)).toEqual({ run: true, skipEntries: true });
-  });
-
-  test("success clears attempts and marker", () => {
-    const today = "2026-07-17";
-    const c = new MeanRevRetryController(statePath, { maxDataRetries: 2 });
-    c.recordAttempt(today, 1_000);
-    c.markSuccess(today);
-    expect(c.getLastSuccessDate()).toBe(today);
-    expect(c.getAttempt(today)).toBeUndefined();
-    expect(c.shouldRun(today, 2_000)).toEqual({ run: false, skipEntries: false, reason: "success" });
-  });
-
-  test("terminal blocks further runs", () => {
-    const today = "2026-07-17";
-    const c = new MeanRevRetryController(statePath, { maxDataRetries: 2 });
-    c.recordAttempt(today, 1_000);
-    c.markTerminal(today, "insufficient_buying_power", 2_000);
-    expect(c.shouldRun(today, 3_000)).toEqual({ run: false, skipEntries: false, reason: "terminal" });
-    expect(c.getAttempt(today)?.terminalReason).toContain("insufficient_buying_power");
-  });
-
-  test("backoff grows deterministically", () => {
-    const today = "2026-07-17";
-    const c = new MeanRevRetryController(statePath, { maxDataRetries: 3, baseBackoffMs: 5_000, backoffMultiplier: 2 });
-    c.recordAttempt(today, 0);
-    expect(c.shouldRun(today, 1_000)).toEqual({ run: false, skipEntries: false, reason: "backoff", waitMs: 4_000 });
-    expect(c.shouldRun(today, 5_000)).toEqual({ run: true, skipEntries: false });
-
-    c.recordAttempt(today, 5_000);
-    expect(c.shouldRun(today, 6_000)).toEqual({ run: false, skipEntries: false, reason: "backoff", waitMs: 9_000 });
-    expect(c.shouldRun(today, 15_000)).toEqual({ run: true, skipEntries: false });
-  });
-
-  test("maxDataRetries switches to skipEntries", () => {
-    const today = "2026-07-17";
-    const c = new MeanRevRetryController(statePath, { maxDataRetries: 2 });
-    c.recordAttempt(today, 0);
-    c.recordAttempt(today, 1);
-    expect(c.shouldRun(today, 2)).toEqual({ run: true, skipEntries: true });
-  });
-
-  test("state file is atomic tmp+rename", () => {
-    const today = "2026-07-17";
-    const c = new MeanRevRetryController(statePath, { maxDataRetries: 2 });
-    c.recordAttempt(today, 1_000);
-    expect(existsSync(statePath)).toBe(true);
-    const raw = readFileSync(statePath, "utf-8");
-    const parsed = JSON.parse(raw);
-    expect(parsed.attempts[today].count).toBe(1);
-  });
-});
-
 describe("isTerminalActionFailure", () => {
   test("buying-power and qty rejections are terminal", () => {
     expect(isTerminalActionFailure("insufficient_buying_power")).toBe(true);
@@ -793,76 +717,7 @@ describe("marketHours trading-day helpers", () => {
   });
 });
 
-describe("Bounded MeanRev daily retries — spec verification", () => {
-  let tmpDir: string;
-
-  beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), "meanrev-bounded-retry-"));
-  });
-
-  afterEach(() => {
-    try { require("fs").rmSync(tmpDir, { recursive: true, force: true }); } catch {}
-  });
-
-  // Spec: Transient incomplete data retries with exponential backoff until capped.
-  test("transient data recovers on retry (backoff enforced)", () => {
-    const today = "2026-07-17";
-    const retryPath = join(tmpDir, "retry.json");
-    const baseMs = 5_000;
-
-    const retry = new MeanRevRetryController(retryPath, { baseBackoffMs: baseMs });
-    retry.recordAttempt(today, 0);
-    expect(retry.shouldRun(today, 1_000).run).toBe(false); // in backoff
-    expect(retry.shouldRun(today, baseMs + 1).run).toBe(true); // after backoff
-  });
-
-  // Spec: Persistent incomplete data capped at maxDataRetries, then skipEntries mode.
-  test("persistent incomplete data switches to skipEntries after maxDataRetries", () => {
-    const today = "2026-07-17";
-    const retryPath = join(tmpDir, "retry.json");
-
-    const retry = new MeanRevRetryController(retryPath, { maxDataRetries: 2 });
-    retry.recordAttempt(today, 0);
-    retry.recordAttempt(today, 5_000);
-    retry.recordAttempt(today, 10_000);
-
-    const decision = retry.shouldRun(today, 10_001);
-    expect(decision.skipEntries).toBe(true); // entries marked incomplete, exits still run
-  });
-
-  // Spec: Terminal failures (buying power, qty, suspended) do not retry.
-  test("terminal rejection blocks further runs — pages once", () => {
-    const today = "2026-07-17";
-    const retryPath = join(tmpDir, "retry.json");
-
-    const retry = new MeanRevRetryController(retryPath);
-    retry.recordAttempt(today, 0);
-    retry.markTerminal(today, "insufficient_buying_power", 1_000);
-
-    const decision = retry.shouldRun(today, 2_000);
-    expect(decision.run).toBe(false);
-    expect(decision.reason).toBe("terminal");
-  });
-
-  // Spec: Restart persists retry state across process boundary.
-  test("restart persists state: attempts, backoff windows, terminal flags", () => {
-    const today = "2026-07-17";
-    const retryPath = join(tmpDir, "retry.json");
-
-    // Session 1: record 2 attempts, mark terminal
-    const retry1 = new MeanRevRetryController(retryPath);
-    retry1.recordAttempt(today, 0);
-    retry1.recordAttempt(today, 5_000);
-    retry1.markTerminal(today, "qty_too_small", 10_000);
-
-    // Session 2 (restart): state is persisted
-    const retry2 = new MeanRevRetryController(retryPath);
-    expect(retry2.getAttempt(today)?.count).toBe(2);
-    expect(retry2.getAttempt(today)?.terminal).toBe(true);
-    expect(retry2.getAttempt(today)?.terminalReason).toBe("qty_too_small");
-    expect(retry2.shouldRun(today, 10_001).run).toBe(false);
-  });
-
+describe("MeanRevEngine — trading-day gate", () => {
   // Spec: Holidays are no-ops (isTradingDay = false → returns ok with no actions).
   test("non-trading day is a no-op (returns ok, no opens/closes)", async () => {
     const adapter = new FakeAdapter();

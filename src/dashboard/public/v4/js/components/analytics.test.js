@@ -116,6 +116,20 @@ describe("scorecard — plain-language rows", () => {
     band, windows: [{ window: "model", nObs: 5, totalReturnPct: 1, benchmark: {} }],
   });
 
+  test("rolling band is shown next to the model band, with plain bilingual labels", () => {
+    const lang = store.state.lang;
+    try {
+      const e = { ...entity({ status: "within" }), rollingBand: { status: "below", liveCumReturnPct: -9.4 } };
+      for (const [locale, label, status] of [["en", "Last 20 sessions", "below the expected band"], ["es", "Últimas 20 sesiones", "por debajo de la banda esperada"]]) {
+        store.state.lang = locale;
+        const html = scorecard({ entities: [e] });
+        expect(html).toContain(label);
+        expect(html).toContain(status);
+        expect(html).toContain("−9.4%");
+      }
+    } finally { store.state.lang = lang; }
+  });
+
   test("a row reads: name, window, return, benchmark by name, worst drop — statistics folded underneath", () => {
     const lang = store.state.lang;
     try {

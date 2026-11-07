@@ -25,6 +25,8 @@
 //    h = live sessions since MODEL_START. Live below p5 = the automatic
 //    "rinde peor que lo validado" signal. The two stock sleeves' bands are
 //    haircut for universe selection bias (SELECTION_BIAS_HAIRCUT below).
+//    A second band judges the last 20 completed grid sessions across version
+//    changes against the SAME current OOS sample, bootstrap and haircut.
 //
 // The below-band signal is the measurable spirit of the PRE-REGISTERED
 // reversion criteria written next to each wiring decision:
@@ -413,7 +415,7 @@ export function classifyBand(liveCumReturn: number, band: BootstrapBand): Exclud
 
 // ── Artifact OOS loader (combine.ts contract) ─────────────────────────────
 
-const artifactCache = new Map<string, number[] | null>();
+const artifactCache = new Map<string, number[]>();
 
 /**
  * OOS daily returns of a pure-chain artifact: outer test folds only
@@ -443,7 +445,8 @@ export function loadOosDailyReturns(ref: ArtifactRef): number[] | null {
     }
     if (byDate.size > 0) out = [...byDate.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1).map(([, r]) => r);
   } catch { out = null; }
-  artifactCache.set(cacheKey, out);
+  // A later copy/repair must become visible without restarting the bot.
+  if (out) artifactCache.set(cacheKey, out);
   return out;
 }
 
@@ -662,6 +665,9 @@ export interface ExpectationBand {
    *  the first full session of this version's own book. */
   modelVersion: string | null;
   modelStart: string | null;
+  /** Rolling window's actual base/last close, independent of modelStart. */
+  fromDate?: string;
+  toDate?: string;
   horizonSessions: number;
   liveCumReturnPct: number | null;
   liveMaxDrawdownPct: number | null;
@@ -674,7 +680,7 @@ export interface ExpectationBand {
 
 export function computeExpectationBand(
   sleeveId: string,
-  modelWindow: ScorecardWindowMetrics,
+  modelWindow: Pick<ScorecardWindowMetrics, "nObs" | "totalReturnPct" | "maxDrawdownPct">,
   artifacts: Record<string, ArtifactRef> = sleeveExpectationArtifacts(),
   opts: { seed?: number; blockLen?: number; nPaths?: number } = {},
   haircuts: Record<string, SelectionBiasHaircut> = SELECTION_BIAS_HAIRCUT,
@@ -718,6 +724,35 @@ export function computeExpectationBand(
 
 // ── Full scorecard ────────────────────────────────────────────────────────
 
+export const ROLLING_BAND_SESSIONS = 20;
+
+/** Last 20 COMPLETED grid sessions, across model cutovers. Require every
+ * close plus its base: gaps/stale marks must not masquerade as 20 sessions. */
+export function computeRollingExpectationBand(
+  entity: ScorecardEntityDef, marks: DailyMark[], now: number,
+  artifacts: Record<string, ArtifactRef> = sleeveExpectationArtifacts(),
+  opts: { seed?: number; blockLen?: number; nPaths?: number } = {},
+  haircuts: Record<string, SelectionBiasHaircut> = SELECTION_BIAS_HAIRCUT,
+): ExpectationBand {
+  let key = gridDateKey(now, entity.grid);
+  const keys: string[] = [];
+  while (keys.length <= ROLLING_BAND_SESSIONS) {
+    key = utcDateKey(keyToUtcMs(key) - 86_400_000);
+    if (entity.grid === "calendar_days" || isTradingDay(key)) keys.unshift(key);
+  }
+  const seq = marks.filter(m => keys.includes(m.dateKey));
+  const nObs = marksToDailyReturns(seq, entity.grid).length;
+  const complete = seq.length === keys.length && nObs === ROLLING_BAND_SESSIONS;
+  const band = computeExpectationBand(entity.id, {
+    nObs: complete ? ROLLING_BAND_SESSIONS : 0,
+    totalReturnPct: complete ? (seq.at(-1)!.equity / seq[0].equity - 1) * 100 : null,
+    maxDrawdownPct: complete ? (maxDrawdown(seq.map(m => m.equity)) ?? 0) * 100 : null,
+  }, artifacts, opts, haircuts);
+  const rolling = { ...band, fromDate: keys[0], toDate: keys.at(-1)! };
+  return !complete ? { ...rolling, status: "insufficient_data", horizonSessions: nObs,
+    reason: `últimas 20 sesiones incompletas (${nObs}/20 retornos; se requieren 21 cierres consecutivos)` } : rolling;
+}
+
 export interface EntityScorecard {
   id: string;
   kind: "sleeve" | "account";
@@ -730,6 +765,7 @@ export interface EntityScorecard {
   modelVersion: string | null;
   windows: ScorecardWindowMetrics[];
   band: ExpectationBand | null;  // sleeves only
+  rollingBand: ExpectationBand | null; // last 20 sessions, never version-reset
   /** Realized record of every version of the sleeve, by OPENING version. */
   versionRecords: VersionRecord[];
 }
@@ -781,6 +817,8 @@ export function computeScorecard(opts: ScorecardOptions): Scorecard {
       benchmarkSymbol: def.benchmark.symbol, modelStart: MODEL_START[def.id] ?? null,
       modelVersion: def.kind === "sleeve" ? currentModelVersionId(def.id) : null,
       windows, band,
+      rollingBand: def.kind === "sleeve"
+        ? computeRollingExpectationBand(def, marks, now, artifacts, opts.bootstrap, opts.selectionBias) : null,
       versionRecords: def.kind === "sleeve" ? computeVersionRecords(def.id, trades, marks) : [],
     };
   });
@@ -809,6 +847,9 @@ export interface BandReading {
   horizonSessions: number;
   modelStart: string | null;
   reason: string | null;
+  /** Separate display readings; the top-level reading is below if either is. */
+  modelBand?: BandReading;
+  rollingBand?: BandReading;
 }
 
 /** The live scorecard's band readings: trading.db (the caller's handle) and
@@ -829,14 +870,16 @@ export function expectationBandReadings(sc: Scorecard): Record<string, BandReadi
   const out: Record<string, BandReading> = {};
   for (const e of sc.entities) {
     if (e.kind !== "sleeve" || !e.band) continue;
-    out[e.id] = {
-      status: e.band.status,
-      liveCumReturnPct: e.band.liveCumReturnPct,
-      p5Pct: e.band.cumReturnPct?.p5 ?? null,
-      horizonSessions: e.band.horizonSessions,
-      modelStart: e.band.modelStart,
-      reason: e.band.reason,
-    };
+    const reading = (b: ExpectationBand): BandReading => ({
+      status: b.status, liveCumReturnPct: b.liveCumReturnPct,
+      p5Pct: b.cumReturnPct?.p5 ?? null, horizonSessions: b.horizonSessions,
+      modelStart: b.fromDate ?? b.modelStart, reason: b.reason,
+    });
+    const model = reading(e.band);
+    const rolling = e.rollingBand ? reading(e.rollingBand) : null;
+    const chosen = model.status === "below" ? model : rolling?.status === "below" ? rolling
+      : rolling && ["within", "above"].includes(rolling.status) ? rolling : model;
+    out[e.id] = rolling ? { ...chosen, modelBand: model, rollingBand: rolling } : model;
   }
   return out;
 }
@@ -899,7 +942,8 @@ export function formatScorecardDigestLines(scorecard: Scorecard): string[] {
     if (e.kind !== "sleeve") continue;
     const w = e.windows.find(x => x.window === "model");
     const tag = DIGEST_TAG[e.id] ?? e.id;
-    const bandTxt = e.band ? BAND_ES[e.band.status] : "no disponible";
+    const bandTxt = (e.band ? BAND_ES[e.band.status] : "no disponible") +
+      ` · últimas 20 sesiones: ${pctEs(e.rollingBand?.liveCumReturnPct ?? null)} · banda: ${e.rollingBand ? BAND_ES[e.rollingBand.status] : "no disponible"}`;
     if (!w || w.totalReturnPct == null) {
       lines.push(`${tag} sin sesiones aún (modelo desde ${e.modelStart ?? "?"}) · banda: ${bandTxt}`);
       continue;

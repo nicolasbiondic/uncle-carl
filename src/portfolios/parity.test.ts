@@ -16,31 +16,24 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { buildPortfolioPlan, cutoverReunderwriteBefore } from "./factory";
 import { builtinPortfolio, builtinPortfolios } from "./builtin";
-import type { MeanRevPortfolioPlan, MomentumPortfolioPlan, MomentumTsmParams } from "./types";
+import type { MomentumPortfolioPlan, MomentumTsmParams } from "./types";
 import {
   momentumCryptoPortfolioPlan,
   momentumUsdcPortfolioPlan,
-  momentumBtcPortfolioPlan,
-  momentumStocksPortfolioPlan,
-  meanrevStocksPortfolioPlan,
-  momentumStocksCutoverFor,
   momentumUsdcCutoverFor,
-  MOMENTUM_STOCKS_CUTOVER_EXPIRES_AT,
-  MOMENTUM_STOCKS_CUTOVER_SYMBOLS,
   MOMENTUM_USDC_CUTOVER_EXPIRES_AT,
   MOMENTUM_USDC_CUTOVER_SYMBOLS,
 } from "../index";
-import { RISK_PROFILES, ALL_PROFILE_IDS, MOMENTUM_STOCKS_UNIVERSE, MOMENTUM_CRYPTO_UNIVERSE } from "../config/riskProfiles";
+import { RISK_PROFILES, MOMENTUM_STOCKS_UNIVERSE, MOMENTUM_CRYPTO_UNIVERSE } from "../config/riskProfiles";
 import { USDC_SYMBOL_MAP } from "../executor/binance/quoteAsset";
-import { EQUITY_SEMANTICS } from "../strategies/momentum/RiskGuard";
+import { MEANREV_UNIVERSE } from "../strategies/meanrev/MeanRevEngine";
 
-// The five hand-wired sleeves (the "portfolio" template has no index.ts counterpart yet).
-const PURE: Record<string, () => MomentumPortfolioPlan | MeanRevPortfolioPlan> = {
+// The hand-wired sleeves: the two Binance momentum engines. The stock sleeves'
+// built-ins are portfolio-engine definitions with no index.ts plan function
+// (src/portfolios/builtinPortfolioEngine.test.ts locks them to their manifest).
+const PURE: Record<string, () => MomentumPortfolioPlan> = {
   momentum_crypto: momentumCryptoPortfolioPlan,
   momentum_crypto_usdc: momentumUsdcPortfolioPlan,
-  momentum_btc: momentumBtcPortfolioPlan,
-  momentum_stocks: momentumStocksPortfolioPlan,
-  meanrev_stocks: meanrevStocksPortfolioPlan,
 };
 
 for (const id of Object.keys(PURE)) {
@@ -65,12 +58,11 @@ for (const id of Object.keys(PURE)) {
       expect(plan.heartbeat).toEqual(pure.heartbeat);
     });
 
-    test("governor registration (sleeve / default kind / evidence)", () => {
+    test("governor registration (sleeve / evidence)", () => {
       expect(plan.governorRegistration).toEqual(pure.governorRegistration);
     });
 
-    test("shadow spec, scheduler choice and logger context", () => {
-      expect(plan.shadow).toEqual(pure.shadow);
+    test("scheduler choice and logger context", () => {
       expect(plan.scheduler).toEqual(pure.scheduler);
       expect(plan.loggerContext).toBe(pure.loggerContext);
     });
@@ -82,54 +74,48 @@ for (const id of Object.keys(PURE)) {
 }
 
 describe("builtin definitions — registry sanity", () => {
-  test("the five built-ins are exactly ALL_PROFILE_IDS", () => {
-    expect(builtinPortfolios().map((d) => d.id).sort()).toEqual([...ALL_PROFILE_IDS].sort());
+  test("the built-ins are the two crypto momentum sleeves plus the two stock portfolio-engine definitions; the retired ids throw", () => {
+    expect(builtinPortfolios().map((d) => d.id).sort()).toEqual(["momentum_crypto", "momentum_crypto_usdc", "pe_meanrev_stocks", "pe_momentum_stocks"]);
+    for (const retired of ["momentum_btc", "momentum_stocks", "meanrev_stocks"]) {
+      expect(() => builtinPortfolio(retired)).toThrow(/unknown portfolio id/);
+    }
   });
 
   test("capital equals the sleeve's RISK_PROFILES initialEquity (fixed per-sleeve capital — owner rule)", () => {
     for (const d of builtinPortfolios()) {
-      expect({ id: d.id, capital: d.capital }).toEqual({ id: d.id, capital: RISK_PROFILES[d.id as keyof typeof RISK_PROFILES].initialEquity });
+      const sleeve = d.template === "portfolio" ? (d.params as { sleeve: string }).sleeve : d.id;
+      expect({ id: d.id, capital: d.capital }).toEqual({ id: d.id, capital: RISK_PROFILES[sleeve as keyof typeof RISK_PROFILES].initialEquity });
     }
   });
 
   test("universes are the canonical constants (disjointness locks transfer)", () => {
     const params = (id: string) => builtinPortfolio(id).params as MomentumTsmParams;
-    expect(params("momentum_stocks").universe).toEqual(MOMENTUM_STOCKS_UNIVERSE);
+    const peUniverse = (id: string) => (builtinPortfolio(id).params as any).strategy.universe as string[];
+    expect(peUniverse("pe_momentum_stocks")).toEqual([...MOMENTUM_STOCKS_UNIVERSE]);
+    expect(peUniverse("pe_meanrev_stocks")).toEqual([...MEANREV_UNIVERSE]);
     expect(params("momentum_crypto").universe).toEqual(MOMENTUM_CRYPTO_UNIVERSE);
     expect(params("momentum_crypto_usdc").universe).toEqual(Object.keys(USDC_SYMBOL_MAP));
   });
 
-  test("meanrev plan risk IS the sleeve ledger — main()'s inline re-assert is a no-op spread", () => {
-    const plan = buildPortfolioPlan(builtinPortfolio("meanrev_stocks"), Date.now());
-    if (plan.template !== "meanrev_connors") throw new Error("expected meanrev plan");
-    expect(plan.engineConfig.risk).toEqual({ equitySemantics: EQUITY_SEMANTICS.SLEEVE_LEDGER });
+  test("the retired templates cannot build an engine: meanrev_connors, and momentum_tsm on alpaca_main", () => {
+    const crypto = builtinPortfolio("momentum_crypto");
+    expect(() => buildPortfolioPlan({ ...crypto, template: "meanrev_connors" }, Date.now())).toThrow(/retired/);
+    expect(() => buildPortfolioPlan({ ...crypto, account: "alpaca_main" }, Date.now())).toThrow(/no momentum_tsm engine runs on alpaca_main/);
   });
 
-  test("main() registers the same governor kinds the plans carry (docs.test.ts parses those literals)", () => {
+  test("main() registers every planned sleeve with the governor, with no mode (the live/shadow kind was removed 2026-11-07)", () => {
     const src = readFileSync(join(import.meta.dir, "..", "index.ts"), "utf-8");
-    const re = /governor\.register\(\{\s*sleeve:\s*"([a-z_]+)",\s*kind:\s*"(live|shadow)"/g;
-    const kinds: Record<string, string> = {};
+    const re = /governor\.register\(\{\s*sleeve:\s*"([a-z_]+)",\s*evidenceVersion:/g;
+    const registered = new Set<string>();
     let m: RegExpExecArray | null;
-    while ((m = re.exec(src))) kinds[m[1]] = m[2];
-    for (const id of Object.keys(PURE)) {
-      expect({ id, kind: kinds[id] }).toEqual({ id, kind: PURE[id]().governorRegistration.kind });
-    }
+    while ((m = re.exec(src))) registered.add(m[1]);
+    for (const id of Object.keys(PURE)) expect({ id, registered: registered.has(id) }).toEqual({ id, registered: true });
+    expect(src).not.toMatch(/kind:\s*"(live|shadow)"/);
   });
 });
 
 describe("cutover windows — factory resolves the self-expiring one-shots exactly like index.ts", () => {
-  test("momentum_stocks: cutoverReunderwriteBefore ≡ momentumStocksCutoverFor at open/expiry/later instants", () => {
-    const def = builtinPortfolio("momentum_stocks");
-    const cut = (def.params as MomentumTsmParams).cutover!;
-    for (const t of [Date.UTC(2026, 9, 7, 13, 35), MOMENTUM_STOCKS_CUTOVER_EXPIRES_AT, Date.UTC(2027, 0, 1)]) {
-      expect(cutoverReunderwriteBefore(cut, t)).toBe(momentumStocksCutoverFor(t)!);
-      const plan = buildPortfolioPlan(def, t) as MomentumPortfolioPlan;
-      expect(plan.engineConfig.reunderwriteBefore).toBe(momentumStocksCutoverFor(t)!);
-      expect(plan.engineConfig.reunderwriteSymbols).toEqual(momentumStocksCutoverFor(t) !== undefined ? MOMENTUM_STOCKS_CUTOVER_SYMBOLS : undefined);
-    }
-  });
-
-  test("momentum_crypto_usdc: same lock against momentumUsdcCutoverFor", () => {
+  test("momentum_crypto_usdc: cutoverReunderwriteBefore ≡ momentumUsdcCutoverFor at open/expiry/later instants", () => {
     const def = builtinPortfolio("momentum_crypto_usdc");
     const cut = (def.params as MomentumTsmParams).cutover!;
     for (const t of [Date.UTC(2026, 9, 8, 0, 0, 15), MOMENTUM_USDC_CUTOVER_EXPIRES_AT, Date.UTC(2027, 0, 1)]) {

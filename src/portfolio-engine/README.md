@@ -4,10 +4,13 @@ The plan and the pre-registration: `docs/reports/RW-reescritura-rentable.md`.
 The contract: `types.ts`. The pure core (`index.ts`): `decide`,
 `planOrders`, signals, construction, stops, costs. The research simulator:
 `scripts/portfolio-replay.ts`; the live runner: `live/`, consumed by
-`src/index.ts` through the registry (observer alongside an incumbent, live
-instead of it, rollback). No sleeve is configured by the code: the registry
-definition is written by `scripts/portfolio-engine-cutover.ts` from a
-manifest candidate (runbook below).
+`src/index.ts` through the registry (observer alongside the sleeve's manager,
+live instead of it, rollback). The registry definition is written by
+`scripts/portfolio-engine-cutover.ts` from a manifest candidate (runbook
+below); for the two stock sleeves the code ALSO carries a built-in copy of the
+current live definition (`src/portfolios/builtin.ts`), which `src/index.ts`
+runs when the registry gives the sleeve no live engine (since 2026-11-07 the
+portfolio engine is the only stock engine).
 
 ## Calling the core
 
@@ -46,7 +49,7 @@ manifest candidate (runbook below).
   runs the engine on an EXISTING sleeve: `params.sleeve` is the sleeve's
   `trades.account_id` (`momentum_stocks`, `meanrev_stocks`, `momentum_crypto`,
   `momentum_crypto_usdc`). The definition has its own id (`pe_<sleeve>`); the
-  incumbent's row is never edited.
+  sleeve's own legacy row is never edited.
 - `src/index.ts` (step 8b) resolves the definitions (`live/cutover.ts`
   `resolvePortfolioWiring`), constructs the engines (`live/wiring.ts`) BEFORE
   any incumbent, then starts them after the incumbents. Alpaca: `AlpacaVenue`
@@ -67,6 +70,8 @@ manifest candidate (runbook below).
 
 ### Semantics
 
+Crypto sleeves (an incumbent `MomentumEngine` exists):
+
 | | incumbent | portfolio engine |
 |---|---|---|
 | no definition | manages | not built |
@@ -74,19 +79,33 @@ manifest candidate (runbook below).
 | `runMode: live` (and `mode: live`) | NOT built: no entries, no exits (`portfolioEnabled()` is false for the sleeve) | manages. On its first pass it adopts the open rows (re-tag to `PORTFOLIO`, quantity untouched: no close, no rebuy), cancels the incumbent's resting stops on them, and orders only the delta to the target |
 | rollback (observer, removed, or refused at boot) | manages again | not live |
 
+Stock sleeves (`momentum_stocks`, `meanrev_stocks`) — NO incumbent since
+2026-11-07 (owner, audit C: the TSM/Connors engines and `AlpacaMomentumAdapter`
+were deleted; `MeanRevEngine.ts` remains a research kernel only):
+
+| registry | what runs |
+|---|---|
+| `runMode: live` definition that resolves and builds | that definition (as above: adopts, orders the delta) |
+| no live definition, or a refused / unbuildable one (bad hash, unknown version, overlap, disabled, archived, observer only) | the code's BUILT-IN definition of the same current model (`src/portfolios/builtin.ts` `pe_<sleeve>`, locked to its manifest by `builtinPortfolioEngine.test.ts`) — and ops is paged on every boot until the registry agrees again; the registry's observers of that sleeve are not started (one engine per sleeve) |
+| even the built-in cannot run | NO MANAGER: with the alpaca venue simply UNLINKED (no account linked, e.g. a fresh install) `index.ts` logs a warning; otherwise it pages on every boot; `restoreIncumbentRows` reports the open `PORTFOLIO` rows (never re-tagged: nothing exists to hand them to), guardian G2 (decision liveness) pages hourly |
+
+Enforced: `src/index.portfolioCutover.test.ts`, `live/cutover.test.ts`
+("stock sleeves: the built-in fallback definition"), `live/wiring.test.ts`
+("rollback by configuration (stock sleeve…)").
+
 - Rows tagged `PORTFOLIO` are outside the 15 s stop loop and the broker-native
   stop pass (`isPortfolioEngineRow`); BrokerSync never closes them (ids `pf_`,
   not `sync_`; strategy not `BROKER_SYNC`). The only stops they carry are the
   design's own (`syncStops`, D3).
-- Rollback: at the next boot, BEFORE the incumbent starts, every open
+- Rollback (crypto): at the next boot, BEFORE the incumbent starts, every open
   `PORTFOLIO` row of a sleeve the incumbent manages is re-tagged to the
-  incumbent's strategy (`MOMENTUM` / `MEANREV`; `strategy_version` stays: a row
-  belongs to the version that opened it) and the activity log and ops are
-  told. Stocks: the 15 s loop and the native-stop pass see them again by
-  themselves (row stop absent: the 4 % fallback). Binance: the incumbent arms
-  its native stop at open only, so the boot step arms one per handed-back row
-  (`placeStopMarketClose`, profile stop %); a failure pages "protect it
-  manually". Stops the engine placed itself (`pe-s-`) stay at the venue.
+  incumbent's strategy (`MOMENTUM`; `strategy_version` stays: a row belongs to
+  the version that opened it) and the activity log and ops are told. The
+  incumbent arms its native stop at open only, so the boot step arms one per
+  handed-back row (`placeStopMarketClose`, profile stop %); a failure pages
+  "protect it manually". Stops the engine placed itself (`pe-s-`) stay at the
+  venue. Stocks: there is nothing to hand rows back to; a "rollback" of the
+  registry definition means the built-in definition runs (table above).
 
 ### The live pass (what `PortfolioEngine.ts` does around the pure core)
 
@@ -123,11 +142,12 @@ manifest candidate (runbook below).
   HALTED / REDUCING skips every buy…", "a MAX_HOLD close is sent while
   HALTED…"), `src/treasury/TreasurySweep.test.ts`.
 
-### Fail closed (toward the incumbent, with a page)
+### Fail closed (with a page)
 
-A definition runs LIVE only if all of these hold; otherwise the incumbent keeps
-the sleeve, ops gets an `ERROR_BURST` ("NOT live: ...") and the activity log a
-`circuit` row:
+A definition runs LIVE only if all of these hold; otherwise it does not run
+live, ops gets an `ERROR_BURST` ("NOT live: ...") and the activity log a
+`circuit` row — on crypto the incumbent keeps the sleeve; on stocks `index.ts`
+runs the built-in definition (or pages NO MANAGER; Semantics above):
 
 - `params.sleeve` is one of the four sleeves; the definition id is not the
   sleeve id; `account` and `venue` are the sleeve's; `runMode: live` and
@@ -146,10 +166,10 @@ the sleeve, ops gets an `ERROR_BURST` ("NOT live: ...") and the activity log a
   `MOMENTUM_USDC_ENABLED=true`);
 - the engine can be constructed (venue client, `historical.db`).
 
-Last line of defence: `sleevesWithTwoManagers` after the incumbents are built;
-if a live sleeve still has an incumbent the portfolio engine is not started.
-A sleeve with `PORTFOLIO` rows and no manager at all (incumbent gated off, venue
-unlinked) pages every boot ("orphaned").
+Last line of defence: `sleevesWithTwoManagers` after the crypto incumbents are
+built; if a live sleeve still has an incumbent the portfolio engine is not
+started. A sleeve with `PORTFOLIO` rows and no manager at all (venue unlinked,
+every definition refused) pages every boot ("no engine manages the sleeve").
 
 ### Interplay with the shared Alpaca wallet
 
@@ -183,10 +203,9 @@ unlinked) pages every boot ("orphaned").
   Rolling back appends nothing by itself: add an entry for the incumbent's
   config in the next deploy (until then new incumbent rows are stamped with
   the engine's version; their `since` bounds it).
-- Decision parity is implemented: `scripts/parity-check.ts` finds the sleeves
-  whose live manager is the engine (`portfolioEngineLiveSleeves`, reads
-  `platform_portfolios`) and, instead of the incumbent's simulator, runs an
-  EXACT DECISION REPLAY of each live `portfolio_decisions` row: it rebuilds the
+- Decision parity is implemented: `scripts/parity-check.ts` always dispatches
+  the two stock sleeves (the only engine they can run on) to an EXACT DECISION
+  REPLAY of each live `portfolio_decisions` row: it rebuilds the
   `HistoricalPriceView`, the persisted pre-order positions/equity and the
   preceding same-version memory, runs `decide()` on the version's manifest
   strategy and compares weights, regime, MAX_HOLD close intents and kernel
@@ -198,20 +217,24 @@ unlinked) pages every boot ("orphaned").
   `scripts/parity-check.test.ts` ("synthetic fixture: same kernel, exact input
   book/memory… → parity", "tampered weight with identical input diagnostics →
   DIVERGENCE", "renderSummary prints portfolio decisions…", no `SKIPPED` line).
-  Other consumers of the INCUMBENT's config: `liveSleeveConfig(sleeve).managedBy`
-  says "portfolio" and its derivation is the rollback config; the dashboard
-  registry lists the incumbent row as "gestionado por el motor de cartera (pe_x)"
-  and the `pe_*` row with the sleeve's band; the governor registers the sleeve
-  itself under the engine's version (`index.ts`). Cost calibration and the
-  decision funnel still get no observations from the engine (no
-  `fills`/`decision_passes` rows — OPEN.md).
+  `liveSleeveConfig(sleeve)` throws for the stock sleeves (no incumbent
+  derivation since 2026-11-07: the design lives in the registry / built-in
+  definition); the dashboard registry lists any archived legacy row as
+  "gestionado por el motor de cartera (pe_x)" and the `pe_*` row with the
+  sleeve's band; the governor registers the sleeve itself under the engine's
+  version (`index.ts`). Cost calibration and the decision funnel still get no
+  observations from the engine (no `fills`/`decision_passes` rows — OPEN.md).
 
 ### Runbook (per sleeve; `scripts/portfolio-engine-cutover.ts`, dry-run by default)
 
-This is the incumbent → portfolio runbook. For a portfolio → portfolio change,
-an observer CANNOT run beside the current live definition: the resolver refuses
-both. Appending a new last model version also refuses the old live definition on
-the next boot. Coordinate definition + code in one release; RW5d's explicit
+This is the incumbent → portfolio runbook (crypto sleeves today; it was how the
+stock sleeves were cut over in October). For a portfolio → portfolio change —
+every stock model change since 2026-11-07 — an observer CANNOT run beside the
+current live definition: the resolver refuses both. Appending a new last model
+version also refuses the old live definition on the next boot (the stock sleeve
+then runs the built-in definition — which must be updated in the same release,
+`builtinPortfolioEngine.test.ts` fails otherwise — and pages until the registry
+agrees). Coordinate definition + code in one release; RW5d's explicit
 zero-observation exception and portfolio rollback: `docs/reports/rw5-contingencia/cableado-rw5d.md`.
 
 1. Observer: `bun scripts/portfolio-engine-cutover.ts --sleeve <id> --mode observer --manifest experiments/<m>.json --candidate <name>`
@@ -232,14 +255,17 @@ zero-observation exception and portfolio rollback: `docs/reports/rw5-contingenci
    heartbeat fresh, the incumbent's engine absent from the boot log, the next
    04:45 parity cron printing the sleeve's section as an "exact decision
    replay" (`PARITY` / `DATA REVISED` per session; never a `SKIPPED` line).
-4. Rollback: `--mode rollback` (back to observer, keeps evidence) or
+4. Rollback (crypto): `--mode rollback` (back to observer, keeps evidence) or
    `--mode rollback --remove` (deletes the definition), `--apply`, restart. The
    boot re-tags the `PORTFOLIO` rows and arms Binance stops before the
    incumbent starts. The incumbent then manages those positions by ITS rules
    (it may close what its universe/signal does not hold; the engine's
    positions outside the incumbent universe are its decision, not the
-   engine's). `PORTFOLIOS_SOURCE=code` is also a full rollback: definitions are
-   not read, the rows are handed back.
+   engine's). Stocks: the same commands leave the sleeve with no live registry
+   definition, so the boot runs the BUILT-IN definition of the current model
+   and pages; to run another model, cut over to it. `PORTFOLIOS_SOURCE=code`:
+   definitions are not read; crypto rows are handed back, the stock sleeves run
+   their built-in definitions.
 
 ## RW5 optional volManaged contingencies
 

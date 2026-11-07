@@ -59,7 +59,6 @@ export function reasonWord(code, cadence) {
     meanrev_exit: exit,
     idle_overlay_exit: t("idle-cash position closed", "posición de efectivo ocioso cerrada"),
     regime: t("market conditions", "condiciones del mercado"),
-    shadow: t("orders simulated", "órdenes simuladas"),
     slot_displaced: t("a stronger pick took its slot", "otro valor más fuerte ocupó su plaza"),
     signal_exit: t("signal faded", "la señal se apagó"),
     signal_entry: t("new signal", "señal nueva"),
@@ -225,8 +224,6 @@ function blockedSentence(p, o) {
       return t(`No new buys${until ? ` until ${until}` : ""}: several losses in a row.`, `Sin compras nuevas${until ? ` hasta ${until}` : ""}: varias pérdidas seguidas.`);
     case "maintenance":
       return t(`Paused for maintenance${until ? ` until ${until}` : ""}.`, `En pausa por mantenimiento${until ? ` hasta ${until}` : ""}.`);
-    case "shadow":
-      return t("Orders are simulated; none reach the broker.", "Las órdenes se simulan; ninguna llega al broker.");
     default:
       return ""; // market_closed, no_signal and unknown gates are said by chips / the time line
   }

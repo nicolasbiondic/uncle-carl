@@ -110,15 +110,16 @@ export type AccountsSource = "env" | "registry";
  * - Binance FAPI keys: always required (momentum_crypto is always wired);
  *   the legacy BINANCE_API_KEY/BINANCE_SECRET_KEY pair remains an accepted
  *   per-field fallback, exactly mirroring BinanceExecutor's constructor.
- * - COIN-M keys: only when MOMENTUM_COINM_ENABLED=true, and the FAPI keys
- *   satisfy them (DEFAULT_COINM_CONFIG falls back to those).
+ * - COIN-M keys: never required. The momentum_btc engine was retired on
+ *   2026-11-07 (owner, audit C); the DAPI wallet's truth sync starts only
+ *   when keys are present (index.ts, coinmKeysPresent) and the FAPI pair
+ *   satisfies it (DEFAULT_COINM_CONFIG falls back to those).
  * - MOMENTUM_USDC_ENABLED needs no extra keys (same FAPI pair).
  * Takes the env as a parameter so tests never depend on the real .env.
  *
  * accountsSource="registry" (F4a): the Alpaca + Binance FAPI runtime
  * credentials come from the broker-accounts registry, so the .env pairs are
- * NOT required. COIN-M stays env-configured (the registry has no COIN-M
- * provider yet) — its keys are still demanded when the sleeve is enabled.
+ * NOT required.
  */
 export function missingRequiredKeys(
   env: Record<string, string | undefined> = process.env,
@@ -133,14 +134,6 @@ export function missingRequiredKeys(
     }
     if (!credentialPresent(env.BINANCE_FUTURES_SECRET_KEY) && !credentialPresent(env.BINANCE_SECRET_KEY)) {
       missing.push("BINANCE_FUTURES_SECRET_KEY");
-    }
-  }
-  if (env.MOMENTUM_COINM_ENABLED === "true") {
-    if (!credentialPresent(env.BINANCE_COINM_API_KEY) && !credentialPresent(env.BINANCE_FUTURES_API_KEY)) {
-      missing.push("BINANCE_COINM_API_KEY (or BINANCE_FUTURES_API_KEY)");
-    }
-    if (!credentialPresent(env.BINANCE_COINM_SECRET_KEY) && !credentialPresent(env.BINANCE_FUTURES_SECRET_KEY)) {
-      missing.push("BINANCE_COINM_SECRET_KEY (or BINANCE_FUTURES_SECRET_KEY)");
     }
   }
   return missing;

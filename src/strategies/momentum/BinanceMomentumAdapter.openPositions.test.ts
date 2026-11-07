@@ -8,7 +8,6 @@
 //    only when the broker read fails.
 import { describe, expect, test, beforeAll } from "bun:test";
 import { BinanceMomentumAdapter } from "./BinanceMomentumAdapter";
-import { AlpacaMomentumAdapter } from "./AlpacaMomentumAdapter";
 import { MomentumEngine } from "./MomentumEngine";
 import { makeTestDb, seedOpenTrade } from "../../test-support/db";
 
@@ -42,10 +41,7 @@ describe("BinanceMomentumAdapter.getOpenPositions", () => {
 });
 
 describe("every DB-backed live adapter exposes entryTime (MODEL_CUTOVER depends on it)", () => {
-  test("Alpaca and Binance adapters agree on the contract", async () => {
-    seedOpenTrade("aapl-row", "op_alpaca", { symbol: "AAPL", market: "stock", entryPrice: 332, quantity: 75, entryTime: ENTRY });
-    const alpaca = new AlpacaMomentumAdapter({ getCachedPrice: () => 341 } as any, { accountId: "op_alpaca" });
-    expect((await alpaca.getOpenPositions())[0].entryTime).toBe(ENTRY);
+  test("the Binance adapter honours the contract (the Alpaca adapter was retired 2026-11-07)", async () => {
     seedOpenTrade("sol-row", "op_binance", { symbol: "SOL/USD", market: "crypto", entryPrice: 121, quantity: 10, entryTime: ENTRY });
     const binance = new BinanceMomentumAdapter({} as any, { isConnected: () => true, getPositions: async () => [] } as any, { accountId: "op_binance" });
     expect((await binance.getOpenPositions())[0].entryTime).toBe(ENTRY);

@@ -3,47 +3,21 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { coinmSkipStartupStopReconcile, startupBrokerHealth, venueBootActionOnConnectFailure } from "./index";
 
-// Wiring test for the momentum_btc/DAPI truth-only initialization line in
+// Wiring test for the momentum_btc/DAPI truth initialization line in
 // main(): `candidate.init({ skipStartupStopReconcile:
-// coinmSkipStartupStopReconcile(enabled, hasExposure) })`. Truth-only
-// (flag OFF + no open DB exposure) must skip the mutating startup stop
-// reconcile — see BinanceCoinMExecutor's own tests
+// coinmSkipStartupStopReconcile(hasExposure) })`. Truth-only (no open DB
+// exposure — prod since the COIN-M engine was retired 2026-11-07) must skip
+// the mutating startup stop reconcile — see BinanceCoinMExecutor's own tests
 // ("skipStartupStopReconcile:true never cancels/adopts a pre-existing owned
 // stop") for proof that this option value actually prevents stop mutation.
 // This test only proves index.ts computes the RIGHT option for each mode.
 describe("coinmSkipStartupStopReconcile — truth-only wiring", () => {
-  test("flag OFF + no exposure (truth-only) -> skip the mutating reconcile", () => {
-    expect(coinmSkipStartupStopReconcile(false, false)).toBe(true);
+  test("no exposure (truth-only) -> skip the mutating reconcile", () => {
+    expect(coinmSkipStartupStopReconcile(false)).toBe(true);
   });
 
-  test("flag ON (live), regardless of exposure -> default (mutating) reconcile unchanged", () => {
-    expect(coinmSkipStartupStopReconcile(true, false)).toBe(false);
-    expect(coinmSkipStartupStopReconcile(true, true)).toBe(false);
-  });
-
-  test("flag OFF but real open DB exposure exists (close-only) -> default (mutating) reconcile unchanged", () => {
-    expect(coinmSkipStartupStopReconcile(false, true)).toBe(false);
-  });
-});
-
-// OPEN.md P2 "meanrev_stocks no tiene breaker de portfolio": the equity fed
-// to meanrevEngine's RiskGuard MUST be the sleeve's own ledger, never the
-// shared Alpaca account total (momentum_stocks + meanrev_stocks share one
-// wallet — AGENTS.md "Shared Alpaca wallet"). Static source check on the
-// wiring block itself — cheap, and it fails the moment someone swaps the
-// semantics label without touching MeanRevEngine.ts's own equity contract.
-describe("meanrev_stocks RiskGuard wiring — sleeve ledger, never the aggregate account", () => {
-  test("meanrevEngine's risk config is EQUITY_SEMANTICS.SLEEVE_LEDGER", () => {
-    const src = readFileSync(join(import.meta.dir, "index.ts"), "utf-8");
-    const start = src.indexOf("const meanrevEngine = new MeanRevEngine(");
-    const end = src.indexOf("meanrevInterval = scheduleDailyStockRun(");
-    expect(start).toBeGreaterThan(-1);
-    expect(end).toBeGreaterThan(start);
-    const block = src.slice(start, end);
-    expect(block).toMatch(/risk:\s*\{\s*equitySemantics:\s*EQUITY_SEMANTICS\.SLEEVE_LEDGER\s*\}/);
-    // Same pattern momentum_stocks already uses for its own sleeve-scoped
-    // adapter — proves this isn't a one-off label but the same contract.
-    expect(block).not.toMatch(/BINANCE_TOTAL_MARGIN|BINANCE_USDC_MARGIN|BINANCE_COINM_MARGIN/);
+  test("real open DB exposure exists (close-only, no engine) -> default (mutating) reconcile unchanged", () => {
+    expect(coinmSkipStartupStopReconcile(true)).toBe(false);
   });
 });
 

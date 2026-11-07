@@ -1,8 +1,9 @@
 // The portfolio engine wired the way index.ts wires it, on fakes: fake Alpaca executor + client, fake
-// Binance transport, in-memory trading DB and historical.db. Observer sends nothing while the incumbent's
-// rows stay its own; live adopts without closing or rebuying and releases the incumbent's stops; rollback
-// hands the rows back and the stop machinery sees them again; construction failures leave the sleeve to the
-// incumbent; Reg-T / treasury-sweep interplay; heartbeat. No broker, no network.
+// Binance transport, in-memory trading DB and historical.db. Observer sends nothing while the sleeve's
+// rows stay their owner's; live adopts without closing or rebuying and releases legacy stops; a stock
+// rollback leaves the rows with the portfolio engine (no incumbent since 2026-11-07) and the stop
+// machinery keeps ignoring them; construction failures are reported for index.ts's fallback; Reg-T /
+// treasury-sweep interplay; heartbeat. No broker, no network.
 
 import { describe, test, expect, beforeAll, beforeEach } from "bun:test";
 import { getDB, PORTFOLIO_ENGINE_STRATEGY } from "../../db/database";
@@ -25,9 +26,12 @@ const SESSION = "2026-10-20";
 const READY = { alpaca: null, binance_usdm: null, binance_usdc: null } as const;
 const versionsFor = (...sleeves: string[]) => Object.assign({}, ...sleeves.map(s => peVersions(s)));
 
+/** The crypto built-ins only: the built-in pe_ stock definitions would collide with the test's own
+ *  pe_momentum_stocks (same id) — each test adds the stock definition it exercises. */
+const baseDefs = () => builtinPortfolios().filter(d => d.template !== "portfolio");
 function resolve(extra: ReturnType<typeof peDefinition>[], over: Partial<ResolveInput> = {}) {
   return resolvePortfolioWiring({
-    defs: [...builtinPortfolios(), ...extra], venueReady: READY,
+    defs: [...baseDefs(), ...extra], venueReady: READY,
     modelVersions: versionsFor("momentum_stocks", "momentum_crypto_usdc", "meanrev_stocks", "momentum_crypto"), ...over,
   });
 }
@@ -118,8 +122,8 @@ describe("dashboard caps follow the engine actually constructed", () => {
   });
 });
 
-describe("observer alongside the incumbent", () => {
-  test("computes and persists on the sleeve's real rows; sends NOTHING; the incumbent's rows are untouched", async () => {
+describe("observer alongside the sleeve's manager", () => {
+  test("computes and persists on the sleeve's real rows; sends NOTHING; the rows (here a legacy MOMENTUM row) are untouched", async () => {
     seedOpenTrade("inc_spy", "momentum_stocks", { symbol: "SPY", strategy: "MOMENTUM", entryPrice: 500, quantity: 10 });
     const alpaca = fakeAlpaca();
     alpaca.brokerPositions = [{ symbol: "SPY", quantity: 10, avgEntryPrice: 500 }];
@@ -143,7 +147,7 @@ describe("observer alongside the incumbent", () => {
     expect(d.book).toEqual([{ symbol: "SPY", qty: 10, avgEntryPrice: 500 }]); // its book IS the incumbent's rows
   });
 
-  test("an observer is not a manager: the sleeve is not in the cutover set (the incumbent is built)", () => {
+  test("an observer is not a manager: the sleeve is not in the cutover set", () => {
     const wiring = resolve([peDefinition("momentum_stocks", { runMode: "observer" })]);
     expect(wiring.live).toEqual([]);
     const built = buildPortfolioEngines(wiring, sources(fakeAlpaca()).src);
@@ -152,7 +156,7 @@ describe("observer alongside the incumbent", () => {
 });
 
 describe("live (cutover)", () => {
-  test("adopts the open rows WITHOUT closing or rebuying, releases the incumbent's stops, orders only the delta", async () => {
+  test("adopts the open rows WITHOUT closing or rebuying, releases the legacy stops, orders only the delta", async () => {
     // SPY is already at the target weight (10 × 500 = 5000 of 10 000 capital): no SPY order at all.
     seedOpenTrade("inc_spy", "momentum_stocks", { symbol: "SPY", strategy: "MOMENTUM", entryPrice: 500, quantity: 10 });
     const alpaca = fakeAlpaca();
@@ -173,7 +177,7 @@ describe("live (cutover)", () => {
     expect((getDB().prepare("SELECT quantity FROM trades WHERE id='inc_spy'").get() as any).quantity).toBe(10);
     expect(alpaca.orders.map(o => `${o.side} ${o.symbol}`)).toEqual(["buy TLT"]);
     expect(alpaca.orders[0].client_order_id).toBe(portfolioClientOrderId("momentum_stocks", SESSION, "TLT"));
-    // the incumbent's resting stop on the adopted symbol is gone; another sleeve's is not ours to touch
+    // the legacy resting stop on the adopted symbol is gone; another sleeve's is not ours to touch
     expect(alpaca.cancelled).toEqual(["stop-spy"]);
     expect(getDB().prepare("SELECT COUNT(*) c FROM activity_log WHERE message LIKE '%released 1 incumbent stop%'").get()).toEqual({ c: 1 });
     // and a second pass for the same session does nothing
@@ -215,8 +219,8 @@ async function breach(): Promise<string[]> {
   return closed;
 }
 
-describe("rollback by configuration", () => {
-  test("live → rollback: the rows go back to the incumbent and its stop machinery manages them again", async () => {
+describe("rollback by configuration (stock sleeve: no incumbent since 2026-11-07)", () => {
+  test("live → the definition back to observer: the rows STAY portfolio-engine rows (never re-tagged, still stop-exempt) and the boot reports the sleeve has no manager from the registry — index.ts then runs the built-in definition, which adopts them", async () => {
     seedOpenTrade("inc_spy", "momentum_stocks", { symbol: "SPY", strategy: "MOMENTUM", entryPrice: 100, quantity: 10 });
     const alpaca = fakeAlpaca();
     alpaca.brokerPositions = [{ symbol: "SPY", quantity: 10, avgEntryPrice: 100 }];
@@ -225,40 +229,49 @@ describe("rollback by configuration", () => {
     expect(loadSleeveRows("momentum_stocks").every(r => r.strategy === PORTFOLIO_ENGINE_STRATEGY)).toBe(true);
     expect(await breach()).toEqual([]);                                  // exempt while the engine owns them
 
-    // Next boot: the definition is back to observer (same function main() calls, before any incumbent starts).
+    // Next boot: the definition is back to observer (same function main() calls).
     const after = resolve([peDefinition("momentum_stocks", { runMode: "observer" })]);
     expect(after.live).toEqual([]);
     const alerts: string[] = [];
-    const report = await restoreIncumbentRows({ momentum_stocks: "incumbent", meanrev_stocks: "incumbent", momentum_crypto: "incumbent", momentum_crypto_usdc: "incumbent" }, { alert: (_c, m) => alerts.push(m) });
-    expect(report.handedBack.momentum_stocks.map(r => r.symbol).sort()).toEqual(["SPY", "TLT"]);
-    expect(loadSleeveRows("momentum_stocks").map(r => r.strategy)).toEqual(["MOMENTUM", "MOMENTUM"]);
-    expect(alerts.some(a => a.includes("handed back"))).toBe(true);
-    expect(await breach()).toEqual(["SPY"]);                             // protected again: the 15s loop closes the breach (TLT: bought at the mark, no breach)
+    const report = await restoreIncumbentRows({ momentum_stocks: "none", meanrev_stocks: "none", momentum_crypto: "incumbent", momentum_crypto_usdc: "incumbent" }, { alert: (_c, m) => alerts.push(m) });
+    expect(report.handedBack).toEqual({});
+    expect(report.orphaned).toEqual({ momentum_stocks: 2 });
+    expect(loadSleeveRows("momentum_stocks").map(r => r.strategy)).toEqual([PORTFOLIO_ENGINE_STRATEGY, PORTFOLIO_ENGINE_STRATEGY]);
+    expect(alerts.some(a => a.includes("momentum_stocks: 2 open PORTFOLIO row") && a.includes("NO incumbent"))).toBe(true);
+    expect(await breach()).toEqual([]);                                  // still exempt: no stop machinery ever takes them over
+    // …and the fallback engine (the built-in definition, same engine class) adopts them on its first pass.
+    const fallback = buildPortfolioEngines(resolve([peDefinition("momentum_stocks", { runMode: "live" })]), sources(alpaca).src);
+    getDB().exec("DELETE FROM portfolio_decisions");
+    expect((await fallback.live.get("momentum_stocks")!.tick()).status).toBe("submitted");
+    expect(loadSleeveRows("momentum_stocks").every(r => r.strategy === PORTFOLIO_ENGINE_STRATEGY)).toBe(true);
   });
 
-  test("definition REMOVED behaves like observer-off: rows handed back, nothing left unmanaged", async () => {
+  test("definition REMOVED: nothing is handed back on a stock sleeve (there is nobody to hand it to); the rows are reported", async () => {
     seedOpenTrade("inc_spy", "momentum_stocks", { symbol: "SPY", strategy: PORTFOLIO_ENGINE_STRATEGY });
     expect(resolve([]).live).toEqual([]);
-    const report = await restoreIncumbentRows({ momentum_stocks: "incumbent" }, { alert: () => {} });
-    expect(Object.keys(report.handedBack)).toEqual(["momentum_stocks"]);
-    expect(strategyOf("inc_spy").strategy).toBe("MOMENTUM");
+    const alerts: string[] = [];
+    const report = await restoreIncumbentRows({ momentum_stocks: "none" }, { alert: (_c, m) => alerts.push(m) });
+    expect(report.handedBack).toEqual({});
+    expect(report.orphaned).toEqual({ momentum_stocks: 1 });
+    expect(strategyOf("inc_spy").strategy).toBe(PORTFOLIO_ENGINE_STRATEGY);
+    expect(alerts).toHaveLength(1);
   });
 });
 
-describe("construction failures leave the sleeve to the incumbent", () => {
+describe("construction failures are reported for index.ts's fallback", () => {
   test("a live engine that cannot be built is NOT in the cutover set and pages", () => {
     const wiring = resolve([peDefinition("momentum_stocks", { runMode: "live" })]);
     const noClient = { ...fakeAlpaca().executor, client: undefined };
     const built = buildPortfolioEngines(wiring, sources(null, { alpacaExecutor: noClient as any }).src);
     expect(built.live.size).toBe(0);
-    expect(built.problems.map(p => p.message).join(" ")).toContain("the incumbent keeps managing the sleeve");
+    expect(built.problems.map(p => p.message).join(" ")).toContain("the built-in fallback or NO MANAGER");
     const noExec = buildPortfolioEngines(wiring, sources(null, { alpacaExecutor: null }).src);
     expect(noExec.live.size).toBe(0);
     const noHist = buildPortfolioEngines(wiring, sources(fakeAlpaca(), { historicalDb: () => { throw new Error("unable to open database file"); } }).src);
     expect(noHist.live.size).toBe(0);
     expect(noHist.problems[0]).toMatchObject({ definitionId: "pe_momentum_stocks", sleeve: "momentum_stocks", severity: "live_refused" });
   });
-  test("an observer that cannot be built is ignored with a problem; it never blocks the incumbent", () => {
+  test("an observer that cannot be built is ignored with a problem; it never blocks the sleeve's manager", () => {
     const wiring = resolve([peDefinition("momentum_stocks", { runMode: "observer" })]);
     const built = buildPortfolioEngines(wiring, sources(null, { alpacaExecutor: null }).src);
     expect(built.observers).toEqual([]);
@@ -322,7 +335,7 @@ describe("Reg-T buying power guard of the shared Alpaca wallet", () => {
 });
 
 describe("treasury sweep (BOXX) interplay", () => {
-  test("buys find cash the way the incumbents' do: margin buying power, not account cash (no pre-sell)", async () => {
+  test("buys find cash the way the retired incumbents did: margin buying power, not account cash (no pre-sell)", async () => {
     // The sweep parked the cash in BOXX and the account is on margin (cash −$20k): sizing is the sleeve ledger's,
     // the only gate is buying power. BOXX is not in the sleeve's universe, so the engine never sees it.
     const alpaca = fakeAlpaca();

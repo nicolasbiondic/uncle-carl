@@ -1022,19 +1022,18 @@ describe("stop-on-fill — ORDER_FILLED schedules a debounced native-stop pass",
     expect((m as any).stopOnFillTimer).toBeNull();
   });
 
-  test("closes and shadow fills cannot trigger by construction: adapters emit ORDER_FILLED only on the open path AFTER persistence; ShadowAdapter never emits it", () => {
-    const adapterSrc = readFileSync(join(import.meta.dir, "..", "strategies", "momentum", "AlpacaMomentumAdapter.ts"), "utf-8");
-    // Exactly ONE emit, on the entry path, and only after the trades row
-    // persisted (persistFillOrReconcile precedes it) — the event is the
-    // "row exists" signal the scheduled pass relies on.
+  test("closes cannot trigger by construction: the one live adapter emits ORDER_FILLED only on the open path AFTER persistence; no Alpaca adapter emits it any more", () => {
+    // The Alpaca momentum adapter whose entries fed this pass was retired on
+    // 2026-11-07 (the stock sleeves run on the portfolio engine, whose rows are
+    // stop-exempt and whose venue emits no ORDER_FILLED). The remaining emitter
+    // is the Binance adapter: exactly ONE emit, on the entry path, after the
+    // trades row persisted (persistFillOrReconcile precedes it).
+    const adapterSrc = readFileSync(join(import.meta.dir, "..", "strategies", "momentum", "BinanceMomentumAdapter.ts"), "utf-8");
     expect(adapterSrc.split("EVENTS.ORDER_FILLED").length - 1).toBe(1);
     expect(adapterSrc.indexOf("persistFillOrReconcile(order.id")).toBeGreaterThan(0);
     expect(adapterSrc.indexOf("persistFillOrReconcile(order.id")).toBeLessThan(adapterSrc.indexOf("EVENTS.ORDER_FILLED"));
-    // Close path notifies via POSITION_CLOSED, never ORDER_FILLED.
-    expect(adapterSrc).toContain("EVENTS.POSITION_CLOSED");
-    // Shadow books place no real orders and must never wake the reconciler.
-    const shadowSrc = readFileSync(join(import.meta.dir, "..", "governor", "ShadowAdapter.ts"), "utf-8");
-    expect(shadowSrc).not.toContain("ORDER_FILLED");
+    const venueSrc = readFileSync(join(import.meta.dir, "..", "portfolio-engine", "live", "venues", "alpaca.ts"), "utf-8");
+    expect(venueSrc).not.toContain("EVENTS.ORDER_FILLED");
   });
 
   test("a fill landing while the 60s timer pass runs QUEUES its pass behind it — serialized, never a duplicate stop", async () => {

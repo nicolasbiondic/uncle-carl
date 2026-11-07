@@ -454,7 +454,7 @@ describe("portfolio registry route behind the real auth wall (platform F3, 2026-
       const body = await res.json();
       expect(Array.isArray(body)).toBe(true);
       const ids = body.map((p: any) => p.id).sort();
-      expect(ids).toEqual(["meanrev_stocks", "momentum_btc", "momentum_crypto", "momentum_crypto_usdc", "momentum_stocks"]);
+      expect(ids).toEqual(["momentum_crypto", "momentum_crypto_usdc", "pe_meanrev_stocks", "pe_momentum_stocks"]);
       const write = await fetch(`${base}/api/platform/portfolios`, {
         method: "POST", headers: { cookie, "content-type": "application/json", "x-csrf-token": "x" }, body: "{}",
       });

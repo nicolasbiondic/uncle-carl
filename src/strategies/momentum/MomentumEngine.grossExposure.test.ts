@@ -9,7 +9,13 @@
 import { describe, expect, test } from "bun:test";
 import { MomentumEngine } from "./MomentumEngine";
 import { ramp, FakeBroker, silentLogger } from "../../test-support/momentum";
-import { MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT, MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT, MOMENTUM_STOCKS_MAX_LONGS } from "../../index";
+import { GROSS_CAP_HEADROOM } from "../../config/grossCap";
+// The retired Alpaca momentum_stocks incumbent's sizing (0.1875 × 8 slots, backstop
+// × 1.15 headroom = 1.725×) — kept as the test's parametrization of the engine's
+// gross cap (the constants left src/index.ts with that engine on 2026-11-07).
+const MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT = 0.1875;
+const MOMENTUM_STOCKS_MAX_LONGS = 8;
+const MOMENTUM_STOCKS_MAX_GROSS_EXPOSURE_MULT = MOMENTUM_STOCKS_NOTIONAL_PCT_PER_SLOT * MOMENTUM_STOCKS_MAX_LONGS * GROSS_CAP_HEADROOM;
 
 describe("MomentumEngine gross-exposure guard", () => {
   test("today's real cap (1.5x sizing, 8 slots x 0.1875 since 2026-10-10; backstop 1.725x) opens exactly the top 8 candidates, none blocked", async () => {

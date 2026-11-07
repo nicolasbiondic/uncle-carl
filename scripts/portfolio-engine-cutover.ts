@@ -16,7 +16,15 @@
 //
 // Options: --db <path> (default data/trading.db) · --version-name <n> (default pe-<candidate>) ·
 //          --min-observed <n> (default 3).
-// Never touches a broker. The incumbent's registry row is only read (its capital is the sleeve's).
+// Never touches a broker. Capital = the existing definition's, else the sleeve's legacy registry
+// row's, else RISK_PROFILES[sleeve].initialEquity (the fixed per-sleeve capital).
+//
+// Rollback semantics differ by venue (src/portfolio-engine/live/cutover.ts):
+//   crypto — the incumbent MomentumEngine takes the sleeve back; its PORTFOLIO rows are re-tagged.
+//   stocks — there is NO incumbent since 2026-11-07 (owner, audit C). With no live definition the
+//            bot falls back at boot to the code's built-in definition of the CURRENT model
+//            (src/portfolios/builtin.ts) and pages; a rollback here means "run the built-in", never
+//            "run the old TSM/Connors engine". To change the model, cut over to another candidate.
 
 import { Database } from "bun:sqlite";
 import { existsSync, readFileSync } from "node:fs";
@@ -29,6 +37,7 @@ import { overlaySymbols } from "../src/portfolio-engine/contingency";
 import { isTreasurySymbol } from "../src/treasury/treasurySymbols";
 import { USDC_SYMBOL_MAP } from "../src/executor/binance/quoteAsset";
 import { SYMBOL_MAP } from "../src/executor/binance-executor";
+import { RISK_PROFILES } from "../src/config/riskProfiles";
 
 export type CutoverMode = "observer" | "live" | "rollback";
 
@@ -112,33 +121,40 @@ export function planCutover(db: Database, args: CutoverArgs, opts: { modelVersio
   if (!tableExists(db, "platform_portfolios")) { errors.push("platform_portfolios does not exist in this DB (start the bot once with PORTFOLIOS_SOURCE=db, or point --db at the right file)"); return fail(); }
 
   const rows = loadPlatformPortfolioRows(db);
-  const incumbent = rows.find(r => r.id === args.sleeve);
-  if (!incumbent) errors.push(`no registry row '${args.sleeve}' (the incumbent definition): start the bot once with PORTFOLIOS_SOURCE=db so it is seeded`);
-  else if (incumbent.account !== target.account) errors.push(`incumbent row account ${incumbent.account} ≠ ${target.account}`);
+  const legacy = rows.find(r => r.id === args.sleeve);
+  if (legacy && legacy.account !== target.account) errors.push(`legacy row '${args.sleeve}' account ${legacy.account} ≠ ${target.account}`);
   if (errors.length > 0) return fail();
   const id = peDefinitionId(args.sleeve);
   const existing = rows.find(r => r.id === id);
   const existingParams = existing?.params as PortfolioEngineParams | undefined;
+  // Fixed per-sleeve capital (owner rule): the definition's own, else the legacy incumbent row's
+  // (the crypto sleeves still seed one), else the profile's initialEquity.
+  const capital = existing?.capital ?? legacy?.capital ?? (RISK_PROFILES as Record<string, { initialEquity: number }>)[args.sleeve]?.initialEquity;
+  if (!(capital! > 0)) { errors.push(`no capital for '${args.sleeve}': no definition, no legacy row and no RISK_PROFILES entry`); return fail(); }
   const portfolioRowsOpen = (db.prepare(`SELECT COUNT(*) AS c FROM trades WHERE account_id = ? AND status = 'open' AND strategy = 'PORTFOLIO'`).get(args.sleeve) as any)?.c ?? 0;
-  lines.push(`sleeve ${args.sleeve} → account ${target.account}, venue ${target.venue}, incumbent capital $${incumbent!.capital}`);
+  const noIncumbent = target.incumbentStrategy === null;
+  lines.push(`sleeve ${args.sleeve} → account ${target.account}, venue ${target.venue}, capital $${capital}${noIncumbent ? " (no incumbent engine: portfolio engine only)" : ""}`);
   lines.push(`definition id ${id}: ${existing ? `exists (${existingParams?.runMode ?? "?"}, enabled=${existing.enabled}, version ${existingParams?.strategyVersion ?? "?"})` : "does not exist"}`);
   lines.push(`open rows of the sleeve: ${openRowsSummary(db, args.sleeve)}`);
 
   // ── rollback ──
   if (args.mode === "rollback") {
-    if (!existing) { lines.push("nothing to roll back: no portfolio definition exists — the incumbent already manages the sleeve"); return { ok: true, errors, lines, write: { action: "none" } }; }
+    const afterRollback = noIncumbent
+      ? `at the next boot ${args.sleeve} has no live registry definition: the bot runs the code's BUILT-IN definition of the current model (src/portfolios/builtin.ts, pe_${args.sleeve}) and PAGES on every boot until the registry agrees again; its ${portfolioRowsOpen} open PORTFOLIO row(s) stay with the portfolio engine (there is no incumbent to hand them to)`
+      : `at the next boot the incumbent manages ${args.sleeve} again; its ${portfolioRowsOpen} open PORTFOLIO row(s) are re-tagged to ${target.incumbentStrategy} before it starts (its stop machinery covers them)`;
+    if (!existing) { lines.push(noIncumbent ? "nothing to roll back: no portfolio definition exists — the built-in definition already manages the sleeve (and the boot pages)" : "nothing to roll back: no portfolio definition exists — the incumbent already manages the sleeve"); return { ok: true, errors, lines, write: { action: "none" } }; }
     if (args.remove) {
       lines.push(`WILL DELETE definition ${id}`);
-      lines.push(`at the next boot the incumbent manages ${args.sleeve} again; its ${portfolioRowsOpen} open PORTFOLIO row(s) are re-tagged to ${target.incumbentStrategy} before it starts (its stop machinery covers them)`);
+      lines.push(afterRollback);
       return { ok: true, errors, lines, write: { action: "delete", id } };
     }
     const next: PlatformPortfolioRow = {
       ...existing, mode: "shadow", status: "pending_restart", updatedAt: Date.now(),
       params: { ...(existing.params as PortfolioEngineParams), runMode: "observer" },
     };
-    lines.push(`WILL SET ${id} back to observer (it keeps computing and persisting decisions, sends nothing)`);
-    lines.push(`at the next boot the incumbent manages ${args.sleeve} again; its ${portfolioRowsOpen} open PORTFOLIO row(s) are re-tagged to ${target.incumbentStrategy} before it starts`);
-    lines.push("append a MODEL_VERSIONS entry for the incumbent's config in the next deploy (docs: README 'Versions')");
+    lines.push(`WILL SET ${id} back to observer${noIncumbent ? " — NOTE: in a fallback boot the bot does not start observers of the sleeve (one engine per sleeve), so this observer only runs once a live definition exists again" : " (it keeps computing and persisting decisions, sends nothing)"}`);
+    lines.push(afterRollback);
+    if (!noIncumbent) lines.push("append a MODEL_VERSIONS entry for the incumbent's config in the next deploy (docs: README 'Versions')");
     return { ok: true, errors, lines, write: { action: "update", row: next } };
   }
 
@@ -176,7 +192,7 @@ export function planCutover(db: Database, args: CutoverArgs, opts: { modelVersio
 
   const nextRow: PlatformPortfolioRow = {
     id, name: `${args.sleeve} on the portfolio engine (${args.candidate})`, template: "portfolio", account: target.account,
-    capital: incumbent!.capital, mode: args.mode === "live" ? "live" : "shadow", enabled: true, params,
+    capital: capital!, mode: args.mode === "live" ? "live" : "shadow", enabled: true, params,
     status: "pending_restart", validation: "validated", source: "owner",
     createdAt: existing?.createdAt ?? Date.now(), updatedAt: Date.now(),
   };
@@ -205,10 +221,14 @@ export function planCutover(db: Database, args: CutoverArgs, opts: { modelVersio
   if (errors.length > 0) return fail();
 
   if (args.mode === "live") {
-    lines.push(`WILL SET ${id} to LIVE: at the next boot the incumbent engine of ${args.sleeve} is NOT built (no entries, no exits); the portfolio engine adopts its open rows (re-tag to PORTFOLIO, no close, no rebuy), releases the incumbent's resting stops on them and takes them out of the stop machinery`);
-    lines.push("fail-closed: if the engine cannot be built or the definition is refused at boot, the incumbent keeps the sleeve and ops is paged");
+    lines.push(noIncumbent
+      ? `WILL SET ${id} to LIVE: at the next boot the portfolio engine runs THIS design on ${args.sleeve} (adopting any row not yet tagged PORTFOLIO, no close, no rebuy)`
+      : `WILL SET ${id} to LIVE: at the next boot the incumbent engine of ${args.sleeve} is NOT built (no entries, no exits); the portfolio engine adopts its open rows (re-tag to PORTFOLIO, no close, no rebuy), releases the incumbent's resting stops on them and takes them out of the stop machinery`);
+    lines.push(noIncumbent
+      ? "fail-closed: if the engine cannot be built or the definition is refused at boot, the bot falls back to the code's built-in definition of the current model and ops is paged on every boot"
+      : "fail-closed: if the engine cannot be built or the definition is refused at boot, the incumbent keeps the sleeve and ops is paged");
   } else {
-    lines.push(`WILL ${existing ? "REPLACE" : "CREATE"} ${id} as OBSERVER: computes and persists decisions on the sleeve's real rows, sends nothing; the incumbent keeps trading`);
+    lines.push(`WILL ${existing ? "REPLACE" : "CREATE"} ${id} as OBSERVER: computes and persists decisions on the sleeve's real rows, sends nothing; ${noIncumbent ? "the live portfolio engine" : "the incumbent"} keeps trading`);
   }
   return { ok: true, errors, lines, write: { action: existing ? "update" : "insert", row: nextRow } };
 }

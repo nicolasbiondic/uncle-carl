@@ -44,24 +44,15 @@ describe("missingRequiredKeys", () => {
     })).toEqual([]);
   });
 
-  test("COIN-M keys are NOT required while MOMENTUM_COINM_ENABLED is off", () => {
-    expect(missingRequiredKeys({ ...FULL_ENV, MOMENTUM_COINM_ENABLED: "false" })).toEqual([]);
-    expect(missingRequiredKeys(FULL_ENV)).toEqual([]); // unset flag = off
-  });
-
-  test("MOMENTUM_COINM_ENABLED=true is satisfied by the FAPI keys (DEFAULT_COINM_CONFIG falls back to them)", () => {
+  test("COIN-M keys are never required (the momentum_btc engine was retired 2026-11-07; the DAPI truth sync is opt-in by key presence)", () => {
+    expect(missingRequiredKeys(FULL_ENV)).toEqual([]);
+    // The retired flag is ignored even if an old .env still sets it.
     expect(missingRequiredKeys({ ...FULL_ENV, MOMENTUM_COINM_ENABLED: "true" })).toEqual([]);
-  });
-
-  test("MOMENTUM_COINM_ENABLED=true with NEITHER key pair reports the COIN-M pair", () => {
     expect(missingRequiredKeys({
       ALPACA_API_KEY: "k", ALPACA_SECRET_KEY: "s",
-      BINANCE_API_KEY: "legacyk", BINANCE_SECRET_KEY: "legacys", // legacy pair does NOT feed COIN-M
+      BINANCE_API_KEY: "legacyk", BINANCE_SECRET_KEY: "legacys",
       MOMENTUM_COINM_ENABLED: "true",
-    })).toEqual([
-      "BINANCE_COINM_API_KEY (or BINANCE_FUTURES_API_KEY)",
-      "BINANCE_COINM_SECRET_KEY (or BINANCE_FUTURES_SECRET_KEY)",
-    ]);
+    })).toEqual([]);
   });
 
   test("MOMENTUM_USDC_ENABLED needs no extra keys beyond the always-required FAPI pair", () => {
@@ -72,18 +63,11 @@ describe("missingRequiredKeys", () => {
 // F4a (ACCOUNTS_SOURCE=registry): the Alpaca/Binance FAPI runtime
 // credentials come from the broker-accounts registry, so the .env pairs
 // stop being required — a brand-new installation with an empty .env must
-// boot (F4b). COIN-M is NOT in the registry and keeps its requirement.
+// boot (F4b). COIN-M keys are never required (no engine; truth sync by presence).
 describe("missingRequiredKeys — accountsSource=registry", () => {
   test("empty env → nothing missing (registry supplies the runtime credentials)", () => {
     expect(missingRequiredKeys({}, "registry")).toEqual([]);
-  });
-
-  test("COIN-M keys are still demanded when the COIN-M sleeve is enabled (env-configured venue)", () => {
-    expect(missingRequiredKeys({ MOMENTUM_COINM_ENABLED: "true" }, "registry")).toEqual([
-      "BINANCE_COINM_API_KEY (or BINANCE_FUTURES_API_KEY)",
-      "BINANCE_COINM_SECRET_KEY (or BINANCE_FUTURES_SECRET_KEY)",
-    ]);
-    expect(missingRequiredKeys({ MOMENTUM_COINM_ENABLED: "true", BINANCE_COINM_API_KEY: "ck", BINANCE_COINM_SECRET_KEY: "cs" }, "registry")).toEqual([]);
+    expect(missingRequiredKeys({ MOMENTUM_COINM_ENABLED: "true" }, "registry")).toEqual([]);
   });
 
   test("assertRequiredConfig in registry mode: no key demands, and the env-based live ceremony does not run (the registry resolver enforces its own)", () => {

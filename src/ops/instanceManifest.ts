@@ -84,7 +84,6 @@ export const MONEY_FLAGS: readonly FlagSpec[] = [
   { name: "RISK_ENGINE_STATE", default: "unset" }, // unset ⇒ persisted state or ACTIVE (RiskEngine.effectiveState)
   { name: "PLAUSIBILITY_MODE", default: "observe" },
   { name: "MOMENTUM_USDC_ENABLED", default: "false" },
-  { name: "MOMENTUM_COINM_ENABLED", default: "false" },
   { name: "MEANREV_ENABLED", default: "true" },
   { name: "EXECUTION_WS", default: "false" },
   { name: "ALPACA_PAPER", default: "true" },

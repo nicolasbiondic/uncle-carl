@@ -3,7 +3,7 @@
 // (U1 2026-09-26, momentum_crypto_usdc daily kernel, artifact 752767ae…)
 //
 // 1. openPosition.stopLossPct (the engine's volStop output — the SAME
-//    contract AlpacaMomentumAdapter honors, volStopEntry.test.ts) must
+//    contract the retired AlpacaMomentumAdapter honoured, volStopEntry.test.ts) must
 //    drive BOTH the broker-native STOP_MARKET level and the persisted row
 //    stop (trades.stop_loss), so the 15s loop / stopConfirm's rowStopPct
 //    resolves the vol distance. Absent → profile fixed pct (legacy,

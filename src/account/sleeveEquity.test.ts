@@ -4,22 +4,13 @@
 // 1.5×, and the momentum engine sizes on sleeve capital, not account equity.
 
 import { describe, test, expect, beforeAll } from "bun:test";
-import { closeTrade, getTradingStats, getOpenTrades } from "../db/database";
+import { closeTrade } from "../db/database";
 import { computeSleeveLedger, buildSleevePriceMap, EquityTracker } from "./EquityTracker";
-import { RISK_PROFILES, type RiskProfileId } from "../config/riskProfiles";
 import { makeTestDb, seedOpenTrade } from "../test-support/db";
 
-// The three original v8 sleeves this file's fixtures seed/exercise.
-// momentum_crypto_usdc/momentum_btc (2026-07-19) are separate wallets with
-// their own tests (src/account/coinmUsdcSleeves.test.ts) — they must NOT
-// enter this file's "shared Alpaca wallet counted once" totals.
-const V8_SLEEVE_IDS: RiskProfileId[] = ["momentum_stocks", "meanrev_stocks", "momentum_crypto"];
-import { AlpacaMomentumAdapter } from "../strategies/momentum/AlpacaMomentumAdapter";
-
-const stubAlpaca = {
-  getCachedPrice: (s: string) => (s === "AAPL" ? 110 : 0),
-  getLatestPrice: async () => 0,
-} as any;
+// (The AlpacaMomentumAdapter.getEquity tests that used to live here went with
+// the adapter on 2026-11-07; the ledger math below is what the snapshot
+// writer and the portfolio engine's Alpaca venue still share.)
 
 beforeAll(() => {
   makeTestDb();
@@ -66,8 +57,8 @@ describe("computeSleeveLedger", () => {
   // ── fail-closed on corrupt rows (P1 regression, 2026-07-27) ─────────────
   // The per-leg pnlOf().pnl coercion kept `equity` FINITE while costBasis/
   // cash were poisoned NaN — syncLedger's fail-closed guard never fired and
-  // AlpacaMomentumAdapter.getEquity fed a fabricated equity to RiskGuard and
-  // position sizing. These tests FAIL under any per-leg coercion revert:
+  // the (since retired) AlpacaMomentumAdapter.getEquity fed a fabricated
+  // equity to RiskGuard and position sizing. These tests FAIL under any per-leg coercion revert:
   // with quantity=NaN the coerced ledger yields a finite 51,100 equity.
   test("a quantity=NaN row invalidates the WHOLE ledger — never a finite equity next to healthy legs", () => {
     const open = [
@@ -100,19 +91,6 @@ describe("computeSleeveLedger", () => {
   });
 });
 
-describe("AlpacaMomentumAdapter.getEquity — sleeve ledger, not account equity", () => {
-  test("momentum_stocks sizes on its 50k allocation + its own pnl", async () => {
-    const adapter = new AlpacaMomentumAdapter(stubAlpaca);
-    expect(await adapter.getEquity()).toBe(50_000 + 1000 + 100); // 51,100
-  });
-
-  test("meanrev_stocks sees only its own realized pnl", async () => {
-    const adapter = new AlpacaMomentumAdapter(stubAlpaca, {
-      accountId: "meanrev_stocks", timeframe: "1Day", strategy: "MEANREV", closeReason: "MEANREV_EXIT",
-    });
-    expect(await adapter.getEquity()).toBe(50_000 - 200); // 49,800
-  });
-});
 
 describe("buildSleevePriceMap — the shared cache→REST resolver (2026-07-25 live bug)", () => {
   // Live bug shape: momentum_stocks snapshotted equity EXACTLY at seed value
@@ -200,43 +178,5 @@ describe("buildSleevePriceMap — the shared cache→REST resolver (2026-07-25 l
     await buildSleevePriceMap(source, open); // only AAPL, resolved by cache
     expect(calls).toBe(0);
   });
-
-  test("adapter.getEquity() and the snapshot-writer's own buildSleevePriceMap+computeSleeveLedger call agree — the invariant that was broken", async () => {
-    // Same shape AccountManager.syncAlpacaAccount uses: pre-build the price
-    // map, then feed computeSleeveLedger the exact same way the adapter does.
-    const coldCacheWithRest = { getCachedPrice: () => 0, getLatestPrice: async () => 110 };
-    const adapter = new AlpacaMomentumAdapter(coldCacheWithRest as any);
-
-    const adapterEquity = await adapter.getEquity();
-
-    const openTrades = getOpenTrades("momentum_stocks");
-    const prices = await buildSleevePriceMap(coldCacheWithRest, openTrades);
-    const initial = RISK_PROFILES.momentum_stocks.initialEquity;
-    const realized = getTradingStats("momentum_stocks").totalPnl;
-    const writerEquity = computeSleeveLedger(initial, realized, openTrades, s => prices.get(s) ?? 0).equity;
-
-    expect(adapterEquity).toBe(writerEquity);
-  });
 });
 
-describe("consolidated equity has NO double count", () => {
-  test("Σ(sleeve ledger equity) = Σ(initial allocations) + total pnl — the shared wallet is counted once", async () => {
-    const ms = await new AlpacaMomentumAdapter(stubAlpaca).getEquity();
-    const mr = await new AlpacaMomentumAdapter(stubAlpaca, {
-      accountId: "meanrev_stocks", timeframe: "1Day", strategy: "MEANREV", closeReason: "MEANREV_EXIT",
-    }).getEquity();
-    const crypto = RISK_PROFILES.momentum_crypto.initialEquity; // no trades seeded → ledger = initial
-
-    const totalInitial = V8_SLEEVE_IDS.reduce((s, id) => s + RISK_PROFILES[id].initialEquity, 0);
-    expect(totalInitial).toBe(105_000); // 50k + 50k + 5k — NOT 155k (old 100k momentum_stocks)
-
-    const realized = getTradingStats("momentum_stocks").totalPnl + getTradingStats("meanrev_stocks").totalPnl;
-    const unrealized = 100; // AAPL open position marked at 110
-    expect(ms + mr + crypto).toBeCloseTo(totalInitial + realized + unrealized, 6); // 105,900
-
-    // The pre-fix bug shape: momentum_stocks = whole broker account (~101.5k)
-    // + meanrev 50k ⇒ alpaca counted 1.5×. Both sleeves must sum to the 100k
-    // Alpaca allocation + their v8 pnl instead.
-    expect(ms + mr).toBeCloseTo(100_000 + realized + unrealized, 6); // 100,900
-  });
-});

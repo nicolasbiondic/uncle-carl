@@ -1,24 +1,23 @@
 // ═══════════════════════════════════════════════════════════════════════
 // The "vivo = validado" lock (W4 parity, 2026-09-25).
 //
-// For each live sleeve, compares the CandidateConfig DERIVED from the same
-// constants src/index.ts wires (src/config/liveSleeveConfigs.ts) against
-// the candidate of its AUTHORITATIVE experiment manifest — the artifact
-// whose pure OOS chain justified this exact config:
+// For each live MOMENTUM-ENGINE sleeve, compares the CandidateConfig DERIVED
+// from the same constants src/index.ts wires (src/config/liveSleeveConfigs.ts)
+// against the candidate of its AUTHORITATIVE experiment manifest — the
+// artifact whose pure OOS chain justified this exact config:
 //
-//   momentum_stocks ↔ experiments/momentum-stocks-daily-blend3-pure-v1.json
-//   meanrev_stocks  ↔ experiments/meanrev-breadth7-pure-v1.json
 //   momentum_crypto ↔ experiments/momentum-crypto-rw10-turtle-s1-short-pure-v1.json
 //   momentum_crypto_usdc ↔ experiments/momentum-crypto-usdc-daily-s5-rw8-sizeonly-bo13-pure-v1.json
 //     (RW7: no risk pauses; hourly removes regime/Sharpe/cooldown, USDC keeps them)
 //
 // RW2 (2026-10-23): momentum_stocks and meanrev_stocks run on the PORTFOLIO
 // ENGINE (MODEL_VERSIONS current version `engine: "portfolio"`). Their
-// LIVE_SLEEVE_MANIFESTS entry is the RW2 manifest whose candidate the registry
-// definition is hash-locked to at boot (cutover.ts); the incumbent derivation
-// below is still locked against the INCUMBENT manifest (what a rollback
-// returns to), and the "what runs" lock for those sleeves is the manifest +
-// candidate + artifact named by the version (see "portfolio-engine sleeves").
+// LIVE_SLEEVE_MANIFESTS entry is the RW manifest whose candidate the registry
+// definition — and, since 2026-11-07, the code's built-in fallback definition
+// (src/portfolios/builtin.ts, locked by src/portfolios/builtinPortfolioEngine.test.ts)
+// — is hash-locked to at boot (cutover.ts). The TSM/Connors incumbents of the
+// stock sleeves were deleted that day (owner, audit C): there is no incumbent
+// derivation and liveSleeveConfig() throws for them (locked below).
 //
 // EVERY decision-affecting candidate key must be equal, or be listed in
 // DECLARED_KEY_EXCEPTIONS below with its reason. The universe is compared
@@ -31,25 +30,24 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
 import {
+  INCUMBENT_SLEEVE_IDS,
   LIVE_SLEEVE_IDS,
   LIVE_SLEEVE_MANIFESTS,
-  MEANREV_STOCKS_VOL_STOP,
   MOMENTUM_CRYPTO_REGIME,
   MOMENTUM_CRYPTO_TIME_STOP,
   MOMENTUM_CRYPTO_VOL_TARGET,
   MOMENTUM_SLEEVE_SHARPE_GATE,
-  MOMENTUM_STOCKS_SLOT_HYSTERESIS,
   effectiveRiskConfig,
   incumbentManifest,
   liveSleeveConfig,
   sleeveManagedBy,
+  type IncumbentSleeveId,
   type LiveSleeveId,
 } from "../src/config/liveSleeveConfigs";
 import { MODEL_VERSIONS, currentModelVersion, currentModelManifests } from "../src/portfolio/modelVersions";
 import { VALIDATED_PRESETS } from "../src/portfolios/validate";
 import { validateCandidate, type CandidateConfig, type ExperimentManifest } from "./walk-forward";
-import { DEFAULT_MEANREV_CONFIG } from "../src/strategies/meanrev/MeanRevEngine";
-import { MOMENTUM_STOCKS_DAILY_HORIZON, MOMENTUM_STOCKS_DAILY_VOL_STOP, MOMENTUM_USDC_EXPOSURE_CONTROL, dailyHorizonMaxLookback, momentumCryptoPortfolioPlan, momentumUsdcPortfolioPlan } from "../src/index";
+import { MOMENTUM_USDC_DAILY_HORIZON, MOMENTUM_USDC_EXPOSURE_CONTROL, dailyHorizonMaxLookback, momentumCryptoPortfolioPlan, momentumUsdcPortfolioPlan } from "../src/index";
 import { builtinPortfolio } from "../src/portfolios/builtin";
 import { GROSS_CAP_HEADROOM } from "../src/config/grossCap";
 import { DEFAULT_TSM_CONFIG } from "../src/strategies/momentum/TimeSeriesMomentum";
@@ -61,8 +59,8 @@ function loadManifest(sleeve: LiveSleeveId): ExperimentManifest {
   return JSON.parse(readFileSync(join(ROOT, LIVE_SLEEVE_MANIFESTS[sleeve]), "utf-8"));
 }
 /** The manifest the INCUMBENT derivation is locked against (equal to the
- *  above while the incumbent runs). */
-function loadIncumbentManifest(sleeve: LiveSleeveId): ExperimentManifest {
+ *  above while the incumbent runs — both crypto sleeves today). */
+function loadIncumbentManifest(sleeve: IncumbentSleeveId): ExperimentManifest {
   return JSON.parse(readFileSync(join(ROOT, incumbentManifest(sleeve)), "utf-8"));
 }
 
@@ -72,35 +70,22 @@ function loadIncumbentManifest(sleeve: LiveSleeveId): ExperimentManifest {
 // and the manifest candidate. Do NOT add keys here to silence a mismatch —
 // a new mismatch means live drifted from the validated config (or the
 // manifest pointer is stale) and must be reported, not declared away.
-const DECLARED_KEY_EXCEPTIONS: Record<LiveSleeveId, Record<string, string>> = {
-  momentum_stocks: {
-    name: "identity label only — no execution semantics",
-    risk: "compared as the EFFECTIVE RiskGuardConfig below; live additionally sets equitySemantics (selects WHICH broker ledger the equity read uses — the sim broker hands equity to the engine directly, nothing to model)",
-    maxGrossExposureMult:
-      "live-only runtime BACKSTOP (1.15× = product × GROSS_CAP_HEADROOM since 2026-10-07): the bare 1.0× product DID bind on the validated book marked to market (31% of OOS entry decisions, −1.5pp CAGR — G diagnostic, docs/reports/G-gross-cap.md); at the measured headroom activation is 0 on the validated chain while legacy-sized books (the 2026-09-25 META/AAPL cutover class, ~2× product) still trip it. Locked to product × headroom below.",
-  },
-  meanrev_stocks: {
-    name: "identity label only — no execution semantics",
-    // (meanrev candidates carry no risk/maxGross keys in the manifest and
-    // the live candidate adds none: the engine-level backstop is 0.966× =
-    // 0.84 product × GROSS_CAP_HEADROOM since 2026-10-07 — see the dedicated
-    // backstop assertion below and docs/reports/G-gross-cap.md.)
-  },
+const DECLARED_KEY_EXCEPTIONS: Record<IncumbentSleeveId, Record<string, string>> = {
   momentum_crypto: {
     name: "identity label only — no execution semantics",
-    risk: "compared as the EFFECTIVE RiskGuardConfig below; live adds equitySemantics (see momentum_stocks)",
+    risk: "compared as the EFFECTIVE RiskGuardConfig below; live additionally sets equitySemantics (selects WHICH broker ledger the equity read uses — the sim broker hands equity to the engine directly, nothing to model)",
     maxGrossExposureMult:
       "live-only runtime BACKSTOP (1.725× = 0.375×4 × GROSS_CAP_HEADROOM since 2026-10-07): the bare 1.5× product bound on 0.24% of validated OOS entry decisions (max marked ratio 1.554, volTarget maxScale reaches 2.25× theoretical — G diagnostic, docs/reports/G-gross-cap.md); at the measured headroom activation is 0. Locked to product × headroom below.",
   },
   momentum_crypto_usdc: {
     name: "identity label only — no execution semantics",
-    risk: "compared as the EFFECTIVE RiskGuardConfig below; live adds equitySemantics (see momentum_stocks)",
+    risk: "compared as the EFFECTIVE RiskGuardConfig below; live adds equitySemantics (see momentum_crypto)",
     maxGrossExposureMult:
       "live-only runtime BACKSTOP (1.15× = 0.20×5 × GROSS_CAP_HEADROOM since 2026-10-07): the bare 1.0× product blocked 8 prod entries the week of 2026-09-26 (4× LTC, 4× AVAX, 4/5 positions filled) and cost the authoritative chain −14.4pp CAGR / −0.174 Sharpe when imposed (27.4% of OOS entry decisions — G diagnostic, docs/reports/G-gross-cap.md); at the measured headroom activation is 0. Locked to product × headroom below.",
   },
 };
 
-function compareCandidateKeys(sleeve: LiveSleeveId, live: object, manifest: CandidateConfig) {
+function compareCandidateKeys(sleeve: IncumbentSleeveId, live: object, manifest: CandidateConfig) {
   const exceptions = DECLARED_KEY_EXCEPTIONS[sleeve];
   const keys = new Set([...Object.keys(live), ...Object.keys(manifest)]);
   for (const key of keys) {
@@ -110,7 +95,19 @@ function compareCandidateKeys(sleeve: LiveSleeveId, live: object, manifest: Cand
   }
 }
 
-for (const sleeve of Object.keys(LIVE_SLEEVE_MANIFESTS) as LiveSleeveId[]) {
+describe("stock sleeves have NO incumbent derivation (owner 2026-11-07): the lock for what runs is the portfolio definition's hash", () => {
+  test("liveSleeveConfig throws for both stock sleeves and names where the design lives", () => {
+    for (const sleeve of ["momentum_stocks", "meanrev_stocks"] as const) {
+      expect(sleeveManagedBy(sleeve)).toBe("portfolio");
+      expect(() => liveSleeveConfig(sleeve)).toThrow(/portfolio engine and has no incumbent derivation since 2026-11-07/);
+      expect(() => liveSleeveConfig(sleeve)).toThrow(/src\/portfolios\/builtin\.ts/);
+    }
+    expect([...INCUMBENT_SLEEVE_IDS]).toEqual(["momentum_crypto", "momentum_crypto_usdc"]);
+    expect([...LIVE_SLEEVE_IDS].sort()).toEqual(["meanrev_stocks", "momentum_crypto", "momentum_crypto_usdc", "momentum_stocks"]);
+  });
+});
+
+for (const sleeve of INCUMBENT_SLEEVE_IDS) {
   describe(`vivo=validado — ${sleeve} (incumbent derivation ↔ incumbent manifest${sleeveManagedBy(sleeve) === "portfolio" ? "; the sleeve RUNS on the portfolio engine, see below" : ""})`, () => {
     const m = loadIncumbentManifest(sleeve);
     const live = liveSleeveConfig(sleeve);
@@ -189,10 +186,6 @@ describe("declared environmental differences (data plumbing)", () => {
     // Honesty lock: the manifest must keep declaring the measured costs the
     // chain was run at (P2-costs: ~17 bps slippage + 3 bps commission/side).
     expect(m.costs.base).toEqual({ slippageBps: 17, commissionBps: 3 });
-  });
-  test("incumbent stock manifests' ledger.leverage: 2 (momentum, Reg-T headroom the 1.0× gross never uses) / 1 (meanrev)", () => {
-    expect(loadIncumbentManifest("momentum_stocks").ledger.leverage).toBe(2);
-    expect(loadIncumbentManifest("meanrev_stocks").ledger.leverage).toBe(1);
   });
 });
 
@@ -333,11 +326,14 @@ describe("portfolio-engine sleeves — the version table names manifest, candida
         expect(cand.portfolio.strategy.regimeOverlay?.hedge).toBeUndefined();
       }
       expect(cand.portfolio.strategy.regimeOverlay?.defensive).toBeUndefined();
-      expect([...cand.portfolio.strategy.universe].sort()).toEqual([...liveSleeveConfig(sleeve).universe].sort());
-      // Same data plumbing as the incumbent: the band and the parity proposal compare like with like.
+      // The built-in fallback definition IS this candidate (src/portfolios/builtinPortfolioEngine.test.ts
+      // locks the byte-equality and the hash); here only the universe/capital identity with the sleeve.
+      const builtin = builtinPortfolio(`pe_${sleeve}`).params as any;
+      expect([...cand.portfolio.strategy.universe].sort()).toEqual([...builtin.strategy.universe].sort());
+      // Same data plumbing as the retired incumbent: the band and the parity proposal compare like with like.
       expect({ source: m.data.source, timeframe: m.data.timeframe, barMinutes: m.data.barMinutes })
         .toEqual({ source: "alpaca_wide", timeframe: "1d", barMinutes: 1440 });
-      expect(m.ledger.initialEquity).toBe(liveSleeveConfig(sleeve).initialEquity);
+      expect(m.ledger.initialEquity).toBe(builtinPortfolio(`pe_${sleeve}`).capital);
     });
   }
   test("every version that names an artifact also names a manifest, and shiftDays is 0 unless it is a daily MOMENTUM replay (session labelled by its END)", () => {
@@ -366,12 +362,13 @@ describe("index.ts wiring literals ↔ module constants", () => {
     }
   });
 
-  test("slotHysteresis: true — exactly twice (stocks + usdc daily kernel; refuted on HOURLY crypto)", () => {
-    expect(MOMENTUM_STOCKS_SLOT_HYSTERESIS).toBe(true);
-    // stocks (owner override 2026-09-10) + momentum_crypto_usdc's daily
-    // kernel (part of the validated candidate, artifact 752767ae…). The
-    // hourly momentum_crypto sleeve must NOT wire it (refuted 2026-09-10).
-    expect(count("slotHysteresis: true")).toBe(2);
+  test("slotHysteresis: true — exactly once (the usdc daily kernel; refuted on HOURLY crypto; the stocks override left with the Alpaca incumbent 2026-11-07)", () => {
+    // momentum_crypto_usdc's daily kernel (part of the validated candidate,
+    // artifact 752767ae…). The hourly momentum_crypto sleeve must NOT wire it
+    // (refuted 2026-09-10).
+    expect(count("slotHysteresis: true")).toBe(1);
+    expect(liveSleeveConfig("momentum_crypto_usdc").candidate.slotHysteresis).toBe(true);
+    expect(liveSleeveConfig("momentum_crypto").candidate.slotHysteresis).toBeUndefined();
   });
 
   test("crypto volTarget literal matches MOMENTUM_CRYPTO_VOL_TARGET — exactly once", () => {
@@ -385,8 +382,6 @@ describe("index.ts wiring literals ↔ module constants", () => {
     expect(count("exposureControl: {")).toBe(1);
     expect(count("exposureControl: { ...MOMENTUM_USDC_EXPOSURE_CONTROL")).toBe(1);
     expect(liveSleeveConfig("momentum_crypto").candidate.exposureControl).toBeUndefined();
-    expect(liveSleeveConfig("momentum_stocks").candidate.exposureControl).toBeUndefined();
-    expect(liveSleeveConfig("meanrev_stocks").candidate.exposureControl).toBeUndefined();
   });
 
   test("RW7 regime disabled literal matches MOMENTUM_CRYPTO_REGIME — hourly crypto only", () => {
@@ -397,39 +392,33 @@ describe("index.ts wiring literals ↔ module constants", () => {
     expect(count('mode: "sizeOnly"')).toBe(2);
   });
 
-  test("meanrev volStop literal matches MEANREV_STOCKS_VOL_STOP — exactly once", () => {
-    const s = MEANREV_STOCKS_VOL_STOP;
-    const literal = `volStop: { kSigma: ${s.kSigma}, lookbackBars: ${s.lookbackBars}, minPct: ${s.minPct}, maxPct: ${s.maxPct} }`;
-    expect(count(literal)).toBe(1);
-  });
-
-  test("sharpeGate literal matches MOMENTUM_SLEEVE_SHARPE_GATE on all but hourly crypto", () => {
+  test("sharpeGate literal matches MOMENTUM_SLEEVE_SHARPE_GATE on the USDC daily kernel only (hourly crypto omits it; the stock plans left with the incumbents)", () => {
     const g = MOMENTUM_SLEEVE_SHARPE_GATE;
     const literal = `sharpeGate: { lookbackDays: ${g.lookbackDays}, minSharpe: ${g.minSharpe} }`;
-    expect(count(literal)).toBe(3); // stocks + USDC + flag-off COIN-M
+    expect(count(literal)).toBe(1); // USDC
     expect(count("sharpeGate: {")).toBe(count(literal)); // no sleeve wires a DIFFERENT gate
   });
 
-  test("stocks daily trail/hard stop both spread MOMENTUM_STOCKS_DAILY_VOL_STOP", () => {
-    expect(count("{ ...MOMENTUM_STOCKS_DAILY_VOL_STOP }")).toBe(2); // tsmTrail + volStop
+  test("usdc daily trail/hard stop both spread MOMENTUM_USDC_DAILY_VOL_STOP; no stock engine literal survives in index.ts", () => {
+    expect(count("{ ...MOMENTUM_USDC_DAILY_VOL_STOP }")).toBe(2); // tsmTrail + volStop
+    expect(count("MOMENTUM_STOCKS_DAILY_VOL_STOP")).toBe(0);
+    expect(count("MEANREV_STOCKS")).toBe(0);
+    expect(count("AlpacaMomentumAdapter")).toBe(0);
   });
 });
 
 // ── structural sanity the derivations rely on ────────────────────────────
 describe("derivation invariants", () => {
   test("backstops equal slot×count products × GROSS_CAP_HEADROOM (the bare product DID bind on validated books — G diagnostic, docs/reports/G-gross-cap.md, applied 2026-10-07)", () => {
-    const stocks = liveSleeveConfig("momentum_stocks").candidate;
-    expect(stocks.maxGrossExposureMult).toBeCloseTo(stocks.notionalPctPerSlot! * stocks.maxLongs! * GROSS_CAP_HEADROOM, 10);
     const crypto = liveSleeveConfig("momentum_crypto").candidate;
     expect(crypto.maxGrossExposureMult).toBeCloseTo(crypto.notionalPctPerSlot! * crypto.maxLongs! * GROSS_CAP_HEADROOM, 10);
     const usdc = liveSleeveConfig("momentum_crypto_usdc").candidate;
     expect(usdc.maxGrossExposureMult).toBeCloseTo(usdc.notionalPctPerSlot! * usdc.maxLongs! * GROSS_CAP_HEADROOM, 10);
-    expect(DEFAULT_MEANREV_CONFIG.slotPct * DEFAULT_MEANREV_CONFIG.maxPositions).toBeCloseTo(0.84, 10);
   });
 
-  test("live daily historyBars formula equals the replay's for the wired horizon", () => {
-    const h = MOMENTUM_STOCKS_DAILY_HORIZON!;
-    const liveBars = Math.max(dailyHorizonMaxLookback(h), h.maLengthDays) + 11; // index.ts stocksHistoryBars
+  test("live daily historyBars formula equals the replay's for the wired horizon (USDC daily kernel)", () => {
+    const h = MOMENTUM_USDC_DAILY_HORIZON;
+    const liveBars = Math.max(dailyHorizonMaxLookback(h), h.maLengthDays) + 11; // index.ts usdc historyBars
     const horizonDays = Math.max(dailyHorizonMaxLookback(h), h.maLengthDays) + 1;
     const replayBars = Math.ceil((horizonDays * 24 * 60) / 1440) + 10; // runWithConfig
     expect(liveBars).toBe(replayBars);
@@ -453,10 +442,5 @@ describe("derivation invariants", () => {
     // Trail + hard stop are the SAME k8 spec, and equal the manifest's.
     expect({ mode: "volScaled", ...c.tsmTrail }).toEqual(c.hardStop as any);
     expect(c.hardStop).toEqual(m.candidates[0].hardStop);
-  });
-
-  test("stocks daily vol stop constant equals the k8 leg of the INCUMBENT manifest (rollback config)", () => {
-    const m = loadIncumbentManifest("momentum_stocks");
-    expect({ mode: "volScaled", ...MOMENTUM_STOCKS_DAILY_VOL_STOP }).toEqual(m.candidates[0].hardStop as any);
   });
 });
