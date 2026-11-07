@@ -31,7 +31,8 @@
 import type { AlpacaExecutor } from "../../../executor/alpaca-executor";
 import { ALPACA_ACCOUNT_MAX_GROSS } from "../../../ops/grossCaps";
 import { createLogger } from "../../../utils/logger";
-import type { LegacyStopRelease, OrderIntent, OrderResult, Position, VenueAdapter, VenueRules } from "../../types";
+import { getETDateKey } from "../../../db/database";
+import type { LegacyStopRelease, OrderIntent, OrderResult, Position, SessionDate, VenueAdapter, VenueRules } from "../../types";
 
 const log = createLogger("PortfolioVenue:alpaca");
 
@@ -44,6 +45,8 @@ export interface AlpacaVenueClient {
   getOrder(orderId: string): Promise<any>;
   getOrderByClientId(clientOrderId: string): Promise<any>;
   cancelOrder(orderId: string): Promise<void>;
+  /** v3-shaped snapshot (alpaca-v5-compat): `DailyBar.OpenPrice` / `.Timestamp` = today's RAW open. Optional. */
+  getSnapshot?(symbol: string): Promise<any>;
 }
 
 /** The executor surface this venue reads (positions, prices, connectivity). */
@@ -152,6 +155,24 @@ export class AlpacaVenue implements VenueAdapter {
         px = marks.get(s) ?? 0;
       }
       if (px > 0) out[s] = px;
+    }
+    return out;
+  }
+
+  /** Q7 V1 execution record: the execution session's UNADJUSTED open per symbol, from the snapshot's
+   *  daily bar (one data call per symbol, raw prices — the same basis as the fills, unlike the
+   *  adjustment=all history bars). A bar stamped on another ET date (pre-open, holiday) or any failure
+   *  leaves the symbol out: the engine journals null, never a guess. */
+  async sessionOpens(symbols: readonly string[], session: SessionDate): Promise<Record<string, number>> {
+    const out: Record<string, number> = {};
+    if (!this.client.getSnapshot) return out;
+    for (const s of new Set(symbols)) {
+      try {
+        const bar = (await this.client.getSnapshot(s))?.DailyBar;
+        const open = Number(bar?.OpenPrice);
+        const ts = bar?.Timestamp ? Date.parse(String(bar.Timestamp)) : NaN;
+        if (open > 0 && Number.isFinite(ts) && getETDateKey(ts) === session) out[s] = open;
+      } catch (e: any) { log.debug(`session open ${s}: ${e?.message ?? e}`); }
     }
     return out;
   }

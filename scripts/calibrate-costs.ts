@@ -97,6 +97,23 @@ function printSleeve(c: SleeveCostCalibration): void {
   printAligned(["serie", "n", "media", "mediana", "p90", "IC95(media)"], rows);
   const ex = c.excluded;
   console.log(`  excluidos: nonSim=${ex.nonSim} noBar=${ex.noBar} noStopLevel=${ex.noStopLevel} preModel=${ex.preModel}`);
+  if (c.portfolioExecution) {
+    // Q7 V1: the portfolio engine's journal — every filled leg by its own label, vs the price the pass
+    // decided on and vs the session's RAW open (when the venue gave it).
+    const pe = c.portfolioExecution;
+    console.log(`  diario del motor de cartera: n=${pe.n} (con apertura cruda ${pe.nWithSessionOpen}, parciales ${pe.partialFills}, etiqueta inferida ${pe.nLabelInferred}) · marcas de emergencia (NO ejecuciones): ${pe.excluded.emergencyMark} · preModel ${pe.excluded.preModel}`);
+    const peRows: string[][] = [];
+    const push = (label: string, g: { vsDecision: CostStats | null; vsSessionOpen: CostStats | null }) => {
+      peRows.push(statsRow(`${label} · vs decisión`, g.vsDecision));
+      peRows.push(statsRow(`${label} · vs apertura cruda`, g.vsSessionOpen));
+    };
+    push("todas", pe);
+    for (const [label, g] of Object.entries(pe.byLabel)) push(label, g!);
+    for (const [bucket, g] of Object.entries(pe.byBucket)) push(`nocional ${bucket}`, g!);
+    for (const [symbol, g] of Object.entries(pe.bySymbol)) push(symbol, g);
+    printAligned(["serie (diario)", "n", "media", "mediana", "p90", "IC95(media)"], peRows);
+  }
+  if (c.caveat) console.log(`  OJO: ${c.caveat}`);
   console.log(`  VEREDICTO: ${c.verdict}`);
 }
 

@@ -21,12 +21,14 @@
 //    trades) and realized vs unrealized P&L.
 //  • EXPECTATION BAND: a block bootstrap (fixed seed) over the authoritative
 //    pure-chain OOS daily returns of each sleeve's validated artifact gives
-//    the 5/50/95 percentiles of cumulative return and maxDD at horizon
+//    the 1/5/50/95 percentiles of cumulative return (5/50/95 for maxDD) at horizon
 //    h = live sessions since MODEL_START. Live below p5 = the automatic
 //    "rinde peor que lo validado" signal. The two stock sleeves' bands are
 //    haircut for universe selection bias (SELECTION_BIAS_HAIRCUT below).
 //    A second band judges the last 20 completed grid sessions across version
 //    changes against the SAME current OOS sample, bootstrap and haircut.
+//    Its return below p1 is the distinct §2.6 freeze exception (guardian G11);
+//    p5 remains the existing investigation signal. Neither changes trading.
 //
 // The below-band signal is the measurable spirit of the PRE-REGISTERED
 // reversion criteria written next to each wiring decision:
@@ -364,7 +366,7 @@ export function mulberry32(seed: number): () => number {
 }
 
 export interface BootstrapBand {
-  cumReturn: { p5: number; p50: number; p95: number };
+  cumReturn: { p1: number; p5: number; p50: number; p95: number };
   maxDD: { p5: number; p50: number; p95: number };
   horizon: number; nPaths: number; blockLen: number; seed: number; nOosReturns: number;
 }
@@ -399,7 +401,7 @@ export function blockBootstrapBand(
     cums.push(eq - 1); dds.push(dd);
   }
   return {
-    cumReturn: { p5: percentile(cums, 0.05), p50: percentile(cums, 0.5), p95: percentile(cums, 0.95) },
+    cumReturn: { p1: percentile(cums, 0.01), p5: percentile(cums, 0.05), p50: percentile(cums, 0.5), p95: percentile(cums, 0.95) },
     maxDD: { p5: percentile(dds, 0.05), p50: percentile(dds, 0.5), p95: percentile(dds, 0.95) },
     horizon: h, nPaths, blockLen, seed, nOosReturns: n,
   };
@@ -671,7 +673,7 @@ export interface ExpectationBand {
   horizonSessions: number;
   liveCumReturnPct: number | null;
   liveMaxDrawdownPct: number | null;
-  cumReturnPct: { p5: number; p50: number; p95: number } | null;
+  cumReturnPct: { p1: number; p5: number; p50: number; p95: number } | null;
   maxDDPct: { p5: number; p50: number; p95: number } | null;
   bootstrap: { seed: number; blockLen: number; nPaths: number; nOosReturns: number } | null;
   /** The haircut the band was built with (null = none for this sleeve). */
@@ -715,7 +717,7 @@ export function computeExpectationBand(
   return {
     ...base,
     status: classifyBand(modelWindow.totalReturnPct / 100, band),
-    cumReturnPct: { p5: band.cumReturn.p5 * 100, p50: band.cumReturn.p50 * 100, p95: band.cumReturn.p95 * 100 },
+    cumReturnPct: { p1: band.cumReturn.p1 * 100, p5: band.cumReturn.p5 * 100, p50: band.cumReturn.p50 * 100, p95: band.cumReturn.p95 * 100 },
     maxDDPct: { p5: band.maxDD.p5 * 100, p50: band.maxDD.p50 * 100, p95: band.maxDD.p95 * 100 },
     bootstrap: { seed: band.seed, blockLen: band.blockLen, nPaths: band.nPaths, nOosReturns: band.nOosReturns },
     selectionBias: haircut ? { sharpeHaircut: haircut.sharpe, dailyDrift: drift, evidence: haircut.evidence } : null,
@@ -725,6 +727,14 @@ export function computeExpectationBand(
 // ── Full scorecard ────────────────────────────────────────────────────────
 
 export const ROLLING_BAND_SESSIONS = 20;
+
+/** §2.6: p5 means investigate; only a complete rolling return below p1 is
+ * a freeze exception. Unknown data cannot close an existing alarm episode. */
+export function freezeExceptionStatus(band: ExpectationBand): BandStatus {
+  if (!band.cumReturnPct || band.liveCumReturnPct == null || band.horizonSessions !== ROLLING_BAND_SESSIONS)
+    return band.status === "unavailable" ? "unavailable" : "insufficient_data";
+  return band.liveCumReturnPct < band.cumReturnPct.p1 ? "below" : "within";
+}
 
 /** Last 20 COMPLETED grid sessions, across model cutovers. Require every
  * close plus its base: gaps/stale marks must not masquerade as 20 sessions. */
@@ -777,6 +787,12 @@ export interface Scorecard {
   notes: string[];
 }
 
+/** Declared comparison caveats, not synthetic cash flows or a second P&L. */
+export const PAPER_BACKTEST_CAVEATS = [
+  "Alpaca paper: sin actividades INT desde 2026-09-01 (consulta de solo lectura, 2026-11-07); el backtest carga 6,5% anual de interés de margen (E1: $18.198 entre folds). El vivo paper puede parecer mejor al no pagar ese coste.",
+  "Alpaca paper: sin actividades DIV desde 2026-09-01 (consulta de solo lectura, 2026-11-07); el backtest usa precios ajustados por dividendos. Sí hubo FEE regulatorias (−$17,07). La comparación no es económicamente idéntica; no se imputan flujos ficticios al dinero vivo.",
+];
+
 export interface ScorecardOptions {
   db: Database;
   /** historical.db handle; null/missing ⇒ benchmark columns render null. */
@@ -828,6 +844,7 @@ export function computeScorecard(opts: ScorecardOptions): Scorecard {
     entities,
     benchmarksAvailable: hist != null,
     notes: [
+      ...PAPER_BACKTEST_CAVEATS,
       "Con pocas semanas de vivo NINGUNA métrica certifica edge (ver PSR/MinTRL: obsMissing).",
       "La banda detecta roturas frente a la distribución OOS validada; estar dentro NO prueba alpha.",
       "Benchmark calculado sobre las MISMAS fechas que las observaciones diarias válidas del sleeve.",
@@ -942,8 +959,10 @@ export function formatScorecardDigestLines(scorecard: Scorecard): string[] {
     if (e.kind !== "sleeve") continue;
     const w = e.windows.find(x => x.window === "model");
     const tag = DIGEST_TAG[e.id] ?? e.id;
-    const bandTxt = (e.band ? BAND_ES[e.band.status] : "no disponible") +
-      ` · últimas 20 sesiones: ${pctEs(e.rollingBand?.liveCumReturnPct ?? null)} · banda: ${e.rollingBand ? BAND_ES[e.rollingBand.status] : "no disponible"}`;
+    const percentiles = (b: ExpectationBand | null) => b?.cumReturnPct
+      ? ` (p1/p5/p50/p95 ${[b.cumReturnPct.p1, b.cumReturnPct.p5, b.cumReturnPct.p50, b.cumReturnPct.p95].map(x => pctEs(x)).join(" / ")})` : "";
+    const bandTxt = (e.band ? BAND_ES[e.band.status] : "no disponible") + percentiles(e.band) +
+      ` · últimas 20 sesiones: ${pctEs(e.rollingBand?.liveCumReturnPct ?? null)} · banda: ${e.rollingBand ? BAND_ES[e.rollingBand.status] : "no disponible"}${percentiles(e.rollingBand)}`;
     if (!w || w.totalReturnPct == null) {
       lines.push(`${tag} sin sesiones aún (modelo desde ${e.modelStart ?? "?"}) · banda: ${bandTxt}`);
       continue;

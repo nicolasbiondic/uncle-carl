@@ -4,8 +4,10 @@
 //                              (src/portfolio/kpis.ts, shared with Telegram).
 //   GET /api/funnel?days=1|7|30 — per-portfolio decision funnel: passes,
 //                              signals, entries, exits, blocks by reason
-//                              (decision_passes telemetry), plus live
-//                              executed orders/day vs the validated design.
+//                              (decision_passes telemetry: the momentum
+//                              engines' recorder and, since 2026-11-07, one
+//                              row per completed portfolio-engine pass), plus
+//                              live executed orders/day vs the validated design.
 //                              Since 2026-10-23 each account also carries
 //                              signalsRawLong / signalsAfterGates / gateBinding
 //                              (gates that removed a candidate, not merely
@@ -28,8 +30,11 @@ import { toBoundedInt } from "../dashboard-utils";
  * (`@pe-vt15`, docs/reports/RW-reescritura-rentable.md §9): orders per
  * session 0.74 (E1) and 0.46 (E2) → 0.37 / 0.23 ops per day. Until then:
  * 0.05 (5f03d68d) and 1.20 (624d50e9). countExecutedOrders includes confirmed
- * rebalances from the portfolio decision journal; the engine still writes
- * no decision_passes, so its funnel rows show 0 passes.
+ * rebalances from the portfolio decision journal (its ONLY execution record:
+ * the engine writes no `fills`, so the UNION never double-counts). Since
+ * 2026-11-07 (Q7 V1) the engine also writes ONE decision_passes row per
+ * completed live pass (PortfolioEngine.recordDecisionPass), so the stock
+ * sleeves' funnel rows show their passes, signals and filled legs.
  */
 export const DESIGN_OPS_PER_DAY: Record<string, number> = {
   momentum_stocks: 0.37,

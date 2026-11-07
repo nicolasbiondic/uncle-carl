@@ -8,6 +8,9 @@
  * G7 (audit F-2): every cron job's success marker (data/cron-markers, src/ops/cronJobs.ts)
  * is fresh for its schedule; a stale job pages once per episode. Skipped with --now.
  * G8: current live model artifacts exist and runs.jsonl is readable (no cached result).
+ * G9: persistent position/target drift over two completed NYSE sessions.
+ * G10: current-version sleeve drawdown worse than its stitched OOS worst drawdown.
+ * G11: rolling 20-session return below p1 (freeze exception, not the p5 investigation).
  * 0 healthy; 1 invariant violation; 2 operational failure of a check (takes precedence;
  * paged here as an OP:<check> episode); 3 the guardian itself could not run (DB, state file,
  * Telegram) — paged once per episode by scripts/lib/cron-job.sh via guardian.sh.
@@ -20,14 +23,15 @@ import { readFileSync, writeFileSync, renameSync, unlinkSync, statSync } from "n
 import { resolve } from "node:path";
 import { countExecutedOrders, getETDateKey, getETDayStart } from "../src/db/database";
 import { MODEL_VERSIONS } from "../src/portfolio/modelVersions";
-import { sleeveExpectationArtifacts } from "../src/portfolio/scorecard";
+import { sleeveExpectationArtifacts, SCORECARD_ENTITIES, readDailyMarks, computeRollingExpectationBand, freezeExceptionStatus, gridDateKey, V8_START } from "../src/portfolio/scorecard";
 import { maxHoldExpired } from "../src/portfolio-engine/decide";
 import { portfolioDecisionSymbols } from "../src/portfolio-engine/live/PortfolioEngine";
 import { STOCKS_RUN_MINUTES_ET } from "../src/portfolio-engine/live/schedule";
 import { HistoricalPriceView } from "../src/portfolio-engine/live/priceView";
+import { portfolioClientOrderId } from "../src/portfolio-engine/live/clientOrderId";
 import type { PersistedOrder } from "../src/portfolio-engine/live/persistence";
 import type { PortfolioStrategyConfig } from "../src/portfolio-engine/types";
-import { getPreviousTradingDay, isTradingDay } from "../src/utils/marketHours";
+import { getPreviousTradingDay, getSessionClose, isTradingDay } from "../src/utils/marketHours";
 import { isTreasurySymbol } from "../src/treasury/treasurySymbols";
 import { loadInstanceConfig } from "../src/platform/instance";
 import { alpaca, fapi } from "./broker-truth";
@@ -37,13 +41,15 @@ const HOUR = 3_600_000;
 const STOCKS = ["momentum_stocks", "meanrev_stocks"] as const;
 // Explicit owner-rule scope; do not silently stop checking a disabled sleeve.
 const LIVE_SLEEVE_IDS = [...STOCKS, "momentum_crypto", "momentum_crypto_usdc"] as const;
-type Check = "G1" | "G2" | "G3" | "G4" | "G5" | "G6" | "G7" | "G8";
+type Check = "G1" | "G2" | "G3" | "G4" | "G5" | "G6" | "G7" | "G8" | "G9" | "G10" | "G11";
 export interface Finding { key: string; check: Check; message: string }
 export interface GuardianResult {
   violations: Finding[];
   reports: string[];
   errors: Array<{ check: Check; message: string }>;
   evaluated: Check[];
+  /** A missing observation cannot prove recovery for this key/prefix. */
+  unavailableKeys?: string[];
 }
 interface TradeRow {
   id: string; account_id: string; symbol: string; side: string; quantity: number;
@@ -155,6 +161,57 @@ export function mandatoryCloseFindings(d: DecisionRow, orders: PersistedOrder[])
     else add(o.intent.symbol, "rebuy skipped max_hold_close_incomplete");
   }
   return out;
+}
+
+/** Absolute AND relative anchors. In particular a 3% E2 target needs >1pp,
+ * not merely 25% of 3%, and a zero target still needs >the absolute band. */
+export function positionOffTarget(actual: number, target: number, band: number): boolean {
+  const delta = Math.abs(actual - target);
+  return delta > band + 1e-12 && delta > Math.abs(target) * 0.25 + 1e-12;
+}
+
+/** Reconstruct the session's actual sleeve rows from their pre-pass snapshot
+ * and applied fills. Reading today's mutable trades.quantity backwards would
+ * silently attribute later trims/add-backs to yesterday. No money recomputation:
+ * the denominator is the recorded end-of-session sleeve equity. */
+function sessionPositionDrift(db: Database, hist: Database, sleeve: string, session: string, now: number, band: number): Map<string, string> | null {
+  const passes = db.query(`SELECT * FROM portfolio_decisions WHERE account_id = ? AND session = ?
+    AND mode = 'live' AND decided_at <= ? ORDER BY id DESC`).all(sleeve, session, now) as Array<DecisionRow & {
+      book_json: string; weights_json: string;
+    }>;
+  if (passes.length !== 1 || passes[0].status !== "submitted" || passes[0].updated_at > now) return null;
+  const d = passes[0], book: Array<{ symbol: string; qty: number }> = JSON.parse(d.book_json);
+  const qty = new Map<string, number>();
+  for (const p of book) qty.set(p.symbol, (qty.get(p.symbol) ?? 0) + p.qty);
+  const orders: PersistedOrder[] = JSON.parse(d.orders_json);
+  for (const o of orders) {
+    // Stale-close legs preceded this normal pass's row snapshot, so are already
+    // in book_json. Their deterministic hashed IDs also cover the -r1 retry.
+    const staleId = portfolioClientOrderId(sleeve, session, o.intent.symbol, "stale-close");
+    if (o.clientOrderId === staleId || o.clientOrderId === `${staleId}-r1`) continue;
+    if (o.applied && (o.result?.filledQty ?? 0) > 0) {
+      if (o.filledAt != null && getETDateKey(o.filledAt) !== session) return null;
+      qty.set(o.intent.symbol, (qty.get(o.intent.symbol) ?? 0) + (o.intent.side === "buy" ? 1 : -1) * o.result!.filledQty);
+    }
+  }
+  const targets: Record<string, number> = JSON.parse(d.weights_json);
+  const start = getETDayStart(Date.parse(`${session}T17:00:00Z`));
+  const end = getETDayStart(Date.parse(`${session}T17:00:00Z`) + 86_400_000);
+  const mark = db.query(`SELECT equity FROM equity_snapshots WHERE profile_id = ? AND semantics = 5
+    AND synthetic = 0 AND equity > 0 AND snapshot_time >= ? AND snapshot_time < ? AND snapshot_time <= ?
+    ORDER BY snapshot_time DESC, id DESC LIMIT 1`).get(sleeve, start + getSessionClose(session).closeMinutes * 60_000, end, now) as { equity: number } | null;
+  if (!mark) return null;
+  const symbols = [...new Set([...qty.keys(), ...Object.keys(targets)])];
+  const view = new HistoricalPriceView({ db: hist, asOf: session, symbols, maxBars: 1 });
+  const drift = new Map<string, string>();
+  for (const symbol of symbols) {
+    const q = qty.get(symbol) ?? 0, target = targets[symbol] ?? 0;
+    if (!Number.isFinite(q) || q < -1e-6 || !Number.isFinite(target) || target < 0) throw new Error(`${sleeve} ${session}: invalid quantity/target ${symbol}`);
+    if (Math.abs(q) > 1e-6 && view.lastSession(symbol) !== session) return null;
+    const actual = Math.max(0, q) * (view.lastClose(symbol) ?? 0) / mark.equity;
+    if (positionOffTarget(actual, target, band)) drift.set(symbol, `${session} actual=${actual.toFixed(4)} target=${target.toFixed(4)}`);
+  }
+  return drift;
 }
 
 export async function evaluateGuardian(opts: {
@@ -279,12 +336,95 @@ export async function evaluateGuardian(opts: {
         const dir = resolve(opts.root ?? resolve(import.meta.dir, ".."), ref.dir);
         if (!statSync(dir).isDirectory()) throw new Error("artifact path is not a directory");
         if (!readFileSync(resolve(dir, "runs.jsonl"), "utf8").trim()) throw new Error("runs.jsonl is empty");
+        const dd = JSON.parse(readFileSync(resolve(dir, "summary.json"), "utf8")).stitchedOos?.maxDrawdown;
+        if (!Number.isFinite(dd) || dd < 0 || dd > 1) throw new Error("summary.json has no valid stitchedOos.maxDrawdown");
       } catch (e) {
         add("G8", sleeve, `${v.id}: expectation artifact missing/unreadable (${ref?.dir ?? "none"}): ${e instanceof Error ? e.message : e}`);
       }
     }
   });
   else result.reports.push("G8 skipped (--now: host artifacts are not historical)");
+  await run("G9", () => {
+    // Respect early closes and DST. A pass finishing in the morning does not
+    // make that session complete; after the close it also needs its close mark.
+    const last = isTradingDay(today) && now >= getETDayStart(now) + getSessionClose(today).closeMinutes * 60_000
+      ? today : getPreviousTradingDay(today);
+    const previous = getPreviousTradingDay(last);
+    const definitions = db.query(`SELECT params_json FROM platform_portfolios WHERE template = 'portfolio'
+      AND mode = 'live' AND enabled = 1 AND status != 'archived'`).all() as { params_json: string }[];
+    for (const sleeve of STOCKS) {
+      const params = definitions.map(r => JSON.parse(r.params_json)).filter(p => p.sleeve === sleeve && p.runMode === "live");
+      if (params.length !== 1 || !Number.isFinite(params[0].rebalanceBand) || params[0].rebalanceBand < 0)
+        throw new Error(`${sleeve}: missing live definition rebalanceBand`);
+      const band = params[0].rebalanceBand;
+      const a = sessionPositionDrift(db, hist, sleeve, previous, now, band);
+      const b = sessionPositionDrift(db, hist, sleeve, last, now, band);
+      if (!a || !b) {
+        (result.unavailableKeys ??= []).push(`G9:${sleeve}`);
+        result.reports.push(`G9 ${sleeve}: ${previous}/${last} incomplete, stale/skipped or missing prices/marks; episode retained`);
+        continue;
+      }
+      const persistent = [...b.keys()].filter(symbol => a.has(symbol));
+      for (const symbol of persistent) add("G9", `${sleeve}:${symbol}`,
+        `${sleeve} ${symbol}: posición fuera del objetivo dos sesiones consecutivas (${a.get(symbol)}; ${b.get(symbol)}); > banda absoluta ${band} Y >25% del objetivo. Investigar; sin cambiar la operativa.`);
+      result.reports.push(`G9 ${sleeve}: ${previous}/${last}, band=${band}, persistent drift=${persistent.join(",") || "none"}`);
+    }
+  });
+  if (!opts.historical) await run("G10", () => {
+    const artifacts = sleeveExpectationArtifacts();
+    for (const e of SCORECARD_ENTITIES.filter(e => e.kind === "sleeve")) {
+      const v = MODEL_VERSIONS[e.id].at(-1)!;
+      if (result.errors.some(f => f.check === "G8") || result.violations.some(f => f.key === `G8:${e.id}`)) {
+        (result.unavailableKeys ??= []).push(`G10:${e.id}`);
+        result.reports.push(`G10 ${e.id}: artifact unavailable (G8); episode retained`);
+        continue;
+      }
+      const ref = artifacts[e.id];
+      const worst = JSON.parse(readFileSync(resolve(opts.root ?? resolve(import.meta.dir, ".."), ref.dir, "summary.json"), "utf8")).stitchedOos.maxDrawdown;
+      const snapshots = db.query(`SELECT equity, snapshot_time FROM equity_snapshots WHERE profile_id = ?
+        AND semantics = 5 AND synthetic = 0 AND equity > 0 AND snapshot_time <= ? ORDER BY snapshot_time, id`).all(e.id, now) as { equity: number; snapshot_time: number }[];
+      const start = snapshots.findIndex(s => v.modelStart != null && gridDateKey(s.snapshot_time, e.grid) >= v.modelStart);
+      if (start < 0) {
+        (result.unavailableKeys ??= []).push(`G10:${e.id}`);
+        result.reports.push(`G10 ${e.id}: no marks for current version; episode retained`);
+        continue;
+      }
+      // Include the last pre-model close as the base, just like the model band.
+      const window = snapshots.slice(Math.max(0, start - 1));
+      const peak = window.reduce((peak, s) => Math.max(peak, s.equity), 0);
+      const dd = 1 - window.at(-1)!.equity / peak;
+      // Reported, not paged: the sleeve's fall from its peak since V8 spans retired models too, so a
+      // version change cannot hide a long slide from whoever reads the report.
+      const sinceV8 = snapshots.filter(s => gridDateKey(s.snapshot_time, e.grid) >= V8_START);
+      const sleevePeak = sinceV8.reduce((p, s) => Math.max(p, s.equity), 0);
+      const sleeveDd = sleevePeak > 0 ? 1 - sinceV8.at(-1)!.equity / sleevePeak : null;
+      result.reports.push(`G10 ${v.id}: current DD=${(dd * 100).toFixed(2)}%, OOS worst=${(worst * 100).toFixed(2)}%`
+        + (sleeveDd === null ? "" : `; sleeve DD from its peak since ${V8_START}=${(sleeveDd * 100).toFixed(2)}% (reported only)`));
+      if (dd > worst) add("G10", e.id, `${v.id}: caída peor que la peor del backtest (vivo ${(dd * 100).toFixed(2)}% > OOS ${(worst * 100).toFixed(2)}%). Investigar solamente; nunca un veto ni un límite por sleeve del presupuesto de cuenta.`);
+    }
+  });
+  else result.reports.push("G10 skipped (--now: host artifacts are not historical)");
+  // G11 is distinct from Telegram's p5 investigation episodes. No action on trading.
+  if (!opts.historical) await run("G11", () => {
+    const artifacts = Object.fromEntries(Object.entries(sleeveExpectationArtifacts()).map(([id, ref]) =>
+      [id, { ...ref, dir: resolve(opts.root ?? resolve(import.meta.dir, ".."), ref.dir) }]));
+    for (const e of SCORECARD_ENTITIES.filter(e => e.kind === "sleeve")) {
+      if (result.errors.some(f => f.check === "G8") || result.violations.some(f => f.key === `G8:${e.id}`)) {
+        (result.unavailableKeys ??= []).push(`G11:${e.id}`);
+        result.reports.push(`G11 ${e.id}: artifact unavailable (G8); episode retained`);
+        continue;
+      }
+      const band = computeRollingExpectationBand(e, readDailyMarks(db, e.id, e.grid, now), now, artifacts);
+      const status = freezeExceptionStatus(band);
+      if (status === "below") add("G11", e.id,
+        `${e.id}: excepción de la congelación: últimas 20 sesiones bajo el p1 (vivo ${band.liveCumReturnPct!.toFixed(2)}%, p1 ${band.cumReturnPct!.p1.toFixed(2)}%). Investigar; sin cambiar la operativa.`);
+      else if (status === "unavailable" || status === "insufficient_data") {
+        (result.unavailableKeys ??= []).push(`G11:${e.id}`);
+        result.reports.push(`G11 ${e.id}: ${band.reason ?? status}; episode retained`);
+      }
+    }
+  });
+  else result.reports.push("G11 skipped (--now: host artifacts are not historical)");
   return result;
 }
 
@@ -300,7 +440,8 @@ export function episodeTransitions(previous: EpisodeState, r: GuardianResult, no
   const current = new Map(findings.map(f => [f.key, f]));
   for (const [key, old] of Object.entries(active)) {
     // An unreadable/skipped check cannot prove an old violation cleared.
-    if (!known.has(old.check) || (!key.startsWith("OP:") && failed.has(old.check))) continue;
+    if (!known.has(old.check) || (!key.startsWith("OP:") && failed.has(old.check)) ||
+      r.unavailableKeys?.some(prefix => key === prefix || key.startsWith(`${prefix}:`))) continue;
     if (!current.has(key)) { events.push(`GUARDIAN CLEARED ${key}: ${old.message}`); delete active[key]; }
   }
   for (const f of findings) {
@@ -313,7 +454,7 @@ function readState(path: string): EpisodeState {
   try {
     const s = JSON.parse(readFileSync(path, "utf8"));
     if (s.version !== 1 || !s.active || typeof s.active !== "object" || Array.isArray(s.active)) throw new Error("invalid guardian state");
-    for (const v of Object.values(s.active) as any[]) if (!v || !/^G[1-8]$/.test(v.check) || typeof v.message !== "string" || !Number.isFinite(v.since)) throw new Error("invalid guardian episode");
+    for (const v of Object.values(s.active) as any[]) if (!v || !/^G(?:[1-9]|10|11)$/.test(v.check) || typeof v.message !== "string" || !Number.isFinite(v.since)) throw new Error("invalid guardian episode");
     return s;
   } catch (e: any) { if (e.code === "ENOENT") return { version: 1, active: {} }; throw e; }
 }

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHmac } from "node:crypto";
 import {
-  evaluateGuardian, episodeTransitions, guardianExitCode, guardianMain, stockPassTime, writeState,
+  evaluateGuardian, episodeTransitions, guardianExitCode, guardianMain, stockPassTime, writeState, positionOffTarget,
   type GuardianResult, type EpisodeState, type StockConfigs, type BrokerPosition,
 } from "./guardian";
 
@@ -28,6 +28,7 @@ function fixture() {
     const artifact = join(dir, key);
     mkdirSync(artifact);
     writeFileSync(join(artifact, "runs.jsonl"), "{}\n");
+    writeFileSync(join(artifact, "summary.json"), JSON.stringify({ stitchedOos: { maxDrawdown: 0.2 } }));
     process.env[key] = artifact;
   }
   const path = join(dir, "trading.db"), histPath = join(dir, "historical.db");
@@ -35,11 +36,13 @@ function fixture() {
   db.exec(`CREATE TABLE trades (id TEXT, account_id TEXT, symbol TEXT, side TEXT, quantity REAL, entry_time INTEGER,
     exit_time INTEGER, strategy TEXT, status TEXT, close_reason TEXT);
     CREATE TABLE portfolio_decisions (id INTEGER PRIMARY KEY, account_id TEXT, strategy_version TEXT, session TEXT,
-      status TEXT, mode TEXT, orders_json TEXT, decided_at INTEGER, updated_at INTEGER);
+      status TEXT, mode TEXT, orders_json TEXT, decided_at INTEGER, updated_at INTEGER,
+      book_json TEXT DEFAULT '[]', weights_json TEXT DEFAULT '{}');
     CREATE TABLE decision_passes (account_id TEXT, ts INTEGER);
     CREATE TABLE platform_portfolios (id TEXT, template TEXT, enabled INTEGER, mode TEXT, status TEXT, params_json TEXT);
     CREATE TABLE fills (account_id TEXT, trade_id TEXT, order_id TEXT, symbol TEXT, side TEXT, fill_time INTEGER, filled_qty REAL);
-    CREATE TABLE activity_log (event_type TEXT, message TEXT, created_at INTEGER);`);
+    CREATE TABLE activity_log (event_type TEXT, message TEXT, created_at INTEGER);
+    CREATE TABLE equity_snapshots (id INTEGER PRIMARY KEY, profile_id TEXT, equity REAL, snapshot_time INTEGER, semantics INTEGER, synthetic INTEGER);`);
   hist.exec(`CREATE TABLE historical_bars (symbol TEXT, source TEXT, timeframe TEXT, timestamp INTEGER,
     open REAL, high REAL, low REAL, close REAL, volume REAL);`);
   function decision(sleeve = "momentum_stocks", session = "2026-11-02", orders: any[] = [], version = "fixture", at = NOW - HOUR) {
@@ -54,7 +57,7 @@ function fixture() {
   for (const [sleeve, strategy] of Object.entries(configs)) {
     decision(sleeve);
     db.query("INSERT INTO platform_portfolios VALUES (?,'portfolio',1,'live','active',?)")
-      .run(`pe_${sleeve}`, JSON.stringify({ sleeve, runMode: "live", strategy }));
+      .run(`pe_${sleeve}`, JSON.stringify({ sleeve, runMode: "live", strategy, rebalanceBand: 0.01 }));
   }
   for (const symbol of ["SPY", "SH", "ABBV"]) hist.query("INSERT INTO historical_bars VALUES (?,'alpaca_wide','1d',?,100,101,99,100,1000)")
     .run(symbol, Date.parse("2026-10-30T04:00:00Z"));
@@ -70,13 +73,195 @@ function fixture() {
   } };
 }
 const findings = (r: GuardianResult, check: string) => r.violations.filter(f => f.check === check);
+
+describe("G11 — p1 freeze exception, independent of p5", () => {
+  test("complete rolling window pages once, missing data retains, equality recovers once; readonly", async () => {
+    const f = fixture();
+    try {
+      const dir = process.env.SCORECARD_ARTIFACT_MOMENTUM_CRYPTO!;
+      writeFileSync(join(dir, "manifest-resolved.json"), JSON.stringify({ costs: { base: { slippageBps: 2, commissionBps: 0 } } }));
+      writeFileSync(join(dir, "runs.jsonl"), JSON.stringify({ foldPath: "0/test", costTier: "base", result: {
+        config: { slippageBps: 2, commissionBps: 0 }, dailyReturns: Array.from({ length: 60 }, (_, i) => ({ date: `2020-${i}`, ret: 0 })) } }));
+      for (let i = 0; i <= 20; i++) f.db.query("INSERT INTO equity_snapshots (profile_id,equity,snapshot_time,semantics,synthetic) VALUES ('momentum_crypto',?,?,5,0)")
+        .run(100 - i, Date.parse("2026-10-12T21:00:00Z") + i * 24 * HOUR);
+      const db = new Database(f.path, { readonly: true });
+      try {
+        const r = await f.run({ db });
+        expect(findings(r, "G11")).toHaveLength(1);
+        expect(findings(r, "G11")[0].message).toContain("excepción de la congelación: últimas 20 sesiones bajo el p1");
+        const first = episodeTransitions(emptyState(), r, NOW);
+        expect(first.events).toHaveLength(1);
+        expect(episodeTransitions(first.state, await f.run({ db }), NOW).events).toEqual([]);
+        // The scorecard caches good samples, but a removed host artifact still
+        // belongs to G8 and cannot change a G11 episode using the old memo.
+        rmSync(join(dir, "summary.json"));
+        const missing = await f.run({ db });
+        expect(findings(missing, "G11")).toEqual([]);
+        expect(episodeTransitions(first.state, missing, NOW).events.some(e => e.includes("CLEARED G11"))).toBe(false);
+        writeFileSync(join(dir, "summary.json"), JSON.stringify({ stitchedOos: { maxDrawdown: 0.2 } }));
+        f.db.exec("DELETE FROM equity_snapshots WHERE id=10");
+        expect(episodeTransitions(first.state, await f.run({ db }), NOW).events).toEqual([]);
+        f.db.query("INSERT INTO equity_snapshots VALUES (10,'momentum_crypto',100,?,5,0)").run(Date.parse("2026-10-21T21:00:00Z"));
+        f.db.exec("UPDATE equity_snapshots SET equity=100");
+        const clear = episodeTransitions(first.state, await f.run({ db }), NOW);
+        expect(clear.events).toEqual([expect.stringContaining("CLEARED G11:momentum_crypto")]);
+        expect(episodeTransitions(clear.state, await f.run({ db }), NOW).events).toEqual([]);
+      } finally { db.close(); }
+    } finally { f.close(); }
+  });
+});
 function closeOrder(qty = 10, filled = 0, id = "close") {
   return { intent: { symbol: "ABBV", side: "sell", qty, maxHold: "close" }, clientOrderId: id,
     result: { ok: filled === qty, filledQty: filled, status: filled === qty ? "filled" : "canceled" }, applied: true };
 }
 
+describe("G9 — two completed sessions, absolute AND relative position drift", () => {
+  test.each([
+    [0.038, 0.03, false], // E2's 32 names: >25% relative alone must NOT page
+    [0.04, 0.03, false], [0.041, 0.03, true],
+    [0.12, 0.1, false], [0.125, 0.1, false], [0.126, 0.1, true],
+    [0.01, 0, false], [0.011, 0, true],
+  ])("actual %s vs target %s => %s", (actual, target, expected) => {
+    expect(positionOffTarget(actual as number, target as number, 0.01)).toBe(expected);
+  });
+  function sessions(f: ReturnType<typeof fixture>, actual = 0.041, target = 0.03) {
+    for (const session of ["2026-10-29", "2026-10-30"]) {
+      f.decision("meanrev_stocks", session, [], "fixture", Date.parse(`${session}T14:00:00Z`));
+      f.db.query("UPDATE portfolio_decisions SET book_json=?, weights_json=? WHERE account_id='meanrev_stocks' AND session=?")
+        .run(JSON.stringify([{ symbol: "ABBV", qty: actual * 100 }]), JSON.stringify({ ABBV: target }), session);
+      f.db.query("INSERT INTO equity_snapshots (profile_id,equity,snapshot_time,semantics,synthetic) VALUES ('meanrev_stocks',10000,?,5,0)")
+        .run(Date.parse(`${session}T21:00:00Z`));
+      if (session === "2026-10-29") f.hist.query("INSERT INTO historical_bars VALUES ('ABBV','alpaca_wide','1d',?,100,101,99,100,1000)")
+        .run(Date.parse(`${session}T04:00:00Z`));
+    }
+  }
+  test("same symbol on two adjacent sessions pages once, a healthy weight recovers once; current incomplete pass ignored, readonly", async () => {
+    const f = fixture();
+    try {
+      sessions(f);
+      const db = new Database(f.path, { readonly: true }), hist = new Database(f.histPath, { readonly: true });
+      try {
+        const r = await f.run({ db, hist });
+        expect(findings(r, "G9").map(f => f.key)).toEqual(["G9:meanrev_stocks:ABBV"]);
+        expect(r.reports.join("\n")).toContain("band=0.01");
+        const first = episodeTransitions(emptyState(), r, NOW);
+        expect(first.events).toHaveLength(1);
+        expect(episodeTransitions(first.state, await f.run({ db, hist }), NOW + HOUR).events).toEqual([]);
+        f.db.exec(`UPDATE portfolio_decisions SET book_json='[{"symbol":"ABBV","qty":3}]' WHERE session='2026-10-30'`);
+        const clear = episodeTransitions(first.state, await f.run({ db, hist }), NOW + HOUR);
+        expect(clear.events).toEqual([expect.stringContaining("CLEARED G9:meanrev_stocks:ABBV")]);
+        expect(episodeTransitions(clear.state, await f.run({ db, hist }), NOW + HOUR).events).toEqual([]);
+      } finally { db.close(); hist.close(); }
+    } finally { f.close(); }
+  });
+  test.each(["skipped_stale", "failed", "decided", "missing", "missing price", "missing mark", "future journal"])("%s never bridges a gap or falsely recovers an episode", async kind => {
+    const f = fixture();
+    try {
+      sessions(f);
+      const first = episodeTransitions(emptyState(), await f.run(), NOW);
+      if (kind === "missing") f.db.exec("DELETE FROM portfolio_decisions WHERE session='2026-10-30'");
+      else if (kind === "missing price") f.hist.query("DELETE FROM historical_bars WHERE symbol='ABBV' AND timestamp >= ?").run(Date.parse("2026-10-30T00:00:00Z"));
+      else if (kind === "missing mark") f.db.exec("DELETE FROM equity_snapshots");
+      else if (kind === "future journal") f.db.query("UPDATE portfolio_decisions SET updated_at=? WHERE session='2026-10-30'").run(NOW + 1);
+      else f.db.query("UPDATE portfolio_decisions SET status=? WHERE session='2026-10-30'").run(kind);
+      const r = await f.run();
+      expect(findings(r, "G9")).toEqual([]);
+      expect(episodeTransitions(first.state, r, NOW).events.filter(e => e.includes("G9:"))).toEqual([]);
+    } finally { f.close(); }
+  });
+  test("uses session close prices and applied partial fills, not entry prices, requested quantities or today's mutable rows", async () => {
+    const f = fixture();
+    try {
+      sessions(f, 0, 0.1);
+      const orders = [{ intent: { symbol: "ABBV", side: "buy", qty: 10 }, clientOrderId: "partial",
+        applied: true, result: { ok: false, filledQty: 3, status: "canceled" } },
+        { intent: { symbol: "ABBV", side: "buy", qty: 7 }, applied: false, result: { filledQty: 7 } }];
+      f.db.query("UPDATE portfolio_decisions SET orders_json=? WHERE session IN ('2026-10-29','2026-10-30')").run(JSON.stringify(orders));
+      expect(findings(await f.run(), "G9")).toHaveLength(1); // 3% actual, not requested 10%
+      f.trade({ account_id: "meanrev_stocks", quantity: 999, symbol: "ABBV" }); // later row, irrelevant
+      expect(findings(await f.run(), "G9")).toHaveLength(1);
+      f.hist.exec("UPDATE historical_bars SET close=333.333333333 WHERE symbol='ABBV'");
+      expect(findings(await f.run(), "G9")).toEqual([]); // 10% when marked at session prices
+    } finally { f.close(); }
+  });
+  test("zero targets count and the definition's band is used rather than a hardcoded 1pp", async () => {
+    const f = fixture();
+    try {
+      sessions(f, 0.02, 0);
+      expect(findings(await f.run(), "G9")).toHaveLength(1);
+      f.db.query("UPDATE platform_portfolios SET params_json=? WHERE id='pe_meanrev_stocks'")
+        .run(JSON.stringify({ sleeve: "meanrev_stocks", runMode: "live", strategy: configs.meanrev_stocks, rebalanceBand: 0.03 }));
+      expect(findings(await f.run(), "G9")).toEqual([]);
+    } finally { f.close(); }
+  });
+  test("today counts only after the NYSE close, including early closes; no second session from repeated hourly checks", async () => {
+    const f = fixture();
+    try {
+      sessions(f);
+      const beforeClose = await f.run({ now: Date.parse("2026-10-30T19:59:59Z") });
+      expect(findings(beforeClose, "G9")).toEqual([]); // the 29th alone is not two sessions
+      const afterClose = await f.run({ now: Date.parse("2026-10-30T21:01:00Z") });
+      expect(findings(afterClose, "G9")).toHaveLength(1);
+      // Half-day Friday after Thanksgiving: no synthetic full-day assumption.
+      for (const session of ["2026-11-25", "2026-11-27"]) {
+        f.decision("meanrev_stocks", session, [], "fixture", Date.parse(`${session}T15:00:00Z`));
+        f.db.query("UPDATE portfolio_decisions SET book_json=?,weights_json=? WHERE session=?")
+          .run('[{"symbol":"ABBV","qty":4.1}]', '{"ABBV":0.03}', session);
+        f.db.query("INSERT INTO equity_snapshots (profile_id,equity,snapshot_time,semantics,synthetic) VALUES ('meanrev_stocks',10000,?,5,0)")
+          .run(Date.parse(`${session}T18:00:00Z`));
+        f.hist.query("INSERT INTO historical_bars VALUES ('ABBV','alpaca_wide','1d',?,100,101,99,100,1000)")
+          .run(Date.parse(`${session}T05:00:00Z`));
+      }
+      // 25th is a full day: replace its mark with one after 16:00 ET.
+      f.db.query("UPDATE equity_snapshots SET snapshot_time=? WHERE snapshot_time=?")
+        .run(Date.parse("2026-11-25T21:00:00Z"), Date.parse("2026-11-25T18:00:00Z"));
+      expect(findings(await f.run({ now: Date.parse("2026-11-27T17:59:59Z") }), "G9")).toEqual([]);
+      expect(findings(await f.run({ now: Date.parse("2026-11-27T18:00:01Z") }), "G9")).toHaveLength(1);
+    } finally { f.close(); }
+  });
+});
+
+describe("G10 — current-version drawdown vs stitched OOS worst, investigation only", () => {
+  test("all four sleeves, strict OOS threshold, once per episode and recovery; prior model peaks excluded", async () => {
+    const f = fixture();
+    const now = Date.parse("2026-11-07T17:00:00Z"), run = (db = f.db) => f.run({ db, now });
+    try {
+      for (const sleeve of ["momentum_stocks", "meanrev_stocks", "momentum_crypto", "momentum_crypto_usdc"]) {
+        for (const [time, equity] of [["2026-09-01T21:00:00Z", 1000], ["2026-10-30T21:00:00Z", 100], ["2026-11-06T21:00:00Z", 79]] as const)
+          f.db.query("INSERT INTO equity_snapshots (profile_id,equity,snapshot_time,semantics,synthetic) VALUES (?,?,?,5,0)").run(sleeve, equity, Date.parse(time));
+        // Last pre-model base is 100, not the retired model's high of 1000.
+        f.db.query("INSERT INTO equity_snapshots (profile_id,equity,snapshot_time,semantics,synthetic) VALUES (?,100,?,5,0)")
+          .run(sleeve, Date.parse("2026-10-01T21:00:00Z"));
+      }
+      const r = await run();
+      expect(findings(r, "G10")).toHaveLength(4);
+      expect(findings(r, "G10")[0].message).toContain("caída peor que la peor del backtest");
+      expect(r.reports.join("\n")).toContain("current DD=21.00%, OOS worst=20.00%");
+      // The fall from the retired model's 1000 peak is reported, never paged.
+      expect(r.reports.join("\n")).toContain("sleeve DD from its peak since 2026-07-10=92.10% (reported only)");
+      const first = episodeTransitions(emptyState(), r, NOW);
+      expect(episodeTransitions(first.state, await run(), NOW).events).toEqual([]);
+      // Missing artifacts are G8 only; they cannot recover a G10 episode.
+      const dir = process.env.SCORECARD_ARTIFACT_MEANREV_STOCKS!;
+      rmSync(join(dir, "summary.json"));
+      const missing = await run();
+      expect(findings(missing, "G10")).toHaveLength(3);
+      expect(findings(missing, "G8")).toHaveLength(1);
+      expect(episodeTransitions(first.state, missing, NOW).events.some(e => e.includes("CLEARED G10"))).toBe(false);
+      writeFileSync(join(dir, "summary.json"), JSON.stringify({ stitchedOos: { maxDrawdown: 0.2 } }));
+      f.db.exec("UPDATE equity_snapshots SET equity=81 WHERE equity=79");
+      const db = new Database(f.path, { readonly: true });
+      try {
+        const clear = episodeTransitions(first.state, await run(db), NOW);
+        expect(clear.events.filter(e => e.includes("CLEARED G10:"))).toHaveLength(4);
+        expect(episodeTransitions(clear.state, await run(db), NOW).events).toEqual([]);
+      } finally { db.close(); }
+    } finally { f.close(); }
+  });
+});
+
 describe("G8 — current model expectation artifacts", () => {
-  test.each(["missing directory", "missing runs.jsonl", "runs.jsonl is a directory", "empty runs.jsonl", "unreadable runs.jsonl"])("%s pages once, recovers once after copy (no restart)", async kind => {
+  test.each(["missing directory", "missing runs.jsonl", "runs.jsonl is a directory", "empty runs.jsonl", "unreadable runs.jsonl", "missing summary.json", "invalid summary.json"])("%s pages once, recovers once after copy (no restart)", async kind => {
     const f = fixture();
     try {
       const dir = process.env.SCORECARD_ARTIFACT_MOMENTUM_STOCKS!, runs = join(dir, "runs.jsonl");
@@ -85,6 +270,8 @@ describe("G8 — current model expectation artifacts", () => {
       else if (kind === "missing runs.jsonl") rmSync(runs);
       else if (kind === "runs.jsonl is a directory") { rmSync(runs); mkdirSync(runs); }
       else if (kind === "unreadable runs.jsonl") chmodSync(runs, 0o000);
+      else if (kind === "missing summary.json") rmSync(join(dir, "summary.json"));
+      else if (kind === "invalid summary.json") writeFileSync(join(dir, "summary.json"), '{"stitchedOos":{"maxDrawdown":-1}}');
       else writeFileSync(runs, "");
       const failed = await f.run();
       expect(failed.evaluated).toContain("G8");
@@ -94,6 +281,7 @@ describe("G8 — current model expectation artifacts", () => {
       expect(episodeTransitions(first.state, await f.run(), NOW + HOUR).events).toEqual([]);
       rmSync(dir, { recursive: true, force: true }); mkdirSync(dir);
       writeFileSync(runs, "{}\n");
+      writeFileSync(join(dir, "summary.json"), JSON.stringify({ stitchedOos: { maxDrawdown: 0.2 } }));
       const clear = episodeTransitions(first.state, await f.run(), NOW + 2 * HOUR);
       expect(clear.events).toEqual([expect.stringContaining("CLEARED G8:momentum_stocks")]);
       expect(episodeTransitions(clear.state, await f.run(), NOW + 3 * HOUR).events).toEqual([]);

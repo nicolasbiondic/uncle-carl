@@ -381,6 +381,9 @@ export interface VenueAdapter {
   prices(symbols: readonly string[]): Promise<Record<string, number>>;
   /** Idempotent by clientOrderId: a retry with the same id must never duplicate an order. */
   submit(order: OrderIntent, clientOrderId: string): Promise<OrderResult>;
+  /** The execution session's UNADJUSTED open per symbol, when the venue offers it cheaply at submission
+   *  time (Q7 V1 execution record; a missing symbol = not available, journaled as null). Optional. */
+  sessionOpens?(symbols: readonly string[], session: SessionDate): Promise<Record<string, number>>;
   /** Make the venue's stop orders for these symbols match `stops` exactly (D3 with stops); optional. */
   syncStops?(stops: readonly StopLevel[], positions: readonly Position[]): Promise<void>;
   /** Cutover: cancel the resting protective stops the INCUMBENT engine armed on these symbols

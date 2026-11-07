@@ -19,7 +19,7 @@ import {
   SCORECARD_ENTITIES, MODEL_START, type ScorecardEntityDef,
   readDailyMarks, readTrades, marksToDailyReturns, maxDrawdown, olsAlphaBeta,
   percentile, mulberry32, blockBootstrapBand, classifyBand,
-  loadOosDailyReturns, clearArtifactCache, computeExpectationBand,
+  loadOosDailyReturns, clearArtifactCache, computeExpectationBand, freezeExceptionStatus,
   computeWindowMetrics, computeVersionRecords, computeScorecard, computeRollingExpectationBand, bandEpisodeTransitions,
   formatScorecardDigestLines, type DailyMark, type ScorecardWindowMetrics,
   SELECTION_BIAS_HAIRCUT, selectionBiasDrift, expectationBandReadings, sleeveExpectationArtifacts,
@@ -288,6 +288,7 @@ describe("blockBootstrapBand", () => {
 
   test("percentiles are ordered and maxDD non-negative", () => {
     const b = blockBootstrapBand(oos, 40, {})!;
+    expect(b.cumReturn.p1).toBeLessThanOrEqual(b.cumReturn.p5);
     expect(b.cumReturn.p5).toBeLessThanOrEqual(b.cumReturn.p50);
     expect(b.cumReturn.p50).toBeLessThanOrEqual(b.cumReturn.p95);
     expect(b.maxDD.p5).toBeGreaterThanOrEqual(0);
@@ -471,6 +472,9 @@ describe("rolling band — last 20 completed grid sessions, not the current vers
       const e = sc.entities.find(e => e.id === entity.id)!;
       const b = e.rollingBand!;
       expect(b.horizonSessions).toBe(20);
+      expect(freezeExceptionStatus(b)).toBe("below");
+      expect(freezeExceptionStatus({ ...b, liveCumReturnPct: b.cumReturnPct!.p1 })).toBe("within");
+      expect(freezeExceptionStatus({ ...b, liveCumReturnPct: (b.cumReturnPct!.p1 + b.cumReturnPct!.p5) / 2 })).toBe("within");
       expect(b.status).toBe("below");
       expect(b.modelVersion).toBe(currentModelVersion(entity.id)!.id);
       expect(b.artifactDir).toBe(dir);
@@ -486,6 +490,7 @@ describe("rolling band — last 20 completed grid sessions, not the current vers
       for (const removed of [5, 20]) {
         const gap = computeRollingExpectationBand(entity, marks.filter((_, i) => i !== removed), now, artifacts);
         expect(gap.status).toBe("insufficient_data");
+        expect(freezeExceptionStatus(gap)).toBe("insufficient_data");
         expect(gap.liveCumReturnPct).toBeNull();
       }
     } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
@@ -540,6 +545,7 @@ describe("selection-bias haircut", () => {
       const raw = computeExpectationBand("momentum_stocks", win(0), arts, {}, {});
       const legacy = blockBootstrapBand(loadOosDailyReturns(arts.momentum_stocks)!, 40, {})!;
       expect(raw.cumReturnPct!.p5).toBe(legacy.cumReturn.p5 * 100);
+      expect(raw.cumReturnPct!.p1).toBe(legacy.cumReturn.p1 * 100);
       expect(raw.selectionBias).toBeNull();
       const memoBefore = [...loadOosDailyReturns(arts.momentum_stocks)!];
 
@@ -547,6 +553,8 @@ describe("selection-bias haircut", () => {
       const adj = computeExpectationBand("momentum_stocks", win(0), arts, {}, haircut);
       expect(adj.selectionBias!.dailyDrift).toBeCloseTo(selectionBiasDrift(oos, 1.5, 252), 15);
       expect(adj.cumReturnPct!.p5).toBeLessThan(raw.cumReturnPct!.p5);
+      const adjustedSample = memoBefore.map(r => r - selectionBiasDrift(memoBefore, 1.5, 252));
+      expect(adj.cumReturnPct!.p1).toBe(blockBootstrapBand(adjustedSample, 40)!.cumReturn.p1 * 100);
       expect(adj.cumReturnPct!.p50).toBeLessThan(raw.cumReturnPct!.p50);
       expect(adj.maxDDPct!.p50).toBeGreaterThanOrEqual(raw.maxDDPct!.p50);
       // The loader's memo still holds the artifact's own returns.
@@ -573,7 +581,7 @@ describe("expectationBandReadings — what the SleeveGovernor reads", () => {
     const band = (status: any, p5: number | null) => ({
       status, reason: null, artifactDir: "x", manifest: "m", modelStart: "2026-09-23", horizonSessions: 10,
       liveCumReturnPct: -8.48, liveMaxDrawdownPct: 8.48,
-      cumReturnPct: p5 == null ? null : { p5, p50: 0, p95: 20 }, maxDDPct: null, bootstrap: null, selectionBias: null,
+      cumReturnPct: p5 == null ? null : { p1: p5 - 1, p5, p50: 0, p95: 20 }, maxDDPct: null, bootstrap: null, selectionBias: null,
     });
     const sc: any = {
       generatedAt: 0, benchmarksAvailable: true, notes: [],
@@ -632,6 +640,11 @@ describe("computeScorecard readonly", () => {
       ro.close();
 
       expect(sc.entities.length).toBe(6);
+      expect(sc.notes.join("\n")).toContain("sin actividades INT desde 2026-09-01");
+      expect(sc.notes.join("\n")).toContain("6,5% anual de interés de margen (E1: $18.198 entre folds)");
+      expect(sc.notes.join("\n")).toContain("sin actividades DIV desde 2026-09-01");
+      expect(sc.notes.join("\n")).toContain("precios ajustados por dividendos");
+      expect(sc.notes.join("\n")).toContain("FEE regulatorias (−$17,07)");
       const ms = sc.entities.find(e => e.id === "momentum_stocks")!;
       expect(ms.windows.map(w => w.window)).toEqual(["model", "30d", "90d", "v8"]);
       const w30 = ms.windows.find(w => w.window === "30d")!;

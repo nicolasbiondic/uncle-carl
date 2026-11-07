@@ -11,7 +11,7 @@
 // ══════════════════════════════════════════════
 
 import { Database } from "bun:sqlite";
-import { computeScorecard, openHistoricalReadonly, type EntityScorecard, type ScorecardWindowMetrics } from "../src/portfolio/scorecard";
+import { computeScorecard, openHistoricalReadonly, PAPER_BACKTEST_CAVEATS, type EntityScorecard, type ScorecardWindowMetrics } from "../src/portfolio/scorecard";
 
 function arg(name: string, def: string): string {
   const i = process.argv.indexOf(`--${name}`);
@@ -81,7 +81,7 @@ function printEntity(e: EntityScorecard): void {
     if (b.cumReturnPct) {
       console.log(
         `banda ${label} (h=${b.horizonSessions} sesiones, artefacto ${b.manifest}): ` +
-        `ret p5/p50/p95 = ${f(b.cumReturnPct.p5, 2, "%")} / ${f(b.cumReturnPct.p50, 2, "%")} / ${f(b.cumReturnPct.p95, 2, "%")} · ` +
+        `ret p1/p5/p50/p95 = ${f(b.cumReturnPct.p1, 2, "%")} / ${f(b.cumReturnPct.p5, 2, "%")} / ${f(b.cumReturnPct.p50, 2, "%")} / ${f(b.cumReturnPct.p95, 2, "%")} · ` +
         `maxDD p5/p50/p95 = ${f(b.maxDDPct!.p5, 2, "%")} / ${f(b.maxDDPct!.p50, 2, "%")} / ${f(b.maxDDPct!.p95, 2, "%")} · ` +
         `vivo ret ${f(b.liveCumReturnPct, 2, "%")} / DD ${f(b.liveMaxDrawdownPct, 2, "%")} → ESTADO: ${b.status.toUpperCase()}`
       );
@@ -98,6 +98,7 @@ function printEntity(e: EntityScorecard): void {
 }
 
 console.log(`Scorecard · db=${dbPath} · hist=${histPath}${hist ? "" : " (NO DISPONIBLE — benchmarks vacíos)"} · generado ${new Date(sc.generatedAt).toISOString()}`);
+for (const caveat of PAPER_BACKTEST_CAVEATS) console.log(` ⚠ ${caveat}`);
 for (const e of sc.entities) printEntity(e);
 console.log("\nNotas:");
-for (const n of sc.notes) console.log(` • ${n}`);
+for (const n of sc.notes.filter(n => !PAPER_BACKTEST_CAVEATS.includes(n))) console.log(` • ${n}`);

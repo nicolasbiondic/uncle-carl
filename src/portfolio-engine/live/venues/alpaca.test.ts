@@ -377,3 +377,20 @@ describe("releaseLegacyStops / Reg-T guard (executor surface)", () => {
     expect((await mk(-5).submit(intent(), "id6")).status).toBe("insufficient_buying_power"); // margin call: blocks
   });
 });
+
+describe("sessionOpens (Q7 V1 execution record)", () => {
+  test("the snapshot's daily bar gives the session's RAW open; another ET date, a bad value or a failure leave the symbol out; no getSnapshot → {}", async () => {
+    const snaps: Record<string, any> = {
+      SPY: { DailyBar: { OpenPrice: 512.34, Timestamp: "2026-10-20T13:30:00Z" } },   // 09:30 ET of the session
+      TLT: { DailyBar: { OpenPrice: 90.5, Timestamp: "2026-10-19T13:30:00Z" } },     // yesterday's bar (pre-open / holiday)
+      GLD: { DailyBar: { OpenPrice: 0, Timestamp: "2026-10-20T13:30:00Z" } },
+      SH: { DailyBar: null },
+    };
+    const client = Object.assign(fakeClient(), {
+      getSnapshot: async (s: string) => { if (s === "QQQ") throw new Error("429"); return snaps[s]; },
+    });
+    const venue = new AlpacaVenue(fakeExecutor(), client, { sleep: async () => {} });
+    expect(await venue.sessionOpens(["SPY", "TLT", "GLD", "SH", "QQQ", "SPY"], "2026-10-20")).toEqual({ SPY: 512.34 });
+    expect(await new AlpacaVenue(fakeExecutor(), fakeClient(), { sleep: async () => {} }).sessionOpens(["SPY"], "2026-10-20")).toEqual({});
+  });
+});

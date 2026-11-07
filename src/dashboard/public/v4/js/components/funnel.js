@@ -32,6 +32,12 @@ const BLOCK_LABELS = () => ({
   breakout_long_close_failed: t("close failed", "cierre fallido"),
   breakout_short_close_failed: t("close failed", "cierre fallido"),
   idle_overlay_close_failed: t("close failed", "cierre fallido"),
+  // Portfolio-engine skip codes (Q7 V1, 2026-11-07: one decision_passes row per completed live pass).
+  risk_engine_halted: t("risk brake", "freno de riesgo"),
+  risk_engine_reducing: t("risk brake", "freno de riesgo"),
+  max_hold_close_incomplete: t("close incomplete", "cierre incompleto"),
+  rejected: t("rejected", "rechazada"),
+  session_ended: t("session ended", "sesión terminada"),
 });
 
 function accountLabel(id) {

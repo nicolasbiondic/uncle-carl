@@ -4,12 +4,12 @@
 // in-memory historical.db. No broker, no network.
 
 import { describe, test, expect, beforeAll, beforeEach } from "bun:test";
-import { countExecutedOrders, getDB, PORTFOLIO_ENGINE_STRATEGY } from "../../db/database";
+import { countExecutedOrders, getDB, getDecisionPassSummary, PORTFOLIO_ENGINE_STRATEGY } from "../../db/database";
 import { makeTestDb, seedOpenTrade } from "../../test-support/db";
 import { PortfolioEngine, HEARTBEAT_GRACE_TICKS, type PortfolioEngineOptions } from "./PortfolioEngine";
 import { HeartbeatRegistry } from "../../ops/heartbeat";
 import { HistoricalPriceView } from "./priceView";
-import { getPortfolioDecision, latestPortfolioMemory, listPortfolioDecisions, savePortfolioDecision } from "./persistence";
+import { getPortfolioDecision, inferOrderLabel, latestPortfolioMemory, listPortfolioDecisions, savePortfolioDecision } from "./persistence";
 import { portfolioClientOrderId } from "./clientOrderId";
 import { PORTFOLIO_REBALANCE_CLOSE_REASON, PORTFOLIO_RECONCILED_CLOSE_REASON, loadSleeveRows } from "./rows";
 import { FakeVenue, XASSET, CRYPTO_STOP, fixedDecide, makeHistDb, weekdaySessions } from "./testSupport";
@@ -50,9 +50,30 @@ function rows() { return loadSleeveRows(SLEEVE); }
 function row(symbol: string) {
   return getDB().prepare(`SELECT * FROM trades WHERE account_id = ? AND symbol = ? ORDER BY entry_time DESC LIMIT 1`).get(SLEEVE, symbol) as any;
 }
+function resetState() { getDB().exec("DELETE FROM trade_realized_legs; DELETE FROM trades; DELETE FROM portfolio_decisions; DELETE FROM activity_log; DELETE FROM decision_passes;"); }
+function passes() { return getDB().prepare(`SELECT * FROM decision_passes WHERE account_id = ? ORDER BY id`).all(SLEEVE) as any[]; }
+
+// ── Q7 V1 (2026-11-07) fault injection: a crash EXACTLY between the book write and the journal write ──
+// A BEFORE UPDATE trigger on portfolio_decisions aborts the journal write while `whenSql` (a predicate
+// on the book) holds: the rows have just been written, the order is about to be marked applied. With
+// the two writes in one transaction the abort rolls the book back too; with the old code the rows stayed
+// and the resume applied the venue's duplicate-id answer a second time.
+function crashBetweenWrites(whenSql: string): () => void {
+  getDB().exec(`CREATE TRIGGER crash_between_writes BEFORE UPDATE ON portfolio_decisions WHEN (${whenSql})
+    BEGIN SELECT RAISE(ABORT, 'crash between book and journal'); END;`);
+  return () => getDB().exec("DROP TRIGGER IF EXISTS crash_between_writes");
+}
+function bookSnapshot() {
+  return getDB().prepare(`SELECT symbol, status, quantity, entry_price, pnl, close_reason, partial_realized_native, partial_closed_contracts
+    FROM trades WHERE account_id = ? ORDER BY symbol, entry_time, id`).all(SLEEVE);
+}
+function legsSnapshot() {
+  return getDB().prepare(`SELECT t.symbol, l.quantity, l.entry_price, l.exit_price, l.realized_native, l.source
+    FROM trade_realized_legs l JOIN trades t ON t.id = l.trade_id WHERE t.account_id = ? ORDER BY l.id`).all(SLEEVE);
+}
 
 beforeAll(() => { makeTestDb(); });
-beforeEach(() => { getDB().exec("DELETE FROM trades; DELETE FROM portfolio_decisions; DELETE FROM activity_log;"); });
+beforeEach(() => { getDB().exec("DROP TRIGGER IF EXISTS crash_between_writes"); resetState(); });
 
 describe("first rebalance (empty book)", () => {
   test("buys to the target with deterministic ids, one PORTFOLIO row per symbol, decision persisted as submitted", async () => {
@@ -290,6 +311,40 @@ describe("MAX_HOLD with the real Alpaca venue", () => {
     expect(getDB().query("SELECT status, close_reason FROM trades WHERE id='expired'").get()).toEqual({ status: "closed", close_reason: "MAX_HOLD" });
     expect((await e.runSession(WINDOW)).status).toBe("already_done");
     expect(sent).toHaveLength(3);
+  });
+
+  test("Q7 V1 atomic apply: a crash between the first leg's row write and its journal write persists nothing; the resume applies that leg once, then -r1 and the rebuy; book and legs equal a clean run", async () => {
+    // Clean run first: the reference book.
+    {
+      const { venue } = setup("partial");
+      expect((await engine(venue, { config, decide: coreDecide }).runSession(WINDOW)).status).toBe("submitted");
+    }
+    const clean = { book: bookSnapshot(), legs: legsSnapshot() };
+    resetState();
+    const { venue, sent, book } = setup("partial");
+    const recover = crashBetweenWrites(`(SELECT quantity FROM trades WHERE id = 'expired') < ${qty}`);
+    const rep = await engine(venue, { config, decide: coreDecide }).runSession(WINDOW);
+    expect(rep.status).toBe("failed");
+    expect(rep.note).toContain("crash between book and journal");
+    expect(sent.map(p => p.side)).toEqual(["sell"]); // the broker DID fill 1 share of it
+    expect(row("SPY")).toMatchObject({ quantity: qty, status: "open" }); // …but the book is untouched
+    expect(legsSnapshot()).toEqual([]);
+    const journal = getPortfolioDecision(SLEEVE, VERSION, SESSION)!;
+    expect(journal.status).toBe("decided");
+    expect(journal.orders.map(o => o.clientOrderId!.endsWith("-r1"))).toEqual([false, false]); // the -r1 leg was NOT journaled either
+    expect(journal.orders[0]).toMatchObject({ applied: false, result: null });
+    recover();
+    const resumed = await engine(venue, { config, decide: coreDecide }).runSession(WINDOW);
+    expect(resumed.status).toBe("resumed");
+    expect(sent.map(p => p.side)).toEqual(["sell", "sell", "buy"]); // the first id was answered by the venue's existing order, never re-created
+    expect(venue.submits.filter(s => s.clientOrderId === sent[0].client_order_id)).toHaveLength(2);
+    expect(book.size).toBe(3); // close, its -r1 remainder, rebuy: three broker orders, as in the clean run
+    expect(bookSnapshot()).toEqual(clean.book);
+    expect(legsSnapshot()).toEqual(clean.legs);
+    expect(countExecutedOrders(NOW - 1, NOW, SLEEVE)).toBe(3);
+    // Execution record: the remainder leg is its own labeled execution with the parent's decision price.
+    expect(getPortfolioDecision(SLEEVE, VERSION, SESSION)!.orders.map(o => [o.label, o.decisionPrice]))
+      .toEqual([["max_hold_close", 500], ["retry", 500], ["max_hold_rebuy", 500]]);
   });
 
   test("ambiguous retry fill survives restart without reapplying the first fill or selling twice", async () => {
@@ -993,5 +1048,309 @@ describe("held-quantity sell rejections are retried within the session", () => {
     const rep = await mk(venue).runSession(WINDOW);
     expect(rep.status).toBe("submitted");
     expect((getDB().prepare(`SELECT message FROM activity_log WHERE account_id = ?`).all(SLEEVE) as any[]).map(r => r.message).join("\n")).toContain("released 1 incumbent stop order(s)");
+  });
+});
+
+describe("atomic fill application (Q7 V1): book + journal in one transaction", () => {
+  // Every path that applies a fill goes through PortfolioEngine.applyFill; the -r1 remainder path is
+  // covered in "MAX_HOLD with the real Alpaca venue" above. A crash between the two writes used to leave
+  // the row written and the order unapplied: the resume re-sent the same client id, the venue answered
+  // with the already-filled order and the fill was applied twice.
+  const SPY_ROW_OPEN = `EXISTS (SELECT 1 FROM trades WHERE account_id = '${SLEEVE}' AND symbol = 'SPY' AND status = 'open')`;
+
+  test("buy: nothing half-persisted after the crash; the resume applies the same client id exactly once", async () => {
+    const venue = new FakeVenue();
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    const recover = crashBetweenWrites(SPY_ROW_OPEN);
+    const rep = await engine(venue, { decide: fixedDecide({ SPY: 0.5 }) }).runSession(WINDOW);
+    expect(rep.status).toBe("failed");
+    expect(rep.note).toContain("crash between book and journal");
+    expect(venue.positions_.find(p => p.symbol === "SPY")!.qty).toBeCloseTo(10, 9); // the venue filled
+    expect(rows()).toEqual([]);                                                        // the book did not move
+    const dec = getPortfolioDecision(SLEEVE, VERSION, SESSION)!;
+    expect(dec.status).toBe("decided");
+    expect(dec.orders[0]).toMatchObject({ applied: false, result: null });
+    expect(dec.note).toContain("resume pending");
+    recover();
+    const rep2 = await engine(venue, { decide: fixedDecide({ SPY: 0.5 }) }).runSession(WINDOW);
+    expect(rep2.status).toBe("resumed");
+    const cid = portfolioClientOrderId(SLEEVE, SESSION, "SPY");
+    expect(venue.submits.map(s => s.clientOrderId)).toEqual([cid, cid]);               // same id, venue dedups
+    expect(venue.positions_.find(p => p.symbol === "SPY")!.qty).toBeCloseTo(10, 9);
+    expect(row("SPY").quantity).toBeCloseTo(10, 9);                                    // applied ONCE, not 20
+    expect(getPortfolioDecision(SLEEVE, VERSION, SESSION)!.orders[0]).toMatchObject({ applied: true, result: { filledQty: 10 } });
+    expect(countExecutedOrders(NOW - 1, NOW, SLEEVE)).toBe(1);
+  });
+
+  test("sell (partial trim with a realized leg): quantities and trade_realized_legs equal a clean run", async () => {
+    const seed = () => {
+      seedOpenTrade("lot", SLEEVE, { symbol: "SPY", strategy: PORTFOLIO_ENGINE_STRATEGY, entryPrice: 500, quantity: 20, entryTime: NOW - 86_400_000 });
+      const venue = new FakeVenue();
+      venue.positions_ = [{ symbol: "SPY", qty: 20, avgEntryPrice: 500 }];
+      venue.prices_ = { SPY: 510, TLT: 90, GLD: 200 };
+      return venue;
+    };
+    // equity = 10 000 + 20 × 10 = 10 200; target 0.5 → 10 shares: a SELL of 10 realizing +100.
+    const decide = () => fixedDecide({ SPY: 0.5 });
+    expect((await engine(seed(), { decide: decide() }).runSession(WINDOW)).status).toBe("submitted");
+    const clean = { book: bookSnapshot(), legs: legsSnapshot() };
+    expect(clean.legs).toEqual([{ symbol: "SPY", quantity: 10, entry_price: 500, exit_price: 510, realized_native: 100, source: "fill" }]);
+    resetState();
+    const venue = seed();
+    const recover = crashBetweenWrites(`(SELECT quantity FROM trades WHERE id = 'lot') < 20`);
+    expect((await engine(venue, { decide: decide() }).runSession(WINDOW)).status).toBe("failed");
+    expect(venue.positions_.find(p => p.symbol === "SPY")!.qty).toBeCloseTo(10, 9); // venue sold 10
+    expect(row("SPY")).toMatchObject({ quantity: 20, partial_realized_native: 0 });  // row untouched
+    expect(legsSnapshot()).toEqual([]);                                              // no half-written leg
+    recover();
+    expect((await engine(venue, { decide: decide() }).runSession(WINDOW)).status).toBe("resumed");
+    expect(venue.submits).toHaveLength(2);
+    expect(new Set(venue.submits.map(s => s.clientOrderId)).size).toBe(1);
+    expect(venue.positions_.find(p => p.symbol === "SPY")!.qty).toBeCloseTo(10, 9);
+    expect(bookSnapshot()).toEqual(clean.book);
+    expect(legsSnapshot()).toEqual(clean.legs); // ONE leg of 10, not two
+  });
+
+  test("stale closes-only pass: the MAX_HOLD close survives the crash and is applied once on the next stale tick", async () => {
+    const config: VolManagedConfig = { kind: "volManaged", universe: ["SPY"], inceptionGuardBars: 20, volLookback: 20, covLookback: 20,
+      portfolioVolTarget: 0.15, annualization: 252, perAssetCap: 1, maxGross: 1, maxHoldSessions: 5, maxHoldStagger: true };
+    const seed = () => {
+      seedOpenTrade("lot", SLEEVE, { symbol: "SPY", strategy: PORTFOLIO_ENGINE_STRATEGY, entryPrice: 500, quantity: 4, entryTime: Date.parse("2026-10-12T14:00:00Z") });
+      const venue = new FakeVenue();
+      venue.positions_ = [{ symbol: "SPY", qty: 4, avgEntryPrice: 500 }];
+      venue.prices_ = { SPY: 510 };
+      return venue;
+    };
+    const stale = () => histDb("2026-10-16", ["SPY"]);
+    expect((await engine(seed(), { config, decide: coreDecide }, stale()).runSession(WINDOW)).status).toBe("skipped_stale");
+    const clean = bookSnapshot();
+    expect(clean).toMatchObject([{ status: "closed", close_reason: "MAX_HOLD", pnl: 40 }]);
+    resetState();
+    const venue = seed();
+    const recover = crashBetweenWrites(`(SELECT status FROM trades WHERE id = 'lot') = 'closed'`);
+    expect((await engine(venue, { config, decide: coreDecide }, stale()).runSession(WINDOW)).status).toBe("failed");
+    expect(venue.positions_).toEqual([]);                                   // the venue closed it
+    expect(row("SPY")).toMatchObject({ status: "open", quantity: 4 });       // the row did not
+    const rec = getPortfolioDecision(SLEEVE, VERSION, SESSION)!;
+    expect(rec.status).toBe("skipped_stale");
+    expect(rec.orders[0]).toMatchObject({ applied: false, result: null });
+    recover();
+    expect((await engine(venue, { config, decide: coreDecide }, stale()).runSession(WINDOW)).status).toBe("skipped_stale");
+    const cid = portfolioClientOrderId(SLEEVE, SESSION, "SPY", "stale-close");
+    expect(venue.submits.map(s => s.clientOrderId)).toEqual([cid, cid]);
+    expect(bookSnapshot()).toEqual(clean);
+    expect(getPortfolioDecision(SLEEVE, VERSION, SESSION)!.orders).toHaveLength(1);
+  });
+
+  test("emergency 'marked at last close' (fill without a price): the mark is atomic with the journal too", async () => {
+    const venue = new FakeVenue();
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    const seen = new Map<string, any>();
+    venue.submit = async (order, clientOrderId) => {
+      venue.submits.push({ order, clientOrderId });
+      if (seen.has(clientOrderId)) return seen.get(clientOrderId);
+      venue.positions_.push({ symbol: order.symbol, qty: order.qty, avgEntryPrice: 500 });
+      const r = { ok: true, filledQty: order.qty, avgPrice: null, status: "filled", brokerOrderId: "b-1", error: "no filled_avg_price in the venue's answer" };
+      seen.set(clientOrderId, r);
+      return r;
+    };
+    const recover = crashBetweenWrites(SPY_ROW_OPEN);
+    expect((await engine(venue, { decide: fixedDecide({ SPY: 0.5 }) }).runSession(WINDOW)).status).toBe("failed");
+    expect(rows()).toEqual([]);
+    recover();
+    expect((await engine(venue, { decide: fixedDecide({ SPY: 0.5 }) }).runSession(WINDOW)).status).toBe("resumed");
+    expect(venue.submits).toHaveLength(2);
+    const r = row("SPY");
+    expect(r.quantity).toBeCloseTo(10, 9);
+    expect(r.entry_price).toBe(399); // makeHistDb: close = 100 + i over 300 sessions → the last close, not the venue price
+    expect(getDB().prepare(`SELECT COUNT(*) c FROM trades WHERE account_id = ? AND symbol = 'SPY'`).get(SLEEVE)).toEqual({ c: 1 });
+  });
+});
+
+describe("execution record in the journal (Q7 V1): label, decisionPrice, sessionOpenRaw, submittedAt", () => {
+  const maxHold: VolManagedConfig = { kind: "volManaged", universe: ["SPY"], inceptionGuardBars: 20, volLookback: 20, covLookback: 20,
+    portfolioVolTarget: 0.15, annualization: 252, perAssetCap: 1, maxGross: 1, maxHoldSessions: 5, maxHoldStagger: true };
+
+  test("rebalance orders: label by side, the pass's reference price, the venue's RAW session open when offered, the submission time", async () => {
+    seedOpenTrade("tlt", SLEEVE, { symbol: "TLT", strategy: PORTFOLIO_ENGINE_STRATEGY, entryPrice: 90, quantity: 100, entryTime: NOW - 86_400_000 });
+    const venue = new FakeVenue();
+    venue.positions_ = [{ symbol: "TLT", qty: 100, avgEntryPrice: 90 }];
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    const asked: string[][] = [];
+    venue.sessionOpens = async (symbols, session) => { asked.push([session, ...symbols]); return { SPY: 498.5 }; }; // TLT: no bar today
+    const rep = await engine(venue, { decide: fixedDecide({ SPY: 0.5, TLT: 0.3 }) }).runSession(WINDOW);
+    expect(rep.status).toBe("submitted");
+    const [sell, buy] = getPortfolioDecision(SLEEVE, VERSION, SESSION)!.orders;
+    expect(sell).toMatchObject({ intent: { symbol: "TLT", side: "sell" }, label: "rebalance_sell", decisionPrice: 90, sessionOpenRaw: null, submittedAt: NOW });
+    expect(buy).toMatchObject({ intent: { symbol: "SPY", side: "buy" }, label: "rebalance_buy", decisionPrice: 500, sessionOpenRaw: 498.5, submittedAt: NOW });
+    expect(asked).toEqual([[SESSION, "TLT", "SPY"]]); // one venue read per submit pass, pending symbols only
+    expect(buy.result).toMatchObject({ brokerOrderId: expect.any(String), filledQty: 10, avgPrice: 500 });
+  });
+
+  test("the session opens are read AFTER the orders went out: recording them never delays an order", async () => {
+    seedOpenTrade("tlt", SLEEVE, { symbol: "TLT", strategy: PORTFOLIO_ENGINE_STRATEGY, entryPrice: 90, quantity: 100, entryTime: NOW - 86_400_000 });
+    const venue = new FakeVenue();
+    venue.positions_ = [{ symbol: "TLT", qty: 100, avgEntryPrice: 90 }];
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    const calls: string[] = [];
+    const submit = venue.submit.bind(venue);
+    venue.submit = async (intent, id) => { calls.push(`submit ${intent.symbol}`); return submit(intent, id); };
+    venue.sessionOpens = async () => { calls.push("sessionOpens"); return { SPY: 498.5, TLT: 90.2 }; };
+    expect((await engine(venue, { decide: fixedDecide({ SPY: 0.5, TLT: 0.3 }) }).runSession(WINDOW)).status).toBe("submitted");
+    expect(calls).toEqual(["submit TLT", "submit SPY", "sessionOpens"]);
+    expect(getPortfolioDecision(SLEEVE, VERSION, SESSION)!.orders.map(o => o.sessionOpenRaw)).toEqual([90.2, 498.5]);
+  });
+
+  test("a venue without sessionOpens journals null (declared), and the fields never block an order", async () => {
+    const venue = new FakeVenue();
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    expect((await engine(venue, { decide: fixedDecide({ SPY: 0.5 }) }).runSession(WINDOW)).status).toBe("submitted");
+    expect(getPortfolioDecision(SLEEVE, VERSION, SESSION)!.orders[0]).toMatchObject({ label: "rebalance_buy", decisionPrice: 500, sessionOpenRaw: null, submittedAt: NOW });
+  });
+
+  test("a venue whose sessionOpens throws: warned, journaled null, the order still goes", async () => {
+    const venue = new FakeVenue();
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    venue.sessionOpens = async () => { throw new Error("snapshot 429"); };
+    expect((await engine(venue, { decide: fixedDecide({ SPY: 0.5 }) }).runSession(WINDOW)).status).toBe("submitted");
+    expect(getPortfolioDecision(SLEEVE, VERSION, SESSION)!.orders[0]).toMatchObject({ applied: true, sessionOpenRaw: null, result: { filledQty: 10 } });
+  });
+
+  test("MAX_HOLD pair: close → max_hold_close, rebuy → max_hold_rebuy; both carry the decision price", async () => {
+    seedOpenTrade("lot", SLEEVE, { symbol: "SPY", strategy: PORTFOLIO_ENGINE_STRATEGY, entryPrice: 500, quantity: 4, entryTime: Date.parse("2026-10-12T14:00:00Z") });
+    const venue = new FakeVenue();
+    venue.positions_ = [{ symbol: "SPY", qty: 4, avgEntryPrice: 500 }];
+    venue.prices_ = { SPY: 510 };
+    expect((await engine(venue, { config: maxHold, decide: coreDecide }, histDb(AS_OF, ["SPY"])).runSession(WINDOW)).status).toBe("submitted");
+    const orders = getPortfolioDecision(SLEEVE, VERSION, SESSION)!.orders;
+    expect(orders.map(o => [o.label, o.intent.maxHold, o.decisionPrice])).toEqual([["max_hold_close", "close", 510], ["max_hold_rebuy", "rebuy", 510]]);
+    expect(orders.every(o => o.submittedAt === NOW && o.sessionOpenRaw === null)).toBe(true);
+  });
+
+  test("stale closes-only pass: label stale_close", async () => {
+    seedOpenTrade("lot", SLEEVE, { symbol: "SPY", strategy: PORTFOLIO_ENGINE_STRATEGY, entryPrice: 500, quantity: 4, entryTime: Date.parse("2026-10-12T14:00:00Z") });
+    const venue = new FakeVenue();
+    venue.positions_ = [{ symbol: "SPY", qty: 4, avgEntryPrice: 500 }];
+    venue.prices_ = { SPY: 510 };
+    venue.sessionOpens = async () => ({ SPY: 507 });
+    expect((await engine(venue, { config: maxHold, decide: coreDecide }, histDb("2026-10-16", ["SPY"])).runSession(WINDOW)).status).toBe("skipped_stale");
+    expect(getPortfolioDecision(SLEEVE, VERSION, SESSION)!.orders[0]).toMatchObject({ label: "stale_close", decisionPrice: 510, sessionOpenRaw: 507, submittedAt: NOW });
+  });
+
+  test("older journal rows without the fields still read, and inferOrderLabel derives the label from what they carry", () => {
+    const key = { accountId: SLEEVE, session: SESSION };
+    const base = { symbol: "SPY", qty: 1, notional: 500, targetWeight: 0, currentWeight: 0, reduceOnly: true } as const;
+    expect(inferOrderLabel({ intent: { ...base, side: "sell", maxHold: "close" }, clientOrderId: portfolioClientOrderId(SLEEVE, SESSION, "SPY", "close") }, key)).toBe("max_hold_close");
+    expect(inferOrderLabel({ intent: { ...base, side: "sell", maxHold: "close" }, clientOrderId: portfolioClientOrderId(SLEEVE, SESSION, "SPY", "stale-close") }, key)).toBe("stale_close");
+    expect(inferOrderLabel({ intent: { ...base, side: "sell", maxHold: "close" }, clientOrderId: `${portfolioClientOrderId(SLEEVE, SESSION, "SPY", "close")}-r1` }, key)).toBe("retry");
+    expect(inferOrderLabel({ intent: { ...base, side: "buy", maxHold: "rebuy", reduceOnly: false }, clientOrderId: portfolioClientOrderId(SLEEVE, SESSION, "SPY", "rebuy") }, key)).toBe("max_hold_rebuy");
+    expect(inferOrderLabel({ intent: { ...base, side: "buy", reduceOnly: false }, clientOrderId: portfolioClientOrderId(SLEEVE, SESSION, "SPY") }, key)).toBe("rebalance_buy");
+    expect(inferOrderLabel({ intent: { ...base, side: "sell" }, clientOrderId: null }, key)).toBe("rebalance_sell");
+    expect(inferOrderLabel({ intent: { ...base, side: "sell" }, clientOrderId: null, label: "max_hold_close" }, key)).toBe("max_hold_close"); // its own label wins
+    // A pre-2026-11-07 journal (no label, no prices, no submittedAt) is read back untouched.
+    savePortfolioDecision({
+      accountId: SLEEVE, strategyVersion: VERSION, session: SESSION, asOf: AS_OF, mode: "live", status: "submitted", equity: 10_000,
+      book: [], weights: {}, stops: [], memory: {}, diagnostics: {},
+      orders: [{ intent: { ...base, side: "buy", reduceOnly: false }, clientOrderId: "uc8-x-pf0000000000000000", result: { ok: true, filledQty: 1, avgPrice: 501, status: "filled" }, applied: true }],
+      note: null, decidedAt: NOW, updatedAt: NOW,
+    });
+    const o = getPortfolioDecision(SLEEVE, VERSION, SESSION)!.orders[0];
+    expect(o.label).toBeUndefined();
+    expect(o.decisionPrice).toBeUndefined();
+    expect(o.sessionOpenRaw).toBeUndefined();
+    expect(o.submittedAt).toBeUndefined();
+    expect(inferOrderLabel(o, key)).toBe("rebalance_buy");
+  });
+});
+
+describe("decision_passes telemetry (Q7 V1 / OPEN.md RW2): one row per completed live pass", () => {
+  const maxHold: VolManagedConfig = { kind: "volManaged", universe: ["SPY"], inceptionGuardBars: 20, volLookback: 20, covLookback: 20,
+    portfolioVolTarget: 0.15, annualization: 252, perAssetCap: 1, maxGross: 1, maxHoldSessions: 5, maxHoldStagger: true };
+
+  test("a submitted pass writes ONE row: universe, evaluated, signals, filled entries/exits, exposure; later ticks add none; the funnel reads it", async () => {
+    seedOpenTrade("tlt", SLEEVE, { symbol: "TLT", strategy: PORTFOLIO_ENGINE_STRATEGY, entryPrice: 90, quantity: 100, entryTime: NOW - 86_400_000 });
+    const venue = new FakeVenue();
+    venue.positions_ = [{ symbol: "TLT", qty: 100, avgEntryPrice: 90 }];
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    const e = engine(venue, { decide: fixedDecide({ SPY: 0.5, TLT: 0.3 }) });
+    expect((await e.runSession(WINDOW)).status).toBe("submitted");
+    const [p, ...rest] = passes();
+    expect(rest).toEqual([]);
+    // equity 10 000 (100 TLT × 90 = 9 000 + 1 000 cash): sell TLT to 3 000 (33.3…), buy 10 SPY → gross 8 000 / 10 000
+    expect(p).toMatchObject({ account_id: SLEEVE, ts: NOW, universe: 3, evaluated: 3, signals_long: 2, signals_short: 0, entries: 1, exits: 1,
+      blocks: "{}", block_note: null, slots_used: null, slots_total: null, signals_raw_long: 2, signals_after_gates: 2, gate_binding: "[]" });
+    expect(p.exposure_intended).toBeCloseTo(0.8, 9);
+    expect(p.exposure_real).toBeCloseTo(0.8, 9);
+    expect((await e.runSession(WINDOW)).status).toBe("already_done");
+    expect(passes()).toHaveLength(1);
+    const funnel = getDecisionPassSummary(0).find(s => s.accountId === SLEEVE)!;
+    expect(funnel).toMatchObject({ passes: 1, universe: 3, signalsLong: 2, entries: 1, exits: 1, blocks: {} });
+    expect(funnel.exposure!.latest.ratio).toBeCloseTo(1, 9);
+  });
+
+  test("a crashed pass writes nothing; its resume completes the session and writes the one row (every leg counted)", async () => {
+    const venue = new FakeVenue();
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    venue.behavior.TLT = { kind: "throw", error: "socket hang up" };
+    expect((await engine(venue).runSession(WINDOW)).status).toBe("failed");
+    expect(passes()).toEqual([]);
+    venue.behavior = {};
+    expect((await engine(venue).runSession(WINDOW)).status).toBe("resumed");
+    expect(passes()).toHaveLength(1);
+    expect(passes()[0]).toMatchObject({ entries: 2, exits: 0, signals_long: 2 });
+  });
+
+  test("a retrying pass (held-shares sell) writes nothing until the session completes", async () => {
+    seedOpenTrade("tlt", SLEEVE, { symbol: "TLT", strategy: PORTFOLIO_ENGINE_STRATEGY, entryPrice: 90, quantity: 100, entryTime: NOW - 86_400_000 });
+    const venue = new FakeVenue();
+    venue.positions_ = [{ symbol: "TLT", qty: 100, avgEntryPrice: 90 }];
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    venue.behavior.TLT = { kind: "reject", error: "insufficient qty available for order (requested: 66, available: 0)", times: 1 };
+    const e = engine(venue, { decide: fixedDecide({ SPY: 0.5, TLT: 0.3 }) });
+    expect((await e.runSession(WINDOW)).status).toBe("retrying");
+    expect(passes()).toEqual([]);
+    expect((await e.runSession(WINDOW)).status).toBe("resumed"); // the next tick finishes the journal
+    expect(passes()).toHaveLength(1);
+    expect(passes()[0]).toMatchObject({ entries: 1, exits: 1, blocks: "{}" });
+  });
+
+  test("blocks: a buy skipped by TRADING_ENABLED=false counts under trading_disabled and binds that gate; a terminal rejection counts as rejected", async () => {
+    const venue = new FakeVenue();
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    venue.behavior.TLT = { kind: "reject", error: "insufficient buying power" };
+    let enabled = false;
+    const e = engine(venue, { decide: fixedDecide({ SPY: 0.5, TLT: 0.3, GLD: 0.1 }), tradingEnabled: () => { enabled = !enabled; return enabled; } });
+    // calls alternate true/false per buy: SPY goes, TLT skipped by the kill-switch, GLD goes… order is SPY, TLT, GLD (planOrders)
+    expect((await e.runSession(WINDOW)).status).toBe("submitted");
+    const p = passes()[0];
+    const blocks = JSON.parse(p.blocks);
+    expect(blocks.trading_disabled).toBe(1);
+    expect(JSON.parse(p.gate_binding)).toEqual(["trading_disabled"]);
+    expect(p.signals_raw_long).toBe(3);
+    expect(p.signals_after_gates).toBe(2);
+    expect(p.entries + (blocks.rejected ?? 0) + blocks.trading_disabled).toBe(3);
+    expect(p.block_note).toMatch(/buy (TLT|GLD): (trading_disabled|rejected)/);
+  });
+
+  test("MAX_HOLD pair: close and rebuy are one exit and one entry of the same pass", async () => {
+    seedOpenTrade("lot", SLEEVE, { symbol: "SPY", strategy: PORTFOLIO_ENGINE_STRATEGY, entryPrice: 500, quantity: 4, entryTime: Date.parse("2026-10-12T14:00:00Z") });
+    const venue = new FakeVenue();
+    venue.positions_ = [{ symbol: "SPY", qty: 4, avgEntryPrice: 500 }];
+    venue.prices_ = { SPY: 510 };
+    expect((await engine(venue, { config: maxHold, decide: coreDecide }, histDb(AS_OF, ["SPY"])).runSession(WINDOW)).status).toBe("submitted");
+    expect(passes()).toHaveLength(1);
+    expect(passes()[0]).toMatchObject({ universe: 1, evaluated: 1, signals_long: 1, entries: 1, exits: 1 });
+  });
+
+  test("observer passes and stale skips write no row (they decide nothing live)", async () => {
+    const venue = new FakeVenue();
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    expect((await engine(venue, { mode: "observer" }).runSession(WINDOW)).status).toBe("observed");
+    expect(passes()).toEqual([]);
+    resetState();
+    seedOpenTrade("lot", SLEEVE, { symbol: "SPY", strategy: PORTFOLIO_ENGINE_STRATEGY, entryPrice: 500, quantity: 4, entryTime: Date.parse("2026-10-12T14:00:00Z") });
+    venue.positions_ = [{ symbol: "SPY", qty: 4, avgEntryPrice: 500 }];
+    expect((await engine(venue, { config: maxHold, decide: coreDecide }, histDb("2026-10-16", ["SPY"])).runSession(WINDOW)).status).toBe("skipped_stale");
+    expect(passes()).toEqual([]); // the closes-only tick is journaled on portfolio_decisions, not a funnel pass
   });
 });

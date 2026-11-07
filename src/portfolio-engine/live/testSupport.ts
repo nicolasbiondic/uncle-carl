@@ -64,6 +64,8 @@ export class FakeVenue implements VenueAdapter {
   releaseLegacyStops?: (symbols: readonly string[]) => Promise<string[] | import("../types").LegacyStopRelease>;
   mirrorFills = true;
   syncStops?: (stops: readonly StopLevel[], positions: readonly Position[]) => Promise<void>;
+  /** Scripted session RAW opens (Q7 V1 execution record); unset = the venue offers none (journaled null). */
+  sessionOpens?: (symbols: readonly string[], session: string) => Promise<Record<string, number>>;
 
   constructor(venue: VenueId = "alpaca", opts: { withStops?: boolean } = {}) {
     this.venue = venue;

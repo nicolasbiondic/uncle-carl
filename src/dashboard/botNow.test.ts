@@ -115,6 +115,15 @@ describe("bot now: states and live sources", () => {
     const f = fixture("momentum_stocks", "portfolio"); f.pass(); f.pe({ status: "failed", note: "no current data" });
     expect(f.build().portfolios[0]).toMatchObject({ state: "error", lastDecision: { note: "no current data" }, blocked: { reason: "failed" } });
   });
+  test("a portfolio engine's own decision_passes row (Q7 V1 funnel telemetry) never feeds its bot-now card: journal only", () => {
+    const f = fixture("momentum_stocks", "portfolio");
+    f.pass({ universe: 3, evaluated: 3, signals_long: 2, signals_raw_long: 2, entries: 1, exits: 1, blocks: JSON.stringify({ rejected: 1 }), block_note: "buy TLT: rejected (insufficient buying power)" });
+    f.pe({ orders_json: JSON.stringify([filled("buy", "SPY", 0, 0.5)]) });
+    const p = f.build().portfolios[0];
+    expect(p.lastDecision).toMatchObject({ at: NOW - 60_000, entries: 1, exits: 0, orders: 1, rejected: 0, signalsLong: null, note: null });
+    expect(p.blocked?.reason).toBe("market_closed"); // not the pass's block_note
+    expect(p.state).toBe("flat"); // no open rows: the pass's entries never stand in for positions
+  });
   test("momentum has no first pass if only a previous model's decision exists", () => {
     const f = fixture(); f.pass({ ts: Date.parse("2026-10-22T12:00:00Z") });
     expect(f.build().portfolios[0]).toMatchObject({ state: "waiting_first_pass", lastDecision: null });

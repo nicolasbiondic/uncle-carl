@@ -18,10 +18,11 @@ const mkdirpSync = (p: string) => require("fs").mkdirSync(p, { recursive: true }
 import {
   bootstrapMeanCI, breakEvenCostBps, calibrateSleeveCosts, computeCostCalibration,
   computeCostStats, costVsOpenBps, interpolateSharpeAt, loadArtifactCostContext,
-  readSleeveCostObservations, stopSlipBps,
-  PRICE_BASIS_BOUNDARY_MS, COST_SLEEVES,
+  notionalBucket, readPortfolioExecutions, readSleeveCostObservations, stopSlipBps, summarizePortfolioExecutions,
+  PAPER_CAVEAT, PRICE_BASIS_BOUNDARY_MS, COST_SLEEVES,
   type SleeveCostConfig,
 } from "./costCalibration";
+import { portfolioClientOrderId } from "../portfolio-engine/live/clientOrderId";
 
 const tmp = mkdtempSync(join(tmpdir(), "costcal-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -163,6 +164,47 @@ function buildTradingDb(path: string): void {
   // ── momentum_crypto_usdc: X/USDC prices off the X/USD mainnet bar ──
   trade.run("u1", "buy", null, null, null, 30015, null, 1, 0, 0, postTs, null, "open", "momentum_crypto_usdc");
   fill.run("u1", "b4", "momentum_crypto_usdc", "BTC/USDC", "buy", "crypto", 30000, 30000, 30015, 1, 0, postTs, 50, "binance", null);
+
+  // ── momentum_stocks: the portfolio engine's decision journal (Q7 V1), its ONLY execution record ──
+  db.exec(`CREATE TABLE portfolio_decisions (id INTEGER PRIMARY KEY, account_id TEXT, strategy_version TEXT, session TEXT, as_of TEXT, mode TEXT,
+    status TEXT, equity REAL, book_json TEXT, weights_json TEXT, stops_json TEXT, memory_json TEXT, diagnostics_json TEXT, orders_json TEXT,
+    note TEXT, decided_at INTEGER, updated_at INTEGER);`);
+  const journal = db.prepare(`INSERT INTO portfolio_decisions (account_id, strategy_version, session, as_of, mode, status, equity, book_json, weights_json,
+    stops_json, memory_json, diagnostics_json, orders_json, note, decided_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const S = "momentum_stocks";
+  const intent = (symbol: string, side: "buy" | "sell", qty: number, over: Record<string, unknown> = {}) =>
+    ({ symbol, side, qty, notional: qty * 500, targetWeight: side === "buy" ? 0.5 : 0, currentWeight: side === "buy" ? 0 : 0.5, reduceOnly: side === "sell", ...over });
+  const fillRes = (filledQty: number, avgPrice: number | null, status = "filled") => ({ ok: status === "filled", filledQty, avgPrice, status, brokerOrderId: `b-${filledQty}-${avgPrice}` });
+  const t = (d: string) => ET_0935(d);
+  // Session 2026-11-03 (after MODEL_START): a MAX_HOLD renewal with a partial close, its -r1 remainder, the rebuy
+  // (decision 510, raw session open 507), a rebalance partial trim of TLT (decision 90, no open from the venue),
+  // and an emergency mark (filled, no price). The ONLY trade of SPY closed MANUAL_CLOSE: the journal must not care.
+  journal.run(S, "v", "2026-11-03", "2026-11-02", "live", "submitted", 20_000, "[]", "{}", "[]", "{}", "{}", JSON.stringify([
+    { intent: intent("SPY", "sell", 4, { maxHold: "close" }), clientOrderId: portfolioClientOrderId(S, "2026-11-03", "SPY", "close"), applied: true,
+      result: fillRes(1, 509, "canceled"), filledAt: t("2026-11-03"), label: "max_hold_close", decisionPrice: 510, sessionOpenRaw: 507, submittedAt: t("2026-11-03") },
+    { intent: intent("SPY", "sell", 3, { maxHold: "close" }), clientOrderId: `${portfolioClientOrderId(S, "2026-11-03", "SPY", "close")}-r1`, applied: true,
+      result: fillRes(3, 508.5), filledAt: t("2026-11-03") + 60_000, label: "retry", decisionPrice: 510, sessionOpenRaw: 507, submittedAt: t("2026-11-03") + 60_000 },
+    { intent: intent("SPY", "buy", 4, { maxHold: "rebuy" }), clientOrderId: portfolioClientOrderId(S, "2026-11-03", "SPY", "rebuy"), applied: true,
+      result: fillRes(4, 511), filledAt: t("2026-11-03") + 120_000, label: "max_hold_rebuy", decisionPrice: 510, sessionOpenRaw: 507, submittedAt: t("2026-11-03") + 120_000 },
+    { intent: intent("TLT", "sell", 10, { targetWeight: 0.2, currentWeight: 0.3 }), clientOrderId: portfolioClientOrderId(S, "2026-11-03", "TLT"), applied: true,
+      result: fillRes(10, 89.91), filledAt: t("2026-11-03") + 10_000, label: "rebalance_sell", decisionPrice: 90, sessionOpenRaw: null, submittedAt: t("2026-11-03") + 10_000 },
+    { intent: intent("GLD", "buy", 2), clientOrderId: portfolioClientOrderId(S, "2026-11-03", "GLD"), applied: true,
+      result: { ok: true, filledQty: 2, avgPrice: null, status: "filled", error: "no filled_avg_price" }, filledAt: t("2026-11-03") + 130_000, label: "rebalance_buy", decisionPrice: 200, sessionOpenRaw: 199, submittedAt: t("2026-11-03") + 130_000 },
+    { intent: intent("SH", "buy", 50), clientOrderId: portfolioClientOrderId(S, "2026-11-03", "SH"), applied: true, skipped: "risk_engine_halted", result: null },
+  ]), null, t("2026-11-03") - 60_000, t("2026-11-03") + 200_000);
+  trade.run("spy-journal", "buy", "MANUAL_CLOSE", null, null, 500, 509, 4, 0, 0, t("2026-10-27"), t("2026-11-03"), "closed", S);
+  // Session 2026-11-04: a pre-field journal (no label/prices) — a plain rebalance buy, label inferred, no slippage measurable.
+  journal.run(S, "v", "2026-11-04", "2026-11-03", "live", "submitted", 20_000, "[]", "{}", "[]", "{}", "{}", JSON.stringify([
+    { intent: intent("TLT", "buy", 10), clientOrderId: portfolioClientOrderId(S, "2026-11-04", "TLT"), applied: true, result: fillRes(10, 90.2), filledAt: t("2026-11-04") },
+  ]), null, t("2026-11-04") - 60_000, t("2026-11-04") + 20_000);
+  // Session before MODEL_START → preModel (the model then was another execution).
+  journal.run(S, "old", "2026-10-24", "2026-10-23", "live", "submitted", 20_000, "[]", "{}", "[]", "{}", "{}", JSON.stringify([
+    { intent: intent("SPY", "buy", 1), clientOrderId: portfolioClientOrderId(S, "2026-10-24", "SPY"), applied: true, result: fillRes(1, 500), filledAt: t("2026-10-24"), label: "rebalance_buy", decisionPrice: 499 },
+  ]), null, t("2026-10-24") - 60_000, t("2026-10-24") + 20_000);
+  // An observer journal never counts.
+  journal.run(S, "obs", "2026-11-05", "2026-11-04", "observer", "observed", 20_000, "[]", "{}", "[]", "{}", "{}", JSON.stringify([
+    { intent: intent("SPY", "buy", 1), clientOrderId: null, applied: false, skipped: "observer", result: null },
+  ]), null, t("2026-11-05"), t("2026-11-05"));
   db.close();
 }
 
@@ -187,6 +229,67 @@ const roTrading = () => new Database(tradingPath, { readonly: true });
 const roHist = () => new Database(histPath, { readonly: true });
 
 const cfgOf = (sleeve: string): SleeveCostConfig => COST_SLEEVES.find(c => c.sleeve === sleeve)!;
+
+// ── Portfolio-engine journal (Q7 V1) ──────────────────────────────────────
+
+describe("readPortfolioExecutions / summarizePortfolioExecutions (the engine's journal)", () => {
+  test("notional buckets", () => {
+    expect(["<1k", "1k-5k", "5k-20k", ">20k"].map((_, i) => notionalBucket([999, 1_000, 5_000, 20_000][i]))).toEqual(["<1k", "1k-5k", "5k-20k", ">20k"]);
+  });
+
+  test("every filled leg by its OWN label (close, -r1 retry, rebuy, partial trim), slippage vs decision price and vs raw session open; the emergency mark is flagged, never measured; preModel and observer rows excluded; close_reason ignored", () => {
+    const db = roTrading();
+    try {
+      const o = readPortfolioExecutions(db, "momentum_stocks", { sinceEtDateKey: "2026-10-29" });
+      expect(o.excluded).toEqual({ emergencyMark: 1, preModel: 1 });
+      expect(o.obs.map(x => [x.session, x.symbol, x.label, x.labelInferred, x.partial])).toEqual([
+        ["2026-11-03", "SPY", "max_hold_close", false, true],
+        ["2026-11-03", "SPY", "retry", false, false],
+        ["2026-11-03", "SPY", "max_hold_rebuy", false, false],
+        ["2026-11-03", "TLT", "rebalance_sell", false, false],
+        ["2026-11-04", "TLT", "rebalance_buy", true, false],
+      ]);
+      const close = o.obs[0], retry = o.obs[1], rebuy = o.obs[2], trim = o.obs[3], legacy = o.obs[4];
+      // sell 509 vs decided 510: (510 − 509)/510 = +19.6 bps cost; vs raw open 507: (507 − 509)/507 = −39.4 bps (a saving)
+      expect(close.vsDecisionBps).toBeCloseTo(19.6078, 3);
+      expect(close.vsSessionOpenBps).toBeCloseTo(-39.448, 2);
+      expect(retry.vsDecisionBps).toBeCloseTo(29.4118, 3);
+      // buy 511 vs decided 510 = +19.6; vs open 507 = +78.9
+      expect(rebuy.vsDecisionBps).toBeCloseTo(19.6078, 3);
+      expect(rebuy.vsSessionOpenBps).toBeCloseTo(78.895, 2);
+      expect(trim).toMatchObject({ side: "sell", bucket: "<1k", sessionOpenRaw: null, vsSessionOpenBps: null });
+      expect(trim.notional).toBeCloseTo(899.1, 9);
+      expect(trim.vsDecisionBps).toBeCloseTo(10, 6);
+      expect(legacy).toMatchObject({ decisionPrice: null, vsDecisionBps: null, vsSessionOpenBps: null });
+      expect(o.obs.every(x => x.fillPx > 0)).toBe(true); // the GLD mark (no price) is not among them
+
+      const s = summarizePortfolioExecutions(o, { nBoot: 50 });
+      expect(s).toMatchObject({ n: 5, nWithSessionOpen: 3, nLabelInferred: 1, partialFills: 1, caveat: PAPER_CAVEAT, excluded: { emergencyMark: 1, preModel: 1 } });
+      expect(s.vsDecision!.n).toBe(4);
+      expect(s.vsSessionOpen!.n).toBe(3);
+      expect(Object.keys(s.byLabel).sort()).toEqual(["max_hold_close", "max_hold_rebuy", "rebalance_buy", "rebalance_sell", "retry"]);
+      expect(s.byLabel.max_hold_rebuy!.n).toBe(1);
+      expect(s.byLabel.max_hold_rebuy!.notional).toBeCloseTo(2044, 9);
+      expect(s.byLabel.max_hold_rebuy!.vsSessionOpen!.meanBps).toBeCloseTo(78.895, 2);
+      expect(Object.keys(s.bySymbol)).toEqual(["SPY", "TLT"]);
+      expect(s.bySymbol.SPY.n).toBe(3);
+      expect(s.byBucket["<1k"]!.n).toBe(3);   // the 1-share close (509), the trim (899), the legacy buy (902)
+      expect(s.byBucket["1k-5k"]!.n).toBe(2); // the -r1 remainder (1 525.5), the rebuy (2 044)
+      // Without the model floor the pre-MODEL_START leg counts.
+      expect(readPortfolioExecutions(db, "momentum_stocks").obs).toHaveLength(6);
+      expect(readPortfolioExecutions(db, "momentum_stocks", { sinceMs: ET_0935("2026-11-04") }).obs.map(x => x.session)).toEqual(["2026-11-04"]);
+      expect(readPortfolioExecutions(db, "meanrev_stocks").obs).toEqual([]);
+    } finally { db.close(); }
+  });
+
+  test("a database without portfolio_decisions yields nothing (never a throw)", () => {
+    const p = join(tmp, "nojournal.db");
+    const w = new Database(p); w.exec("CREATE TABLE x (y)"); w.close();
+    const db = new Database(p, { readonly: true });
+    try { expect(readPortfolioExecutions(db, "momentum_stocks")).toEqual({ obs: [], excluded: { emergencyMark: 0, preModel: 0 } }); }
+    finally { db.close(); }
+  });
+});
 
 // ── Readers (READONLY handles: any write in the module would throw) ──────
 
@@ -329,6 +432,27 @@ describe("calibrateSleeveCosts / computeCostCalibration", () => {
     const ctx = loadArtifactCostContext({ dir, shiftDays: 0, manifest: "m.json" });
     expect(ctx.assumed).toBeNull();
     expect(ctx.curve).toBeNull();
+  });
+
+  test("a stock sleeve with no comparable fills but a journal: measured comes from the journal vs the raw session open, the verdict says PAPER, portfolioExecution and the caveat are in the output", () => {
+    const db = roTrading(), hist = roHist();
+    try {
+      const c = calibrateSleeveCosts(db, hist, cfgOf("momentum_stocks"), null, { nBoot: 50 });
+      expect(c.excluded.preModel).toBe(1); // the fills-table pre-model row, as before
+      expect(c.measured).toMatchObject({ source: "portfolio_journal", n: 3, commissionMeanBps: 0 });
+      // sell 509 vs 507 = −39.448; retry sell 508.5 vs 507 = −29.586; rebuy 511 vs 507 = +78.895
+      expect(c.measured!.slipMeanBps).toBeCloseTo((-39.448 - 29.586 + 78.895) / 3, 2);
+      expect(c.verdict).toContain("diario del motor vs apertura cruda de sesión, PAPER");
+      expect(c.portfolioExecution!.n).toBe(5);
+      expect(c.portfolioExecution!.excluded.emergencyMark).toBe(1);
+      expect(c.caveat).toBe(PAPER_CAVEAT);
+      const meanrev = calibrateSleeveCosts(db, hist, cfgOf("meanrev_stocks"), null, { nBoot: 50 });
+      expect(meanrev.measured!.source).toBe("fills"); // the Connors-era fills still rule its headline
+      expect(meanrev.portfolioExecution).toBeNull();
+      const crypto = calibrateSleeveCosts(db, hist, cfgOf("momentum_crypto"), null, { nBoot: 50 });
+      expect(crypto.caveat).toBeNull();
+      expect(computeCostCalibration(db, hist, { artifacts: {}, nBoot: 50 }).caveat).toBe(PAPER_CAVEAT);
+    } finally { db.close(); hist.close(); }
   });
 
   test("empty DB (no comparable fills) → measured null, 'sin fills' verdict", () => {

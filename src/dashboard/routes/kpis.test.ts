@@ -174,6 +174,31 @@ describe("GET /api/funnel", () => {
     });
   });
 
+  test("a portfolio-engine pass (Q7 V1): the funnel shows it, and its live orders come from the journal alone — never double-counted", async () => {
+    setSystemTime(new Date("2026-10-12T16:00:00Z"));
+    const now = Date.now();
+    const cid = (s: string) => `uc8-momentum_sto-pf${s.padEnd(16, "0")}`;
+    const orders = [
+      { intent: { symbol: "TLT", side: "sell", qty: 10, notional: 900, targetWeight: 0.3, currentWeight: 0.4, reduceOnly: true }, clientOrderId: cid("a"), applied: true,
+        result: { ok: true, filledQty: 10, avgPrice: 90, status: "filled", brokerOrderId: "b1" }, filledAt: now - 3_000_000, label: "rebalance_sell", decisionPrice: 90, sessionOpenRaw: 89.8, submittedAt: now - 3_000_000 },
+      { intent: { symbol: "SPY", side: "buy", qty: 2, notional: 1000, targetWeight: 0.5, currentWeight: 0.4, reduceOnly: false }, clientOrderId: cid("b"), applied: true,
+        result: { ok: true, filledQty: 2, avgPrice: 500, status: "filled", brokerOrderId: "b2" }, filledAt: now - 2_900_000, label: "rebalance_buy", decisionPrice: 500, sessionOpenRaw: null, submittedAt: now - 2_900_000 },
+    ];
+    getDB().prepare(`INSERT INTO portfolio_decisions (account_id, strategy_version, session, as_of, mode, status, equity, book_json, weights_json, stops_json,
+        memory_json, diagnostics_json, orders_json, note, decided_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run("momentum_stocks", "momentum_stocks@pe", "2026-10-12", "2026-10-09", "live", "submitted", 10_000, "[]", JSON.stringify({ SPY: 0.5, TLT: 0.3 }), "[]", "{}", "{}",
+        JSON.stringify(orders), null, now - 3_100_000, now - 2_800_000);
+    // The row PortfolioEngine.recordDecisionPass writes for that pass (portfolioDecisionPassSnapshot).
+    insertDecisionPass({ accountId: "momentum_stocks", ts: now - 2_800_000, universe: 3, evaluated: 3, signalsLong: 2, signalsShort: 0, entries: 1, exits: 1,
+      blocks: {}, signalsRawLong: 2, signalsAfterGates: 2, gateBinding: [], exposureReal: 0.8, exposureIntended: 0.8 });
+    await withServer(async (port) => {
+      const f = await (await fetch(`http://127.0.0.1:${port}/api/funnel?days=1`)).json() as any;
+      const s = f.accounts.find((a: any) => a.accountId === "momentum_stocks");
+      expect(s).toMatchObject({ passes: 1, universe: 3, signalsLong: 2, entries: 1, exits: 1, blocks: {}, liveOrders: 2, designOpsPerDay: DESIGN_OPS_PER_DAY.momentum_stocks });
+      expect(s.exposure.latest.ratio).toBeCloseTo(1, 9);
+    });
+  });
+
   test("days is clamped to 1..30 and defaults to 7", async () => {
     await withServer(async (port) => {
       const def = await (await fetch(`http://127.0.0.1:${port}/api/funnel`)).json() as any;

@@ -37,14 +37,25 @@
 // are excluded entirely — the simulator never takes those decisions.
 //
 // RW2 (2026-10-23): momentum_stocks and meanrev_stocks run on the portfolio
-// engine, which writes NO fills rows (OPEN.md) — from the cutover neither
-// sleeve accumulates observations here (honest: no number, not a wrong one).
-// momentum_stocks' window starts at MODEL_START (the engine's), so it shows
-// "insufficient"; meanrev_stocks (sinceEtDateKey null) keeps showing the
-// Connors era's execution cost — same reference (the decision session's
-// open, which the engine also fills after), a valid prior but the retired
-// model's evidence. The artifact (break-even curve, base costs) now comes
-// from the version table and IS the engine's.
+// engine, which writes NO fills rows: its ONE execution record is the decision
+// journal (portfolio_decisions.orders_json). Since Q7 V1 (2026-11-07) this
+// module reads that journal too (readPortfolioExecutions): every filled leg
+// (MAX_HOLD close, its -r1 retry, the rebuy, a stale-tick close, a rebalance
+// buy, a partial trim or full exit) with the slippage of its fill vs the price
+// the pass DECIDED on (`decisionPrice`) and vs the session's UNADJUSTED open
+// (`sessionOpenRaw`, when the venue gave it — the replay's reference, raw like
+// the fill, so no adjustment bias), by label, symbol and notional bucket.
+// Classification is the EXECUTION's own label, never the trade's eventual
+// close_reason. A fill the venue reported without a price (the engine marks
+// the row at the last close) is an emergency mark, not an execution: it is
+// FLAGGED (excluded.emergencyMark) and never measured. The headline `measured`
+// of a stock sleeve falls back to the journal's vs-session-open series when
+// the fills table has nothing comparable (source "portfolio_journal").
+// Caveat, explicit in the output: Alpaca PAPER fills at the quote without
+// impact, so every stock number here is a lower bound on a live cost.
+// meanrev_stocks (sinceEtDateKey null) still shows the Connors era's fills
+// (same reference) under `periods`; the artifact (break-even curve, base
+// costs) comes from the version table and IS the engine's.
 //
 // Caveat (stocks): historical daily bars are adjustment=all — a dividend/
 // split ex-date AFTER a fill shifts that day's adjusted open vs the raw
@@ -57,6 +68,7 @@
 import { Database } from "bun:sqlite";
 import { existsSync, readFileSync } from "fs";
 import { getETDateKey } from "../db/database";
+import { inferOrderLabel, type PersistedOrder, type PortfolioOrderLabel } from "../portfolio-engine/live/persistence";
 import {
   MODEL_START, mulberry32, percentile, sleeveExpectationArtifacts,
   type ArtifactRef,
@@ -332,6 +344,149 @@ export function readSleeveCostObservations(
   return out;
 }
 
+// ── Portfolio-engine journal (Q7 V1): executions by label / symbol / notional ──
+
+/** Alpaca paper: fills at the quote, no impact, no commission. Stated on every stock figure. */
+export const PAPER_CAVEAT = "Alpaca PAPER: ejecuta al precio cotizado sin impacto ni comisión — cada coste medido en acciones es una cota INFERIOR del coste real en vivo";
+
+export type NotionalBucket = "<1k" | "1k-5k" | "5k-20k" | ">20k";
+export const NOTIONAL_BUCKETS: readonly NotionalBucket[] = ["<1k", "1k-5k", "5k-20k", ">20k"];
+export function notionalBucket(usd: number): NotionalBucket {
+  return usd < 1_000 ? "<1k" : usd < 5_000 ? "1k-5k" : usd < 20_000 ? "5k-20k" : ">20k";
+}
+
+export interface PortfolioExecutionObs {
+  session: string;
+  symbol: string;
+  side: "buy" | "sell";
+  label: PortfolioOrderLabel;
+  /** The label was derived (journal written before the field existed). */
+  labelInferred: boolean;
+  qty: number;
+  /** filledQty × avgPrice. */
+  notional: number;
+  bucket: NotionalBucket;
+  fillPx: number;
+  decisionPrice: number | null;
+  sessionOpenRaw: number | null;
+  /** Side-aware bps of the fill vs the price the pass decided on; null without a decision price. */
+  vsDecisionBps: number | null;
+  /** Side-aware bps of the fill vs the session's raw open; null when the venue gave none. */
+  vsSessionOpenBps: number | null;
+  /** filledQty < intent qty (a partial fill, or the first leg of a close that -r1 finished). */
+  partial: boolean;
+}
+
+export interface PortfolioExecutionObservations {
+  obs: PortfolioExecutionObs[];
+  excluded: {
+    /** Filled legs the venue reported WITHOUT a price: the engine marked the row at the last close. Never an execution. */
+    emergencyMark: number;
+    /** Before the sleeve's comparable model start (session < sinceEtDateKey). */
+    preModel: number;
+  };
+}
+
+/** All SELECTs on portfolio_decisions (live journals of `sleeve`). A database without the table
+ *  (an old fixture) yields nothing — never a throw. */
+export function readPortfolioExecutions(
+  db: Database, sleeve: string, opts: { sinceMs?: number; sinceEtDateKey?: string | null } = {},
+): PortfolioExecutionObservations {
+  const out: PortfolioExecutionObservations = { obs: [], excluded: { emergencyMark: 0, preModel: 0 } };
+  const hasTable = db.prepare(`SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'portfolio_decisions'`).get();
+  if (!hasTable) return out;
+  const rows = db.prepare(
+    `SELECT account_id, session, orders_json, decided_at, updated_at FROM portfolio_decisions
+     WHERE account_id = ? AND mode = 'live' AND updated_at >= ? ORDER BY session ASC, id ASC`,
+  ).all(sleeve, opts.sinceMs ?? 0) as { account_id: string; session: string; orders_json: string; decided_at: number; updated_at: number }[];
+  for (const r of rows) {
+    let orders: PersistedOrder[] = [];
+    try { orders = JSON.parse(r.orders_json); } catch { continue; }
+    if (!Array.isArray(orders)) continue;
+    for (const o of orders) {
+      const filledQty = o?.result?.filledQty ?? 0;
+      if (!(filledQty > 0) || !o.intent) continue;
+      if (opts.sinceEtDateKey && r.session < opts.sinceEtDateKey) { out.excluded.preModel++; continue; }
+      if (opts.sinceMs && (o.filledAt ?? r.updated_at) < opts.sinceMs) continue;
+      const fillPx = o.result!.avgPrice;
+      if (fillPx === null || !(fillPx > 0)) { out.excluded.emergencyMark++; continue; }
+      const side: "buy" | "sell" = o.intent.side === "buy" ? "buy" : "sell";
+      const decisionPrice = typeof o.decisionPrice === "number" && o.decisionPrice > 0 ? o.decisionPrice : null;
+      const sessionOpenRaw = typeof o.sessionOpenRaw === "number" && o.sessionOpenRaw > 0 ? o.sessionOpenRaw : null;
+      const notional = filledQty * fillPx;
+      out.obs.push({
+        session: r.session, symbol: o.intent.symbol, side,
+        label: inferOrderLabel(o, { accountId: r.account_id, session: r.session }), labelInferred: !o.label,
+        qty: filledQty, notional, bucket: notionalBucket(notional), fillPx, decisionPrice, sessionOpenRaw,
+        vsDecisionBps: decisionPrice === null ? null : costVsOpenBps(side, fillPx, decisionPrice),
+        vsSessionOpenBps: sessionOpenRaw === null ? null : costVsOpenBps(side, fillPx, sessionOpenRaw),
+        partial: filledQty < o.intent.qty * (1 - 1e-6),
+      });
+    }
+  }
+  return out;
+}
+
+export interface ExecutionGroupStats {
+  n: number;
+  notional: number;
+  vsDecision: CostStats | null;
+  vsSessionOpen: CostStats | null;
+}
+
+export interface PortfolioExecutionSummary {
+  /** Executions measured (filled legs with a price). */
+  n: number;
+  /** Of them, with a raw session open to compare against. */
+  nWithSessionOpen: number;
+  /** Labels derived for pre-field journals (0 once every row carries its own). */
+  nLabelInferred: number;
+  partialFills: number;
+  vsDecision: CostStats | null;
+  vsSessionOpen: CostStats | null;
+  byLabel: Partial<Record<PortfolioOrderLabel, ExecutionGroupStats>>;
+  bySymbol: Record<string, ExecutionGroupStats>;
+  byBucket: Partial<Record<NotionalBucket, ExecutionGroupStats>>;
+  excluded: PortfolioExecutionObservations["excluded"];
+  caveat: string;
+}
+
+function groupStats(xs: PortfolioExecutionObs[], statOpts: { seed?: number; nBoot?: number }): ExecutionGroupStats {
+  return {
+    n: xs.length,
+    notional: xs.reduce((s, x) => s + x.notional, 0),
+    vsDecision: computeCostStats(xs.map(x => x.vsDecisionBps).filter((v): v is number => v !== null), statOpts),
+    vsSessionOpen: computeCostStats(xs.map(x => x.vsSessionOpenBps).filter((v): v is number => v !== null), statOpts),
+  };
+}
+
+function groupBy<K extends string>(xs: PortfolioExecutionObs[], key: (x: PortfolioExecutionObs) => K, statOpts: { seed?: number; nBoot?: number }): Record<K, ExecutionGroupStats> {
+  const out = {} as Record<K, ExecutionGroupStats>;
+  const groups = new Map<K, PortfolioExecutionObs[]>();
+  for (const x of xs) { const k = key(x); groups.set(k, [...(groups.get(k) ?? []), x]); }
+  for (const [k, v] of [...groups.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))) out[k] = groupStats(v, statOpts);
+  return out;
+}
+
+export function summarizePortfolioExecutions(
+  o: PortfolioExecutionObservations, statOpts: { seed?: number; nBoot?: number } = {},
+): PortfolioExecutionSummary {
+  const all = groupStats(o.obs, statOpts);
+  return {
+    n: o.obs.length,
+    nWithSessionOpen: o.obs.filter(x => x.vsSessionOpenBps !== null).length,
+    nLabelInferred: o.obs.filter(x => x.labelInferred).length,
+    partialFills: o.obs.filter(x => x.partial).length,
+    vsDecision: all.vsDecision,
+    vsSessionOpen: all.vsSessionOpen,
+    byLabel: groupBy(o.obs, x => x.label, statOpts),
+    bySymbol: groupBy(o.obs, x => x.symbol, statOpts),
+    byBucket: groupBy(o.obs, x => x.bucket, statOpts),
+    excluded: o.excluded,
+    caveat: PAPER_CAVEAT,
+  };
+}
+
 // ── Artifact context (manifest base costs + breakEvenCurve) ───────────────
 
 export interface ArtifactCostContext {
@@ -385,12 +540,19 @@ export interface SleeveCostCalibration {
   /** Sim's declared per-side cost (manifest costs.base). */
   assumed: { slippageBps: number; commissionBps: number; totalPerSideBps: number } | null;
   /** Headline: slippage-vs-open (combined sides) + real commission, per
-   *  side, on the CURRENT-era period (crypto: desde-2026-09-10). */
+   *  side, on the CURRENT-era period (crypto: desde-2026-09-10). `source`
+   *  "portfolio_journal" = the engine journal's fills vs the session's RAW
+   *  open (stock sleeves with no comparable fills rows). */
   measured: {
     period: CostPeriodLabel; n: number;
     slipMeanBps: number; slipCi95: { lo: number; hi: number } | null;
     commissionMeanBps: number; totalPerSideBps: number;
+    source: "fills" | "portfolio_journal";
   } | null;
+  /** Q7 V1: the portfolio engine's executions from its decision journal (null = the sleeve has none). */
+  portfolioExecution: PortfolioExecutionSummary | null;
+  /** Explicit for every stock sleeve (paper broker); null on crypto. */
+  caveat: string | null;
   breakEven: {
     curveMinBps: number; curveMaxBps: number;
     sharpeAtAssumed: number | null;
@@ -422,7 +584,8 @@ function buildVerdict(c: SleeveCostCalibration): string {
   }
   const m = c.measured;
   const ci = m.slipCi95 ? `, IC95 slip ${fmtBps(m.slipCi95.lo)}..${fmtBps(m.slipCi95.hi)}` : "";
-  const real = `coste real ${fmtBps(m.totalPerSideBps)} bps/lado (slip ${fmtBps(m.slipMeanBps)} + com ${fmtBps(m.commissionMeanBps)}${ci}, n=${m.n})`;
+  const src = m.source === "portfolio_journal" ? ", diario del motor vs apertura cruda de sesión, PAPER" : "";
+  const real = `coste real ${fmtBps(m.totalPerSideBps)} bps/lado (slip ${fmtBps(m.slipMeanBps)} + com ${fmtBps(m.commissionMeanBps)}${ci}, n=${m.n}${src})`;
   const assumed = c.assumed ? ` vs supuesto ${c.assumed.totalPerSideBps} bps (slip ${c.assumed.slippageBps} + com ${c.assumed.commissionBps})` : " — sin supuesto declarado (sin artefacto autoritativo)";
   const smallN = m.n < MIN_N_FOR_VERDICT ? ` · OJO: n=${m.n} < ${MIN_N_FOR_VERDICT}, muestra pequeña` : "";
   if (!c.breakEven) return `${real}${assumed} → sin breakEvenCurve del artefacto${smallN}`;
@@ -473,6 +636,11 @@ export function calibrateSleeveCosts(
     ? { ...ctx.assumed, totalPerSideBps: ctx.assumed.slippageBps + ctx.assumed.commissionBps }
     : null;
 
+  // Q7 V1: the portfolio engine's journal (its only execution record). Every live sleeve may have one;
+  // today only the two stock sleeves run on the engine.
+  const journal = readPortfolioExecutions(db, cfg.sleeve, { sinceMs: opts.sinceMs, sinceEtDateKey: cfg.sinceEtDateKey });
+  const portfolioExecution = journal.obs.length > 0 || journal.excluded.emergencyMark > 0 ? summarizePortfolioExecutions(journal, statOpts) : null;
+
   let measured: SleeveCostCalibration["measured"] = null;
   if (headline.combined) {
     const commissionMeanBps = headline.commissionPerSide?.meanBps ?? 0;
@@ -481,7 +649,13 @@ export function calibrateSleeveCosts(
       slipMeanBps: headline.combined.meanBps, slipCi95: headline.combined.ci95,
       commissionMeanBps,
       totalPerSideBps: headline.combined.meanBps + commissionMeanBps,
+      source: "fills",
     };
+  } else if (portfolioExecution?.vsSessionOpen) {
+    // No comparable fills rows: the journal's fills vs the session's RAW open are the same wedge the
+    // replay assumes (fill at the open), on the same price basis. Paper, stated in the verdict.
+    const s = portfolioExecution.vsSessionOpen;
+    measured = { period: headlineLabel, n: s.n, slipMeanBps: s.meanBps, slipCi95: s.ci95, commissionMeanBps: 0, totalPerSideBps: s.meanBps, source: "portfolio_journal" };
   }
 
   let breakEven: SleeveCostCalibration["breakEven"] = null;
@@ -520,6 +694,8 @@ export function calibrateSleeveCosts(
     stops: computeCostStats(obs.stops, statOpts),
     excluded: obs.excluded,
     assumed, measured, breakEven,
+    portfolioExecution,
+    caveat: cfg.market === "stock" ? PAPER_CAVEAT : null,
     verdict: "",
   };
   out.verdict = buildVerdict(out);
@@ -532,6 +708,8 @@ export interface CostCalibration {
   generatedAt: number;
   priceBasisBoundary: string; // ISO date of the expected_px basis change
   sleeves: SleeveCostCalibration[];
+  /** The paper caveat, once more at the top level so no consumer can miss it. */
+  caveat: string;
 }
 
 export function computeCostCalibration(
@@ -549,5 +727,6 @@ export function computeCostCalibration(
     generatedAt: opts.now ?? Date.now(),
     priceBasisBoundary: "2026-09-10",
     sleeves,
+    caveat: PAPER_CAVEAT,
   };
 }

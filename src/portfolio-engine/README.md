@@ -141,6 +141,55 @@ Enforced: `src/index.portfolioCutover.test.ts`, `live/cutover.test.ts`
   honors the same state. Enforced: `PortfolioEngine.test.ts` ("RiskEngine
   HALTED / REDUCING skips every buy…", "a MAX_HOLD close is sent while
   HALTED…"), `src/treasury/TreasurySweep.test.ts`.
+- Atomic fill application (Q7 V1, 2026-11-07): applying a fill to the rows
+  (`applyBuyFill`/`applySellFill`) and marking the order `applied` in the journal
+  happen in ONE SQLite transaction (`PortfolioEngine.applyFill`; the `rows.ts`
+  transactions nest as savepoints). Before, a crash between the two re-sent the
+  same client id on resume, the venue answered with the already-filled order and
+  the fill was applied twice (then reconciliation booked a fake P&L against the
+  broker). Every path goes through it: the normal pass, the `-r1` remainder, the
+  stale closes-only pass and the emergency "marked at last close" branch. The
+  stale closes-only pass also settles its pending journal BEFORE the broker
+  reconciliation, so a confirmed MAX_HOLD fill is never relabeled
+  `PORTFOLIO_RECONCILED` at the reference price. Enforced:
+  `PortfolioEngine.test.ts` ("atomic fill application (Q7 V1)": a trigger aborts
+  the journal write exactly between the two writes — nothing half-persisted, the
+  resume applies the same client id once, book and `trade_realized_legs` equal a
+  clean run; all five fail without the transaction).
+- Execution record = the journal, ONE source (Q7 V1): the engine writes no
+  `fills` rows (`countExecutedOrders` UNION ALLs `fills` and the journal and would
+  double-count). `portfolio_decisions.orders_json` already carried
+  `brokerOrderId`, `filledQty`, `avgPrice`, `filledAt`, `clientOrderId` (with its
+  leg) and `diagnostics.prices`; each order now also carries `label`
+  (`max_hold_close | max_hold_rebuy | stale_close | retry | rebalance_buy |
+  rebalance_sell`, the execution's own reason, never the trade's later
+  `close_reason`), `decisionPrice` (the reference price the pass decided on),
+  `sessionOpenRaw` (the session's UNADJUSTED open from the venue when it offers it,
+  read AFTER the orders went out so it never delays one — `AlpacaVenue.sessionOpens`, the snapshot's daily bar on
+  the same ET date; Binance and a missing bar journal `null`, declared) and
+  `submittedAt`. Journals written before the fields read unchanged;
+  `inferOrderLabel` derives their label from the `-r1` suffix, the maxHold leg,
+  the recomputable stale-close id and the side. Enforced:
+  `PortfolioEngine.test.ts` ("execution record in the journal (Q7 V1)"),
+  `venues/alpaca.test.ts` ("sessionOpens"). Reader:
+  `src/reports/costCalibration.ts` (`readPortfolioExecutions`: slippage vs
+  `decisionPrice` and vs `sessionOpenRaw` by label, symbol and notional bucket,
+  MAX_HOLD closes/rebuys, rebalances and partial trims included; a fill without a
+  price — the emergency mark — is flagged, never measured; the paper caveat is in
+  the output; `costCalibration.test.ts`).
+- Funnel telemetry (Q7 V1, OPEN.md RW2 closed): ONE `decision_passes` row per
+  completed live pass, written when the session's journal reaches `submitted`
+  (first pass or resume), derived from the final record and the rows
+  (`portfolioDecisionPassSnapshot`): universe/evaluated, signals = target weights
+  > 0, entries/exits = filled buys/sells (every leg), blocks = skip codes +
+  terminal rejections, gate binding, exposure real vs intended. Stale ticks,
+  failed and observer passes write nothing. Telemetry only, fail-soft. Readers:
+  `GET /api/funnel` (now shows the stock sleeves; `liveOrders` still from the
+  journal alone), botNow (portfolio engines never read `decision_passes`),
+  guardian G2 (crypto sleeves only). Enforced: `PortfolioEngine.test.ts`
+  ("decision_passes telemetry"), `src/dashboard/routes/kpis.test.ts` ("a
+  portfolio-engine pass"), `src/dashboard/botNow.test.ts` ("a portfolio engine's
+  own decision_passes row…").
 
 ### Fail closed (with a page)
 

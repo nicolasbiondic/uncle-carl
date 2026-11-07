@@ -10,11 +10,17 @@
 import { getDB } from "../../db/database";
 import type { Database } from "bun:sqlite";
 import type { OrderIntent, OrderResult, Position, SessionDate, StopLevel } from "../types";
+import { portfolioClientOrderId } from "./clientOrderId";
 
 export type DecisionMode = "observer" | "live";
 
 /** decided → submitted/observed → (resumed) …; skipped_stale/failed carry a note. */
 export type DecisionStatus = "decided" | "observed" | "submitted" | "skipped_stale" | "failed";
+
+/** Why an order exists — the EXECUTION's own label, fixed when the order is journaled (Q7 V1, 2026-11-07).
+ *  Cost readers classify by it, never by the trade's eventual close_reason. `retry` is the `-r1` remainder
+ *  of a MAX_HOLD close (its intent still carries maxHold "close"). */
+export type PortfolioOrderLabel = "max_hold_close" | "max_hold_rebuy" | "stale_close" | "retry" | "rebalance_buy" | "rebalance_sell";
 
 export interface PersistedOrder {
   intent: OrderIntent;
@@ -24,12 +30,36 @@ export interface PersistedOrder {
   applied: boolean;
   /** First fill confirmation time (ms); old journals use the decision's updatedAt. */
   filledAt?: number;
+  // ── Execution record (Q7 V1, 2026-11-07). Absent on journals written before it: readers use
+  //    inferOrderLabel and treat the prices as unknown, never as zero. ──
+  label?: PortfolioOrderLabel;
+  /** The reference price the pass decided on for this symbol (venue last/mark, else the last close). */
+  decisionPrice?: number | null;
+  /** The execution session's UNADJUSTED open at the venue, read at submission when the venue offers it
+   *  cheaply (Alpaca: the snapshot's daily bar); null = not available on this venue/that day, declared. */
+  sessionOpenRaw?: number | null;
+  /** When the order was first handed to the venue (ms). */
+  submittedAt?: number;
   /** Skipped before submission (observer, trading disabled, …). */
   skipped?: string;
   /** Submissions of this order that the venue rejected as RETRYABLE (a sell refused because the
    *  shares are still held by a resting order). Capped per session; the order stays unapplied
    *  (same client order id) until it fills, is rejected for another reason, or hits the cap. */
   attempts?: number;
+}
+
+/** The label of a journaled order: its own when it has one; for journals written before 2026-11-07 it
+ *  is derived from what the row already carries (the `-r1` suffix, the maxHold leg, the stale-close id
+ *  — recomputable from sleeve/session/symbol — and the side). */
+export function inferOrderLabel(o: Pick<PersistedOrder, "intent" | "clientOrderId" | "label">,
+  key: { accountId: string; session: SessionDate }): PortfolioOrderLabel {
+  if (o.label) return o.label;
+  if (o.clientOrderId?.endsWith("-r1")) return "retry";
+  if (o.intent.maxHold === "close") {
+    return o.clientOrderId === portfolioClientOrderId(key.accountId, key.session, o.intent.symbol, "stale-close") ? "stale_close" : "max_hold_close";
+  }
+  if (o.intent.maxHold === "rebuy") return "max_hold_rebuy";
+  return o.intent.side === "buy" ? "rebalance_buy" : "rebalance_sell";
 }
 
 export interface PortfolioDecisionRecord {

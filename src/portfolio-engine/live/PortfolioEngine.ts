@@ -43,7 +43,7 @@ import type {
 import { computeSleeveLedger } from "../../account/EquityTracker";
 import { isTradingEnabled } from "../../config";
 import { getDefaultRiskEngine, type TradingState } from "../../risk/RiskEngine";
-import { insertActivity } from "../../db/database";
+import { getDB, insertActivity, insertDecisionPass, type DecisionPassSnapshot } from "../../db/database";
 import { createLogger } from "../../utils/logger";
 import { isMarketOpen } from "../../utils/marketHours";
 import { eventBus, EVENTS } from "../../utils/events";
@@ -51,7 +51,7 @@ import { heartbeats as defaultHeartbeats } from "../../ops/heartbeat";
 import { portfolioClientOrderId } from "./clientOrderId";
 import type { FreshnessReport } from "./priceView";
 import {
-  finalizeEndedPortfolioSessions, getPortfolioDecision, getPortfolioSessionDecision, latestPortfolioMemory, savePortfolioDecision, updatePortfolioDecisionProgress,
+  finalizeEndedPortfolioSessions, getPortfolioDecision, getPortfolioSessionDecision, inferOrderLabel, latestPortfolioMemory, savePortfolioDecision, updatePortfolioDecisionProgress,
   type DecisionMode, type PersistedOrder, type PortfolioDecisionRecord,
 } from "./persistence";
 import {
@@ -397,10 +397,14 @@ export class PortfolioEngine {
     const claimed = this.alreadyDecided(window);
     if (claimed) return claimed;
     // The settled stale-tick closes stay first in the journal (already applied: submitAll skips them).
-    const orders: PersistedOrder[] = [...staleCloses, ...intents.map(intent => ({
-      intent, clientOrderId: live ? portfolioClientOrderId(this.opts.accountId, session, intent.symbol, intent.maxHold) : null,
-      result: null, applied: false, ...(live ? {} : { skipped: "observer" }),
-    }))];
+    const orders: PersistedOrder[] = [...staleCloses, ...intents.map(intent => {
+      const clientOrderId = live ? portfolioClientOrderId(this.opts.accountId, session, intent.symbol, intent.maxHold) : null;
+      return {
+        intent, clientOrderId, result: null, applied: false, ...(live ? {} : { skipped: "observer" }),
+        // Execution record (Q7 V1): the label and the price the pass decided on, fixed at journaling.
+        label: inferOrderLabel({ intent, clientOrderId }, key), decisionPrice: prices[intent.symbol] ?? null,
+      };
+    })];
     const record: PortfolioDecisionRecord = {
       ...key, asOf, mode: this.opts.mode, status: live ? "decided" : "observed", equity: ledger.equity,
       book: positions, weights: target.weights, stops: target.stops, memory: target.memory,
@@ -470,6 +474,21 @@ export class PortfolioEngine {
   ): Promise<{ orders: PersistedOrder[]; rejected: number }> {
     const cfg = this.opts.config;
     if (cfg.kind !== "volManaged" || cfg.maxHoldSessions === undefined) return { orders: [], rejected: 0 };
+    // Closes journaled by an earlier stale tick and not yet applied (a crash, an unknown outcome) are
+    // settled BEFORE the broker reconciliation, as decideAndExecute does: a fill the venue confirmed must
+    // land as the MAX_HOLD close it is, at its fill price — not as a PORTFOLIO_RECONCILED close at the
+    // reference price because the broker was already flat (Q7 V1). A close still retrying defers the
+    // rest of the stale pass to the next tick (never two sells per lot in one tick).
+    const rejectedEarly: PersistedOrder[] = [];
+    if (journal.some(o => !o.applied && !o.skipped)) {
+      const outcome = await this.submitAll(key, journal, view);
+      if (outcome.marketClosed) return { orders: journal, rejected: outcome.rejected.length };
+      if (outcome.retrying > 0) {
+        updatePortfolioDecisionProgress(key, { orders: journal, note: `${note}; closes-only: stale-tick MAX_HOLD close(s) still retrying` }, this.now());
+        return { orders: journal, rejected: outcome.rejected.length };
+      }
+      rejectedEarly.push(...outcome.rejected);
+    }
     const venueSymbols = [...new Set([...symbols.all, ...heldSymbols])];
     const brokerPositions = await this.opts.venue.positions(venueSymbols);
     const prices = await this.referencePrices(venueSymbols, view, brokerPositions);
@@ -489,7 +508,7 @@ export class PortfolioEngine {
       orders.push({
         intent: { symbol: p.symbol, side: "sell", qty: p.qty, notional: p.qty * price, targetWeight: 0,
           currentWeight: equity > 0 ? p.qty * price / equity : 0, reduceOnly: true, maxHold: "close" },
-        clientOrderId, result: null, applied: false,
+        clientOrderId, result: null, applied: false, label: "stale_close", decisionPrice: price,
       });
     }
     if (orders.length === 0) return { orders, rejected: 0 };
@@ -500,12 +519,13 @@ export class PortfolioEngine {
       diagnostics: { freshness: fresh, prices, drift, closesOnly: true }, orders, note: `${note}; closes-only: ${orders.length} MAX_HOLD close(s)`,
       decidedAt: firstDecidedAt ?? this.now(), updatedAt: this.now(),
     });
-    const outcome = await this.submitAll(key, orders, view);
-    if (outcome.rejected.length > 0) {
+    const outcome = pending.length > 0 ? await this.submitAll(key, orders, view) : { rejected: [] as PersistedOrder[], retrying: 0 };
+    const rejected = [...rejectedEarly, ...outcome.rejected];
+    if (rejected.length > 0) {
       this.alertFn(`Portfolio:${this.opts.accountId}`,
-        `${this.opts.accountId} ${key.session}: ${outcome.rejected.length} stale-pass MAX_HOLD close(s) rejected — ${outcome.rejected.map(o => `${o.intent.symbol}: ${o.result?.error ?? o.result?.status}`).join("; ")}`);
+        `${this.opts.accountId} ${key.session}: ${rejected.length} stale-pass MAX_HOLD close(s) rejected — ${rejected.map(o => `${o.intent.symbol}: ${o.result?.error ?? o.result?.status}`).join("; ")}`);
     }
-    return { orders, rejected: outcome.rejected.length };
+    return { orders, rejected: rejected.length };
   }
 
   /** Steps 6–7 shared by the first pass and the resume. Orders that must be retried (a held-quantity sell
@@ -528,6 +548,7 @@ export class PortfolioEngine {
       updatePortfolioDecisionProgress(key, { orders, note: `retrying next tick: ${pending.join(", ")}` }, this.now());
     } else {
       updatePortfolioDecisionProgress(key, { status: "submitted", orders, ...(doneNote ? { note: doneNote } : {}) }, this.now());
+      this.recordDecisionPass(key);
     }
     const rejected = outcome.rejected.length;
     if (rejected > 0) {
@@ -585,6 +606,29 @@ export class PortfolioEngine {
    *  `maxSellAttempts` per session, and the buys behind it wait (sells fund and precede buys); at the cap
    *  it becomes a terminal rejection like any other. */
   private async submitAll(key: { accountId: string; strategyVersion: string; session: SessionDate }, orders: PersistedOrder[], view: EnginePriceView): Promise<SubmitOutcome> {
+    // A pass that threw leaves its orders for the resume, which records their opens then.
+    const outcome = await this.submitEach(key, orders, view);
+    try { await this.recordSessionOpens(key, orders); }
+    catch (e: any) { this.log.warn(`session opens not journaled (${e?.message ?? e}) — telemetry only, orders unaffected`); }
+    return outcome;
+  }
+
+  /** Execution record (Q7 V1): the session's RAW open per executed symbol, read from the venue when it
+   *  offers it (Alpaca snapshot) AFTER the orders went out — the open is fixed once the session opened, so
+   *  it never delays an order. Unavailable or failed → stays null, declared, never a reason not to send. */
+  private async recordSessionOpens(key: { accountId: string; strategyVersion: string; session: SessionDate }, orders: PersistedOrder[]): Promise<void> {
+    const missing = orders.filter(o => o.submittedAt != null && o.sessionOpenRaw === undefined);
+    if (missing.length === 0) return;
+    let opens: Record<string, number> = {};
+    if (this.opts.venue.sessionOpens) {
+      try { opens = await this.opts.venue.sessionOpens([...new Set(missing.map(o => o.intent.symbol))], key.session); }
+      catch (e: any) { this.log.warn(`session opens unavailable (${e?.message ?? e}) — journaled as null`); }
+    }
+    for (const o of missing) o.sessionOpenRaw = opens[o.intent.symbol] ?? null;
+    updatePortfolioDecisionProgress(key, { orders }, this.now());
+  }
+
+  private async submitEach(key: { accountId: string; strategyVersion: string; session: SessionDate }, orders: PersistedOrder[], view: EnginePriceView): Promise<SubmitOutcome> {
     const rejected: PersistedOrder[] = [];
     const maxAttempts = this.opts.maxSellAttempts ?? DEFAULT_MAX_SELL_ATTEMPTS;
     let retrying = 0;
@@ -622,6 +666,7 @@ export class PortfolioEngine {
         updatePortfolioDecisionProgress(key, { orders, note: "stock market closed; pending orders not submitted" }, this.now());
         return { rejected, retrying, marketClosed: true };
       }
+      o.submittedAt ??= this.now();
       let result;
       try {
         result = await this.opts.venue.submit(o.intent, clientOrderId);
@@ -646,6 +691,29 @@ export class PortfolioEngine {
       }
       o.result = result;
       if (result.filledQty > 0) o.filledAt ??= this.now();
+      if (!result.ok) {
+        rejected.push(o);
+        this.log.warn(`${o.intent.side} ${o.intent.symbol} ${o.intent.qty}: NOT filled (${result.status}${result.error ? `: ${result.error}` : ""})`);
+      }
+      this.applyFill(key, orders, o, result, view, clientOrderId);
+    }
+    return { rejected, retrying };
+  }
+
+  /** Book update + journal progress in ONE SQLite transaction (Q7 V1, 2026-11-07). Before, the rows
+   *  were written (applyBuyFill/applySellFill, each its own transaction in rows.ts) and only then the
+   *  order was marked `applied` in portfolio_decisions: a crash between the two re-submitted the same
+   *  client id on resume, the venue answered with the already-filled order and the fill was applied
+   *  a second time (reconciliation then booked a fake P&L against the broker). Now the rows' own
+   *  transactions nest as savepoints inside this one, so either both land or neither: a restart finds
+   *  the order unapplied AND the book untouched, and applies the venue's duplicate-id answer exactly
+   *  once. Shared by every path that applies a fill: the normal pass, the `-r1` remainder retry, the
+   *  stale closes-only pass and the emergency "marked at last close" branch. */
+  private applyFill(
+    key: { accountId: string; strategyVersion: string; session: SessionDate }, orders: PersistedOrder[], o: PersistedOrder,
+    result: OrderResult, view: EnginePriceView, clientOrderId: string,
+  ): void {
+    const txn = getDB().transaction(() => {
       if (result.filledQty > 0 && result.avgPrice !== null && result.avgPrice > 0) {
         if (o.intent.side === "buy") applyBuyFill(this.rows, o.intent.symbol, result.filledQty, result.avgPrice, this.now());
         else applySellFill(this.rows, o.intent.symbol, result.filledQty, result.avgPrice,
@@ -676,18 +744,33 @@ export class PortfolioEngine {
         && !clientOrderId.endsWith("-r1")) {
         orders.splice(orders.indexOf(o) + 1, 0, {
           intent: { ...o.intent, qty: remaining, notional: o.intent.notional * remaining / o.intent.qty },
-          clientOrderId: `${clientOrderId}-r1`, result: null, applied: false,
+          clientOrderId: `${clientOrderId}-r1`, result: null, applied: false, label: "retry", decisionPrice: o.decisionPrice ?? null,
         });
         this.log.warn(`${o.intent.symbol}: MAX_HOLD close settled ${result.filledQty}/${o.intent.qty} — retrying remainder ${remaining} once`);
       }
-      if (!result.ok) {
-        rejected.push(o);
-        this.log.warn(`${o.intent.side} ${o.intent.symbol} ${o.intent.qty}: NOT filled (${result.status}${result.error ? `: ${result.error}` : ""})`);
-      }
       o.applied = true;
       updatePortfolioDecisionProgress(key, { orders }, this.now());
+    });
+    try { txn(); } catch (e) { o.applied = false; throw e; } // rolled back: the in-memory flag must not lie either
+  }
+
+  /** Funnel telemetry (Q7 V1 / OPEN.md RW2): ONE decision_passes row per live pass, written when the
+   *  session's journal reaches `submitted` (first pass or resume), derived from that final record and the
+   *  rows: universe/evaluated from the decision symbols and the freshness report, signals = target
+   *  weights > 0, entries/exits = filled buys/sells (every leg: MAX_HOLD close, retry, rebuy, rebalance),
+   *  blocks = skip codes + terminal rejections, exposure real/intended vs the decision's equity. Stale
+   *  ticks and failed passes write nothing (they decided nothing; botNow shows them from the journal).
+   *  Telemetry only, fail-soft: it never changes an order. Readers: GET /api/funnel
+   *  (getDecisionPassSummary), guardian G2 (crypto sleeves only), botNow (momentum engines only). */
+  private recordDecisionPass(key: { accountId: string; strategyVersion: string; session: SessionDate }): void {
+    try {
+      const rec = getPortfolioDecision(key.accountId, key.strategyVersion, key.session);
+      if (!rec || rec.mode !== "live") return;
+      insertDecisionPass(portfolioDecisionPassSnapshot(rec, this.decisionSymbols(rec.asOf, rec.memory, rec.session).all,
+        loadSleeveRows(key.accountId), this.now()));
+    } catch (e: any) {
+      this.log.error(`decision_passes telemetry failed (${e?.message ?? e}) — the pass itself is complete`);
     }
-    return { rejected, retrying };
   }
 
   /** After the fills (README "Calling the core"): re-decide on the ACTUAL
@@ -736,4 +819,45 @@ export class PortfolioEngine {
     if (missing.length > 0) this.log.warn(`no venue price for ${missing.join(", ")} — using last close`);
     return out;
   }
+}
+
+/** Pure: the funnel snapshot of a completed live portfolio pass (see PortfolioEngine.recordDecisionPass).
+ *  Gate keys reuse the funnel's vocabulary where it fits (`trading_disabled`, `risk_gate`); the engine's own
+ *  skip codes are kept verbatim as block keys. */
+export function portfolioDecisionPassSnapshot(rec: PortfolioDecisionRecord, universe: readonly string[], rows: readonly SleeveRow[], ts: number): DecisionPassSnapshot {
+  const fresh = (rec.diagnostics as any)?.freshness as { stale?: string[]; missing?: string[] } | undefined;
+  const unavailable = new Set([...(fresh?.stale ?? []), ...(fresh?.missing ?? [])]);
+  const prices = ((rec.diagnostics as any)?.prices ?? {}) as Record<string, number>;
+  const targets = Object.entries(rec.weights).filter(([, w]) => w > 0).map(([s]) => s);
+  const filled = rec.orders.filter(o => (o.result?.filledQty ?? 0) > 0);
+  const blocks: Record<string, number> = {};
+  const gates = new Set<string>();
+  let blockNote: string | undefined;
+  const gatedBuys = new Set<string>();
+  for (const o of rec.orders) {
+    const code = o.skipped ?? (o.result && !o.result.ok && !((o.result.filledQty ?? 0) > 0) ? "rejected" : null);
+    if (!code) continue;
+    blocks[code] = (blocks[code] ?? 0) + 1;
+    blockNote = `${o.intent.side} ${o.intent.symbol}: ${code}${o.result?.error ? ` (${o.result.error})` : ""}`;
+    if (o.intent.side === "buy" && (code === "trading_disabled" || code.startsWith("risk_engine_"))) {
+      gates.add(code === "trading_disabled" ? "trading_disabled" : "risk_gate");
+      gatedBuys.add(o.intent.symbol);
+    }
+  }
+  const positions = positionsFromRows(rows);
+  const gross = positions.reduce((s, p) => s + p.qty * (prices[p.symbol] ?? p.avgEntryPrice), 0);
+  const intended = Object.values(rec.weights).reduce((s, w) => s + Math.max(0, w), 0);
+  return {
+    accountId: rec.accountId, ts,
+    universe: universe.length,
+    evaluated: universe.filter(s => !unavailable.has(s)).length,
+    signalsLong: targets.length, signalsShort: 0,
+    entries: filled.filter(o => o.intent.side === "buy").length,
+    exits: filled.filter(o => o.intent.side === "sell").length,
+    blocks, ...(blockNote ? { blockNote } : {}),
+    signalsRawLong: targets.length,
+    signalsAfterGates: targets.filter(s => !gatedBuys.has(s)).length,
+    gateBinding: [...gates],
+    ...(rec.equity > 0 ? { exposureReal: gross / rec.equity, exposureIntended: intended } : {}),
+  };
 }
