@@ -840,46 +840,32 @@ export class BinanceExecutor {
         }
       }
       // A MARKET order can be PARTIALLY_FILLED on testnet. Do not accept its
-      // executedQty until the residual is canceled and terminal; then trust
-      // positionRisk for the final broker quantity.
+      // executedQty until the residual is canceled and terminal. positionRisk
+      // is account-aggregate: it proves existence, NEVER our fill size/price.
       if (extOrderId && orderStatus !== "FILLED") {
         const terminal = await this.cancelOrderAndConfirmTerminal(binanceSymbol, extOrderId);
         if (!terminal) throw new Error(`open order ${extOrderId} residual was not confirmed terminal`);
         const observed = (await this.getPositions()).find(p => p.symbol === binanceSymbol && Math.abs(p.positionAmt) > 0);
-        if (!observed || observed.entryPrice <= 0) {
+        if (!observed) {
           activeOpenOrderId = null;
           log.warn(`Futures open ${binanceSymbol}: residual canceled but broker is flat`);
           return null;
         }
-        avgPrice = observed.entryPrice;
-        filledQty = Math.abs(observed.positionAmt);
+        const check = await this.signedRequest("GET", "/fapi/v1/order", {
+          symbol: binanceSymbol, orderId: String(extOrderId),
+        });
+        filledQty = parseFloat(check.executedQty) || 0;
+        avgPrice = parseFloat(check.avgPrice) || (parseFloat(check.cumQuote) / filledQty) || 0;
       }
-      // 2026-07-09 (O5): the order didn't confirm FILLED in the poll window.
-      // DON'T fabricate a fill at signal.price (a phantom position at a wrong
-      // price). Verify against the ACTUAL position; use its real entry if it's
-      // there, else return null so nothing is recorded — syncBinanceFutures
-      // recovers a genuinely-filled orphan within 60s.
-      if (avgPrice === 0) {
-        try {
-          const pos = (await this.getPositions()).find((p) => p.symbol === binanceSymbol && Math.abs(p.positionAmt) > 0);
-          if (pos && pos.entryPrice > 0) { avgPrice = pos.entryPrice; filledQty = Math.abs(pos.positionAmt); }
-        } catch { /* fall through to null */ }
-        if (avgPrice === 0) {
-          const terminal = await this.cancelOrderAndConfirmTerminal(binanceSymbol, extOrderId);
-          const posAfterCancel = (await this.getPositions().catch(() => [])).find((p) => p.symbol === binanceSymbol && Math.abs(p.positionAmt) > 0);
-          if (posAfterCancel && posAfterCancel.entryPrice > 0) {
-            avgPrice = posAfterCancel.entryPrice;
-            filledQty = Math.abs(posAfterCancel.positionAmt);
-          } else if (terminal) {
-            activeOpenOrderId = null;
-            log.warn(`Futures open ${binanceSymbol}: not filled; order canceled/terminal and flat — returning null`);
-            return null;
-          } else {
-            throw new Error(`open order ${extOrderId ?? "?"} not confirmed filled, canceled, or flat`);
-          }
-        }
+      if (!(avgPrice > 0) || !(filledQty > 0)) {
+        const trades = await this.signedRequest("GET", "/fapi/v1/userTrades", {
+          symbol: binanceSymbol, orderId: String(extOrderId), limit: "1000",
+        });
+        const ours = Array.isArray(trades) ? trades.filter(t => String(t.orderId) === String(extOrderId)) : [];
+        filledQty = ours.reduce((sum, t) => sum + Number(t.qty), 0);
+        avgPrice = ours.reduce((sum, t) => sum + Number(t.qty) * Number(t.price), 0) / filledQty;
+        if (!(avgPrice > 0) || !(filledQty > 0)) throw new Error(`open order ${extOrderId} fill settlement unavailable`);
       }
-      if (filledQty === 0) filledQty = qty;
       activeOpenOrderId = null;
 
       // Get entry commission from userTrades
@@ -1226,7 +1212,7 @@ export class BinanceExecutor {
    *  A failed enumeration cancels NOTHING — unknown is never "no open
    *  orders"; it logs and leaves state for a later pass (same fail-open
    *  contract as before, but never destructive on unknown state). */
-  async cancelAllOrders(alpacaSymbol: string, opts: { aggregateFlat?: boolean; exceptClientOrderIds?: readonly string[] } = {}): Promise<void> {
+  async cancelAllOrders(alpacaSymbol: string, opts: { aggregateFlat?: boolean; exceptClientOrderIds?: readonly string[]; onlyClientOrderIds?: readonly string[] } = {}): Promise<void> {
     // `exceptClientOrderIds` (RW4a, 2026-10-23): client ids (regular
     // clientOrderId / algo clientAlgoId) that survive the sweep — the
     // exposure control's re-sized stop is placed FIRST and then the previous
@@ -1245,7 +1231,7 @@ export class BinanceExecutor {
       });
   }
 
-  private async cancelAllOrdersCore(alpacaSymbol: string, opts: { aggregateFlat?: boolean; exceptClientOrderIds?: readonly string[] } = {}): Promise<void> {
+  private async cancelAllOrdersCore(alpacaSymbol: string, opts: { aggregateFlat?: boolean; exceptClientOrderIds?: readonly string[]; onlyClientOrderIds?: readonly string[] } = {}): Promise<void> {
     if (!this.connected) return;
     const binanceSymbol = this.symbolMap[alpacaSymbol];
     if (!binanceSymbol) return;
@@ -1255,6 +1241,8 @@ export class BinanceExecutor {
       String(type ?? "").toUpperCase().includes("STOP") &&
       (reduceOnly === true || String(reduceOnly).toLowerCase() === "true");
     const shouldCancel = (clientId: unknown, type: unknown, reduceOnly: unknown): boolean => {
+      // Per-unit cleanup must never sweep another sleeve's or manual stops.
+      if (opts.onlyClientOrderIds && !opts.onlyClientOrderIds.includes(String(clientId ?? ""))) return false;
       if (typeof clientId === "string" && keep.has(clientId)) return false; // the caller's just-placed stop
       if (isBotFapiClientId(clientId as any)) return true; // ours, by stamp
       if (!isReduceOnlyStop(type, reduceOnly)) return false; // never touch a possible entry order
@@ -1299,7 +1287,7 @@ export class BinanceExecutor {
 
   // ── Close position ────────────────────────
 
-  async closePosition(symbol: string, quantity: number, side: "buy" | "sell", opts: { skipOrderCleanup?: boolean; stopConfirm?: StopCloseConfirm } = {}): Promise<{ success: boolean; filledPrice: number; commission: number; realizedPnl: number; exitTime?: number; orderId?: string; submittedAt?: number; submittedPx?: number; filledQty?: number; outcome?: OrderOutcome; estPx?: number; reason?: string }> {
+  async closePosition(symbol: string, quantity: number, side: "buy" | "sell", opts: { skipOrderCleanup?: boolean; stopConfirm?: StopCloseConfirm; onAccepted?: (orderId: string) => void } = {}): Promise<{ success: boolean; filledPrice: number; commission: number; realizedPnl: number; exitTime?: number; orderId?: string; submittedAt?: number; submittedPx?: number; filledQty?: number; outcome?: OrderOutcome; estPx?: number; reason?: string }> {
     // Stop-triggered closes only (OPEN.md P1, the 2026-07-20 LINK ghost
     // stop): confirm the trigger against MAINNET before transmitting — same
     // observe/enforce plausibility pattern as src/market/plausibility.ts,
@@ -1376,7 +1364,7 @@ export class BinanceExecutor {
     return { proceed: true };
   }
 
-  private async closePositionUnderLock(symbol: string, quantity: number, side: "buy" | "sell", opts: { skipOrderCleanup?: boolean } = {}): Promise<{ success: boolean; filledPrice: number; commission: number; realizedPnl: number; exitTime?: number; orderId?: string; submittedAt?: number; submittedPx?: number; filledQty?: number; outcome?: OrderOutcome; estPx?: number; reason?: string }> {
+  private async closePositionUnderLock(symbol: string, quantity: number, side: "buy" | "sell", opts: { skipOrderCleanup?: boolean; onAccepted?: (orderId: string) => void } = {}): Promise<{ success: boolean; filledPrice: number; commission: number; realizedPnl: number; exitTime?: number; orderId?: string; submittedAt?: number; submittedPx?: number; filledQty?: number; outcome?: OrderOutcome; estPx?: number; reason?: string }> {
     // Outcome taxonomy on the failure paths: "proven_failed" only when the
     // failure is demonstrable (local validation, venue rejection, confirmed
     // flat/terminal); anything ambiguous after a close order was (possibly)
@@ -1457,6 +1445,7 @@ export class BinanceExecutor {
 
       const extOrderId = result.orderId;
       activeCloseOrderId = extOrderId;
+      if (extOrderId) opts.onAccepted?.(String(extOrderId));
       let avgPrice = parseFloat(result.avgPrice) || 0;
       let filled = result.status === "FILLED";
       let reductionVerified = false;
@@ -1886,7 +1875,7 @@ export class BinanceExecutor {
 
   // ── Recent trades for a symbol (realized PnL) ──
 
-  async getRecentTrades(binanceSymbol: string, limit = 10, sinceMs?: number): Promise<{ realizedPnl: number; commission: number; price: number; qty: number; side: string; time: number }[]> {
+  async getRecentTrades(binanceSymbol: string, limit = 10, sinceMs?: number): Promise<{ realizedPnl: number; commission: number; price: number; qty: number; side: string; time: number; orderId?: string }[]> {
     if (!this.connected) throw new Error("Binance is not connected");
     const params: Record<string, string> = { symbol: binanceSymbol, limit: limit.toString() };
     if (sinceMs !== undefined) {
@@ -1908,17 +1897,19 @@ export class BinanceExecutor {
         qty: parseFloat(t.qty || "0"),
         side: t.side,
         time: parseInt(t.time) || 0,
+        orderId: t.orderId == null ? undefined : String(t.orderId),
       }))
       .filter(t => sinceMs === undefined || t.time >= sinceMs);
   }
 
-  async hasFilledStopClose(binanceSymbol: string, closeSide: "BUY" | "SELL", qty: number, sinceMs: number): Promise<boolean> {
+  async hasFilledStopClose(binanceSymbol: string, closeSide: "BUY" | "SELL", qty: number, sinceMs: number, clientOrderId?: string): Promise<boolean> {
     if (!this.connected) throw new Error("Binance is not connected");
     const orders = await this.signedRequest("GET", "/fapi/v1/allOrders", { symbol: binanceSymbol, limit: "1000" }, "protect");
     if (!Array.isArray(orders)) throw new Error(`Binance allOrders failed: ${orders?.msg ?? "non-array response"}`);
     const { decimals } = await this.resolveQtyStep(binanceSymbol);
     const tolerance = 10 ** -decimals / 2;
     return orders.some((o: any) =>
+      (clientOrderId === undefined || o.clientOrderId === clientOrderId) &&
       String(o.status) === "FILLED" &&
       String(o.type).includes("STOP") &&
       String(o.side).toUpperCase() === closeSide &&
@@ -1930,6 +1921,7 @@ export class BinanceExecutor {
   /** Read back both native conditional-order stores. Failure of either query
    * fails closed so callers never mistake a partial read for protection. */
   async getOpenProtectiveOrders(symbol?: string): Promise<Array<{
+    clientOrderId: string;
     symbol: string;
     side: string;
     type: string;
@@ -1962,6 +1954,7 @@ export class BinanceExecutor {
     const normalize = (order: any, algo: boolean) => {
       const rawType = String(algo ? (order.orderType ?? order.type ?? order.actualOrderType) : order.type ?? "").toUpperCase();
       return {
+        clientOrderId: String(algo ? order.clientAlgoId ?? "" : order.clientOrderId ?? ""),
         symbol: String(order.symbol ?? ""),
         side: String(order.side ?? "").toUpperCase(),
         // Canonicalize to "STOP_MARKET" — the semantic type of every stop

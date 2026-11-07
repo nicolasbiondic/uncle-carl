@@ -4,7 +4,23 @@ import { etTime } from "../fmt.js";
 
 const ET = "America/New_York";
 const etDay = () => new Date().toLocaleDateString("en-US", { timeZone: ET, weekday: "short", day: "2-digit", month: "short" });
-const clockText = () => `${etDay()} ${etTime(Date.now())}`;
+// New York time, named: the P&L windows ("Today", 7D …) are New York days.
+const clockText = () => `${etDay()} ${etTime(Date.now())} ET`;
+
+// Connection state, painted next to the clock when the data may be old: the
+// 30 s poll failing (the server cannot be reached) or the live feed down. The
+// numbers on screen are then the last good ones; the notice says from when.
+export const net = { lastOkAt: 0, refreshFailed: false, wsUp: null };
+
+/** "" while everything is fine; else the notice, naming the New York time of
+ *  the last good data. */
+export function staleNotice(now = Date.now()) {
+  if (!net.refreshFailed && net.wsUp !== false) return "";
+  const at = net.lastOkAt ? etTime(net.lastOkAt) : "—";
+  return net.refreshFailed
+    ? t(`Server not reachable · data from ${at} ET`, `Sin conexión con el servidor · datos de las ${at} ET`)
+    : t(`Live updates paused · data from ${at} ET`, `Actualización en vivo en pausa · datos de las ${at} ET`);
+}
 
 /** Brand + clock. The two portfolios (balance, status, click for details)
  *  live in the KPI strip since 2026-10-25 (profiles.js), so the header no
@@ -13,6 +29,7 @@ export function renderHeader() {
   return `
     <div class="brand">${icon("trend", 20)} Uncle Carl
       <span class="clock" id="clock">${esc(clockText())}</span></div>
+    <span class="stale" id="stale" role="status"${staleNotice() ? "" : " hidden"}>${esc(staleNotice())}</span>
   `;
 }
 
@@ -24,7 +41,7 @@ export function actionButton(act, iconName, label, extraCls = "") {
   return `<button class="icn lbl${extraCls ? " " + extraCls : ""}" data-act="${act}" aria-label="${esc(label)}" title="${esc(label)}">${icon(iconName)}<span class="icn-l">${esc(label)}</span></button>`;
 }
 
-const THEME_NAME = { dark: "Dark", terminal: "Terminal", light: "Light" };
+const THEME_NAME = () => ({ dark: t("Dark", "Oscuro"), terminal: "Terminal", light: t("Light", "Claro") });
 
 /** Roving focus inside the user menu: which item index a key moves to
  *  (null = the key is not a menu-navigation key). Arrows wrap. */
@@ -49,7 +66,7 @@ export function renderUserChip(open = false) {
   const name = me?.displayName || me?.username || t("Account", "Cuenta");
   const shortId = pm?.accountId ? pm.accountId.replace(/^acct_/, "").slice(0, 6) : "";
   const lang = store.state.lang === "es" ? "Español" : "English";
-  const theme = THEME_NAME[store.state.theme] || THEME_NAME.dark;
+  const theme = THEME_NAME()[store.state.theme] || THEME_NAME().dark;
   return `<div class="uchip-wrap">
     <button class="icn lbl uchip" data-act="user-menu" aria-haspopup="menu" aria-expanded="${open}" aria-controls="umenu" aria-label="${esc(name)}">
       ${icon("user")}<span class="icn-l">${esc(name)}</span>
@@ -89,4 +106,13 @@ export function renderNav() {
 export function tickClock() {
   const el = document.getElementById("clock");
   if (el) el.textContent = clockText();
+  paintStale();
+}
+
+export function paintStale() {
+  const el = document.getElementById("stale");
+  if (!el) return;
+  const text = staleNotice();
+  el.textContent = text;
+  el.hidden = !text;
 }

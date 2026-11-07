@@ -27,7 +27,7 @@
 //       market data, per-account views).
 // ══════════════════════════════════════════════
 
-import { getEnabledStocks, getEnabledCrypto } from "../config/symbols";
+import { getEnabledStocks } from "../config/symbols";
 import {
   RISK_PROFILES, ALL_PROFILE_IDS, MOMENTUM_STOCKS_UNIVERSE,
   type RiskProfile, type RiskProfileId,
@@ -45,9 +45,8 @@ import {
   USDT_SLEEVE_SPEC, USDC_SLEEVE_SPEC, getOpenCommission,
 } from "./BinanceSleeveReconciler";
 import {
-  getTradingStats, getOpenTrades, closeTrade, insertTrade,
+  getTradingStats, getOpenTrades, closeTrade, insertTrade, PORTFOLIO_ENGINE_STRATEGY,
   saveEquitySnapshot,
-  getRecentSignals, getRecentTrades, getV8StartedAt,
   insertActivity, updateTradeCloseReason, updateTradeStopLoss,
   getETDateKey, getETDayBounds, getETDayStart, pruneOldData, recordFill, isSyncOwned, isPortfolioEngineRow, pnlOf,
   getAlpacaV8StartEquity, getPartialCloseLedger, savePnlWindowMarks,
@@ -56,7 +55,6 @@ import {
 import type { CorporateActionEvent } from "../market/corporateActions";
 import { MARKABLE_ACCOUNTS } from "../portfolio/pnlBreakdown";
 import {
-  getPortfolioEquityNow, getPortfolioEquityStartDisplay, getSleeveEquityStartDisplay,
   reconcilePortfolioInvariants, setBrokerTruthAvailable, isBrokerTruthAvailable,
 } from "../portfolio/truth";
 import { heartbeats } from "../ops/heartbeat";
@@ -68,7 +66,6 @@ import { createLogger } from "../utils/logger";
 import { isMarketOpen } from "../utils/marketHours";
 import { eventBus, EVENTS } from "../utils/events";
 import type { PortfolioState, Position } from "../utils/types";
-import { buildPerformanceSummary } from "./performanceSummary";
 import { MEANREV_UNIVERSE } from "../strategies/meanrev/MeanRevEngine";
 import { isTreasurySymbol } from "../treasury/treasurySymbols";
 
@@ -447,6 +444,9 @@ export class AccountManager {
   /** Injected from index.ts — the engines' RiskGuard states, for the dashboard. */
   private engineStates: (() => Partial<Record<RiskProfileId, EngineCircuitState>>) | null = null;
 
+  /** Actual live cutover this boot (not the model table: rollback may run the incumbent). */
+  private portfolioEngineSleeves: ReadonlySet<string> = new Set();
+
   /** Last stock symbol list sent to Alpaca's IEX WS — used to avoid resubscribing
    *  on every state update when holdings haven't changed. */
   private lastStockWsSymbolsKey = "";
@@ -464,6 +464,11 @@ export class AccountManager {
 
   setEngineStates(fn: () => Partial<Record<RiskProfileId, EngineCircuitState>>) {
     this.engineStates = fn;
+  }
+
+  /** Set before start(): recovered portfolio lots must never enter incumbent stop machinery. */
+  setPortfolioEngineSleeves(sleeves: Iterable<string>): void {
+    this.portfolioEngineSleeves = new Set(sleeves);
   }
 
   /** Called by index.ts once momentum_crypto_usdc's preflight has passed and
@@ -1963,7 +1968,7 @@ export class AccountManager {
             symbol: bp.symbol,
             market: "stock",
             side: bp.side,
-            strategy: "SYNC_RECOVERY",
+            strategy: this.portfolioEngineSleeves.has(owner) ? PORTFOLIO_ENGINE_STRATEGY : "SYNC_RECOVERY",
             entryPrice: bp.avgEntryPrice,
             quantity: bp.quantity,
             entryTime: now,
@@ -2681,19 +2686,21 @@ export class AccountManager {
     return v;
   }
 
-  /** §4 structural guard: portfolio invariant reconciliation, once per ET day.
-   *  Runs inside the 5-min snapshot loop right after fresh snapshots landed. */
-  private lastInvariantDay = "";
+  /** §4 structural guard: portfolio invariant reconciliation. Hourly (A-5,
+   * 2026-11-07; was once per ET day) inside the 5-min snapshot loop, right
+   * after fresh snapshots landed, so a recovery is noticed the same day; the
+   * truth reader pages each violation and its recovery once per episode. */
+  private lastInvariantAt = 0;
   private runDailyInvariantCheck() {
-    const day = getETDateKey();
-    if (this.lastInvariantDay === day) return;
-    this.lastInvariantDay = day;
+    const now = Date.now();
+    if (now - this.lastInvariantAt < 60 * 60_000) return;
     try {
       const unrealized: Partial<Record<RiskProfileId, number>> = {};
       for (const [id, acc] of this.accounts) {
         unrealized[id] = (acc.state?.positions ?? []).reduce((s, p) => s + p.unrealizedPnl, 0);
       }
       reconcilePortfolioInvariants(unrealized);
+      this.lastInvariantAt = now;
     } catch (e: any) {
       log.warn(`invariant check failed to run: ${e?.message ?? e}`);
     }
@@ -2753,6 +2760,9 @@ export class AccountManager {
     return this.accounts.get(id as RiskProfileId)?.state ?? this.getConsolidatedState();
   }
 
+  /** What the dashboard reads: the book it shows (`portfolio`), which view that
+   *  is, and the sleeve cards (`accounts`). Nothing else rides along — the
+   *  client computes no other figure from this payload (audit G-15). */
   getDashboardData(viewId?: RiskProfileId | "consolidated"): any {
     const id = viewId ?? this.viewId;
     // Dynamic views accept ACTIVE ids only — a stale session cookie/settings
@@ -2760,62 +2770,10 @@ export class AccountManager {
     // consolidated instead of resurrecting its state/cards.
     const isConsolidated = !id || id === "consolidated" || !this.isActive(id as RiskProfileId);
     const state = isConsolidated ? this.getConsolidatedState() : this.getState(id as RiskProfileId);
-    const accountId = isConsolidated ? undefined : id as RiskProfileId;
-    const realizedPnl = getTradingStats(isConsolidated ? undefined : accountId as string).totalPnl;
-
-    // Anchor "Since Start" to the first equity snapshot (broker-truth rows for
-    // the consolidated view). DISPLAY variants (src/portfolio/truth.ts) span
-    // every configured-rebase semantics era, not just the current one — the
-    // current-era-only getPortfolioEquityStart stays reserved for
-    // reconcilePortfolioInvariants and its own tests
-    // (getSleeveEquityStart, its per-sleeve twin, had no caller anywhere and
-    // was deleted 2026-09-25).
-    const startInfo: { equity: number | undefined; rebased: boolean } = (() => {
-      if (isConsolidated) {
-        const s = getPortfolioEquityStartDisplay();
-        return { equity: s.total ?? undefined, rebased: s.rebased };
-      }
-      const s = getSleeveEquityStartDisplay(accountId as string);
-      return { equity: s?.equity ?? undefined, rebased: s?.rebased ?? false };
-    })();
-    const startingEquity = startInfo.equity;
-
-    const perfTotalEquity: number | null = (() => {
-      if (!isConsolidated) return state.totalEquity;
-      // Broker truth = latest *_main equity_snapshots (written every sync),
-      // via portfolio/truth — NEVER the stale `accounts` table (frozen at its
-      // Jul 9 pre-v8-deploy values; the $111,580-vs-$111,353 incident).
-      return getPortfolioEquityNow().total;
-    })();
-
-    let todayTrades = 0;
-    if (isConsolidated) {
-      for (const aid of this.getActiveProfileIds()) todayTrades += getTradingStats(aid).todayTrades;
-    } else {
-      const acc = this.accounts.get(id as RiskProfileId);
-      if (acc) todayTrades = getTradingStats(acc.id).todayTrades;
-    }
-
     return {
       portfolio: state,
-      recentSignals: getRecentSignals(20, accountId),
-      recentTrades: getRecentTrades(200, accountId), // 200 so the dashboard 30d time-filter is accurate
-      activeStrategies: this.getActiveStrategies(),
-      marketData: this.getMarketData(),
       viewId: id,
       accounts: this.getAccountSummaries(),
-      performance: perfTotalEquity == null
-        ? { equityPnl: null, equityPnlPct: null }
-        : buildPerformanceSummary({ totalEquity: perfTotalEquity, realizedPnl, startingEquity, rebased: startInfo.rebased }),
-      circuits: this.getCircuits(),
-      adjustments: [],
-      correlations: [],
-      dailyTradesUsage: { current: todayTrades, max: 0 },
-      // v8-scoped (2026-09-24 audit fix): the "RUNNING" KPI must not count
-      // the amputated pre-v8 legacy profiles' April history — see
-      // getV8StartedAt's docstring. getBotStartedAt (account-agnostic,
-      // whole-table earliest) stays untouched for its other, documented use.
-      daysRunning: Math.max(1, Math.ceil((Date.now() - getV8StartedAt()) / 86_400_000)),
     };
   }
 
@@ -2847,14 +2805,6 @@ export class AccountManager {
       });
     }
     return summaries;
-  }
-
-  private getMarketData(): Record<string, { price: number; change24h: number }> {
-    const data: Record<string, { price: number; change24h: number }> = {};
-    for (const symbol of [...getEnabledStocks(), ...getEnabledCrypto()]) {
-      data[symbol] = { price: this.executor.alpaca.getCachedPrice(symbol), change24h: 0 };
-    }
-    return data;
   }
 
   private emitPositionUpdates(symbol: string, currentPrice: number) {

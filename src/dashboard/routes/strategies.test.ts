@@ -4,6 +4,12 @@ import { getDB, saveEquitySnapshot } from "../../db/database";
 import { registerStrategyRoutes } from "./strategies";
 import { makeTestDb } from "../../test-support/db";
 
+/** The last row carries `moneyWindow` (the tile's window, A-4); the point
+ *  rows themselves are unchanged. */
+function points(rows: any[]): any[] {
+  return rows.map(({ moneyWindow: _w, ...r }) => r);
+}
+
 function rawSnapshot(profileId: string, equity: number, cash: number, at: number, semantics: number): void {
   getDB().prepare(
     `INSERT INTO equity_snapshots (profile_id, equity, cash, snapshot_time, semantics)
@@ -56,10 +62,14 @@ describe("GET /api/equity/history consolidated truth", () => {
     try {
       const { port } = server.address() as { port: number };
       const response = await fetch(`http://127.0.0.1:${port}/api/equity/history?account=consolidated&range=all`);
-      expect(await response.json()).toEqual([
+      const rows = await response.json();
+      expect(points(rows)).toEqual([
         { snapshot_time: old, equity: 105_000, cash: 87_000, rebased: true },
         { snapshot_time: current, equity: 105_100, cash: 83_100, rebased: false },
       ]);
+      // An unclassified (discontinuous) alpaca 2→5 boundary: no window P&L
+      // header may be invented across it (the frontend renders "—").
+      expect(rows.at(-1)).toHaveProperty("moneyWindow", null);
     } finally {
       server.close();
     }
@@ -91,13 +101,20 @@ describe("GET /api/equity/history consolidated truth", () => {
       // truncated to today — using DAPI's own first-ever reading as a
       // constant synthetic baseline, marked rebased (no simple all-time %
       // off a fabricated basis).
-      expect(rows[0]).toEqual({
+      expect(points(rows)[0]).toEqual({
         snapshot_time: oldBucket, equity: 100_000 + 5_000 + 1_000, cash: 80_000 + 4_000 + 1_000, rebased: true,
       });
       // Latest bucket sums the REAL current readings exactly — no fake jump.
-      expect(rows[rows.length - 1]).toEqual({
+      expect(points(rows)[rows.length - 1]).toEqual({
         snapshot_time: nowBucket, equity: 101_000 + 5_200 + 1_000, cash: 81_000 + 4_100 + 1_000, rebased: false,
       });
+      // The header window is the tile's: Σ legs' first display rows (the DAPI
+      // leg's synthetic pre-genesis baseline makes the start rebased ⇒ no %).
+      const w = rows[rows.length - 1].moneyWindow;
+      expect(w.pnl).toBe(1_200);
+      expect(w.pnlPct).toBeNull();
+      expect(w.start).toMatchObject({ at: oldBucket, equity: 106_000, rebased: true });
+      expect(rows[rows.length - 1].equity - rows[0].equity).toBe(w.pnl);
     } finally {
       server.close();
     }
@@ -115,7 +132,7 @@ describe("GET /api/equity/history consolidated truth", () => {
     try {
       const { port } = server.address() as { port: number };
       const response = await fetch(`http://127.0.0.1:${port}/api/equity/history?account=consolidated&range=all`);
-      expect(await response.json()).toEqual([{ snapshot_time: at, equity: 105_000, cash: 84_000, rebased: false }]);
+      expect(points(await response.json())).toEqual([{ snapshot_time: at, equity: 105_000, cash: 84_000, rebased: false }]);
     } finally {
       server.close();
     }
@@ -139,7 +156,8 @@ describe("GET /api/equity/history consolidated truth", () => {
       const { port } = server.address() as { port: number };
       const response = await fetch(`http://127.0.0.1:${port}/api/equity/history?account=consolidated&range=all`);
       const rows = await response.json();
-      expect(rows).toEqual([{ snapshot_time: genesis, equity: 106_000, cash: 85_000, rebased: false }]);
+      expect(points(rows)).toEqual([{ snapshot_time: genesis, equity: 106_000, cash: 85_000, rebased: false }]);
+      expect(rows.at(-1).moneyWindow).toBeNull(); // a stale leg: no window, not a 2-leg partial
       // The stale bucket is dropped entirely — never a FAPI+alpaca-only
       // partial masquerading as the full portfolio total.
       expect(rows.find((r: any) => r.snapshot_time === stale)).toBeUndefined();

@@ -12,8 +12,8 @@
 // COIN-M pre-genesis synthetic baseline marked `rebased`, and a bucket only
 // emitted when EVERY leg has a fresh-enough reading.
 
-import { getEquityHistoryByRangeDisplay, type DisplayEquityRow } from "../db/database";
-import { BROKER_SNAPSHOT_MAX_AGE_MS, isMainSeriesApplicable } from "./truth";
+import { getEquityHistoryByRangeDisplay, getDisplayEquitySeries, equityWindowFromSeries, type DisplayEquityRow } from "../db/database";
+import { BROKER_SNAPSHOT_MAX_AGE_MS, isMainSeriesApplicable, readDisplayMoneyWindow } from "./truth";
 
 export interface ConsolidatedEquityPoint {
   snapshot_time: number;
@@ -29,13 +29,14 @@ export interface ConsolidatedEquityPoint {
  */
 export function buildConsolidatedEquitySeries(
   fetchLeg: (profileId: string) => DisplayEquityRow[],
+  profileIds?: string[],
 ): ConsolidatedEquityPoint[] {
-  const coreLegs = ["alpaca_main", "binance_main"];
+  const coreLegs = profileIds?.filter(id => id !== "binance_coinm_main") ?? ["alpaca_main", "binance_main"];
   // binance_coinm_main (DAPI) joins the curve only once it has EVER recorded
   // a snapshot (mirrors isMainSeriesApplicable). Fetched at full "all"
   // history unconditionally so its genesis timestamp/value are known
   // regardless of the requested window.
-  const coinmApplicable = isMainSeriesApplicable("coinm");
+  const coinmApplicable = (!profileIds || profileIds.includes("binance_coinm_main")) && isMainSeriesApplicable("coinm");
   const coinmGenesis = coinmApplicable ? getEquityHistoryByRangeDisplay("binance_coinm_main", "all")[0] : undefined;
   const coinmGenesisBucket = coinmGenesis ? Math.floor(coinmGenesis.snapshot_time / 300_000) * 300_000 : 0;
   const legs = coinmGenesis ? [...coreLegs, "binance_coinm_main"] : coreLegs;
@@ -89,4 +90,36 @@ export function buildConsolidatedEquitySeries(
   }
 
   return result;
+}
+
+/** Display endpoints use the SAME composite anchors as the money reader.
+ * Bucket resampling is chart detail, never a second definition of P&L. */
+export function readDisplayMoneyCurve(profileIds: string[], days: number, now = Date.now()) {
+  const window = readDisplayMoneyWindow(profileIds, days, now, false);
+  if (!window) {
+    // Historical chart detail remains useful across an unclassified era or
+    // a stale leg, but it must not invent a comparable window P&L header.
+    const fetch = (id: string) => {
+      const rows = getDisplayEquitySeries(id).filter(r => r.snapshot_time <= now);
+      const since = days <= 0 ? 0 : now - (days + 1) * 86_400_000;
+      return rows.filter(r => r.snapshot_time >= since);
+    };
+    return { rows: profileIds.length === 1 ? fetch(profileIds[0]) : buildConsolidatedEquitySeries(fetch, profileIds), window: null };
+  }
+  const legs = new Map(profileIds.map(id => {
+    const series = getDisplayEquitySeries(id).filter(r => r.snapshot_time <= now);
+    return [id, { series, window: equityWindowFromSeries(series, days, now)! }] as const;
+  }));
+  const fetch = (id: string) => {
+    const leg = legs.get(id)!;
+    return leg.series.filter(r => r.snapshot_time >= leg.window.start.at);
+  };
+  const points = profileIds.length === 1 ? fetch(profileIds[0]) : buildConsolidatedEquitySeries(fetch, profileIds);
+  const cashAt = (end: boolean) => [...legs.values()].reduce((sum, l) => sum +
+    (l.series.find(r => r.snapshot_time === (end ? l.window.endAt : l.window.start.at))?.cash ?? 0), 0);
+  const first: ConsolidatedEquityPoint = { snapshot_time: window.start.at, equity: window.start.equity, cash: cashAt(false), rebased: window.start.rebased };
+  const last: ConsolidatedEquityPoint = { snapshot_time: window.endAt, equity: window.equity, cash: cashAt(true), rebased: false };
+  const rows = [first, ...points.filter(r => r.snapshot_time > first.snapshot_time && r.snapshot_time < last.snapshot_time)];
+  if (last.snapshot_time > first.snapshot_time) rows.push(last);
+  return { rows, window };
 }

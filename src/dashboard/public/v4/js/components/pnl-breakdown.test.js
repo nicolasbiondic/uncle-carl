@@ -117,11 +117,12 @@ describe("renderBreakdown — the bridge from realized to the tile's two figures
       .map((s) => html.indexOf(s));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
-    expect(html).toContain("−$1,150.32");
-    expect(html).toContain("+$1,323.40"); // minus a negative "counted before"
-    expect(html).toContain("+$173.08");
-    expect(html).toContain("+$193.92");
-    expect(html).toContain("+$367.00");
+    expect(html).toContain("−$1,150");
+    expect(html).not.toContain(".32<"); // whole dollars in the bridge table (owner: no decimals in tables)
+    expect(html).toContain("+$1,323"); // minus a negative "counted before"
+    expect(html).toContain("+$173");
+    expect(html).toContain("+$194");
+    expect(html).toContain("+$367");
     expect(html).toContain("colateral BTC");
     expect(html).not.toContain("ya estaba");
     expect(html).not.toContain("aproximado"); // marks were used
@@ -132,8 +133,8 @@ describe("renderBreakdown — the bridge from realized to the tile's two figures
     const html = renderBreakdown(today);
     expect(html.indexOf("QQQ")).toBeLessThan(html.indexOf("SMH"));
     expect(html).toContain("SMH <span class=\"muted\">trim</span>");
-    expect(html).toContain("−$288.50");
-    expect(html).toContain("−$25.01");
+    expect(html).toContain("−$288");
+    expect(html).toContain("−$25");
     expect(html).toContain("and 16 more"); // 18 legs, 2 shown
   });
 
@@ -165,13 +166,13 @@ describe("renderBreakdown — the bridge from realized to the tile's two figures
 });
 
 describe("Trades tab — holding time", () => {
-  test("compact prices and P&L preserve small crypto prices and percent decimals", () => {
+  test("compact prices and P&L: whole dollars, small crypto prices keep their digits, percent is whole", () => {
     Object.assign(store.state, { lang: "en" });
     const html = renderTrades([
       { status: "closed", symbol: "SPY", side: "buy", entryPrice: 540.24, exitPrice: 525.49, pnl: -1794.42, pnlPct: -0.3 },
       { status: "closed", symbol: "DOGE/USD", side: "buy", entryPrice: 0.0777, exitPrice: 8.99, pnl: 85.04, pnlPct: 0.3 },
     ]);
-    for (const value of ["$540<", "$525<", "−$1,794 ", "$0.0777<", "$8.99<", "+$85 ", "−0.3%"])
+    for (const value of ["$540<", "$525<", "−$1,794 ", "$0.0777<", "$8.99<", "+$85 ", "0%"])
       expect(html).toContain(value);
     expect(html).not.toContain("$1,794.42");
   });

@@ -4,6 +4,15 @@
 # (works while the bot has the DB open in WAL mode).
 # Keeps the last 14 daily + 8 weekly backups.
 # Wire into cron with: scripts/install-cron.sh
+#
+# Dead-man's switch (audit F-2, 2026-11-07): a full success writes
+# data/cron-markers/backup-db.ok; any failure — including an off-host copy
+# that did not land (exit 3, after the verified local backup) — pages OPS
+# once per episode (scripts/lib/cron-job.sh). The master key is kept as
+# content-addressed versions, master-<sha256:12>.key, locally under
+# data/backups/ and off-host, never overwritten (audit F-9): a rotated key
+# cannot erase the one older backups need. scripts/restore-drill.sh restores
+# the latest backup with it every week.
 # ══════════════════════════════════════════════
 
 set -euo pipefail
@@ -11,6 +20,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DATA_DIR="$ROOT_DIR/data"
+# shellcheck source=lib/cron-job.sh
+source "$ROOT_DIR/scripts/lib/cron-job.sh"
+cron_job_start backup-db
 BACKUP_DIR="$DATA_DIR/backups"
 SRC_DB="$DATA_DIR/trading.db"
 
@@ -49,9 +61,10 @@ TS=$(date -u +%Y%m%dT%H%M%SZ)
 DAY=$(date -u +%Y%m%d)
 DOW=$(date -u +%u)        # 1=Mon..7=Sun
 DAILY_FILE="$BACKUP_DIR/daily-${DAY}.db"
-WEEKLY_FILE="$BACKUP_DIR/weekly-$(date -u +%Y-W%V).db"
+# ISO week-numbering year (%G), not the calendar year: 2027-01-01 is 2026-W53.
+WEEKLY_FILE="$BACKUP_DIR/weekly-$(date -u +%G-W%V).db"
 STATE_FILE="$BACKUP_DIR/daily-${DAY}-state.tar.gz"
-STATE_WEEKLY_FILE="$BACKUP_DIR/weekly-$(date -u +%Y-W%V)-state.tar.gz"
+STATE_WEEKLY_FILE="$BACKUP_DIR/weekly-$(date -u +%G-W%V)-state.tar.gz"
 
 # ── 1. Consistent backup (safe with WAL + concurrent writers)
 # snapshot_sqlite SRC OUT — WAL-safe copy of a live SQLite DB into OUT.
@@ -89,7 +102,7 @@ snapshot_sqlite "$SRC_DB" "$DAILY_FILE"
 # (daily-*.db, weekly-*.db) never count or delete these files.
 AIQ_DB="$DATA_DIR/ai-quorum.db"
 AIQ_DAILY="$BACKUP_DIR/aiq-daily-${DAY}.db"
-AIQ_WEEKLY="$BACKUP_DIR/aiq-weekly-$(date -u +%Y-W%V).db"
+AIQ_WEEKLY="$BACKUP_DIR/aiq-weekly-$(date -u +%G-W%V).db"
 if [ -f "$AIQ_DB" ]; then
   snapshot_sqlite "$AIQ_DB" "$AIQ_DAILY"
   chmod 640 "$AIQ_DAILY" 2>/dev/null || true
@@ -179,6 +192,7 @@ rm -f "$DAILY_FILE-shm" "$DAILY_FILE-wal" "$WEEKLY_FILE-shm" "$WEEKLY_FILE-wal" 
 #   BACKUP_REMOTE      — an rsync/scp target, e.g. user@host:/srv/uncle-carl-backups
 #                        (or an ~/.ssh/config Host alias, e.g. uc-backup:).
 # ship FILE MODE — copy FILE to every configured off-host target with MODE.
+OFFHOST_FAILED=0
 ship() {
   local file="$1" mode="$2" base
   base="$(basename "$file")"
@@ -187,6 +201,7 @@ ship() {
       echo "📦 Off-host copy → $BACKUP_OFFHOST_DIR/$base"
     else
       echo "⚠️  Off-host copy of $base to BACKUP_OFFHOST_DIR=$BACKUP_OFFHOST_DIR FAILED (local backup still OK)" >&2
+      OFFHOST_FAILED=1
     fi
   fi
   if [ -n "${BACKUP_REMOTE:-}" ]; then
@@ -196,6 +211,7 @@ ship() {
       echo "📦 Off-host scp → $BACKUP_REMOTE ($base)"
     else
       echo "⚠️  Off-host transfer of $base to BACKUP_REMOTE=$BACKUP_REMOTE FAILED (local backup still OK)" >&2
+      OFFHOST_FAILED=1
     fi
   fi
 }
@@ -204,12 +220,22 @@ ship "$DAILY_FILE" 640
 # produced above.
 [ -f "$STATE_FILE" ] && ship "$STATE_FILE" 640
 [ -f "$AIQ_DAILY" ] && ship "$AIQ_DAILY" 640
-# The master key decrypts the broker credentials stored in the DB; its only
-# other copy lives on this same host. Shipped off-host as-is (mode 600, one
-# file, overwritten daily): useless without the DB, and the DB without it
-# loses the encrypted broker accounts.
-if [ -f "$DATA_DIR/master.key" ] && { [ -n "${BACKUP_REMOTE:-}" ] || [ -n "${BACKUP_OFFHOST_DIR:-}" ]; }; then
-  ship "$DATA_DIR/master.key" 600
+# The master key decrypts the broker credentials stored in the DB: useless
+# without the DB, and the DB without it loses the encrypted broker accounts.
+# Versioned by content (master-<sha256:12>.key, mode 600): a new key adds a
+# file, it never overwrites the one older backups were sealed with. The local
+# copy under data/backups/ is what restore-drill.sh opens the registry with.
+KEY_COPY=""
+if [ -f "$DATA_DIR/master.key" ]; then
+  KEY_HASH="$(sha256sum "$DATA_DIR/master.key" | cut -c1-12)"
+  KEY_COPY="$BACKUP_DIR/master-${KEY_HASH}.key"
+  if [ ! -f "$KEY_COPY" ]; then
+    (umask 077 && cp "$DATA_DIR/master.key" "$KEY_COPY.tmp" && mv "$KEY_COPY.tmp" "$KEY_COPY")
+  fi
+  chmod 600 "$KEY_COPY" 2>/dev/null || true
+  if [ -n "${BACKUP_REMOTE:-}" ] || [ -n "${BACKUP_OFFHOST_DIR:-}" ]; then
+    ship "$KEY_COPY" 600
+  fi
 fi
 
 STATE_MSG="no risk-state files found"
@@ -220,4 +246,11 @@ if [ -z "$INTEGRITY" ]; then
   echo "⚠️  DB backed up at ${TS} → $DAILY_FILE (${SIZE_MB} MB, integrity=skipped, $STATE_MSG)"
 else
   echo "✅ DB backed up at ${TS} → $DAILY_FILE (${SIZE_MB} MB, integrity=ok, $STATE_MSG)"
+fi
+
+# The local backup is verified, but a copy that never left the host does not
+# protect against losing it: fail the job so the dead-man's switch pages.
+if [ "$OFFHOST_FAILED" = 1 ]; then
+  echo "❌ at least one off-host copy FAILED — see the ⚠️ lines above" >&2
+  exit 3
 fi

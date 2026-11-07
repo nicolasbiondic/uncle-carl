@@ -6,7 +6,7 @@
 // container exists (loadEquity / openCandles). bun:test has no DOM, so it
 // never calls those mount functions — importing equity.js/candle.js in a
 // test costs nothing beyond this tiny wrapper module. Never a CDN: the CSP
-// in src/dashboard/server.ts is `script-src 'self'`; the file is vendored at
+// in src/dashboard/server.ts allows no third-party script host for it; the file is vendored at
 // public/v4/vendor/lightweight-charts/ (Apache-2.0 — see LICENSE/NOTICE next
 // to it, and vendor-lightweight-charts.test.ts for the pinned checksum).
 let libPromise = null;

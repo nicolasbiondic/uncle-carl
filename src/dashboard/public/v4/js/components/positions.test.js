@@ -249,33 +249,33 @@ describe("holdProgress — sessions for stocks, hours for crypto", () => {
     expect(weekdaysSince(Date.UTC(2026, 9, 27, 0, 30), Date.UTC(2026, 9, 27, 14))).toBe(1);
   });
 
-  test("a stock row: dots = sessions elapsed, 'closes in N days' with N the sessions left", () => {
+  test("a stock row: dots = sessions elapsed, 'closes within N days' with N the sessions left", () => {
     const p = { symbol: "SPY", market: "stock", openedAt: mon };
     expect(holdProgress(p, alpaca, mon)).toMatchObject({ unit: "sessions", elapsed: 0, limit: MAX_HOLD_SESSIONS, remaining: 5, dots: 0, closing: false });
-    expect(holdText(holdProgress(p, alpaca, mon))).toBe("closes in 5 days");
-    expect(holdText(holdProgress(p, alpaca, mon + day))).toBe("closes in 4 days");
+    expect(holdText(holdProgress(p, alpaca, mon))).toBe("closes within 5 days");
+    expect(holdText(holdProgress(p, alpaca, mon + day))).toBe("closes within 4 days");
     expect(holdProgress(p, alpaca, mon + 4 * day)).toMatchObject({ dots: 4, remaining: 1 });
-    expect(holdText(holdProgress(p, alpaca, mon + 4 * day))).toBe("closes in 1 day");
-    expect(holdText(holdProgress(p, alpaca, mon + 6 * day))).toBe("closes in 1 day"); // Sunday: Monday's pass closes it
+    expect(holdText(holdProgress(p, alpaca, mon + 4 * day))).toBe("closes within 1 day");
+    expect(holdText(holdProgress(p, alpaca, mon + 6 * day))).toBe("closes within 1 day"); // Sunday: Monday's pass closes it
   });
 
   test("past the limit the close is pending: five dots and 'closing'", () => {
     const h = holdProgress({ market: "stock", openedAt: mon }, alpaca, mon + 7 * day);
     expect(h).toMatchObject({ dots: 5, remaining: 0, closing: true });
-    expect(holdText(h)).toBe("closing");
+    expect(holdText(h)).toBe("due to close");
     expect(holdProgress({ market: "stock", openedAt: mon }, alpaca, mon + 20 * day)).toMatchObject({ dots: 5, closing: true });
   });
 
   test("a crypto row runs on 120 calendar hours: a dot per day, days rounded up so dots + days = 5, hours under a day", () => {
     const p = { symbol: "ETH/USDC", openedAt: mon };
     expect(holdProgress(p, binance, mon)).toMatchObject({ unit: "hours", limit: MAX_HOLD_HOURS, remaining: 120, dots: 0, closing: false });
-    expect(holdText(holdProgress(p, binance, mon + 20 * 36e5))).toBe("closes in 5 days"); // 0 dots + 5
+    expect(holdText(holdProgress(p, binance, mon + 20 * 36e5))).toBe("closes within 5 days"); // 0 dots + 5
     expect(holdProgress(p, binance, mon + 50 * 36e5)).toMatchObject({ dots: 2 });
-    expect(holdText(holdProgress(p, binance, mon + 50 * 36e5))).toBe("closes in 3 days"); // 2 dots + 3
-    expect(holdText(holdProgress(p, binance, mon + 100 * 36e5))).toBe("closes in 20 h");
-    expect(holdText(holdProgress(p, binance, mon + 119.5 * 36e5))).toBe("closes in 1 h");
+    expect(holdText(holdProgress(p, binance, mon + 50 * 36e5))).toBe("closes within 3 days"); // 2 dots + 3
+    expect(holdText(holdProgress(p, binance, mon + 100 * 36e5))).toBe("closes within 20 h");
+    expect(holdText(holdProgress(p, binance, mon + 119.5 * 36e5))).toBe("closes within 1 h");
     expect(holdProgress(p, binance, mon + 120 * 36e5)).toMatchObject({ dots: 5, closing: true });
-    expect(holdText(holdProgress(p, binance, mon + 130 * 36e5))).toBe("closing");
+    expect(holdText(holdProgress(p, binance, mon + 130 * 36e5))).toBe("due to close");
   });
 
   test("durationSeconds stands in for a missing openedAt; neither -> null and a dash", () => {
@@ -460,13 +460,13 @@ describe("renderPositions (partial data)", () => {
     const html = renderPositions(state, []);
     expect(html).toContain('title="Qty 130 · Entry $196 · Now $196">SPY</span>');
     expect(html).not.toContain(">Qty<"); expect(html).not.toContain(">SL<"); expect(html).not.toContain('class="opt1"');
-    expect(html).toContain('<span class="pnlbar-fill" style="width:38.5%;background:var(--up)"></span></span><span style="color:var(--up)">+$65 <span class="muted">+0.5%</span>'); // 0.5 / 1.3 of the track
+    expect(html).toContain('<span class="pnlbar-fill" style="width:38.5%;background:var(--up)"></span></span><span style="color:var(--up)">+$65 <span class="muted">+1%</span>'); // 0.5 / 1.3 of the track
     expect(html).toContain('style="width:100%;background:var(--up)"></span></span><span style="color:var(--up)">+$130');
     expect(html).toContain('style="width:38.5%;background:var(--down)"></span></span><span style="color:var(--down)">−$10');
-    expect(html).toContain('<span class="hdots" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="opt2 hold-txt muted">closes in 5 days</span>');
-    expect(html).toContain('<span class="hdots" aria-hidden="true"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span><span class="opt2 hold-txt muted">closes in 3 days</span>');
-    expect(html).toMatch(/class="hold" title="Held 2d · limit 120 h · every operation closes at 5 days/);
-    expect(html).toMatch(/<th title="[^"]*5 NYSE sessions for stocks, 120 h for crypto[^"]*">Time<\/th>/);
+    expect(html).toContain('<span class="hdots" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="opt2 hold-txt muted">closes within 5 days</span>');
+    expect(html).toContain('<span class="hdots" aria-hidden="true"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span><span class="opt2 hold-txt muted">closes within 3 days</span>');
+    expect(html).toMatch(/class="hold" title="Held 2d · limit 120 h · Your 5-day rule is the latest a position stays open/);
+    expect(html).toMatch(/<th title="[^"]*5 market sessions for stocks, 120 h for crypto[^"]*">Time<\/th>/);
   });
 
   test("a pending close reads 'closing' in the text colour; folded groups do not set the bar scale", () => {
@@ -477,7 +477,7 @@ describe("renderPositions (partial data)", () => {
       portfolio: { positions: [...many, { symbol: "SPY", side: "buy", market: "stock", quantity: 1, avgEntryPrice: 100, currentPrice: 101, unrealizedPnl: 1, unrealizedPnlPct: 1, openedAt: now - 30 * 864e5, profileId: "momentum_stocks" }] },
     } };
     const html = renderPositions(state, []);
-    expect(html).toContain('<span class="opt2 hold-txt">closing</span>');
+    expect(html).toContain('<span class="opt2 hold-txt">due to close</span>');
     expect(html).toContain('style="width:100%;background:var(--up)"'); // SPY's 1% is the largest ON SCREEN (the 13 folded 10% rows don't count)
   });
 
@@ -648,7 +648,7 @@ describe("renderPositions — compact numbers", () => {
       { symbol: "SPY", side: "buy", quantity: 5.59, avgEntryPrice: 540.1, currentPrice: 525.25, stopLoss: 478.4, unrealizedPnl: -85.04, unrealizedPnlPct: -0.3 },
       { symbol: "QQQ", side: "buy", quantity: 10, avgEntryPrice: 540.1, unrealizedPnl: -1709.38 },
     ]), []);
-    for (const value of ['title="Qty 6 · Entry $540 · Now $525"', "$540<", "$525<", "$3,019<", "−$85 ", "−$1,794<", "−0.3%"])
+    for (const value of ['title="Qty 6 · Entry $540 · Now $525"', "$540<", "$525<", "$3,019<", "−$85 ", "−$1,794<", "0%"])
       expect(html).toContain(value);
     expect(html).not.toContain("$478");
     expect(html).not.toContain("$540.10");

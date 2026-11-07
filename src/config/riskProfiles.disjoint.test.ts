@@ -7,7 +7,7 @@ import { MOMENTUM_SYMBOLS } from "./wideUniverse";
 import { SYMBOL_MAP } from "../executor/binance-executor";
 import { readFileSync } from "node:fs";
 import { currentModelVersion } from "../portfolio/modelVersions";
-import { portfolioUniverse } from "../portfolios/validate";
+import { portfolioEngineOwnedSymbols, portfolioUniverse } from "../portfolios/validate";
 import { isTreasurySymbol } from "../treasury/treasurySymbols";
 
 // The two Alpaca sleeves (momentum_stocks, meanrev_stocks) share ONE wallet.
@@ -39,6 +39,11 @@ describe("momentum_stocks ∩ meanrev_stocks universes", () => {
     expect(tradable.filter(s => MEANREV_UNIVERSE.includes(s))).toEqual([]);
     expect(tradable.filter(isTreasurySymbol)).toEqual([]);
     expect(isTreasurySymbol("SH")).toBe(false);
+    // BrokerSync's ownership boundary (B-4) is derived from the same tradable universe: a live
+    // definition carrying this strategy registers SH as sleeve-owned, never an alpaca_main orphan.
+    const owned = portfolioEngineOwnedSymbols([{ id: "pe", name: "E1", template: "portfolio", account: "alpaca_main", capital: 1, mode: "live", enabled: true,
+      params: { ...params, engine: "portfolio", venue: "alpaca", runMode: "live" } }]);
+    expect(owned.alpaca).toEqual(tradable.sort());
   });
 
   test("neither universe has internal duplicates", () => {

@@ -11,10 +11,11 @@
 // USDC daily kernel) from the venue we execute on, with Alpaca bars as the
 // fallback; normal momentum attaches a broker-native STOP_MARKET at the
 // engine's vol-scaled stopLossPct (profile fixed pct as fallback). Explicit
-// research roles opt out: idle TSM has no stop, Turtle stops at hourly close.
+// idle TSM has no stop; Turtle keeps its close-based 2N exit plus a native 3N tail stop.
 
 import type { MomentumBrokerAdapter } from "./MomentumEngine";
-import { BREAKOUT_SHORT_TIME_STOP } from "./MomentumEngine";
+import { BREAKOUT_CATASTROPHE_STOP, BREAKOUT_SHORT_TIME_STOP } from "./MomentumEngine";
+import { ensureTurtleCatastropheStop, isTurtleUnit, turtleStopClientOrderId, withTurtleProtectionLock } from "../../account/BinanceSleeveReconciler";
 import { BREAKOUT_LONG_EXIT, BREAKOUT_LONG_STOP, BREAKOUT_LONG_PRIORITY, BREAKOUT_LONG_DRAWDOWN, BREAKOUT_LONG_TIME_STOP } from "./MomentumEngine";
 import { BREAKOUT_SHORT_EXIT, BREAKOUT_SHORT_STOP, BREAKOUT_SHORT_PRIORITY, BREAKOUT_SHORT_DRAWDOWN, IDLE_OVERLAY_EXIT_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, TIME_STOP_CLOSE_REASON, TRAIL_STOP_CLOSE_REASON, TREND_EXIT_CLOSE_REASON } from "./MomentumEngine";
 import type { CurrentPosition } from "./Rebalancer";
@@ -30,7 +31,7 @@ import { binanceKlinesEnabled, fetchBinanceKlines } from "../../market/binanceKl
 import {
   getDB, insertTrade, closeTrade, updateTradeCloseReason, getOpenTrades,
   insertSignal, insertOrder, recordFill, insertActivity, RECONCILE_CLOSE_SQL,
-  accumulatePartialCloseLedger, getPartialCloseLedger, increaseOpenTradeQuantity,
+  accumulatePartialCloseLedger, getPartialCloseLedger, increaseOpenTradeQuantity, setPendingTradeClose,
 } from "../../db/database";
 import { eventBus, EVENTS } from "../../utils/events";
 import { createLogger } from "../../utils/logger";
@@ -42,7 +43,7 @@ const log = createLogger("BinanceMomentumAdapter");
 // MOMENTUM_REBALANCE — both were previously recorded as the latter). Any
 // other/absent value falls back to MOMENTUM_REBALANCE, so free-text can
 // never land in the enum-ish column. Mirrors AlpacaMomentumAdapter.
-const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, TREND_EXIT_CLOSE_REASON, IDLE_OVERLAY_EXIT_CLOSE_REASON, BREAKOUT_SHORT_EXIT, BREAKOUT_SHORT_STOP, BREAKOUT_SHORT_PRIORITY, BREAKOUT_SHORT_DRAWDOWN, BREAKOUT_SHORT_TIME_STOP, BREAKOUT_LONG_EXIT, BREAKOUT_LONG_STOP, BREAKOUT_LONG_PRIORITY, BREAKOUT_LONG_DRAWDOWN, BREAKOUT_LONG_TIME_STOP]);
+const ENGINE_CLOSE_REASONS: ReadonlySet<string> = new Set([BREAKOUT_CATASTROPHE_STOP, TRAIL_STOP_CLOSE_REASON, TIME_STOP_CLOSE_REASON, SLOT_DISPLACED_CLOSE_REASON, MODEL_CUTOVER_CLOSE_REASON, TREND_EXIT_CLOSE_REASON, IDLE_OVERLAY_EXIT_CLOSE_REASON, BREAKOUT_SHORT_EXIT, BREAKOUT_SHORT_STOP, BREAKOUT_SHORT_PRIORITY, BREAKOUT_SHORT_DRAWDOWN, BREAKOUT_SHORT_TIME_STOP, BREAKOUT_LONG_EXIT, BREAKOUT_LONG_STOP, BREAKOUT_LONG_PRIORITY, BREAKOUT_LONG_DRAWDOWN, BREAKOUT_LONG_TIME_STOP]);
 
 export interface BinanceMomentumAdapterConfig {
   /** Profile id to associate trades with. */
@@ -180,6 +181,9 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
   }
 
   async openPosition(action: Parameters<MomentumBrokerAdapter["openPosition"]>[0]): Promise<{ ok: boolean; reason?: string }> {
+    if (action.breakout?.catastropheN !== undefined && (!Number.isFinite(action.breakout.catastropheN) || action.breakout.catastropheN <= 0)) {
+      return { ok: false, reason: "catastropheN must be positive and finite" };
+    }
     if (action.role === "breakout-long" && (!this.cfg.breakoutLongSymbols?.includes(action.symbol) || !this.toNative(action.symbol) || action.side !== "buy" || !action.breakout || ![action.breakout.n, action.breakout.stopN, action.breakout.quantity].every(x => Number.isFinite(x) && x > 0))) {
       return { ok: false, reason: `breakout long requires a configured, mapped ${this.cfg.quoteAsset} buy with positive N/stopN` };
     }
@@ -367,15 +371,19 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
     // unattended protection for this position (the 15s client stop loop is
     // a secondary backstop, not primary) — an open can never report success
     // while genuinely unprotected, so a failed install reconciles the
-    // position closed instead of persisting it. Role-tagged units explicitly
-    // opt out: idle TSM has no stop; Turtle evaluates 2N at HOURLY CLOSE only
-    // in the shared engine (including live). No unattended stop for that unit.
+    // position closed instead of persisting it. Idle TSM opts out. Turtle's
+    // separate catastrophe stop is installed AFTER persisting the unit below;
+    // failure keeps the unit and pages once, then each sync retries.
     const nativeStop = !!action.role || await this.binance.placeStopMarketClose(action.symbol, action.side, stopLoss, finalQty);
     if (!nativeStop) return this.closeAfterStopFailure(action, finalQty, stopLoss);
 
     // Persist a trade row so getRealisedPnlSince() can attribute the close later.
     const persist = await this.persistFillOrReconcile(order.id, action, filledPrice, finalQty, stopLoss, order.openCommission ?? 0);
     if (!persist.ok) return persist;
+    if (action.role === "breakout-short" || action.role === "breakout-long") {
+      const trade = getOpenTrades(this.cfg.accountId).find(t => t.id === order.id);
+      if (trade) await ensureTurtleCatastropheStop(this.binance, trade, binanceSym);
+    }
 
     // Telegram/dashboard: adapters are the only open path in v8 — without
     // this emit no open is ever notified (2026-07-11 fix).
@@ -473,6 +481,8 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
       side: action.side,
       strategy: action.role === "breakout-long" ? "BREAKOUT_LONG" : action.role === "breakout-short" ? "BREAKOUT_SHORT" : action.role === "idle-overlay" ? "IDLE_OVERLAY" : "MOMENTUM" as any,
       breakoutN: action.role === "breakout-short" || action.role === "breakout-long" ? action.breakout!.n : undefined,
+      catastropheStop: action.role === "breakout-short" || action.role === "breakout-long"
+        ? filledPrice + (action.side === "sell" ? 1 : -1) * (action.breakout!.catastropheN ?? 3) * action.breakout!.n : undefined,
       entryPrice: filledPrice,
       quantity: filledQty,
       entryTime: Date.now(),
@@ -523,6 +533,15 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
 
   async closePosition(action: { symbol: string; side: "buy" | "sell"; closeReason?: string }): Promise<{ ok: boolean; reason?: string }> {
     if (!this.binance.isConnected()) return { ok: false, reason: "binance not connected" };
+    let turtle;
+    try { turtle = getOpenTrades(this.cfg.accountId).find(t => t.symbol === action.symbol && isTurtleUnit(t)); }
+    catch (e: any) { return { ok: false, reason: `DB ownership lookup failed: ${e.message}` }; }
+    if (turtle) return withTurtleProtectionLock(this.cfg.accountId, action.symbol, () => this.closePositionCore(action), () => ({ ok: false, reason: "Turtle protection lock timeout" }));
+    return this.closePositionCore(action);
+  }
+
+  private async closePositionCore(action: { symbol: string; side: "buy" | "sell"; closeReason?: string }): Promise<{ ok: boolean; reason?: string }> {
+    if (!this.binance.isConnected()) return { ok: false, reason: "binance not connected" };
     // TRAIL_STOP (or a future canonical label) from the engine; default flip label otherwise.
     const closeReason = action.closeReason && ENGINE_CLOSE_REASONS.has(action.closeReason)
       ? action.closeReason
@@ -545,7 +564,7 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
     let row: any;
     try {
       row = getDB().prepare(
-        `SELECT id, entry_price, quantity, side, open_commission FROM trades
+        `SELECT id, strategy, account_id AS accountId, entry_price, quantity, side, open_commission FROM trades
          WHERE account_id = ? AND symbol = ? AND status = 'open' AND strategy IN ('MOMENTUM', 'SYNC_RECOVERY', 'IDLE_OVERLAY', 'BREAKOUT_SHORT', 'BREAKOUT_LONG')
          ORDER BY entry_time DESC LIMIT 1`
       ).get(this.cfg.accountId, action.symbol) as any;
@@ -567,7 +586,7 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
       // Broker flatness is enough to remove protection. Accounting may still
       // be pending because userTrades is eventually consistent; our stale DB
       // row is closed by AccountManager's 60s sync as an external close.
-      await this.binance.cancelAllOrders(action.symbol, { aggregateFlat: true });
+      await this.binance.cancelAllOrders(action.symbol, isTurtleUnit(row) ? { onlyClientOrderIds: [turtleStopClientOrderId(row)] } : { aggregateFlat: true });
       return { ok: false, reason: "broker position already flat; awaiting fill reconciliation" };
     }
 
@@ -605,7 +624,10 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
     // reconciler takes over on its next pass, exactly as before.
     beginEngineClose(this.cfg.accountId, action.symbol);
     try {
-      const result = await this.binance.closePosition(action.symbol, qty, action.side);
+      const result = await this.binance.closePosition(action.symbol, qty, action.side, {
+        ...(isTurtleUnit(row) ? { skipOrderCleanup: true } : {}),
+        onAccepted: orderId => setPendingTradeClose(row.id, closeReason, orderId),
+      });
       if (!result.success || result.filledPrice <= 0) return { ok: false, reason: "broker did not confirm close" };
 
       // Clear the native SL left behind (closePosition=true stops don't
@@ -615,7 +637,7 @@ export class BinanceMomentumAdapter implements MomentumBrokerAdapter {
       // manual/unknown position) or a FUTURE position of ours. The aggregate
       // may not be flat here, so this is the scoped form: our stamped stops
       // only, never anonymous ones.
-      await this.binance.cancelAllOrders(action.symbol);
+      await this.binance.cancelAllOrders(action.symbol, isTurtleUnit(row) ? { onlyClientOrderIds: [turtleStopClientOrderId(row)] } : undefined);
 
       // Close the DB row with the broker's realised PnL. A row the exposure
       // control partially reduced (scalePosition, factor < 1) carries those

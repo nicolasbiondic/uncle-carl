@@ -30,7 +30,12 @@ export function sleeveIdPart(accountId: string): string {
   return cleaned || "x";
 }
 
-export function portfolioClientOrderId(accountId: string, session: SessionDate, symbol: string, leg?: "close" | "rebuy"): string {
+/** `close`/`rebuy`: the two legs of a MAX_HOLD renewal; `stale-close`: the closes-only pass of a
+ *  data-stale tick (B-7) — its own identity, so a later normal pass of the same session never
+ *  resolves its own close to the stale pass's broker order. */
+export type PortfolioOrderLeg = "close" | "rebuy" | "stale-close";
+
+export function portfolioClientOrderId(accountId: string, session: SessionDate, symbol: string, leg?: PortfolioOrderLeg): string {
   // Preserve every default-off id; renewal needs TWO durable identities for the same symbol/session.
   const hash = createHash("sha256").update(`${accountId}|${session}|${symbol}${leg ? `|maxHold:${leg}` : ""}`).digest("hex").slice(0, HASH_LEN);
   const id = `${PORTFOLIO_CLIENT_ID_PREFIX}-${sleeveIdPart(accountId)}-${PORTFOLIO_CLIENT_ID_MARK}${hash}`;

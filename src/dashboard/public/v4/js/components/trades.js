@@ -1,12 +1,25 @@
 import { t } from "../store.js";
-import { moneyCompact, moneySignedCompact, pnlWhole, pctSigned, pnlColor, etDateTime, dur } from "../fmt.js";
+import { moneyCompact, pnlWhole, pctWhole, pnlColor, etDateTime, dur } from "../fmt.js";
 import { esc } from "../ui.js";
 
 // Uses /api/trades (camelCase). Excludes reconcile/sync phantoms so the list
 // reflects real strategy activity (same spirit as the fixed stats).
 const HIDE = new Set(["BROKER_GONE_404", "MANUAL_CLOSE_UNRECONCILED", "BACKFILLED_SYNC", "SYNC_DETECTED"]);
 
+/** The strategy in a word (the engine's code is never shown); "" when unknown. */
+export function strategyWord(code) {
+  const c = String(code || "").toUpperCase();
+  if (c.startsWith("MEANREV")) return t("Mean reversion", "Reversión");
+  if (c.startsWith("MOMENTUM")) return "Momentum";
+  return "";
+}
+
+/** `trades` null = the feed failed (not the same as "no closed trades"). */
 export function renderTrades(trades) {
+  if (trades == null) {
+    return `<div class="empty"><div class="big">${t("Could not load the trades", "No se pudieron cargar los trades")}</div>
+      ${t("It will retry in a moment.", "Se reintentará en unos instantes.")}</div>`;
+  }
   // Most recent CLOSE first (the server feed is ordered by latest activity;
   // sorting here too keeps the list right whatever the feed order).
   const rows = (trades || [])
@@ -30,12 +43,12 @@ export function renderTrades(trades) {
       ${anyShort ? `<td><span class="badge ${isL ? "l" : "s"}">${isL ? "L" : "S"}</span></td>` : ""}
       <td class="opt3">${moneyCompact(x.entryPrice)}</td>
       <td class="opt3">${x.exitPrice != null ? moneyCompact(x.exitPrice) : "—"}</td>
-      <td style="color:${pnlColor(x.pnl)}">${pnlWhole(x.pnl)} <span class="muted">${pctSigned(x.pnlPct)}</span></td>
+      <td style="color:${pnlColor(x.pnl)}">${pnlWhole(x.pnl)} <span class="muted">${pctWhole(x.pnlPct)}</span></td>
       <td class="muted" title="${esc(t("How long the position was open — a gain built over weeks was already in the P&L before it closed", "Cuánto estuvo abierta — una ganancia acumulada en semanas ya estaba en el P&L antes del cierre"))}">${x.exitTime && x.entryTime ? dur(x.exitTime - x.entryTime) : "—"}</td>
-      <td class="muted opt4">${esc((x.strategy || "").slice(0, 8))}</td>
+      <td class="muted opt4">${esc(strategyWord(x.strategy))}</td>
     </tr>`;
   }).join("");
   return `<div class="scroll" style="max-height:420px"><table>
-    <thead><tr><th>${t("Time", "Hora")}</th><th>${t("Sym", "Sím")}</th>${anyShort ? "<th>S</th>" : ""}<th class="opt3">${t("Entry", "Entrada")}</th><th class="opt3">${t("Exit", "Salida")}</th><th>P&L</th><th>${t("Held", "Abierta")}</th><th class="opt4">${t("Strat", "Estr")}</th></tr></thead>
+    <thead><tr><th>${t("Time (ET)", "Hora (ET)")}</th><th>${t("Sym", "Sím")}</th>${anyShort ? "<th>S</th>" : ""}<th class="opt3">${t("Entry", "Entrada")}</th><th class="opt3">${t("Exit", "Salida")}</th><th>P&L</th><th>${t("Held", "Abierta")}</th><th class="opt4">${t("Strat", "Estr")}</th></tr></thead>
     <tbody>${body}</tbody></table></div>`;
 }

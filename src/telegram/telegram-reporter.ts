@@ -4,9 +4,10 @@
 //
 // Design goals:
 //   1. One line per real-time event. No multi-line headers for routine OPEN/CLOSE.
-//   2. ONE scheduled report per day (23:59 ET). Removed 9am + 18:00 reports —
-//      they overlapped the 23:59 daily report and never added information that
-//      `/status` or `/profits` couldn't pull on demand.
+//   2. ONE scheduled report per day (~00:01 ET, the completed day; 23:59 ET
+//      until 2026-11-07). Removed 9am + 18:00 reports — they overlapped the
+//      daily report and never added information that `/status` or `/profits`
+//      couldn't pull on demand.
 //   3. Push minimal, pull rich. Commands stay detailed; passive stream stays quiet.
 //   4. `/quiet on` mutes OPEN/CLOSE event lines but still lets PAUSE / ERROR_BURST
 //      through. Resets to off on bot restart by design (so an operator can't
@@ -15,7 +16,10 @@
 //      weekly W/L + Binance/Alpaca/Patrimonio truth), no operator-only detail
 //      (top symbol, reject breakdown) — those stay in the dashboard.
 //
-// Commands: /start /status /trades /profits /report /quiet /help
+// Commands: /start /status /trades /profits /report /quiet /help — honored ONLY from the
+// configured user chat (TELEGRAM_CHAT_ID) and ops chat; any other chat is ignored (one
+// log line per chat per 10 min). Auto-detection of the chat id happens only while none
+// is configured.
 // Real-time events: ORDER_FILLED · POSITION_CLOSED · CIRCUIT_BREAKER · ERROR_BURST
 // ══════════════════════════════════════════════
 
@@ -23,23 +27,25 @@ import { existsSync, statSync, unlinkSync } from "fs";
 import { config } from "../config";
 import { createLogger } from "../utils/logger";
 import { eventBus, EVENTS } from "../utils/events";
-import { getTradingStats, getRecentTrades, getDB, getAssetBalances, RECONCILE_CLOSE_SQL, getETDayStart, getEquityPnlDisplay, insertActivity, getSyncState, setSyncState } from "../db/database";
+import { getTradingStats, getRecentTrades, getDB, RECONCILE_CLOSE_SQL, getETWindowStart, getETDayBounds, getETDateKey,
+  getEquityPnlDisplay, getEquityWindowDisplay, getRecognizedRealizedPnl, insertActivity, getSyncState, setSyncState } from "../db/database";
+import { ALL_PROFILE_IDS } from "../config/riskProfiles";
 import {
   computeScorecard, openHistoricalReadonly, formatScorecardDigestLines,
   bandEpisodeTransitions, MODEL_START,
   type Scorecard, type BandStatus, type BandEpisodeState,
 } from "../portfolio/scorecard";
 import {
-  getPortfolioEquityNow, getSleeveEquityNow, getSleevePct,
-  combineEquityPnlLegs, isMainSeriesApplicable, BROKER_SNAPSHOT_MAX_AGE_MS,
+  getPortfolioEquityNow, getSleevePct,
+  combineEquityPnlLegs, isMainSeriesApplicable, portfolioMainLegs, readDisplayMoneyWindow,
 } from "../portfolio/truth";
 import { getMarketStatus } from "../utils/marketHours";
 import { fetchT } from "../utils/timeout";
 import { TelegramOutbox, type SendOutcome } from "./outbox";
-import { ALL_PROFILE_IDS, RISK_PROFILES } from "../config/riskProfiles";
 import type { PortfolioState } from "../utils/types";
 import type { Database } from "bun:sqlite";
-import { computePnlBreakdown, type BreakdownPosition, type PnlBreakdown } from "../portfolio/pnlBreakdown";
+import { type BreakdownPosition, type PnlBreakdown } from "../portfolio/pnlBreakdown";
+import { readMoneyWindow, readSleeveMoney, readBinanceMarginBreakdown, MONEY_LABELS, moneyReportDate } from "../portfolio/money";
 import { computeKpiSnapshot } from "../portfolio/kpis";
 
 const log = createLogger("Telegram");
@@ -53,11 +59,17 @@ const OUTBOX_PATH = "data/telegram-outbox.json";
 const OUTBOX_DRAIN_INTERVAL_MS = 30_000;
 const CONNECT_RETRY_BASE_MS = 15_000;
 const CONNECT_RETRY_CAP_MS = 10 * 60_000;
+// A dated digest composed within this long after its ET day ended may still
+// carry the live sections (positions, wallet, KPI, scorecard); later than
+// that only the figures-only final digest is honest (A-12).
+export const DIGEST_LIVE_GRACE_MS = 30 * 60_000;
 
 // Short tag per profile — keep Telegram lines under 80 chars on mobile.
 const SHORT: Record<string, string> = {
   momentum_stocks: "M-S",
   momentum_crypto: "M-C",
+  momentum_crypto_usdc: "M-USDC",
+  momentum_btc: "M-BTC",
   meanrev_stocks: "MR-S",
 };
 
@@ -98,6 +110,9 @@ export function sleeveOfBandEpisodeKey(key: string): string {
   const i = key.indexOf("@");
   return i > 0 ? key.slice(0, i) : key;
 }
+
+/** One log line per unauthorized chat per this window (a flood of strangers must not flood the log). */
+export const IGNORED_CHAT_LOG_COOLDOWN_MS = 10 * 60_000;
 
 export class TelegramReporter {
   private token: string;
@@ -206,10 +221,11 @@ export class TelegramReporter {
     if (this.plannedDeploy) {
       log.info("Telegram: planned deploy restart — startup banner suppressed");
     } else {
-      // OPERATOR audience: a restart is plumbing, not a trading event. The
-      // user's positions and protections are re-verified on boot either
-      // way, so there is nothing for them to act on.
-      await this.sendOps("🟢 <b>Uncle Carl</b> operativo de nuevo tras un reinicio inesperado. Posiciones y protecciones verificadas.");
+      // F-11 (2026-11-07): a Telegram connection is not evidence of a
+      // successful broker sync. The banner says what is true at this instant
+      // and where the verification is reported; it never claims "positions
+      // and protections verified" before the first sync has run.
+      await this.sendOps("🟢 <b>Uncle Carl</b> arrancado tras un reinicio inesperado · Telegram conectado. Posiciones y protecciones se verifican en el primer sync con los brókers (≈1 min); cualquier fallo se avisa aquí.");
     }
   }
 
@@ -379,9 +395,18 @@ export class TelegramReporter {
         const raw = msg.text.trim();
         const text = raw.toLowerCase();
 
-        if (!this.chatId || this.chatId === "your_chat_id") {
+        // Auto-detect ONLY while no chat is configured (first install); afterwards the
+        // configured chats are the only principals.
+        if (!this.chatConfigured()) {
           this.chatId = chatId;
           log.info(`Chat ID auto-detected: ${chatId}`);
+        }
+        // F-3 (2026-11-07): the bot used to answer any chat that found it — a stranger could read
+        // /status and /trades or `/quiet on` the owner's alerts. Commands are accepted from the
+        // configured user/ops chats only; anything else is dropped with a rate-limited log line.
+        if (!this.isAuthorizedChat(chatId)) {
+          this.logIgnoredChat(chatId, text);
+          continue;
         }
 
         if (text === "/start") await this.cmdStart(chatId, msg.from?.first_name || "trader");
@@ -397,6 +422,24 @@ export class TelegramReporter {
     } finally {
       this.polling = false;
     }
+  }
+
+  private chatConfigured(): boolean {
+    return !!this.chatId && this.chatId !== "your_chat_id";
+  }
+
+  /** Commands are honored from the configured user chat and the ops chat only. */
+  isAuthorizedChat(chatId: string): boolean {
+    return this.chatConfigured() && (chatId === this.chatId || (!!this.opsChatId && chatId === this.opsChatId));
+  }
+
+  private ignoredChatLogAt = new Map<string, number>();
+  private logIgnoredChat(chatId: string, text: string): void {
+    const now = Date.now(); // clock-ok: log rate limit only
+    const last = this.ignoredChatLogAt.get(chatId) ?? 0;
+    if (now - last < IGNORED_CHAT_LOG_COOLDOWN_MS) return;
+    this.ignoredChatLogAt.set(chatId, now);
+    log.warn(`Telegram: ignoring command "${text.slice(0, 32)}" from unauthorized chat ${chatId} (configured: ${this.chatId}${this.opsChatId ? `, ops ${this.opsChatId}` : ""}) — further messages from it are not logged for ${IGNORED_CHAT_LOG_COOLDOWN_MS / 60_000} min`);
   }
 
   // ══════════════════════════════════════════
@@ -418,7 +461,7 @@ export class TelegramReporter {
         `/profits — PnL detallado all-time\n` +
         `/report — reporte diario ahora\n` +
         `/quiet on|off — silencia OPEN/CLOSE (PAUSE/ERROR siguen)\n\n` +
-        `<i>Reporte automático: 23:59 ET</i>`,
+        `<i>Reporte automático: ~00:01 ET, con el día completo</i>`,
       chatId
     );
   }
@@ -452,12 +495,12 @@ export class TelegramReporter {
     let totalPos = 0;
     const daily = this.dailyPnlBreakdown();
     for (const a of accounts) {
-      const stats = getTradingStats(a.id);
+      const money = readSleeveMoney(a.id);
       const pct = a.totalPnlPct ?? getSleevePct(a.id) ?? 0; // ledger-based, same as digest + dashboard cards
       const pause = a.paused ? " ⏸" : "";
       lines.push(
-        `${shortTag(a.id)} $${fmtMoney(a.equity)} ${signPct(pct)}` +
-          ` · cobrado hoy ${signMoney(stats.todayPnl)} · ${stats.todayClosedTrades} cierres · ${a.positions}pos${pause}`
+        `${shortTag(a.id)} $${fmtMoney(a.equity)} ${signPct(pct)} vs asignación` +
+          ` · realizado por fills hoy ${signMoney(money.realizedToday.realized)} · ${money.realizedToday.closesCount} cierres · ${a.positions}pos${pause}`
       );
       totalPos += a.positions;
     }
@@ -468,7 +511,7 @@ export class TelegramReporter {
     const now = getPortfolioEquityNow();
     const totalEq = now.total == null ? "—" : `$${fmtMoney(now.total)}`;
     lines.push(
-      `<b>Total ${totalEq} · ${fmtPeriodLeg("P&L hoy", daily.pnl)} · cobrado hoy ${signMoney(daily.breakdown.realized)} · ${totalPos}pos</b>`
+      `<b>Total ${totalEq} · ${fmtPeriodLeg("P&L hoy", daily.pnl)} · realizado por fills hoy ${signMoney(daily.breakdown.realized)} · ${totalPos}pos</b>`
     );
     await this.send(lines.join("\n"), chatId);
   }
@@ -493,30 +536,50 @@ export class TelegramReporter {
   }
 
   private async cmdProfits(chatId: string) {
+    // A-2/A-6 (2026-11-07): the current view lists ACTIVE sleeves only, with
+    // the recognized realized (closed episodes + partials of open rows, net)
+    // instead of closed-only; a sleeve that no longer runs appears in a dated
+    // history line, never as a current balance. The footer says what it sums.
     const accounts = this.getAccountSummaries?.() || [];
-    const lines = ["<b>PnL all-time por cuenta</b>"];
+    const lines = ["<b>Resultados por sleeve activo</b>"];
 
-    for (const id of ALL_PROFILE_IDS) {
-      const profile = RISK_PROFILES[id];
+    for (const acc of accounts) {
+      const id = acc.id;
       const stats = getTradingStats(id);
-      const acc = accounts.find((a: any) => a.id === id);
-      // Live tracker first; portfolio/truth (latest sleeve snapshot) when the
-      // summaries hook isn't attached; allocation-based last resort on day 1.
-      const currentEq = acc?.equity ?? getSleeveEquityNow(id) ?? profile.initialEquity + stats.totalPnl;
-      const pct = acc?.totalPnlPct ?? getSleevePct(id) ??
-        (profile.initialEquity > 0 ? ((currentEq - profile.initialEquity) / profile.initialEquity) * 100 : 0);
+      const money = readSleeveMoney(id);
+      const pct = acc.totalPnlPct ?? getSleevePct(id);
 
       lines.push(
-        `${shortTag(id)} $${fmtMoney(currentEq)} ${signPct(pct)} · ` +
+        `${shortTag(id)} $${fmtMoney(acc.equity)}${pct == null ? "" : ` ${signPct(pct)} vs asignación`} · ` +
           `${stats.totalTrades}tr WR${fmtNum(stats.winRate, 0)}% · ` +
-          `hoy ${signMoney(stats.todayPnl)}`
+          `realizado reconocido ${signMoney(money.recognizedRealized)} · realizado por fills hoy ${signMoney(money.realizedToday.realized)}`
       );
+    }
+
+    const activeIds = new Set(accounts.map((a: any) => a.id as string));
+    const history: string[] = [];
+    for (const id of ALL_PROFILE_IDS) {
+      if (activeIds.has(id)) continue;
+      const stats = getTradingStats(id);
+      const last = getEquityWindowDisplay(id, 0);
+      if (stats.closedTrades === 0 && !last) continue;
+      history.push(
+        `${shortTag(id)} inactivo · realizado reconocido ${signMoney(getRecognizedRealizedPnl(id))} · ${stats.totalTrades}tr` +
+          `${last ? ` · último saldo $${fmtMoney(last.equity)} al ${getETDateKey(last.endAt)}` : ""}`
+      );
+    }
+    if (history.length) {
+      lines.push("<b>Histórico (sleeves inactivos, sin saldo actual)</b>");
+      lines.push(...history);
     }
 
     const all = getTradingStats();
     lines.push(
-      `<b>Consolidado ${signMoney(all.totalPnl)} · ${all.totalTrades}tr WR${fmtNum(all.winRate, 0)}%</b>`
+      `<b>${MONEY_LABELS.recognizedRealized}, todos los sleeves: ${signMoney(getRecognizedRealizedPnl())} · ${all.totalTrades}tr WR${fmtNum(all.winRate, 0)}%</b>`
     );
+    const inicio = readDisplayMoneyWindow(this.mainLegs(), 0);
+    lines.push(`${fmtPeriodLeg("P&L desde el inicio display (variación del patrimonio)", inicio)}`);
+    lines.push(...fmtDisplayStart(inicio?.start));
     await this.send(lines.join("\n"), chatId);
   }
 
@@ -525,7 +588,7 @@ export class TelegramReporter {
   }
 
   // ══════════════════════════════════════════
-  // Daily digest — invoked on demand (/report) or by DailyReporter at 23:59 ET.
+  // Daily digest — invoked on demand (/report) or by DailyReporter after ET midnight.
   // Client-facing summary: Hoy/7D header, active-trade counts, active-sleeve
   // weekly W/L (best→worst), Binance/Alpaca broker truth, Patrimonio/Inicio.
   // Top-symbol and reject-breakdown are operator detail — dashboard
@@ -534,7 +597,7 @@ export class TelegramReporter {
 
   /**
    * Compose the client-facing daily digest. Called both from /report (any
-   * time) and from DailyReporter (23:59 ET). Returns the HTML body.
+   * time) and from DailyReporter (~00:01 ET, for the completed day). Returns the HTML body.
    *
    * Every dollar/percent figure is sourced from src/portfolio/truth.ts
    * (combineEquityPnlLegs over the applicable *_main broker series —
@@ -543,20 +606,32 @@ export class TelegramReporter {
    * missing renders "—" for that figure rather than a partial/fabricated
    * number (fail closed, never silently substitute a sleeve-ledger sum).
    */
-  composeDailyDigest(): string {
+  composeDailyDigest(reportDate = moneyReportDate()): string {
+    // A-8/A-12 (2026-11-07): a dated digest (DailyReporter, after the ET day
+    // has ended) reads every window AS OF the end of that day — the autumn
+    // 25-hour day included — and is labelled with it. Minutes after midnight
+    // the live sections (positions, wallet, KPI, scorecard) still describe
+    // that day; a late catch-up gets the figures-only final digest instead
+    // of today's live state credited to a past date.
+    let asOf = Date.now();
+    if (reportDate) {
+      const [, end] = getETDayBounds(reportDate);
+      if (end > Date.now()) throw new Error(`Cannot finalize incomplete ET day ${reportDate}`);
+      if (Date.now() - end > DIGEST_LIVE_GRACE_MS) return this.composeFinalDigest(reportDate);
+      asOf = end - 1;
+    }
     const accounts = this.getAccountSummaries?.() || []; // ACTIVE sleeves only (AccountManager.getAccountSummaries)
-    const now = new Date();
-    const dateLabel = now.toLocaleDateString("es-ES", {
+    const dateLabel = new Date(asOf).toLocaleDateString("es-ES", {
       timeZone: "America/New_York",
       day: "numeric",
       month: "short",
     });
 
     const db = getDB();
-    const dayStart = getETDayStart(Date.now());
+    const dayStart = getETWindowStart(1, asOf);
     // Rolling 7d window, re-anchored to ET midnight (a plain −6d offset from
     // dayStart drifts an hour across DST transitions).
-    const weekStart = getETDayStart(Date.now() - 6 * 86_400_000);
+    const weekStart = getETWindowStart(7, asOf);
     const RECONCILE = `AND ${RECONCILE_CLOSE_SQL}`; // shared with getTradingStats (db/database.ts) so dashboard + digest never drift
     const activeIds = accounts.map((a: any) => a.id as string);
 
@@ -566,9 +641,9 @@ export class TelegramReporter {
       const row = db
         .prepare(
           `SELECT COUNT(*) n FROM trades
-           WHERE status='closed' AND exit_time >= ? AND account_id IN (${placeholders}) ${RECONCILE}`
+           WHERE status='closed' AND exit_time >= ? AND exit_time <= ? AND account_id IN (${placeholders}) ${RECONCILE}`
         )
-        .get(sinceMs, ...activeIds) as { n: number } | undefined;
+        .get(sinceMs, asOf, ...activeIds) as { n: number } | undefined;
       return row?.n ?? 0;
     };
     const dayTrades = countClosedTrades(dayStart);
@@ -577,51 +652,56 @@ export class TelegramReporter {
 
     // Rendimiento 7D: active sleeves with ≥1 closed trade in the window,
     // best→worst by 7D marked equity, not cutover realization dates. No all-time clutter — that's /status
-    // and /profits' job; this is the weekly scoreboard only.
+    // and /profits' job; this is the weekly scoreboard only. "realizado por
+    // fills" is the fill-dated reader (A-2), the same one /status uses.
     const sleeveRows: string[] = [];
     const sleevePnls: Array<{ id: string; pnl: number; mtm: number | null; w: number; l: number; paused: boolean }> = [];
     for (const a of accounts) {
       const wkQ = db
         .prepare(
-          `SELECT COALESCE(SUM(pnl),0) pnl,
-                  SUM(CASE WHEN pnl>0 THEN 1 ELSE 0 END) w,
+          `SELECT SUM(CASE WHEN pnl>0 THEN 1 ELSE 0 END) w,
                   SUM(CASE WHEN pnl<0 THEN 1 ELSE 0 END) l
            FROM trades
-           WHERE status='closed' AND account_id=? AND exit_time >= ? ${RECONCILE}`
+           WHERE status='closed' AND account_id=? AND exit_time >= ? AND exit_time <= ? ${RECONCILE}`
         )
-        .get(a.id, weekStart) as { pnl: number; w: number; l: number } | undefined;
+        .get(a.id, weekStart, asOf) as { w: number; l: number } | undefined;
       const w = wkQ?.w ?? 0, l = wkQ?.l ?? 0;
       if (w + l < 1) continue; // "≥1 weekly close" — silent sleeves don't clutter the scoreboard
-      sleevePnls.push({ id: a.id, pnl: +(wkQ?.pnl ?? 0), mtm: getEquityPnlDisplay(a.id, 7)?.pnl ?? null, w, l, paused: !!a.paused });
+      sleevePnls.push({ id: a.id, pnl: readSleeveMoney(a.id, asOf).realized7d.realized, mtm: getEquityPnlDisplay(a.id, 7, asOf)?.pnl ?? null, w, l, paused: !!a.paused });
     }
     sleevePnls.sort((x, y) => (y.mtm ?? -Infinity) - (x.mtm ?? -Infinity) || x.id.localeCompare(y.id));
     for (const r of sleevePnls) {
-      sleeveRows.push(`${profileName(r.id)} MtM ${r.mtm == null ? "—" : signMoney(r.mtm)} · realizado ${signMoney(r.pnl)} · ${r.w}W/${r.l}L${r.paused ? " ⏸" : ""}`);
+      sleeveRows.push(`${profileName(r.id)} MtM ${r.mtm == null ? "—" : signMoney(r.mtm)} · realizado por fills ${signMoney(r.pnl)} · ${r.w}W/${r.l}L${r.paused ? " ⏸" : ""}`);
     }
 
     // Header truth: alpaca_main + binance_main (+ binance_coinm_main once
     // DAPI has ever synced) — same applicability rule the dashboard uses, so
     // a never-enabled COIN-M sleeve never blocks the other two legs.
     const mainLegs = this.mainLegs();
-    const daily = this.dailyPnlBreakdown(mainLegs);
-    const weekLeg = combineEquityPnlLegs(mainLegs, 7);
-    const inicioLeg = combineEquityPnlLegs(mainLegs, 0); // all-time display delta — NOT the 7D window, NOT a sleeve sum
-    const portfolioNow = getPortfolioEquityNow();
-    const bin = this.getBinanceDecomposition(portfolioNow);
+    const daily = this.dailyPnlBreakdown(mainLegs, asOf);
+    const weekLeg = combineEquityPnlLegs(mainLegs, 7, asOf);
+    const inicio = readDisplayMoneyWindow(mainLegs, 0, asOf); // all-time display delta — NOT the 7D window, NOT a sleeve sum
+    // Balances: live for the live digest; AS OF the day end for a dated one,
+    // so Patrimonio, Alpaca and Binance are the same instant as its P&L lines
+    // (the margin components are a live reading only — omitted when dated).
+    const portfolioNow = reportDate ? this.portfolioEquityAsOf(asOf) : getPortfolioEquityNow();
+    const bin = reportDate
+      ? { total: portfolioNow.binance == null ? null : portfolioNow.binance + (portfolioNow.coinm ?? 0), usdt: null, usdc: null, btc: null }
+      : this.getBinanceDecomposition(portfolioNow);
 
     const lines: string[] = [];
-    lines.push(`📊 <b>Uncle Carl</b> · ${dateLabel} · cierre ET`);
-    lines.push(`${fmtPeriodLeg("P&L hoy", daily.pnl)} · ${fmtPeriodLeg("P&L 7D", weekLeg)}`);
+    lines.push(`📊 <b>Uncle Carl</b> · ${dateLabel} · cierre ET${reportDate ? " definitivo" : ""}`);
+    lines.push(`${fmtPeriodLeg(reportDate ? "P&L del día" : "P&L hoy", daily.pnl)} · ${fmtPeriodLeg("P&L 7D", weekLeg)}`);
     lines.push(...fmtClosesToday(daily.breakdown));
     lines.push(
-      `${dayTrades} ${pluralize(dayTrades, "trade", "trades")} hoy · ${weekTrades} en 7D · ` +
+      `${dayTrades} ${pluralize(dayTrades, "trade", "trades")} ${reportDate ? "en el día" : "hoy"} · ${weekTrades} en 7D · ` +
         `${totalPos} ${pluralize(totalPos, "posición abierta", "posiciones abiertas")}`
     );
 
     // P0 (2026-10-09): owner KPIs vs goals — volume (executed orders),
     // 30-day return, drawdown vs budget. Fail-soft: a broken KPI read never
     // tumbles the digest (same discipline as the scorecard section below).
-    for (const l of this.kpiDigestLines()) lines.push(l);
+    for (const l of this.kpiDigestLines(asOf)) lines.push(l);
 
     if (sleeveRows.length > 0) {
       lines.push("");
@@ -644,16 +724,52 @@ export class TelegramReporter {
     if (bin.total != null) {
       const parts = bin.usdt != null && bin.usdc != null && bin.btc != null
         ? ` · USDT $${fmtMoneyGrouped(bin.usdt)} · USDC $${fmtMoneyGrouped(bin.usdc)} · BTC $${fmtMoneyGrouped(bin.btc)}`
-        : ""; // stale/missing/nonfinite asset rows → total only, never invented parts
+        : ""; // stale/missing/nonfinite margin readings → total only, never invented parts
       lines.push(`Binance $${fmtMoneyGrouped(bin.total)}${parts}`);
     }
     if (portfolioNow.alpaca != null) lines.push(`Alpaca $${fmtMoneyGrouped(portfolioNow.alpaca)}`);
     lines.push(
       `${portfolioNow.total == null ? "Patrimonio —" : `Patrimonio $${fmtMoneyGrouped(portfolioNow.total)}`} · ` +
-      `${fmtPeriodLeg("P&L desde el inicio", inicioLeg)}`
+      `${fmtPeriodLeg("P&L desde el inicio", inicio)}`
     );
+    lines.push(...fmtDisplayStart(inicio?.start));
 
     return lines.join("\n");
+  }
+
+  /** Final historical digest for a late catch-up: every figure ends at the
+   * requested ET day — never today's live wallet, KPI, positions or scorecard
+   * credited to a past date (A-12). */
+  private composeFinalDigest(date: string): string {
+    const [, end] = getETDayBounds(date);
+    if (end > Date.now()) throw new Error(`Cannot finalize incomplete ET day ${date}`);
+    const now = end - 1;
+    let hist: Database | null = null;
+    try {
+      hist = this.openHist();
+      const daily = readMoneyWindow({ days: 1, now, hist, requireFresh: false });
+      const week = readDisplayMoneyWindow(this.mainLegs(), 7, now, false);
+      const start = readDisplayMoneyWindow(this.mainLegs(), 0, now, false);
+      const lines = [`📊 <b>Uncle Carl</b> · ${date} · cierre ET definitivo`,
+        `${fmtPeriodLeg("P&L del día", daily.window)} · ${fmtPeriodLeg("P&L 7D", week)}`,
+        ...fmtClosesToday(daily.breakdown),
+        `${start == null ? "Patrimonio —" : `Patrimonio $${fmtMoneyGrouped(start.equity)}`} · ${fmtPeriodLeg("P&L desde el inicio", start)}`,
+        ...fmtDisplayStart(start?.start)];
+      return lines.join("\n");
+    } finally {
+      try { hist?.close(); } catch {}
+    }
+  }
+
+  /** The broker totals at an instant — the last reading of each applicable
+   *  main series at or before `asOf`, the same rows the windows end on. */
+  private portfolioEquityAsOf(asOf: number): ReturnType<typeof getPortfolioEquityNow> {
+    const leg = (id: string) => readDisplayMoneyWindow([id], 1, asOf, false)?.equity ?? null;
+    const coinmApplicable = isMainSeriesApplicable("coinm");
+    const alpaca = leg("alpaca_main"), binance = leg("binance_main");
+    const coinm = coinmApplicable ? leg("binance_coinm_main") : null;
+    const failed = alpaca == null || binance == null || (coinmApplicable && coinm == null);
+    return { total: failed ? null : alpaca + binance + (coinm ?? 0), alpaca, binance, coinm };
   }
 
   /**
@@ -663,9 +779,9 @@ export class TelegramReporter {
    * Targets unset (fresh install/fork) → the raw figures, no goal. Fail-soft:
    * [] on any throw.
    */
-  private kpiDigestLines(): string[] {
+  private kpiDigestLines(now = Date.now()): string[] {
     try {
-      const k = computeKpiSnapshot();
+      const k = computeKpiSnapshot(now);
       const t = k.targets;
       const lines: string[] = [];
       const vol7 = fmtNum(k.volume.avg7d, 1);
@@ -714,28 +830,14 @@ export class TelegramReporter {
     const coinmEq = coinmApplicable ? portfolioNow.coinm! : 0;
     const total = portfolioNow.binance + coinmEq;
 
-    const assets = getAssetBalances("binance_testnet");
-    const freshCutoff = Date.now() - BROKER_SNAPSHOT_MAX_AGE_MS;
-    const fresh = assets.length > 0 && assets.every((a: any) => {
-      const at = Date.parse(String(a.updated_at).replace(" ", "T") + "Z");
-      return Number.isFinite(at) && at >= freshCutoff;
-    });
-    if (!fresh) return { total, usdt: null, usdc: null, btc: null };
-
-    const usdcRow = assets.find((a: any) => a.asset === "USDC");
-    const btcRow = assets.find((a: any) => a.asset === "BTC");
-    const usdc = usdcRow ? usdcRow.usd_value : 0; // filtered out of assets when balance=0 → genuinely zero, not stale
-    const btcFapi = btcRow ? btcRow.usd_value : 0;
-    if (!Number.isFinite(usdc) || !Number.isFinite(btcFapi)) {
-      return { total, usdt: null, usdc: null, btc: null };
-    }
-    const btc = btcFapi + coinmEq;
-    const usdt = total - usdc - btc;
-    return { total, usdt, usdc, btc };
+    const b = readBinanceMarginBreakdown(this.getAccountSummaries?.() ?? []);
+    const btc = b.fapiBtcCollateral == null || (coinmApplicable && b.coinmMargin == null)
+      ? null : b.fapiBtcCollateral + (b.coinmMargin ?? 0);
+    return { total, usdt: b.usdtFutures, usdc: b.usdcFutures, btc };
   }
 
   private mainLegs(): string[] {
-    return ["alpaca_main", "binance_main", ...(isMainSeriesApplicable("coinm") ? ["binance_coinm_main"] : [])];
+    return portfolioMainLegs();
   }
 
   /** Today's P&L (the change in the accounts' value — combineEquityPnlLegs)
@@ -747,17 +849,16 @@ export class TelegramReporter {
    *  move is in the P&L (2026-09-28: META closed +$4,767.74 on a −$831 day;
    *  2026-11-06: ten 5-day renewals showed "+$367 · realized −$912"). /status
    *  and the digest share this. */
-  private dailyPnlBreakdown(mainLegs = this.mainLegs()): { pnl: ReturnType<typeof combineEquityPnlLegs>; breakdown: PnlBreakdown } {
+  private dailyPnlBreakdown(mainLegs = this.mainLegs(), now = Date.now()): { pnl: ReturnType<typeof combineEquityPnlLegs>; breakdown: PnlBreakdown } {
     let hist: Database | null = null;
     try {
       hist = this.openHist();
-      const pnl = combineEquityPnlLegs(mainLegs, 1);
       const openPositions: BreakdownPosition[] = (this.getConsolidatedState?.()?.positions || []).map((p: any) => ({
         accountId: p.profileId, symbol: p.symbol, market: p.market, side: p.side, quantity: p.quantity,
         entryPrice: p.avgEntryPrice, entryTime: p.openedAt, currentPrice: p.currentPrice,
       }));
-      const breakdown = computePnlBreakdown({ db: getDB(), hist, periodDays: 1, pnl: pnl?.pnl ?? null, openPositions });
-      return { pnl, breakdown };
+      const money = readMoneyWindow({ days: 1, now, profiles: mainLegs, hist, positions: openPositions });
+      return { pnl: money.window, breakdown: money.breakdown };
     } finally {
       try { hist?.close(); } catch {}
     }
@@ -889,7 +990,7 @@ export class TelegramReporter {
       const pid = trade.accountId || trade.profileId || "?";
       if (String(pid).startsWith("shadow_")) return;
       let dayPnl = NaN;
-      try { dayPnl = getTradingStats(pid).todayPnl; } catch {}
+      try { dayPnl = readSleeveMoney(pid).realizedToday.realized; } catch {}
       this.send(fmtCloseAlert(trade, dayPnl));
     });
 
@@ -1043,10 +1144,11 @@ export function fmtClosesToday(b: Pick<PnlBreakdown, "realized" | "closesCount" 
   if (!legs) return ["Sin cierres hoy"];
   const lines: string[] = [];
   if (b.closedInWindow != null) {
-    const positions = b.positions == null ? "" : ` · posiciones ${signMoneyWhole(b.positions)}`;
-    lines.push(`Cierres ${signMoneyWhole(b.closedInWindow)}${positions} en el día`);
+    const closes = Math.round(b.closedInWindow);
+    const positions = b.positions == null ? "" : ` · posiciones ${signMoneyWhole(Math.round(b.closedInWindow + b.positions) - closes)}`;
+    lines.push(`Cierres ${signMoneyWhole(closes)}${positions} en el día`);
   }
-  lines.push(`Cobrado desde la entrada ${signMoneyWhole(b.realized)} en ${legs}`);
+  lines.push(`Realizado por fills (neto, desde entrada) ${signMoneyWhole(b.realized)} en ${legs}`);
   return lines;
 }
 
@@ -1061,6 +1163,13 @@ function legsWord(closes: number, trims: number): string {
 function signMoneyWhole(v: number): string {
   const sign = v > 0 ? "+" : v < 0 ? "−" : "";
   return `${sign}$${Math.round(Math.abs(v)).toLocaleString("en-US")}`;
+}
+
+/** The ONE display-start line (A-1): date of the anchor every "since start"
+ *  figure is measured from, and why no percentage accompanies a rebased one. */
+export function fmtDisplayStart(start: { date: string; rebased: boolean } | null | undefined): string[] {
+  if (!start) return [];
+  return [`Inicio display ${start.date}${start.rebased ? " · base rebajada, sin porcentaje" : ""}`];
 }
 
 function fmtPeriodLeg(label: string, leg: { pnl: number; pnlPct: number | null } | null): string {

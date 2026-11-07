@@ -16,7 +16,7 @@
 //      pre-sell: the account is margin, intraday buying power covers them
 //      (AlpacaMomentumAdapter's shared Reg-T guard mirrors the broker
 //      pre-submit), and cash simply goes negative until the cover pass.
-//   2. COVER  (≥ 15:50 ET, before the close): if cash is NEGATIVE, sell
+//   2. COVER  (10 min before the session close): if cash is NEGATIVE, sell
 //      just enough of the ETF to bring cash back to the buffer, so the
 //      account never carries a margin debit overnight. It sells ONLY the
 //      treasury ETF, capped at the broker-reported quantity we actually
@@ -43,8 +43,9 @@
 // ══════════════════════════════════════════════════════════════
 
 import { getETDateKey, getETDayStart, insertActivity } from "../db/database";
-import { isMarketOpen } from "../utils/marketHours";
+import { getSessionClose, isMarketOpen } from "../utils/marketHours";
 import { isUnknownOrder, type UnknownOrderResult } from "../executor/executionPolicy";
+import { getDefaultRiskEngine, type TradingState } from "../risk/RiskEngine";
 import { isTreasurySymbol, TREASURY_SYMBOLS } from "./treasurySymbols";
 import type { Order, Signal } from "../utils/types";
 import { createLogger } from "../utils/logger";
@@ -79,12 +80,13 @@ export function treasurySweepDue(nowMs: number, lastRunKey: string): boolean {
   return getETDateKey(nowMs) !== lastRunKey;
 }
 
-/** Cover window: ≥ 15:50 ET (late enough that the day's entries/closes have
+/** Cover window: last 10 minutes of the session (15:50 ET, or 12:50 on
+ *  early-close days; late enough that the day's entries/closes have
  *  settled into the cash figure, early enough to fill before the bell),
  *  market open, at most once per ET day. */
 export function treasuryCoverDue(nowMs: number, lastRunKey: string): boolean {
   if (!isMarketOpen(nowMs)) return false;
-  if ((nowMs - getETDayStart(nowMs)) / 60_000 < 15 * 60 + 50) return false;
+  if ((nowMs - getETDayStart(nowMs)) / 60_000 < getSessionClose(getETDateKey(nowMs)).closeMinutes - 10) return false;
   return getETDateKey(nowMs) !== lastRunKey;
 }
 
@@ -117,6 +119,9 @@ export class TreasurySweep {
      *  the cover SELL is a close-equivalent and keeps running (closes >
      *  opens, always). */
     private readonly tradingEnabled: () => boolean = () => true,
+    /** RiskEngine TRADING STATE (default: the process-wide engine's). HALTED/REDUCING gates the
+     *  BUY only — the cover SELL is a close-equivalent. Never the per-order notional caps. */
+    private readonly tradingState: () => TradingState = () => getDefaultRiskEngine().getState().tradingState,
   ) {
     if (!isTreasurySymbol(cfg.symbol)) {
       throw new Error(`TreasurySweep: symbol ${cfg.symbol} is not in TREASURY_SYMBOLS — the adoption/drift/stop exclusions would not cover it`);
@@ -200,6 +205,12 @@ export class TreasurySweep {
     if (!this.tradingEnabled()) {
       this.lastSweepKey = todayKey;
       log.warn(`sweep ${todayKey}: TRADING_ENABLED=false — skipping the buy (maintenance kill-switch); cover sells stay active`);
+      return;
+    }
+    const tradingState = this.tradingState();
+    if (tradingState !== "ACTIVE") {
+      this.lastSweepKey = todayKey;
+      log.warn(`sweep ${todayKey}: RiskEngine ${tradingState} — skipping the buy (no new exposure while halted/reducing); cover sells stay active`);
       return;
     }
     const price = await this.sizingPrice();

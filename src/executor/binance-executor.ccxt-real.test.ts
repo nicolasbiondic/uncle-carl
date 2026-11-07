@@ -135,6 +135,7 @@ describe("getOpenProtectiveOrders fed ccxt's REAL Algo Order API response shape"
     // the suite stays green without asserting the bug as spec.
     const orders = await exec.getOpenProtectiveOrders("BTC/USD");
     expect(orders).toEqual([{
+      clientOrderId: String(realProtectiveStop.clientAlgoId ?? ""),
       symbol: "BTCUSDT", side: "SELL", type: "STOP_MARKET",
       quantity: 0.002, triggerPrice: 100000, reduceOnly: true,
     }]);

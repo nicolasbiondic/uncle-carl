@@ -66,7 +66,7 @@ function copyBtn(value, label) {
 function preferencesHtml(s) {
   const seg = (name, opts, cur) => `<span class="seg" data-set="${name}">` + opts.map(([v, l]) => `<button class="${String(v) === String(cur) ? "on" : ""}" data-v="${v}" aria-pressed="${String(v) === String(cur)}">${l}</button>`).join("") + `</span>`;
   return `
-    <div class="set-row"><span>${t("Theme", "Tema")}</span>${seg("theme", [["dark", "Dark"], ["terminal", "Terminal"], ["light", "Light"]], s.theme)}</div>
+    <div class="set-row"><span>${t("Theme", "Tema")}</span>${seg("theme", [["dark", t("Dark", "Oscuro")], ["terminal", "Terminal"], ["light", t("Light", "Claro")]], s.theme)}</div>
     <div class="set-row"><span>${t("Language", "Idioma")}</span>${seg("lang", [["en", "English"], ["es", "Español"]], s.lang)}</div>
     <div class="set-row"><span>${t("Default window", "Ventana por defecto")}</span>${seg("period", [[1, t("Today", "Hoy")], [7, "7D"], [30, "30D"], [0, t("All", "Todo")]], s.period)}</div>`;
 }
@@ -97,8 +97,8 @@ export function settingsLayoutHtml(s) {
   const me = s.me;
   const pm = s.platformMe;
   const docsNote = `<div class="muted page-note">${t(
-    "Sign-in methods are configured on the server — see", "Los métodos de acceso se configuran en el servidor — ver",
-  )} <code>docs/platform/self-hosting.md</code></div>`;
+    "Sign-in methods are set up on the server.", "Los métodos de acceso se configuran en el servidor.",
+  )}</div>`;
   return `<div class="set-grid">
     <div class="set-col">${card("account", "user", t("Account", "Cuenta"), accountHtml(me, pm))}${card("preferences", "settings", t("Preferences", "Preferencias"), preferencesHtml(s))}</div>
     <div class="set-col">${card("brokers", "coin", t("Broker accounts", "Cuentas de broker"), `<div id="setBrokers"></div>`)}${card("sessions", "list", t("Sessions", "Sesiones"), `<div id="setSessions"><div class="muted">…</div></div>`)}</div>

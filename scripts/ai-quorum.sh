@@ -10,11 +10,22 @@
 # Each run also executes the lazy fill pass first, so decisions get priced
 # as soon as the 04:00 historical refresh has pulled the needed daily bars.
 # Shadow-only: no capital, writes data/ai-quorum.db, never trading.db.
+# stocks/crypto runs report to the dead-man's switch as ai-quorum-<mode>
+# (scripts/lib/cron-job.sh, audit F-2): a cycle whose result is
+# status "failed" (no model answered — 2026-11-06, proxy unreachable for a
+# day with no page) exits 3 and pages OPS once per episode.
 # ══════════════════════════════════════════════
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
+
+MODE="${1:-}"
+if [ "$MODE" = stocks ] || [ "$MODE" = crypto ]; then
+  # shellcheck source=lib/cron-job.sh
+  source "$ROOT_DIR/scripts/lib/cron-job.sh"
+  cron_job_start "ai-quorum-$MODE"
+fi
 
 # Resolve bun the same robust way refresh-historical.sh/backup-db.sh do.
 if [ -z "${BUN_BIN:-}" ]; then
@@ -27,4 +38,16 @@ if [ -z "$BUN_BIN" ] || [ ! -x "$BUN_BIN" ]; then
   exit 1
 fi
 
-exec "$BUN_BIN" run scripts/ai-quorum.ts "${1:-}"
+if [ "$MODE" != stocks ] && [ "$MODE" != crypto ]; then
+  exec "$BUN_BIN" run scripts/ai-quorum.ts "$MODE"   # manual fill/status: no marker
+fi
+
+OUT="$(mktemp "${TMPDIR:-/tmp}/uc-aiq.XXXXXX")"
+rc=0
+"$BUN_BIN" run scripts/ai-quorum.ts "$MODE" 2>&1 | tee "$OUT" || rc=${PIPESTATUS[0]}
+if [ "$rc" = 0 ] && grep -q 'done: {"status":"failed"' "$OUT"; then
+  echo "[ai-quorum] cycle status=failed — no model answered" >&2
+  rc=3
+fi
+rm -f "$OUT"
+exit "$rc"

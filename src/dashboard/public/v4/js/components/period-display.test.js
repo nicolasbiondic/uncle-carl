@@ -96,28 +96,33 @@ describe("renderKpis — no Since Start, server-computed period pct", () => {
     expect(renderKpis()).toContain("+0.0%");
   });
 
-  test("falls back to an honest computed % when the server pct is null (rebased anchor)", () => {
-    // All P&L → return on seed capital (Σ initialEquity), NOT the rebased anchor;
-    // fixed 7D → window-start equity (now − 7d P&L). Both consolidated-only.
+  // A-1 (2026-11-07): a null server pct is deliberate (rebased display start /
+  // unavailable). The old frontend divided the same $ figure by Σ initialEquity
+  // or by (equity − pnl) and showed ~+3.6% beside a figure the server refused
+  // to rate. Both windows now stay percent-less.
+  test("never manufactures a % from another denominator when the server pct is null (rebased anchor)", () => {
     Object.assign(store.state, {
       period: 0, view: "consolidated",
       profiles: [{ pnlAggregate: { equity: 111100, periodPnl: 2200, periodPnlPct: null, pnl7d: 1100, pnl7dPct: null } }],
       dashboard: { accounts: [{ initialEquity: 110000 }] },
     });
     const html = renderKpis();
-    expect(html).toContain("+2.0%"); // All: 2200 / Σ initialEquity(110000)
-    expect(html).toContain("+1.0%"); // 7D: 1100 / (111100 − 1100 = 110000)
+    expect(html).toContain("+$2,200");
+    expect(html).toContain("+$1,100");
+    expect(html).not.toContain("+2.0%"); // 2200 / Σ initialEquity — the old fabricated All %
+    expect(html).not.toContain("+1.0%"); // 1100 / (equity − pnl) — the old fabricated 7D %
+    expect(html).not.toMatch(/[+−]\d+\.\d%/);
   });
 
-  test("selected 7D window derives its % from window-start equity when the server pct is null", () => {
-    // At period=7 the top P&L cell IS the 7D figure (the fixed 7D cell is hidden).
+  test("selected 7D window with a null server pct shows the $ figure alone", () => {
     Object.assign(store.state, {
       period: 7, view: "consolidated",
       profiles: [{ pnlAggregate: { equity: 111000, periodPnl: 1000, periodPnlPct: null, pnl7d: 1000, pnl7dPct: null } }],
       dashboard: { accounts: [{ initialEquity: 90000 }] },
     });
-    // 1000 / (111000 − 1000 = 110000) = 0.9%
-    expect(renderKpis()).toContain("+0.9%");
+    const html = renderKpis();
+    expect(html).toContain("+$1,000");
+    expect(html).not.toContain("+0.9%");
   });
 });
 
@@ -138,21 +143,34 @@ describe("portfolio cells — broker aggregation + period label", () => {
     expect(renderProfiles()).toContain(">All <b");
   });
 
-  test("sums period P&L across every sleeve on the broker", () => {
+  // A-11 (2026-11-07): the cell's figures are the broker-truth window the
+  // server sent (brokerAccounts[].stats.periodEquityPnl); per-sleeve stats are
+  // never summed in their place, and a null stays "—".
+  test("shows the broker-truth period P&L in whole dollars; per-sleeve stats are not a substitute", () => {
     Object.assign(store.state, {
       period: 1,
-      profiles: profilesWith("momentum_stocks", { periodEquityPnl: 42, periodEquityPnlPct: null }),
+      profiles: [{ brokerAccounts: [{ brokerId: "alpaca_paper", equity: 100_000, stats: { periodEquityPnl: 42, periodEquityPnlPct: null } }] }],
       dashboard: { accounts: [account("momentum_stocks")] },
     });
-    const html = renderProfiles();
-    const pnlCell = html.slice(html.indexOf(">Today <b"), html.indexOf(">Today <b") + 150);
+    let html = renderProfiles();
+    let pnlCell = html.slice(html.indexOf(">Today <b"), html.indexOf(">Today <b") + 150);
     expect(pnlCell).toContain("+$42<"); // whole dollars, like the rest of the strip
+
+    Object.assign(store.state, {
+      period: 1,
+      profiles: profilesWith("momentum_stocks", { periodEquityPnl: 42, periodEquityPnlPct: null, todayPnl: 42 }),
+      dashboard: { accounts: [account("momentum_stocks")] },
+    });
+    html = renderProfiles();
+    pnlCell = html.slice(html.indexOf(">Today <b"), html.indexOf(">Today <b") + 150);
+    expect(pnlCell).toContain(">—<");
+    expect(pnlCell).not.toContain("$42");
   });
 
   test("one cell per broker: two sleeves on the same broker collapse into one cell", () => {
     Object.assign(store.state, {
       period: 1,
-      profiles: [],
+      profiles: [{ brokerAccounts: [{ brokerId: "alpaca_paper", equity: 100_000, stats: {} }] }],
       dashboard: { accounts: [account("momentum_stocks", "Momentum Stocks", "alpaca"), account("meanrev_stocks", "Meanrev Stocks", "alpaca")] },
     });
     const html = renderProfiles();

@@ -11,12 +11,12 @@
 import { api } from "../api.js";
 import { t } from "../store.js";
 import { esc, icon } from "../ui.js";
-import { num } from "../fmt.js";
+import { num, pctWhole } from "../fmt.js";
 
 export function templateLabel(tpl) {
   if (tpl === "momentum_tsm") return t("Momentum TSM", "Momentum TSM");
   if (tpl === "meanrev_connors") return t("Mean reversion (Connors RSI2)", "Reversión a la media (Connors RSI2)");
-  if (tpl === "portfolio") return t("Portfolio engine (RW2)", "Motor de cartera (RW2)");
+  if (tpl === "portfolio") return t("Portfolio engine", "Motor de cartera");
   return tpl;
 }
 
@@ -42,7 +42,7 @@ export function bandChipHtml(band) {
   };
   const [label, color] = m[band.status] || [band.status, "var(--muted)"];
   const detail = band.liveCumReturnPct != null && band.p5Pct != null
-    ? ` <span class="muted">(${num(band.liveCumReturnPct, 1)}% vs p5 ${num(band.p5Pct, 1)}%)</span>`
+    ? ` <span class="muted">(${pctWhole(band.liveCumReturnPct)} ${t("vs worst expected", "frente al peor esperado")} ${pctWhole(band.p5Pct)})</span>`
     : "";
   return `<span style="color:${color}">${esc(label)}</span>${detail}`;
 }
@@ -137,13 +137,13 @@ export function portfolioRowHtml(p, writable) {
     ? ` <span style="color:var(--down)" title="${t("Params differ from the validated artifact", "Parámetros distintos del artefacto validado")}">⚠ ${t("unvalidated", "no validado")}</span>`
     : "";
   const pending = p.status === "pending_restart"
-    ? ` · <span class="muted">${t("pending restart — applies on the next restart", "pendiente de reinicio — se aplica en el próximo reinicio")}</span>`
+    ? ` · <span class="muted">${t("applies on the next restart", "se aplica en el próximo reinicio")}</span>`
     : "";
   const archived = p.status === "archived" ? ` · <span class="muted">${t("archived", "archivado")}</span>` : "";
   // RW2: the incumbent row of a sleeve the LIVE portfolio engine manages — its own engine is not
   // built this boot; nothing is disabled, the book is managed by the named definition.
   const managed = p.managedBy
-    ? ` · <span class="muted" title="${t("This row's engine is not built; the portfolio engine manages the sleeve's book", "El motor de esta fila no se construye; el motor de cartera gestiona el libro del sleeve")}">${t("managed by the portfolio engine", "gestionado por el motor de cartera")} (${esc(p.managedBy)})</span>`
+    ? ` · <span class="muted" title="${t("This row's engine is not built; the portfolio engine manages the sleeve's book", "El motor de esta fila no se construye; el motor de cartera gestiona el libro del sleeve")}">${t("managed by the portfolio engine", "gestionado por el motor de cartera")}</span>`
     : "";
   const actions = writable ? `<td class="pf-actions">
       <button class="acc-btn" data-pf-edit="${esc(p.id)}">${t("Edit", "Editar")}</button>
@@ -157,7 +157,7 @@ export function portfolioRowHtml(p, writable) {
     <td>${esc(accountLabel(p.account))}</td>
     <td>$${num(p.capital, 0)}</td>
     <td>${Number(p.universeSize) || 0}</td>
-    <td>${esc(p.mode)}${disabled}</td>
+    <td>${esc(p.mode === "live" ? t("live", "en vivo") : p.mode === "shadow" ? t("simulated", "simulado") : "")}${disabled}</td>
     <td>${bandChipHtml(p.band)}</td>
     ${actions}
   </tr>`;
@@ -166,14 +166,14 @@ export function portfolioRowHtml(p, writable) {
 const EMPTY_META = { writable: false, presets: [], accounts: [] };
 
 export function renderPortfoliosBody(items, meta = EMPTY_META) {
-  if (!items) return `<div class="muted">${t("Portfolios API unavailable (route not mounted yet)", "API de portafolios no disponible (ruta aún sin montar)")}</div>`;
+  if (!items) return `<div class="muted">${t("Could not load the portfolios. It will retry on the next visit.", "No se pudieron cargar los portafolios. Se reintentará en la próxima visita.")}</div>`;
   const writable = !!meta?.writable;
   const newBtn = writable ? `<button class="acc-btn primary" data-pf-new>${t("New portfolio", "Nuevo portafolio")}</button>` : "";
   const writeNote = writable
     ? ""
-    : `<div class="muted pf-note">${t("Create and edit unlock with PORTFOLIOS_SOURCE=db.", "Crear y editar se activan con PORTFOLIOS_SOURCE=db.")}</div>`;
+    : `<div class="muted pf-note">${t("Creating and editing portfolios is switched off on this installation.", "Crear y editar portafolios está desactivado en esta instalación.")}</div>`;
   const head = `<div class="pf-head">
-    <div class="muted" style="font-size:var(--t-xs)">${t("Source", "Origen")}: ${esc(sourceLabel(items))}</div>
+    <div class="muted" style="font-size:var(--t-xs)">${t("Portfolios are", "Los portafolios están")} ${esc(sourceLabel(items))}</div>
     ${newBtn}
   </div>${writeNote}`;
   if (!items.length) return `${head}<div class="muted">${t("No portfolios", "Sin portafolios")}</div>`;
@@ -188,8 +188,8 @@ export function renderPortfoliosBody(items, meta = EMPTY_META) {
 function sourceLabel(items) {
   const origin = items && items.length ? items[0].origin : null;
   return origin === "db"
-    ? t("database registry (PORTFOLIOS_SOURCE=db)", "registro en base de datos (PORTFOLIOS_SOURCE=db)")
-    : t("code — built-in definitions (PORTFOLIOS_SOURCE=code)", "código — definiciones integradas (PORTFOLIOS_SOURCE=code)");
+    ? t("saved in the database", "guardados en la base de datos")
+    : t("built into the program", "integrados en el programa");
 }
 
 // ── "new portfolio" form (pure render; the caller wires events) ─────────
@@ -393,7 +393,7 @@ async function onCreateClick(e) {
       const r = await api.createPlatformPortfolio(result.body);
       if (msg) {
         msg.className = "acc-msg ok";
-        msg.textContent = t("Created — applies on the next restart (pending_restart).", "Creado — se aplica en el próximo reinicio (pendiente de reinicio).") + (r?.note ? ` (${r.note})` : "");
+        msg.textContent = t("Created — applies on the next restart.", "Creado — se aplica en el próximo reinicio.");
       }
       if (root) await reload(root).catch(() => {});
       setTimeout(closeCreate, 1400);
@@ -453,7 +453,7 @@ async function onEditClick(e) {
     const r = await api.patchPlatformPortfolio(editingId, result.body);
     if (msg) {
       msg.className = "acc-msg ok";
-      msg.textContent = t("Saved — applies on the next restart (pending_restart).", "Guardado — se aplica en el próximo reinicio (pendiente de reinicio).") + (r?.note ? ` (${r.note})` : "");
+      msg.textContent = t("Saved — applies on the next restart.", "Guardado — se aplica en el próximo reinicio.");
     }
     if (root) await reload(root).catch(() => {});
     setTimeout(closeEdit, 1400);

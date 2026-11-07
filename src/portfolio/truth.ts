@@ -21,8 +21,11 @@ import { createLogger } from "../utils/logger";
 import { sleeveRealizedPnl } from "../portfolio-engine/live/rows";
 import {
   getDB, getEquityAt, getOpenTrades,
-  insertActivity, readSemantics, getEquityDisplayStart, getEquityPnlDisplay,
+  insertActivity, readSemantics, getEquityDisplayStart,
+  getEquityWindowDisplay, getETDateKey, getETWindowStart, getSyncState, setSyncState,
+  type DisplayStart, type EquityWindow,
 } from "../db/database";
+import { eventBus, EVENTS } from "../utils/events";
 import {
   RISK_PROFILES, ALL_PROFILE_IDS, BROKER_MAIN_SERIES, LEDGER_SLEEVE_BROKERS,
   type RiskProfileId,
@@ -59,7 +62,7 @@ export function getBrokerSnapshotNow(broker: BrokerKey): { equity: number; cash:
   if (refreshedAt === null || refreshedAt < Date.now() - BROKER_SNAPSHOT_MAX_AGE_MS) return null;
   const row = getDB().prepare(
     `SELECT equity, cash, snapshot_time AS at FROM equity_snapshots
-     WHERE profile_id = ? AND semantics = ? AND synthetic = 0 ORDER BY snapshot_time DESC LIMIT 1`
+     WHERE profile_id = ? AND semantics = ? AND synthetic = 0 ORDER BY snapshot_time DESC, id DESC LIMIT 1`
   ).get(MAIN_SERIES[broker], readSemantics(MAIN_SERIES[broker])) as { equity: number; cash: number; at: number } | undefined;
   if (!row || row.at < Date.now() - BROKER_SNAPSHOT_MAX_AGE_MS) return null;
   return row;
@@ -94,7 +97,7 @@ export function isMainSeriesApplicable(broker: BrokerKey): boolean {
 /** DISPLAY-only first broker-truth observation — spans every configured-
  *  rebase era (unlike getBrokerFirstEquity, current-era-only). Dashboard/
  *  Telegram "Since Start" only; never the invariant checker. */
-export function getBrokerFirstEquityDisplay(broker: BrokerKey): { equity: number; rebased: boolean } | null {
+export function getBrokerFirstEquityDisplay(broker: BrokerKey): DisplayStart | null {
   return getEquityDisplayStart(MAIN_SERIES[broker]);
 }
 
@@ -168,10 +171,9 @@ export function getSleevePct(id: RiskProfileId): number | null {
  *  OR when reaching the start point required a configured rebase — the %
  *  would otherwise divide by a synthetically-shifted basis. */
 export function getSinceStartPct(): number | null {
-  const start = getPortfolioEquityStartDisplay();
-  const now = getPortfolioEquityNow().total;
-  if (start.total == null || now == null || start.total <= 0 || start.rebased) return null;
-  return ((now - start.total) / start.total) * 100;
+  // One implementation (A-1): the All-window reader every tile, card and
+  // Telegram line uses — never a second since-start formula.
+  return readDisplayMoneyWindow(portfolioMainLegs(), 0)?.pnlPct ?? null;
 }
 
 /** Mark-to-market day P&L over both fresh *_main series (ET-midnight anchored).
@@ -180,16 +182,7 @@ export function getSinceStartPct(): number | null {
  *  before: no reading a stale broker series just because its display history
  *  happens to look continuous. */
 export function getTodayPnl(): number | null {
-  if (!getBrokerSnapshotNow("alpaca") || !getBrokerSnapshotNow("binance")) return null;
-  const a = getEquityPnlDisplay(MAIN_SERIES.alpaca, 1);
-  const b = getEquityPnlDisplay(MAIN_SERIES.binance, 1);
-  if (a == null || b == null) return null;
-  const coinmApplicable = isMainSeriesApplicable("coinm");
-  if (!coinmApplicable) return a.pnl + b.pnl;
-  if (!getBrokerSnapshotNow("coinm")) return null;
-  const c = getEquityPnlDisplay(MAIN_SERIES.coinm, 1);
-  if (c == null) return null;
-  return a.pnl + b.pnl + c.pnl;
+  return readDisplayMoneyWindow(portfolioMainLegs(), 1)?.pnl ?? null;
 }
 
 /**
@@ -214,18 +207,41 @@ export function getTodayPnl(): number | null {
  * gate) already reports the total as unavailable. Sleeve/non-main ids carry
  * no such gate — unchanged semantics.
  */
-export function combineEquityPnlLegs(profileIds: string[], periodDays: number): { pnl: number; pnlPct: number | null } | null {
+export function readDisplayMoneyWindow(profileIds: string[], periodDays: number, now = Date.now(), requireFresh = true): EquityWindow | null {
   for (const id of profileIds) {
     const broker = BROKER_BY_MAIN_SERIES[id];
-    if (broker && isMainSeriesApplicable(broker) && !getBrokerSnapshotNow(broker)) return null;
+    if (requireFresh && broker && isMainSeriesApplicable(broker) && !getBrokerSnapshotNow(broker)) return null;
   }
-  const rows = profileIds.map(id => getEquityPnlDisplay(id, periodDays));
+  const rows = profileIds.map(id => getEquityWindowDisplay(id, periodDays, now));
+  if (!rows.length) return null;
   if (rows.some(r => r == null)) return null;
-  const legs = rows as { pnl: number; pnlPct: number | null; startEquity: number }[];
+  const legs = rows as EquityWindow[];
+  if (Math.max(...legs.map(r => r.endAt)) - Math.min(...legs.map(r => r.endAt)) > BROKER_SNAPSHOT_MAX_AGE_MS) return null;
   const pnl = legs.reduce((s, r) => s + r.pnl, 0);
-  const startSum = legs.reduce((s, r) => s + r.startEquity, 0);
+  const startSum = legs.reduce((s, r) => s + r.start.equity, 0);
   const invalid = legs.some(r => r.pnlPct == null) || startSum <= 0;
-  return { pnl, pnlPct: invalid ? null : (pnl / startSum) * 100 };
+  const at = Math.min(...legs.map(r => r.start.at));
+  // The composite start is rebased when any leg's is, or when the COIN-M leg
+  // had no reading at the window start (its anchor is its own genesis, the
+  // same synthetic pre-genesis baseline the consolidated curve marks
+  // `rebased`). Legs anchored seconds apart before the SAME boundary are not
+  // a rebase — the 5-min passes never land on one instant.
+  const windowStart = periodDays === 0 ? at : getETWindowStart(periodDays, now);
+  const coinmLeg = profileIds.indexOf(MAIN_SERIES.coinm) >= 0 ? legs[profileIds.indexOf(MAIN_SERIES.coinm)] : null;
+  const rebased = legs.some(r => r.start.rebased) || (coinmLeg != null && coinmLeg.start.at > windowStart);
+  return { pnl, pnlPct: invalid || rebased ? null : (pnl / startSum) * 100,
+    equity: legs.reduce((s, r) => s + r.equity, 0), endAt: Math.max(...legs.map(r => r.endAt)),
+    start: { at, date: getETDateKey(at), equity: startSum,
+      rebased } };
+}
+
+export function portfolioMainLegs(): string[] {
+  return [MAIN_SERIES.alpaca, MAIN_SERIES.binance, ...(isMainSeriesApplicable("coinm") ? [MAIN_SERIES.coinm] : [])];
+}
+
+export function combineEquityPnlLegs(profileIds: string[], periodDays: number, now = Date.now()): { pnl: number; pnlPct: number | null } | null {
+  const w = readDisplayMoneyWindow(profileIds, periodDays, now);
+  return w ? { pnl: w.pnl, pnlPct: w.pnlPct } : null;
 }
 
 // ══════════════════════════════════════════════
@@ -240,6 +256,29 @@ export interface InvariantReport { at: number; ok: boolean; checks: InvariantChe
 let lastReport: InvariantReport | null = null;
 /** Surfaced in /healthz/full. */
 export function getLastInvariantReport(): InvariantReport | null { return lastReport; }
+
+/** Durable episode latch (A-5, 2026-11-07): page the FIRST violation of each
+ * invariant and its recovery, once each, through the explicit ops channel
+ * (the same `EVENTS.ERROR_BURST` payload the adapters emit directly) — never
+ * by hoping a once-a-day check reaches the logger's ten-errors-per-minute
+ * burst detector. The latch lives in sync_state so a restart neither re-pages
+ * a known episode nor forgets to page its recovery. Returns the names whose
+ * state changed in this report. */
+export function publishInvariantEpisodes(report: InvariantReport): Set<string> {
+  const transitions = new Set<string>();
+  for (const check of report.checks) {
+    const key = `money:invariant:${check.name}`;
+    const wasBroken = getSyncState(key) === "broken";
+    if ((!check.ok && !wasBroken) || (check.ok && wasBroken)) {
+      const message = `${check.ok ? "RECOVERED" : "VIOLATION"} [${check.name}]: ${check.detail}`;
+      eventBus.emit(EVENTS.ERROR_BURST, { context: "PortfolioTruth.invariants", message,
+        count: 1, windowMs: 0, firstAt: report.at, lastAt: report.at });
+      setSyncState(key, check.ok ? "ok" : "broken");
+      transitions.add(check.name);
+    }
+  }
+  return transitions;
+}
 
 /**
  * @param unrealizedBySleeve live Σ unrealizedPnl per sleeve (from AccountManager
@@ -320,10 +359,20 @@ export function reconcilePortfolioInvariants(
 
   const report: InvariantReport = { at: Date.now(), ok: checks.every(c => c.ok), checks };
   lastReport = report;
+  const transitions = publishInvariantEpisodes(report);
 
-  for (const c of checks.filter(c => !c.ok)) {
-    log.error(`Portfolio invariant VIOLATION [${c.name}]: ${c.detail}`);
-    try { insertActivity(null, "system", `⚖️ Invariant violation [${c.name}]: ${c.detail}`); } catch {}
+  // Loud once per episode (log.error + activity row); an ongoing violation
+  // keeps a quieter trace each pass so logs are not flooded between checks.
+  for (const c of checks) {
+    if (!c.ok && transitions.has(c.name)) {
+      log.error(`Portfolio invariant VIOLATION [${c.name}]: ${c.detail}`);
+      try { insertActivity(null, "system", `⚖️ Invariant violation [${c.name}]: ${c.detail}`); } catch {}
+    } else if (!c.ok) {
+      log.warn(`Portfolio invariant still broken [${c.name}]: ${c.detail}`);
+    } else if (transitions.has(c.name)) {
+      log.info(`Portfolio invariant RECOVERED [${c.name}]: ${c.detail}`);
+      try { insertActivity(null, "system", `⚖️ Invariant recovered [${c.name}]: ${c.detail}`); } catch {}
+    }
   }
   if (report.ok) log.info(`Portfolio invariants OK (${checks.length} checks)`);
   return report;

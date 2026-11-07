@@ -2,20 +2,30 @@ import { expect, test } from "bun:test";
 import { sinceStart } from "./profiles.js";
 import { sinceStartSub } from "./kpis.js";
 
-const st = (brokers) => ({ profiles: [{ brokerAccounts: brokers }] });
+// A-1 (2026-11-07): "since start" is the server's ONE display-start window
+// (pnlAggregate.sinceStart — the same object the All tile and Telegram use),
+// never a frontend sum of broker cards against another anchor.
+const st = (sinceStartWindow) => ({ profiles: [{ pnlAggregate: { sinceStart: sinceStartWindow } }] });
 
-test("since start sums both brokers' broker-truth equity against their first equity", () => {
-  const r = sinceStart(st([
-    { equity: 105479, firstEquity: 102208, startedAt: Date.UTC(2026, 6, 10) },
-    { equity: 12629, firstEquity: 10972, startedAt: Date.UTC(2026, 6, 20) },
-  ]));
-  expect(r.pnl).toBeCloseTo(4928, 6);
+test("since start reads the server's display-start window verbatim (date, equity, rebased flag)", () => {
+  const start = { at: Date.UTC(2026, 6, 10), date: "2026-07-10", equity: 113180, rebased: false };
+  const r = sinceStart(st({ pnl: 4928, pnlPct: 4928 / 113180 * 100, equity: 118108, endAt: Date.UTC(2026, 10, 7), start }));
+  expect(r.pnl).toBe(4928);
   expect(r.pct).toBeCloseTo(4928 / 113180 * 100, 9);
   expect(r.startedAt).toBe(Date.UTC(2026, 6, 10));
+  expect(r.displayStart).toEqual(start);
 });
 
-test("no figure while a broker lacks its first anchor; the sub line stays empty", () => {
-  expect(sinceStart(st([{ equity: 100, firstEquity: null }]))).toBeNull();
+test("a rebased start keeps the server's null percent — the frontend never invents one", () => {
+  const r = sinceStart(st({ pnl: 10, pnlPct: null, equity: 100, endAt: 1, start: { at: 1, date: "2026-01-01", equity: 90, rebased: true } }));
+  expect(r.pnl).toBe(10);
+  expect(r.pct).toBeNull();
+  expect(sinceStartSub(r)).not.toContain("%");
+});
+
+test("no figure while the server has no display-start window; the sub line stays empty", () => {
+  expect(sinceStart(st(null))).toBeNull();
+  expect(sinceStart({ profiles: [{ brokerAccounts: [{ equity: 100, firstEquity: 90 }] }] })).toBeNull();
   expect(sinceStart({ profiles: [] })).toBeNull();
   expect(sinceStartSub(null)).toBe("");
 });

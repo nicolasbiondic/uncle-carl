@@ -1,6 +1,7 @@
 import { store, t, isEs, sleeveLabel } from "../store.js";
 import { api } from "../api.js";
-import { moneySigned, pnlWhole, pct, pctSigned, pctFrac, pnlColor, n, num, etDateTime } from "../fmt.js";
+import { pnlWhole, pct, pctSigned, pctFrac, pnlColor, n, num } from "../fmt.js";
+import { activityLogHtml } from "./activity.js";
 import { byId, esc } from "../ui.js";
 import { windowSeg } from "./kpis.js";
 import { fitTablesIn } from "../fit.js";
@@ -25,7 +26,7 @@ const TAB_MIGRATE = { portfolio: "equity", hours: "performance", symbols: "perfo
 export function renderAnalyticsShell() {
   const cur = TAB_MIGRATE[store.state.tab] || store.state.tab;
   const tabs = TABS().map(([id, label]) => `<button class="tab ${cur === id ? "on" : ""}" data-atab="${id}">${label}</button>`).join("");
-  const windowHtml = cur === "equity" ? `<span class="an-window"><span class="an-window-l">${t("Window", "Ventana")}</span>${windowSeg(store.state.period)}</span>` : "";
+  const windowHtml = cur === "equity" ? `<span class="an-window"><span class="an-window-l" title="${t("Days are New York days, like the P&L tiles", "Los días son días de Nueva York, como en las tarjetas de P&L")}">${t("Window", "Ventana")} · ET</span>${windowSeg(store.state.period)}</span>` : "";
   return `<div class="an-head"><div class="tabs">${tabs}</div>${windowHtml}</div><div class="cardbody" id="anBody"><div class="empty">…</div></div>`;
 }
 
@@ -51,7 +52,10 @@ export async function loadTab() {
       await loadFunnel();
     }
     else if (tab === "activity") body.innerHTML = activity(await api.activity(60));
-  } catch (e) { body.innerHTML = `<div class="empty">${t("Could not load", "No se pudo cargar")}: ${esc(e.message)}</div>`; }
+  } catch {
+    // The server's error text is never printed; a failure reads as one.
+    body.innerHTML = `<div class="empty">${t("Could not load this tab. It will retry in a moment.", "No se pudo cargar esta pestaña. Se reintentará en unos instantes.")}</div>`;
+  }
 }
 
 // Performance: one plain-language line per portfolio (return vs its benchmark,
@@ -116,7 +120,7 @@ const BAND_LABEL = () => ({
 
 function bandChip(band) {
   if (!band) return `<span class="muted">—</span>`;
-  if (band.status === "insufficient_data") return `<span class="muted" title="${esc(band.reason || t("Not enough live data to evaluate the band", "Sin datos de vivo suficientes para evaluar la banda"))}">—</span>`;
+  if (band.status === "insufficient_data") return `<span class="muted" title="${esc(t("Not enough live data to evaluate the band", "Sin datos de vivo suficientes para evaluar la banda"))}">—</span>`;
   const label = BAND_LABEL()[band.status] || band.status;
   const color = band.status === "below" ? "var(--down)" : band.status === "above" ? "var(--up)" : "var(--muted, inherit)";
   const adjusted = band.selectionBias
@@ -124,7 +128,7 @@ function bandChip(band) {
     : "";
   const tip = band.cumReturnPct
     ? `h=${n(band.horizonSessions)} · p5 ${pctSigned(band.cumReturnPct.p5)} · p50 ${pctSigned(band.cumReturnPct.p50)} · p95 ${pctSigned(band.cumReturnPct.p95)}${adjusted}`
-    : (band.reason || "");
+    : "";
   return `<span class="mchip" title="${esc(tip)}" style="color:${color};border-color:${color};white-space:nowrap">${esc(label)}</span>`;
 }
 
@@ -194,8 +198,7 @@ export function scorecard(sc) {
 }
 
 function activity(items) {
-  if (!items?.length) return `<div class="empty">${t("No recent activity", "Sin actividad reciente")}</div>`;
-  return `<div class="scroll" style="max-height:420px;font-family:var(--mono);font-size:var(--t-xs)">${items.map((a) => `<div style="padding:3px 0;border-bottom:1px solid var(--border)"><span class="muted">[${esc(etDateTime(a.created_at))}]</span> ${a.account_id ? `<span class="muted">[${esc(a.account_id)}]</span> ` : ""}${esc(a.message)}</div>`).join("")}</div>`;
+  return `<div class="scroll" style="max-height:420px;font-size:var(--t-xs)">${activityLogHtml(items)}</div>`;
 }
 
 function hours(data) {
@@ -203,7 +206,7 @@ function hours(data) {
   const max = Math.max(...data.map((h) => Math.abs(n(h.avgPnl))), 0.01);
   const bars = data.map((h) => {
     const v = n(h.avgPnl), pctH = Math.abs(v) / max * 100, up = v >= 0;
-    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px" title="${h.hour}:00 ET · ${moneySigned(v)} · ${n(h.tradeCount)} trades">
+    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px" title="${h.hour}:00 ET · ${pnlWhole(v)} · ${n(h.tradeCount)} ${t("trades", "trades")}">
       <div style="height:70px;width:100%;display:flex;align-items:flex-end;justify-content:center"><div style="width:60%;height:${pctH}%;background:${up ? "var(--up)" : "var(--down)"};border-radius:2px 2px 0 0"></div></div>
       <span class="muted" style="font-size:9px">${h.hour}</span></div>`;
   }).join("");
@@ -212,17 +215,17 @@ function hours(data) {
 
 function symbols(data) {
   if (!data?.length) return `<div class="empty">${t("No symbol data", "Sin datos por símbolo")}</div>`;
-  const rows = data.slice(0, 20).map((s) => `<tr><td>${esc(s.symbol)}</td><td>${n(s.tradeCount)}</td><td style="color:${n(s.winRate) >= .5 ? "var(--up)" : "var(--text)"}">${pctFrac(s.winRate)}</td><td style="color:${pnlColor(s.totalPnl)}">${moneySigned(s.totalPnl)}</td></tr>`).join("");
-  return `<div class="scroll"><table><thead><tr><th>${t("Symbol", "Símbolo")}</th><th>${t("Trades", "Trades")}</th><th>Win</th><th>P&L</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const rows = data.slice(0, 20).map((s) => `<tr><td>${esc(s.symbol)}</td><td>${n(s.tradeCount)}</td><td style="color:${n(s.winRate) >= .5 ? "var(--up)" : "var(--text)"}">${pctFrac(s.winRate)}</td><td style="color:${pnlColor(s.totalPnl)}">${pnlWhole(s.totalPnl)}</td></tr>`).join("");
+  return `<div class="scroll"><table><thead><tr><th>${t("Symbol", "Símbolo")}</th><th>${t("Trades", "Trades")}</th><th>${t("Win", "Ganadas")}</th><th>P&L</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 export function pnlAttr(d) {
   if (!d?.buckets) return `<div class="empty">${t("No data", "Sin datos")}</div>`;
   const label = { algo: t("Strategy trades", "Operaciones de la estrategia"), reconcile: t("Broker corrections", "Correcciones del bróker"), sync: t("Positions recovered from the broker", "Posiciones recuperadas del bróker") };
   const tip = { algo: t("Closed strategy trades; not proof of an edge.", "Operaciones cerradas de las estrategias; no demuestra una ventaja."), reconcile: t("Rows closed to match the broker; some P&L values are placeholders.", "Filas cerradas para cuadrar con el bróker; algunos P&L son provisionales."), sync: t("Positions imported by broker synchronization or recovery, not opened by a strategy.", "Posiciones importadas al sincronizar o recuperar el bróker, no abiertas por una estrategia.") };
-  const rows = d.buckets.map((b) => `<tr><td title="${esc(tip[b.bucket] || "")}">${label[b.bucket] || esc(b.bucket)}</td><td>${n(b.trades)}</td><td>${pctFrac(b.winRate)}</td><td style="color:${pnlColor(b.totalPnl)}">${pnlWhole(b.totalPnl)}</td><td>${b.profitFactor == null ? "∞" : num(b.profitFactor, 2)}</td></tr>`).join("");
+  const rows = d.buckets.map((b) => `<tr><td title="${esc(tip[b.bucket] || "")}">${label[b.bucket] || esc(b.bucket)}</td><td>${n(b.trades)}</td><td>${pctFrac(b.winRate)}</td><td style="color:${pnlColor(b.totalPnl)}">${pnlWhole(b.totalPnl)}</td></tr>`).join("");
   return `<div class="an-h" title="${esc(t("Closed-trade P&L of the current sleeves, including corrections and recovered positions. Not the change in account equity or a measure of strategy edge.", "P&L de cierres de las carteras actuales, incluidas correcciones y posiciones recuperadas. No es el cambio de patrimonio ni una medida de la ventaja de la estrategia."))}">${t("Where the P&L comes from", "De dónde viene el P&L")}</div>
-    <div class="scroll"><table><thead><tr><th>${t("Source", "Fuente")}</th><th>${t("Trades", "Trades")}</th><th>Win</th><th>P&L</th><th>PF</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="scroll"><table><thead><tr><th>${t("Source", "Fuente")}</th><th>${t("Trades", "Trades")}</th><th>${t("Win", "Ganadas")}</th><th>P&L</th></tr></thead><tbody>${rows}</tbody></table></div>
     <div style="margin-top:var(--s2);color:${pnlColor(d.netPnl)}">${t("Net", "Neto")}: <b>${pnlWhole(d.netPnl)}</b> <span class="muted">(${n(d.windowDays)}d)</span></div>`;
 }
 

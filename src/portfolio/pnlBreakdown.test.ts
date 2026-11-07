@@ -132,10 +132,13 @@ describe("realized attribution — what was cashed vs what was earned before the
     expect(ra.closes.find(c => c.symbol === "AAPL")).toMatchObject({ realized: 715.16, earnedBefore: null, inWindow: null });
   });
 
-  test("COIN-M contracts are not linear in price: a pre-window momentum_btc close nulls the total", () => {
+  test("COIN-M native ledgers are explicitly excluded, never BTC subtracted from USD", () => {
     trade({ id: "btc", account: "momentum_btc", symbol: "BTC/USD", qty: 3, entry: 60_000, entryTime: Date.UTC(2026, 8, 1), exit: 62_000, exitTime: Date.UTC(2026, 8, 25), pnl: 10 });
     bar("binance_futures", "1h", "BTC/USD", S7 - H, 61_000);
-    expect(computeRealizedAttribution(getDB(), hist, S7).earnedBefore).toBeNull();
+    const result = computeRealizedAttribution(getDB(), hist, S7);
+    expect(result.excludedAccounts).toContain("momentum_btc");
+    expect(result.realized).toBe(0);
+    expect(result.closesCount).toBe(0);
   });
 
   test("realized is exactly getTradingStats' periodPnl — the figure the KPI sub-line shows", () => {
@@ -259,7 +262,7 @@ describe("reducing legs — 5-day renewals, resizes and earlier trims", () => {
 
   test("resize legs: a trim inside the window is attributed from its lot's entry and taken out of the open position", () => {
     // SMH 6.26 @512.14 in on 11-04; trimmed 2.05 @468.36 today; 4.22 remain at 470.
-    trade({ id: "smh", account: "momentum_stocks", symbol: "SMH", qty: 4.216213657, entry: 512.138741, entryTime: Date.UTC(2026, 10, 4, 14, 37), partialRealized: -89.57, partialClosed: 2.045963148 });
+    trade({ id: "smh", account: "momentum_stocks", symbol: "SMH", qty: 4.216213657, entry: 512.138741, entryTime: Date.UTC(2026, 10, 4, 14, 37), partialRealized: (468.36 - 512.138741) * 2.045963148, partialClosed: 2.045963148 });
     journal("momentum_stocks", PASS, [{ symbol: "SMH", qty: 6.262176805, avgEntryPrice: 512.138741 }], [
       { side: "sell", symbol: "SMH", qty: 2.045963148, price: 468.36, filledAt: PASS + 100_000 },
     ]);

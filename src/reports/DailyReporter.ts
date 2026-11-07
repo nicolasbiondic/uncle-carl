@@ -1,16 +1,17 @@
 // ══════════════════════════════════════════════
-// Daily Reporter — generates end-of-day reports at 23:59 ET
+// Daily Reporter — final reports after the requested ET day has ended
 // Stores in SQLite, sends via Telegram if configured
 // ══════════════════════════════════════════════
 
 import { createLogger } from "../utils/logger";
 import {
   saveDailyReport, getClosedTradesInETDayRange,
-  getEquityAt, insertActivity,
-  getETDateKey, getETDayBounds, hasDailyReport,
+  insertActivity, getETYesterday,
+  getETDayBounds, hasDailyReport,
   markDailyReportTelegramSent,
 } from "../db/database";
 import { heartbeats } from "../ops/heartbeat";
+import { readMoneyWindow, withMoneyReportDate } from "../portfolio/money";
 
 const log = createLogger("DailyReporter");
 
@@ -49,7 +50,7 @@ export class DailyReporter {
     // watchdog; a genuinely wedged generateReport (guard held forever, see
     // `ticking` above) stops beating and pages within ~10 minutes.
     heartbeats.register(DAILY_REPORTER_HEARTBEAT, 60_000, { graceMultiplier: 10 });
-    log.info("Daily reporter started (23:59 ET — captures stocks + 24/7 crypto)");
+    log.info("Daily reporter started (after ET midnight — final completed-day reports)");
   }
 
   stop() {
@@ -78,22 +79,14 @@ export class DailyReporter {
       // gives the identical "h===23 && m>=59" window (the last minute before
       // midnight ET) without a second Intl formatter to keep in sync.
       const now = Date.now();
-      const today = getETDateKey(now);
-      const prev = getETDateKey(now - 86_400_000);
+      const prev = getETYesterday(now);
 
       if (!hasDailyReport(prev)) {
         await this.safeGenerate(prev);
       }
 
-      // Audit fix (2026-05-06): generate at 23:59 ET instead of 17:00 ET so
-      // the report captures crypto closes that happen after the US equity
-      // close (16:00 ET) and through the end of the calendar day. The old
-      // 17:00 ET cutoff caused crypto cierres en 17:00–23:59 ET to never
-      // appear in any report.
-      const [, todayEnd] = getETDayBounds(today);
-      if (now >= todayEnd - 60_000 && !hasDailyReport(today)) {
-        await this.safeGenerate(today);
-      }
+      // Never finalize an incomplete day at 23:59. Its last minute, and the
+      // last hour of the 25-hour autumn day, belong to that day's report.
       heartbeats.beat(DAILY_REPORTER_HEARTBEAT); // end of a full pass only — a guard-blocked poll must NOT beat
     } finally {
       this.ticking = false;
@@ -109,7 +102,7 @@ export class DailyReporter {
   }
 
   async generateReport(date?: string) {
-    const reportDate = date || getETDateKey();
+    const reportDate = date || getETYesterday();
     log.info(`Generating daily report for ${reportDate}...`);
 
     try {
@@ -119,6 +112,7 @@ export class DailyReporter {
       // an ET-derived report date. The old logic missed late-evening trades
       // on every account.
       const [dayStart, dayEnd] = getETDayBounds(reportDate);
+      if (dayEnd > Date.now()) throw new Error(`Daily report ${reportDate} is not final: ET day has not ended`);
 
       for (const acc of summaries) {
         // Audit fix (2026-05-06): pull ALL closed trades for this profile
@@ -143,10 +137,10 @@ export class DailyReporter {
         // edge cases where stats and the trade scan disagreed. Sum directly
         // from the same `todayTrades` list used for counts so the numbers
         // are guaranteed consistent.
-        let realizedPnl = 0;
+        let closedEpisodePnl = 0;
         for (const t of todayTrades) {
           const pnl = t.pnl || 0;
-          realizedPnl += pnl;
+          closedEpisodePnl += pnl;
           if (pnl > bestTrade.pnl) bestTrade = { symbol: t.symbol, pnl };
           if (pnl < worstTrade.pnl) worstTrade = { symbol: t.symbol, pnl };
           stratCount[t.strategy] = (stratCount[t.strategy] || 0) + 1;
@@ -160,8 +154,10 @@ export class DailyReporter {
         // the day's move. Use the equity_snapshots table to anchor at the
         // actual ET-day boundaries. Fallback to initialEquity only on the
         // very first day when there are no prior snapshots.
-        const startingEquity = getEquityAt(acc.id, dayStart - 1) ?? acc.initialEquity;
-        const endingEquity = getEquityAt(acc.id, dayEnd - 1) ?? acc.equity;
+        const money = readMoneyWindow({ days: 1, now: dayEnd - 1, profiles: [acc.id], accounts: [acc.id], requireFresh: false });
+        const startingEquity = money.window?.start.equity ?? acc.initialEquity;
+        const endingEquity = money.window?.equity ?? startingEquity;
+        const realizedPnl = money.breakdown.realized;
 
         // unrealizedPnl was `equity - cash - todayPnl` which produced the
         // bizarre "exact opposite of realized" mirror seen in 2026-05-04..06
@@ -176,6 +172,7 @@ export class DailyReporter {
           startingEquity,
           endingEquity,
           realizedPnl,
+          closedEpisodePnl,
           unrealizedPnl,
           totalTrades: todayTrades.length,
           winningTrades: todayTrades.filter(t => (t.pnl || 0) > 0).length,
@@ -197,7 +194,7 @@ export class DailyReporter {
       // Send Telegram summary.
       // 2026-05-19: the daily report row stays in DB for the dashboard and
       // any future export, but the Telegram body is now composed by the
-      // TelegramReporter so /report and the scheduled 23:59 message agree
+      // TelegramReporter so /report and the scheduled daily message agree
       // byte-for-byte. The old per-profile multi-line dump (≈20 lines) was
       // redundant with `/profits` and noisy in the chat history.
       if (this.sendTelegramDigest) {
@@ -208,7 +205,7 @@ export class DailyReporter {
           // rate limit exhausted, revoked token) looked identical to a
           // real delivery. sendDaily() now returns whether Telegram's
           // response actually carried `ok: true`; only THAT flips the flag.
-          const ok = await this.sendTelegramDigest();
+          const ok = await withMoneyReportDate(reportDate, () => this.sendTelegramDigest!());
           if (ok) {
             // Phase 5E (2026-05-20): flip telegram_sent=1 on the
             // daily_reports rows we just wrote, so the dashboard can show

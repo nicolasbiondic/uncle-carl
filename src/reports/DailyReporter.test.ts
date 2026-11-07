@@ -1,5 +1,5 @@
-import { describe, test, expect, beforeEach } from "bun:test";
-import { getETDateKey, hasDailyReport, getDB } from "../db/database";
+import { describe, test, expect, beforeEach, afterEach, spyOn } from "bun:test";
+import { getETDateKey, getETDayBounds, hasDailyReport, getDB, saveEquitySnapshot } from "../db/database";
 import { DailyReporter } from "./DailyReporter";
 import { makeTestDb } from "../test-support/db";
 
@@ -14,6 +14,34 @@ function makeReporter(getAccountSummaries: () => any[]) {
   r.getAccountSummaries = getAccountSummaries;
   return r;
 }
+
+// A-8 (2026-11-07): the 23:59 provisional is gone — a day is reported once it
+// has ENDED (first poll after ET midnight; the 25-hour autumn day included), so
+// the last minute/hour of the day and the real closing equity are in it.
+describe("DailyReporter — final reports only", () => {
+  afterEach(() => spyOn(Date, "now").mockRestore());
+
+  test("23:59 ET writes nothing for the running day; the first poll after midnight writes it with the day's real end", async () => {
+    const day = "2026-11-04";
+    const [start, end] = getETDayBounds(day);
+    saveEquitySnapshot("momentum_stocks", 50_000, 50_000, 0, start - 60_000);
+    saveEquitySnapshot("momentum_stocks", 50_150, 50_000, 0, end - 2 * 60_000);
+    saveEquitySnapshot("momentum_stocks", 50_200, 50_000, 0, end - 30_000); // the last minute, lost by the old 23:59 cut
+    saveEquitySnapshot("momentum_stocks", 50_900, 50_000, 0, end + 60_000); // next day: never in this report
+    const r = makeReporter(() => [{ id: "momentum_stocks", initialEquity: 50_000, equity: 50_900 }]);
+    // Yesterday (11-03) already reported, so only the running day is at stake.
+    getDB().prepare(`INSERT INTO daily_reports (profile_id, report_date, starting_equity, ending_equity) VALUES ('momentum_stocks', '2026-11-03', 1, 1)`).run();
+
+    spyOn(Date, "now").mockReturnValue(end - 30_000); // 23:59:30 ET
+    await (r as any).checkReportTime();
+    expect(hasDailyReport(day)).toBe(false);
+
+    spyOn(Date, "now").mockReturnValue(end + 90_000); // 00:01:30 ET next day
+    await (r as any).checkReportTime();
+    const row = getDB().prepare(`SELECT starting_equity s, ending_equity e FROM daily_reports WHERE report_date = ?`).get(day) as any;
+    expect(row).toEqual({ s: 50_000, e: 50_200 });
+  });
+});
 
 describe("DailyReporter self-healing", () => {
   test("catch-up: a missing prior-day report is generated on the next poll", async () => {

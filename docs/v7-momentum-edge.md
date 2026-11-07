@@ -1,6 +1,17 @@
 # v8 Momentum TSM - Runbook de validacion
 
-## Estado actual
+> **Runbook histórico, fechado en septiembre de 2026 (estado al 2026-07-15 /
+> 2026-09).** El "Estado actual" y la "Evidencia honesta" de abajo describen
+> `momentum_stocks` en barras de 5 minutos y `momentum_crypto` en shadow: NO es lo
+> que corre hoy. `momentum_stocks` corre desde 2026-10-23 en el motor de cartera
+> (`src/portfolio-engine/`) y `momentum_crypto` opera live. El modelo vivo de cada
+> sleeve es la última entrada de `src/portfolio/modelVersions.ts`; el estado vigente
+> y verificable está en `AGENTS.md` y `README.md`. Lo que sigue vigente de este
+> documento son los comandos canónicos, el protocolo y la regla de cambios
+> (secciones finales). Verificar qué está vivo:
+> `bun -e 'import {currentModelVersionId as v} from "./src/portfolio/modelVersions"; console.log(v("momentum_stocks"), v("momentum_crypto"))'`.
+
+## Estado actual (septiembre de 2026; histórico)
 
 `MomentumEngine` ejecuta time-series momentum en dos sleeves independientes:
 

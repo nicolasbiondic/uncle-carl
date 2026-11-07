@@ -148,6 +148,23 @@ export function listPortfolioDecisions(accountId: string, limit = 30): Portfolio
   ).all(accountId, limit) as any[]).map(toRecord);
 }
 
+/** A new session never submits yesterday's target. Retire its unfinished
+ *  journal explicitly (across versions too), preserving fills and memory. */
+export function finalizeEndedPortfolioSessions(accountId: string, session: SessionDate, nowMs: number): void {
+  const ended = getDB().prepare(
+    `SELECT * FROM portfolio_decisions WHERE account_id = ? AND session < ? AND status = 'decided' AND mode = 'live'`,
+  ).all(accountId, session) as any[];
+  for (const row of ended) {
+    const rec = toRecord(row);
+    const unsent = rec.orders.filter(o => !o.applied && !o.skipped);
+    for (const order of unsent) order.skipped = "session_ended";
+    updatePortfolioDecisionProgress(rec, {
+      status: "submitted", orders: rec.orders,
+      note: `${rec.note ? `${rec.note}; ` : ""}session ended with ${unsent.length} unsent order(s)`,
+    }, nowMs);
+  }
+}
+
 /** BinanceVenueOptions.claimOrderId: record the id in portfolio_order_claims BEFORE returning true.
  *  One INSERT OR IGNORE statement = atomic (the PRIMARY KEY decides the race, even across
  *  processes); the row is durable in the same SQLite file as the book, never expires and is never

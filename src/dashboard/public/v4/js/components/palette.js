@@ -9,8 +9,8 @@ let root = null, input = null, list = null, acts = [], filtered = [], sel = 0, r
 function build() {
   root = document.createElement("div");
   root.className = "pal-backdrop";
-  root.innerHTML = `<div class="pal" role="dialog" aria-modal="true" aria-label="Command palette">
-    <input class="pal-in" placeholder="${t("Type a command…", "Escribe un comando…")}" aria-label="Command">
+  root.innerHTML = `<div class="pal" role="dialog" aria-modal="true" aria-label="${t("Command palette", "Paleta de comandos")}">
+    <input class="pal-in" placeholder="${t("Type a command…", "Escribe un comando…")}" aria-label="${t("Command", "Comando")}">
     <div class="pal-list" role="listbox"></div></div>`;
   document.body.appendChild(root);
   input = root.querySelector(".pal-in");

@@ -1,7 +1,8 @@
 import { api, setCsrf } from "./api.js";
 import { store, t, sleeveLabel } from "./store.js";
 import { byId, on, esc, icon } from "./ui.js";
-import { renderHeader, renderActions, renderNav, nextMenuIndex, NAV_PAGES, tickClock } from "./components/header.js";
+import { renderHeader, renderActions, renderNav, nextMenuIndex, NAV_PAGES, tickClock, paintStale, net } from "./components/header.js";
+import { viewChip } from "./components/viewchip.js";
 import { renderKpis, kpiValues } from "./components/kpis.js";
 import { openPnlBreakdown } from "./components/pnl-breakdown.js";
 import { loadProfileSparks } from "./components/profiles.js";
@@ -23,18 +24,26 @@ import { isAliasHash, normalizePage, pageFromHash } from "./router.js";
 import { num, n } from "./fmt.js";
 
 let opsTab = "positions";
-let tradesCache = [];
+let lastTab = null;
+let tradesCache = null; // null = never loaded (a failed feed is not "no trades")
 let prevKpi = {};
 let refreshT = null;
 const debouncedRefresh = () => { clearTimeout(refreshT); refreshT = setTimeout(async () => { await refresh(); render(); }, 1500); };
 
-function applyTheme() { document.documentElement.dataset.theme = store.state.theme; }
+function applyTheme() {
+  document.documentElement.dataset.theme = store.state.theme;
+  document.documentElement.lang = store.state.lang === "es" ? "es" : "en"; // screen readers and spell-checkers follow the UI language
+  const d = byId("disclaimerText");
+  if (d) d.textContent = t(
+    "Trading involves substantial risk of loss and is not suitable for all investors. Past performance is not indicative of future results. Do your own research. This software is for educational and informational purposes only — not financial advice.",
+    "Operar implica un riesgo sustancial de pérdida y no es adecuado para todos los inversores. El rendimiento pasado no garantiza resultados futuros. Haz tu propia investigación. Este software es solo educativo e informativo, no es asesoramiento financiero.");
+}
 
 function renderOps() {
   const inner = opsTab === "positions" ? renderPositions(store.state, tradesCache) : renderTrades(tradesCache);
   const tab = (id, label) => `<button class="tab ${opsTab === id ? "on" : ""}" data-opstab="${id}">${label}</button>`;
   return `<div class="card" id="opsCard">
-    <div class="tabs">${tab("positions", t("Positions", "Posiciones"))}${tab("trades", t("Trades", "Trades"))}</div>
+    <div class="tabs">${tab("positions", t("Positions", "Posiciones"))}${tab("trades", t("Trades", "Trades"))}${viewChip()}</div>
     <div class="cardbody" id="opsBody">${inner}</div></div>`;
 }
 
@@ -217,10 +226,14 @@ function renderPage() {
       // crushed the positions table to its tabs at 875px tall.
       byId("opsWrap").innerHTML = renderOps();
     });
+    // The 30 s repaint must not yank the reader to the top of the analytics card.
+    const prevAn = byId("anBody");
+    const keep = prevAn && store.state.tab === lastTab ? prevAn.scrollTop : 0;
+    lastTab = store.state.tab;
     byId("analyticsCol").innerHTML = `<div class="card" id="analyticsCard">${renderAnalyticsShell()}</div>`;
     byId("newsBar").innerHTML = renderNewsBar();
     fitOps(); // the whole page is laid out now (the analytics column and news bar arrived after the ops card)
-    loadTab();
+    loadTab().then(() => { const b = byId("anBody"); if (b && keep) b.scrollTop = keep; });
     loadNews();
   }
 }
@@ -242,9 +255,17 @@ async function refresh() {
       api.kpis(), // owner KPIs (volume/return/risk vs goals) — soft: null on old servers
     ]);
     if (my !== reqSeq) return;
-    tradesCache = trades || [];
-    store.set({ dashboard: dash, profiles: profiles || [], connections: conns || {}, daysRunning: dash?.daysRunning || 0, kpis });
-  } catch (e) { console.error("refresh failed", e); }
+    if (trades) tradesCache = trades; // a failed trades feed keeps the last good list
+    // A filter on a portfolio that no longer exists would show an empty book.
+    const gone = store.state.view !== "consolidated" && !(dash?.accounts || []).some((a) => a.id === store.state.view);
+    store.set({ dashboard: dash, profiles: profiles || [], connections: conns || {}, kpis, ...(gone ? { view: "consolidated" } : {}) });
+    net.refreshFailed = false;
+    net.lastOkAt = Date.now();
+  } catch (e) {
+    console.error("refresh failed", e);
+    if (my === reqSeq) net.refreshFailed = true; // the screen keeps the last good numbers; the header says from when
+  }
+  paintStale();
 }
 
 const userMenuItems = () => [...document.querySelectorAll("#umenu .umenu-item")];
@@ -273,6 +294,7 @@ function wireEvents() {
     else if (act === "user-menu") toggleUserMenu(undefined, !userMenuOpen && e.detail === 0 ? "first" : undefined); // detail 0 = Enter/Space, not a mouse click
     else if (act === "user-menu-close") toggleUserMenu(false);
     else if (act === "pnl-why") openPnlBreakdown(+el.dataset.days);
+    else if (act === "view-all") { store.set({ view: "consolidated" }); refresh().then(render); }
   });
   // Click-away / Escape close the user menu.
   document.addEventListener("click", (e) => {
@@ -318,6 +340,7 @@ function wireEvents() {
 
 function setTab(id) {
   store.set({ tab: id });
+  lastTab = id;
   const card = byId("analyticsCard");
   if (card) { card.innerHTML = renderAnalyticsShell(); loadTab(); }
 }
@@ -337,6 +360,7 @@ function wireWS() {
     },
     trade_closed: debouncedRefresh,
     order: debouncedRefresh,
+    status: (up) => { net.wsUp = up; paintStale(); },
   });
 }
 
@@ -345,7 +369,7 @@ function paletteActions() {
   // straight from am.getAccountSummaries()) — no hardcoded/retired profile ids.
   const accounts = store.state.dashboard?.accounts || [];
   const views = [["consolidated", t("Consolidated", "Consolidado")], ...accounts.map((a) => [a.id, sleeveLabel(a)])];
-  const tabs = [["bot", "Bot"], ["equity", "Equity"], ["performance", t("Performance", "Rendimiento")], ["activity", t("Activity", "Actividad")]];
+  const tabs = [["bot", "Bot"], ["equity", t("Equity", "Curva")], ["performance", t("Performance", "Rendimiento")], ["volume", t("Volume", "Volumen")], ["activity", t("Activity", "Actividad")]];
   const acts = [];
   for (const [id, l] of views) acts.push({ label: `${t("View", "Vista")}: ${l}`, tag: "view", run: () => { store.set({ view: id }); refresh().then(render); } });
   for (const [id, l] of tabs) acts.push({ label: `${t("Tab", "Pestaña")}: ${l}`, tag: "tab", run: () => setTab(id) });

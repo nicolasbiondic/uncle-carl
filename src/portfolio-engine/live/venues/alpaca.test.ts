@@ -110,6 +110,43 @@ describe("submit", () => {
     expect(res).toMatchObject({ ok: false, filledQty: 10, avgPrice: 90, status: "canceled" });
   });
 
+  // B-6 (2026-11-07): the cancel ACK was treated as settlement for buys and plain sells — a late
+  // fill of a "still working" buy became shares no sleeve owned.
+  test("a BUY whose cancel never settles throws (journal stays unapplied); the same id resumes and takes the late fill once", async () => {
+    let t = 0, cancelAt = -1;
+    const book = new Map<string, any>();
+    const client = fakeClient({
+      createOrder: (p) => { if (book.has(p.client_order_id)) throw http(422, "client_order_id must be unique"); book.set(p.client_order_id, { id: "b1" }); return { id: "b1", status: "accepted", filled_qty: "0" }; },
+      cancelOrder: () => { cancelAt = t; },
+      getOrder: () => ({ id: "b1", status: cancelAt < 0 ? "accepted" : "pending_cancel", filled_qty: cancelAt < 0 ? "0" : "5", filled_avg_price: "90" }),
+      getOrderByClientId: () => ({ id: "b1", status: "filled", filled_qty: "33.333333333", filled_avg_price: "90" }),
+    });
+    const venue = new AlpacaVenue(fakeExecutor(), client, { fillTimeoutMs: 1_000, pollIntervalMs: 1_000, releaseConfirmTimeoutMs: 3_000,
+      sleep: async ms => { t += ms; }, now: () => t });
+    await expect(venue.submit(intent(), "buy-stuck")).rejects.toThrow(/buy order b1 still working/);
+    expect(t).toBeGreaterThanOrEqual(cancelAt + 3_000); // the bounded confirm loop ran for the buy too
+    expect(client.calls.filter(c => c.method === "createOrder")).toHaveLength(1);
+    // Next tick, same client id: the venue answers duplicate → the existing (now filled) order is applied once.
+    const res = await venue.submit(intent(), "buy-stuck");
+    expect(res).toMatchObject({ ok: true, filledQty: 33.333333333, avgPrice: 90, brokerOrderId: "b1" });
+    expect(client.calls.filter(c => c.method === "createOrder")).toHaveLength(2);
+  });
+
+  test("a plain SELL (not MAX_HOLD) whose cancel never settles throws too; a settled cancel reports the partial", async () => {
+    let t = 0;
+    const stuck = fakeClient({ createOrder: () => ({ id: "s1", status: "accepted", filled_qty: "0" }),
+      getOrder: () => ({ id: "s1", status: "pending_cancel", filled_qty: "1", filled_avg_price: "90" }) });
+    const venue = new AlpacaVenue(fakeExecutor(), stuck, { fillTimeoutMs: 1_000, pollIntervalMs: 1_000, releaseConfirmTimeoutMs: 3_000,
+      sleep: async ms => { t += ms; }, now: () => t });
+    await expect(venue.submit(intent({ side: "sell", reduceOnly: true }), "sell-stuck")).rejects.toThrow(/sell order s1 still working/);
+    let t2 = 0, cancelAt = -1;
+    const settles = fakeClient({ createOrder: () => ({ id: "s2", status: "accepted", filled_qty: "0" }), cancelOrder: () => { cancelAt = t2; },
+      getOrder: () => ({ id: "s2", status: cancelAt < 0 ? "accepted" : t2 < cancelAt + 2_000 ? "pending_cancel" : "canceled", filled_qty: cancelAt < 0 ? "0" : "1", filled_avg_price: "90" }) });
+    const res = await new AlpacaVenue(fakeExecutor(), settles, { fillTimeoutMs: 1_000, pollIntervalMs: 1_000, settleMs: 1_000,
+      sleep: async ms => { t2 += ms; }, now: () => t2 }).submit(intent({ side: "sell", reduceOnly: true }), "sell-late");
+    expect(res).toMatchObject({ ok: false, status: "canceled", filledQty: 1, avgPrice: 90 });
+  });
+
   test("disconnected executor → no call", async () => {
     const client = fakeClient();
     const venue = new AlpacaVenue(fakeExecutor({ isConnected: () => false }), client);

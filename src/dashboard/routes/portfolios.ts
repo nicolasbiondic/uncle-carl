@@ -1,11 +1,10 @@
 // ═══════════════════════════════════════════════════════════════════════
 // Platform portfolios — read API (F3c, 2026-10-04, docs/platform/PLAN.md).
 //
-// Exported as registerPlatformPortfoliosRoutes(app, deps) and deliberately
-// NOT mounted in server.ts: parallel streams own that file; the director
-// wires the mount (one line, BEHIND the dashboard auth wall like every
-// /api route). Everything here is injected (registry rows + scorecard
-// band reader), so the route owns no I/O of its own.
+// Exported as registerPlatformPortfoliosRoutes(app, deps); server.ts mounts it
+// BEHIND the dashboard auth wall like every /api route. Everything here is
+// injected (registry rows + scorecard band reader), so the route owns no I/O
+// of its own.
 // ═══════════════════════════════════════════════════════════════════════
 import express from "express";
 import type { BandReading } from "../../portfolio/scorecard";

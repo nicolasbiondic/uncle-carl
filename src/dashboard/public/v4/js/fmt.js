@@ -26,10 +26,11 @@ export function moneySigned(v, d = 2) {
   return (x < 0 ? "−" : "+") + "$" + num(Math.abs(x), d);
 }
 
-/** Table money: whole dollars from $100; up to 3 significant digits below. */
+/** Table money: whole dollars from $10 (owner: no decimals in tables); under
+ *  $10 up to 3 significant digits, so a $0.0123 coin never reads $0. */
 export function moneyCompact(v) {
   const x = Math.abs(n(v));
-  return "$" + (x >= 100 ? num(x, 0) : x.toLocaleString("en-US", { maximumSignificantDigits: 3 }));
+  return "$" + (x >= 10 ? num(x, 0) : x.toLocaleString("en-US", { maximumSignificantDigits: 3 }));
 }
 
 export function moneySignedCompact(v) {
@@ -63,6 +64,13 @@ export function pctSigned(v, d = 1) {
   return (x < 0 ? "−" : "+") + num(Math.abs(x), d) + "%";
 }
 
+/** Table percent: whole numbers, signed (owner: no decimals in tables). */
+export function pctWhole(v) {
+  const x = Math.round(n(v));
+  if (x === 0) return "0%";
+  return (x < 0 ? "−" : "+") + num(Math.abs(x), 0) + "%";
+}
+
 /** A 0..1 fraction -> "42%" (some analytics endpoints return fractions). */
 export function pctFrac(v, d = 0) {
   return num(n(v) * 100, d) + "%";
@@ -73,19 +81,39 @@ export function pnlColor(v) {
   return n(v) >= 0 ? "var(--up)" : "var(--down)";
 }
 
-/** ET clock, e.g. "11:05 PM". */
+/** A usable epoch-ms timestamp, or null. A missing time is "—", never "now". */
+function stamp(ms) {
+  if (ms == null || ms === "") return null;
+  const x = Number(ms);
+  return Number.isFinite(x) && x > 0 ? x : null;
+}
+
+/** ET clock, e.g. "11:05 PM"; "—" when there is no time. */
 export function etTime(ms) {
-  return new Date(n(ms, Date.now())).toLocaleTimeString("en-US", { timeZone: ET, hour: "2-digit", minute: "2-digit" });
+  const x = stamp(ms);
+  return x == null ? "—" : new Date(x).toLocaleTimeString("en-US", { timeZone: ET, hour: "2-digit", minute: "2-digit" });
 }
 
-/** ET date, e.g. "Jul 1". */
+/** ET date, e.g. "Jul 1"; "—" when there is no time. */
 export function etDate(ms) {
-  return new Date(n(ms, Date.now())).toLocaleDateString("en-US", { timeZone: ET, month: "short", day: "numeric" });
+  const x = stamp(ms);
+  return x == null ? "—" : new Date(x).toLocaleDateString("en-US", { timeZone: ET, month: "short", day: "numeric" });
 }
 
-/** ET date + time, e.g. "Jul 1, 11:05 PM". */
+/** ET date + time, e.g. "Jul 1, 11:05 PM"; "—" when there is no time. */
 export function etDateTime(ms) {
-  return etDate(ms) + ", " + etTime(ms);
+  return stamp(ms) == null ? "—" : etDate(ms) + ", " + etTime(ms);
+}
+
+/** Same, with the zone named: "Jul 1, 11:05 PM ET". */
+export function etStamp(ms) {
+  return stamp(ms) == null ? "—" : etDateTime(ms) + " ET";
+}
+
+/** The ET calendar day of a timestamp as "YYYY-MM-DD" (the day the tiles use). */
+export function etDayKey(ms) {
+  const x = stamp(ms);
+  return x == null ? "" : new Date(x).toLocaleDateString("en-CA", { timeZone: ET });
 }
 
 /** Relative age: "just now" / "5m" / "3h" / "2d" / date. Handles ms epoch. */

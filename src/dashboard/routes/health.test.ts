@@ -235,3 +235,41 @@ describe("broker unreachable ≠ dead loop (watchdog must not restart)", () => {
     }
   });
 });
+
+describe("GET /healthz — stale_jobs (cron dead-man's switch, audit F-2)", () => {
+  const { mkdtempSync, rmSync, writeFileSync } = require("node:fs") as typeof import("node:fs");
+  const { tmpdir } = require("node:os") as typeof import("node:os");
+  const { join } = require("node:path") as typeof import("node:path");
+
+  async function get(dir: string) {
+    makeTestDb();
+    const app = express();
+    registerHealthRoutes(app, am, { cronMarkerDir: dir, cronTz: "Etc/GMT+5" });
+    const server = app.listen(0);
+    try {
+      const res = await fetch(`http://127.0.0.1:${(server.address() as { port: number }).port}/healthz`);
+      return { status: res.status, body: await res.json() as any };
+    } finally { server.close(); }
+  }
+
+  test("a count only: no job names, no paths, no times; 0 when tracking has not started", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "healthz-cron-"));
+    try {
+      const { status, body } = await get(dir);
+      expect(status).toBe(200);
+      expect(body.stale_jobs).toBe(0);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("overdue jobs are counted, never flip the HTTP status or `status` (the watchdog must not restart over a missed backup)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "healthz-cron-"));
+    try {
+      writeFileSync(join(dir, ".since"), `${Math.floor(Date.now() / 1000) - 30 * 86_400}\n`);
+      const { status, body } = await get(dir);
+      expect(status).toBe(200);
+      expect(body.stale_jobs).toBeGreaterThan(0);
+      const text = JSON.stringify(body);
+      for (const leak of ["backup", "guardian", "cron-markers", dir]) expect(text).not.toContain(leak);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});

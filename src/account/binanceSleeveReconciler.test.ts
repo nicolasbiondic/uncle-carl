@@ -25,9 +25,92 @@ import { AccountManager } from "./AccountManager";
 import {
   verifyProtectiveStop, UnreconciledGrace, emergencyCloseVerified,
   UNRECONCILED_CLOSE_AFTER,
+  ensureTurtleCatastropheStop, turtleStopClientOrderId,
 } from "./BinanceSleeveReconciler";
 import { inversePnlUsdAtExit } from "../executor/binance-coinm-executor";
 import { BinanceExecutor } from "../executor/binance-executor";
+import { BinanceMomentumAdapter } from "../strategies/momentum/BinanceMomentumAdapter";
+import { fakeBinanceExecutor, defaultCatalog, makeSpec } from "../test-support/binance";
+import { eventBus, EVENTS } from "../utils/events";
+
+describe("Turtle catastrophe protection — startup/periodic USDT and USDC reconciliation", () => {
+  for (const usdc of [false, true]) for (const side of ["buy", "sell"] as const) {
+    const accountId = usdc ? "momentum_crypto_usdc" : "momentum_crypto";
+    const symbol = usdc ? "BTC/USDC" : "BTC/USD", native = usdc ? "BTCUSDC" : "BTCUSDT";
+    const strategy = side === "buy" ? "BREAKOUT_LONG" : "BREAKOUT_SHORT";
+    const seed = (id: string, catastropheStop?: number) => {
+      insertTrade({ id, symbol, market: "crypto", side, strategy, entryPrice: 100, quantity: 1,
+        entryTime: Date.now() - 130 * 3_600_000, status: "open", breakoutN: 5,
+        stopLoss: side === "buy" ? 90 : 110, catastropheStop } as any, accountId);
+      return getOpenTrades(accountId).find(t => t.id === id)!;
+    };
+    const build = (fake: Record<string, any>) => {
+      const manager = usdc ? usdcManager(fake) : usdtManager(fake);
+      return () => usdc ? (manager as any).syncBinanceUsdc() : (manager as any).syncBinanceFutures();
+    };
+    test(`${accountId} ${side}: restart installs legacy 3N once; existing manual/sibling stops don't count`, async () => {
+      const trade = seed(`ensure-${accountId}-${side}`), id = turtleStopClientOrderId(trade);
+      const price = side === "buy" ? 85 : 115;
+      let placements = 0;
+      const working: any[] = [{ symbol: native, side: side === "buy" ? "SELL" : "BUY", quantity: 1, triggerPrice: price, reduceOnly: true, clientOrderId: "manual" }];
+      const fake = {
+        getPositions: async () => [{ symbol: native, positionAmt: side === "buy" ? 1 : -1, entryPrice: 100, unrealizedProfit: 0 }],
+        getOpenProtectiveOrders: async () => working,
+        placeStopMarketClose: async (...args: any[]) => {
+          placements++; expect(args).toEqual([symbol, side, price, 1, id]);
+          working.push({ ...working[0], clientOrderId: id }); return true;
+        },
+      };
+      await build(fake)(); // the same sync invoked by AccountManager.start
+      await build(fake)(); // new manager/executor wrapper, same broker stop
+      expect(placements).toBe(1);
+      expect(getOpenTrades(accountId)[0]).toMatchObject({ stopLoss: side === "buy" ? 90 : 110, catastropheStop: price });
+    });
+    test(`${accountId} ${side}: failures retain the unit, page once and recover on ensure`, async () => {
+      const trade = seed(`failed-ensure-${accountId}-${side}`, side === "buy" ? 80 : 120);
+      let works = false, attempts = 0, closes = 0;
+      const pages: any[] = [], handler = (e: any) => { if (e.context === "TurtleCatastropheStop") pages.push(e); };
+      const exec: any = {
+        getOpenProtectiveOrders: async () => [],
+        placeStopMarketClose: async (_s: string, _side: string, price: number) => { attempts++; expect(price).toBe(side === "buy" ? 80 : 120); return works; },
+        closePosition: async () => { closes++; return { success: true }; },
+      };
+      eventBus.on(EVENTS.ERROR_BURST, handler);
+      try {
+        await ensureTurtleCatastropheStop(exec, trade, native);
+        await ensureTurtleCatastropheStop(exec, trade, native);
+        expect(pages).toHaveLength(1); expect(closes).toBe(0); expect(getOpenTrades(accountId)).toHaveLength(1);
+        works = true; await ensureTurtleCatastropheStop(exec, trade, native);
+        expect(attempts).toBe(3); expect(pages).toHaveLength(1);
+      } finally { eventBus.removeListener(EVENTS.ERROR_BURST, handler); }
+    });
+    test.each(["algo", "regular", "manual"])(`${accountId} ${side}: %s fill attribution and exact-id cleanup`, async store => {
+      const trade = seed(`fill-${accountId}-${side}-${store}`), cid = turtleStopClientOrderId(trade);
+      const cancels: any[] = [];
+      const sync = build({
+        getPositions: async () => [], getOpenProtectiveOrders: async () => [],
+        getRecentTrades: async () => [{ realizedPnl: -15, commission: 0, price: side === "buy" ? 85 : 115, qty: 1, side: side === "buy" ? "SELL" : "BUY", time: Date.now() }],
+        hasFilledStopClose: async (_s: string, _side: string, _qty: number, _since: number, id: string) => { expect(id).toBe(cid); return store === "regular"; },
+        getAlgoOrderHistory: async () => [{ algoStatus: "FILLED", orderType: "STOP_MARKET", side: side === "buy" ? "SELL" : "BUY", quantity: 1, updateTime: Date.now(), clientAlgoId: store === "manual" ? "web-manual" : cid }],
+        cancelAllOrders: async (...args: any[]) => { cancels.push(args); },
+      });
+      await sync();
+      expect((getDB().query("SELECT close_reason FROM trades WHERE id = ?").get(trade.id) as any).close_reason).toBe(store === "manual" ? "MANUAL_CLOSE" : "BREAKOUT_CATASTROPHE_STOP");
+      expect(cancels).toContainEqual([symbol, { onlyClientOrderIds: [cid] }]);
+    });
+    test(`${accountId} ${side}: closed-unit orphan cleanup retries, never sweeps manual/sibling ids`, async () => {
+      const trade = seed(`orphan-stop-${accountId}-${side}`), cid = turtleStopClientOrderId(trade);
+      getDB().run("UPDATE trades SET status = 'closed' WHERE id = ?", [trade.id]);
+      const cancels: any[] = [];
+      await build({
+        getPositions: async () => [],
+        getOpenProtectiveOrders: async () => [cid, "manual", "uc-fapi-sibling"].map(clientOrderId => ({ clientOrderId, symbol: native })),
+        cancelAllOrders: async (...args: any[]) => { cancels.push(args); },
+      })();
+      expect(cancels).toEqual([[symbol, { onlyClientOrderIds: [cid] }]]);
+    });
+  }
+});
 
 beforeAll(() => initDatabase(":memory:"));
 beforeEach(() => {
@@ -86,6 +169,63 @@ function coinmManager(coinm: Record<string, any>) {
   } as any, { live: true });
   return manager;
 }
+
+describe("accepted engine closes survive failed settlement and adapter restart", () => {
+  for (const usdc of [false, true]) for (const turtle of [false, true]) {
+    const accountId = usdc ? "momentum_crypto_usdc" : "momentum_crypto";
+    const symbol = usdc ? "BTC/USDC" : "BTC/USD", native = usdc ? "BTCUSDC" : "BTCUSDT";
+    const side = turtle ? "sell" : "buy", closeReason = turtle ? "BREAKOUT_SHORT_TIME_STOP" : "TIME_STOP";
+    test.each(["throws", "non-array", "rejected", "unfilled"])(`${accountId} ${closeReason}: %s close, reconciler attributes only accepted order fills`, async mode => {
+      const id = `pending-${accountId}-${turtle}-${mode}`, entry = Date.now() - 60_000;
+      insertTrade({ id, symbol, market: "crypto", side, strategy: turtle ? "BREAKOUT_SHORT" : "MOMENTUM",
+        quantity: 1, entryPrice: 100, entryTime: entry, status: "open", breakoutN: turtle ? 5 : undefined,
+        catastropheStop: turtle ? 115 : undefined } as any, accountId);
+      let flat = false, settled = false, markerAtSettlement: any;
+      const exec = fakeBinanceExecutor({
+        options: { quoteAsset: usdc ? "USDC" : "USDT" },
+        instrumentCatalog: defaultCatalog([makeSpec(native, { marginAsset: usdc ? "USDC" : "USDT" })]),
+        signedRequest: async (method: string, path: string) => {
+          if (method === "POST" && path === "/fapi/v1/order") {
+            if (mode === "rejected") return { code: -2019, msg: "rejected" };
+            if (mode === "unfilled") return { orderId: 777, status: "NEW", avgPrice: "0", executedQty: "0" };
+            flat = true;
+            return { orderId: 777, status: "FILLED", avgPrice: "105", executedQty: "1" };
+          }
+          if (method === "DELETE" && path === "/fapi/v1/order") return {};
+          if (method === "GET" && path === "/fapi/v1/order") return { status: "CANCELED", executedQty: "0" };
+          if (path === "/fapi/v2/positionRisk") return flat ? [] : [{ symbol: native, positionAmt: turtle ? "-1" : "1", entryPrice: "100" }];
+          if (path === "/fapi/v1/userTrades") {
+            // Capture before settlement fails: the durable marker must exist already.
+            markerAtSettlement = getDB().query("SELECT * FROM trades WHERE id = ?").get(id);
+            if (!settled) {
+              if (mode === "throws") throw new Error("settlement 5xx");
+              return { msg: "settlement unavailable" };
+            }
+            return [{ orderId: mode === "unfilled" || mode === "rejected" ? 888 : 777, qty: "1", price: "105", realizedPnl: turtle ? "-5" : "5", commission: "0.1", side: turtle ? "BUY" : "SELL", time: Date.now() }];
+          }
+          if (path === "/fapi/v1/allOrders" || path === "/fapi/v1/allAlgoOrders") return [];
+          throw new Error(`unexpected ${method} ${path}`);
+        },
+      });
+      (exec as any).closePollTimeoutMs = 0;
+      const result = await new BinanceMomentumAdapter({} as any, exec, { accountId, quoteAsset: usdc ? "USDC" : "USDT" })
+        .closePosition({ symbol, side, closeReason });
+      expect(result.ok).toBe(false);
+      if (mode === "throws" || mode === "non-array") {
+        expect(markerAtSettlement).toMatchObject({ status: "open", pending_close_reason: closeReason, pending_close_order_id: "777" });
+      }
+      expect(getDB().query("SELECT pending_close_reason, pending_close_order_id FROM trades WHERE id = ?").get(id))
+        .toEqual({ pending_close_reason: mode === "rejected" ? null : closeReason, pending_close_order_id: mode === "rejected" ? null : "777" });
+      settled = true;
+      // A fresh AccountManager has no in-memory adapter intent: only SQLite survives.
+      const broker = { getPositions: async () => [], getRecentTrades: exec.getRecentTrades.bind(exec) };
+      const manager = usdc ? usdcManager(broker) : usdtManager(broker);
+      await (manager as any)[usdc ? "syncBinanceUsdc" : "syncBinanceFutures"]();
+      expect(getDB().query("SELECT status, close_reason, pnl FROM trades WHERE id = ?").get(id))
+        .toEqual({ status: "closed", close_reason: mode === "rejected" || mode === "unfilled" ? "MANUAL_CLOSE" : closeReason, pnl: turtle ? -5.1 : 4.9 });
+    });
+  }
+});
 
 // ── 1. verifyProtectiveStop: the single copy of the tolerance logic ──────
 

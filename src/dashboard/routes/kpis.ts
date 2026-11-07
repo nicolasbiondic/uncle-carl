@@ -15,7 +15,7 @@
 
 import express from "express";
 import { computeKpiSnapshot } from "../../portfolio/kpis";
-import { countExecutedOrders, getDecisionPassSummary, getETDayStart } from "../../db/database";
+import { countExecutedOrders, getDecisionPassSummary, getETWindowStart } from "../../db/database";
 import { toBoundedInt } from "../dashboard-utils";
 
 /**
@@ -48,7 +48,7 @@ export function registerKpiRoutes(app: express.Application): void {
     const now = Date.now();
     // ET-day-aligned window: "1" = today, "7" = the last 7 ET days inclusive —
     // the same convention getTradingStats' period windows use.
-    const since = getETDayStart(now - (days - 1) * 86_400_000);
+    const since = getETWindowStart(days, now);
     const summaries = getDecisionPassSummary(since);
 
     // Union of portfolios with telemetry and portfolios with a declared

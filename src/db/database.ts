@@ -86,6 +86,18 @@ export function getETDayBounds(dateKey: string): [number, number] {
   return [start, end];
 }
 
+/** Calendar arithmetic, not N×24h (the autumn ET day has 25 hours). */
+export function getETWindowStart(days: number, now = Date.now()): number {
+  if (days <= 0) return 0;
+  const key = getETDateKey(now);
+  const shifted = new Date(Date.parse(`${key}T12:00:00Z`) - (days - 1) * 86_400_000).toISOString().slice(0, 10);
+  return getETDayBounds(shifted)[0];
+}
+
+export function getETYesterday(now = Date.now()): string {
+  return getETDateKey(getETDayStart(now) - 1);
+}
+
 /**
  * Hour-of-day (0-23) and day-of-week (0=Sun … 6=Sat) for a timestamp, in
  * America/New_York. The "Best Hours / Best Days" analytics must bucket by ET
@@ -156,6 +168,21 @@ export function initDatabase(path = "./data/trading.db"): Database {
  */
 export function pruneEquitySnapshots(fullResDays = 2): number {
   const cutoff = Date.now() - fullResDays * 24 * 60 * 60_000;
+  // Daily endpoints are money anchors, not disposable chart detail. ET dates
+  // are constant within a UTC hour; cache that conversion across all series.
+  const dates = new Map<number, string>();
+  const ends = new Map<string, { first: number; last: number }>();
+  const rows = db.prepare("SELECT id, profile_id, snapshot_time FROM equity_snapshots ORDER BY snapshot_time, id").all() as
+    { id: number; profile_id: string; snapshot_time: number }[];
+  for (const r of rows) {
+    const hour = Math.floor(r.snapshot_time / 3_600_000);
+    if (!dates.has(hour)) dates.set(hour, getETDateKey(hour * 3_600_000));
+    const key = `${r.profile_id}|${dates.get(hour)}`;
+    const end = ends.get(key);
+    if (end) end.last = r.id;
+    else ends.set(key, { first: r.id, last: r.id });
+  }
+  const protectedIds = JSON.stringify([...ends.values()].flatMap(e => [e.first, e.last]));
   // Single-pass window function: within each (profile, hour) bucket of rows
   // older than the cutoff, keep the earliest (rn=1, the since-start baseline of
   // that hour) and delete the rest — UNLESS the row is the first or last of its
@@ -184,7 +211,9 @@ export function pruneEquitySnapshots(fullResDays = 2): number {
        )
        WHERE snapshot_time < ? AND rn > 1 AND is_first = 0 AND is_last = 0
      )
-  `).run(cutoff);
+     AND id NOT IN (SELECT value FROM json_each(?))
+     AND snapshot_time NOT IN (SELECT snapshot_time FROM pnl_window_marks)
+  `).run(cutoff, protectedIds);
   return Number(res.changes);
 }
 
@@ -213,7 +242,7 @@ export function pruneOldData() {
       log.info(`DB cleanup: pruned ${total} rows (equity=${eq.changes} signals=${sg.changes} activity=${al.changes} marks=${mk.changes})`);
       try { db.exec("PRAGMA incremental_vacuum(100)"); } catch {}
     }
-  } catch (e: any) { log.debug(`Prune error: ${e.message}`); }
+  } catch (e: any) { log.warn(`Prune error: ${e.message}`); }
 }
 
 // Retention floors (2026-10-22 ops review: "keep orders, fills, decision passes
@@ -332,6 +361,10 @@ function migrateColumns() {
   // Audit fix: commission tracking on trades
   safeAddColumn("trades", "open_commission", "REAL", "0");
   safeAddColumn("trades", "close_commission", "REAL", "0");
+  // Full episode cost, never the remnant after a partial reduction. NULL on
+  // legacy rows: readers use quantity + partial_closed_contracts as fallback.
+  safeAddColumn("trades", "episode_basis", "REAL", "NULL");
+  safeAddColumn("daily_reports", "closed_episode_pnl", "REAL", "NULL");
 
   // Audit fix: order_id link on trades
   safeAddColumn("trades", "order_id", "TEXT", "NULL");
@@ -354,8 +387,11 @@ function migrateColumns() {
   // Task 6 (v1.4): SL/TP stored per trade
   safeAddColumn("trades", "stop_loss", "REAL", "NULL");
   safeAddColumn("trades", "breakout_n", "REAL", "NULL");
+  safeAddColumn("trades", "catastrophe_stop", "REAL", "NULL");
   safeAddColumn("trades", "take_profit", "REAL", "NULL");
   safeAddColumn("trades", "close_reason", "TEXT", "NULL");
+  safeAddColumn("trades", "pending_close_reason", "TEXT", "NULL");
+  safeAddColumn("trades", "pending_close_order_id", "TEXT", "NULL");
   // Exact margin (cash) deducted from the per-profile ledger at open, so the
   // close path credits back the SAME amount instead of a notional/base-leverage
   // estimate (the latter leaked cash whenever a regime override reduced
@@ -413,7 +449,7 @@ function migrateColumns() {
   safeAddColumn("orders", "strategy_version", "TEXT", "'legacy'");
 
   // Phase 5E (2026-05-20): daily_reports.telegram_sent — observability for
-  // the 23:59 ET digest. The reporter previously wrapped sendTelegramDigest()
+  // the daily ET digest. The reporter previously wrapped sendTelegramDigest()
   // in `try/catch {}` (swallows fetch errors silently), so there was no
   // record of whether the operator actually received the summary. The
   // column flips to 1 only after the await resolves; on throw it stays at
@@ -605,6 +641,24 @@ function createTables() {
       exit_time INTEGER,
       status TEXT NOT NULL DEFAULT 'open'
     );
+
+    -- Immutable reducing legs. The row accumulator is retained for execution
+    -- compatibility; this journal preserves fill date, basis, fees and units
+    -- so display/report readers never have to guess a leg from today's basis.
+    CREATE TABLE IF NOT EXISTS trade_realized_legs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trade_id TEXT NOT NULL REFERENCES trades(id) ON DELETE CASCADE,
+      quantity REAL NOT NULL,
+      entry_price REAL NOT NULL,
+      exit_price REAL,
+      realized_native REAL NOT NULL,
+      commission_native REAL NOT NULL,
+      asset TEXT NOT NULL,
+      fill_time INTEGER NOT NULL,
+      order_id TEXT,
+      source TEXT NOT NULL DEFAULT 'fill'
+    );
+    CREATE INDEX IF NOT EXISTS idx_realized_legs_trade_time ON trade_realized_legs(trade_id, fill_time);
 
     CREATE INDEX IF NOT EXISTS idx_signals_symbol ON signals(symbol);
     CREATE INDEX IF NOT EXISTS idx_signals_timestamp ON signals(timestamp);
@@ -953,15 +1007,15 @@ export function insertTrade(trade: TradeRecord, accountId: string) {
     ?? (isAdoption ? "ops_sync" : currentModelVersionId(accountId))
     ?? "legacy";
   db.prepare(`
-    INSERT INTO trades (id, symbol, market, side, strategy, entry_price, exit_price, quantity, pnl, pnl_pct, entry_time, exit_time, status, account_id, order_id, open_commission, stop_loss, take_profit, profile_id, strategy_version, breakout_n)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO trades (id, symbol, market, side, strategy, entry_price, exit_price, quantity, pnl, pnl_pct, entry_time, exit_time, status, account_id, order_id, open_commission, stop_loss, take_profit, profile_id, strategy_version, breakout_n, catastrophe_stop)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     trade.id, trade.symbol, trade.market, trade.side, trade.strategy,
     trade.entryPrice, trade.exitPrice ?? null, trade.quantity, trade.pnl ?? null,
     trade.pnlPct ?? null, trade.entryTime, trade.exitTime ?? null, trade.status,
     accountId, (trade as any).orderId ?? null, (trade as any).openCommission ?? 0,
     (trade as any).stopLoss ?? null, (trade as any).takeProfit ?? null,
-    accountId, strategyVersion, trade.breakoutN ?? null,
+    accountId, strategyVersion, trade.breakoutN ?? null, trade.catastropheStop ?? null,
   );
 }
 
@@ -1018,6 +1072,19 @@ export function pnlOf(side: string, entryPrice: number, exitPrice: number, quant
   return { pnl, pnlPct, raw };
 }
 
+/** Linear episode return on its full cost, including every partial. Legacy
+ * PE rows lacked a basis column; use their full ever-held quantity rather
+ * than continue displaying the remnant-only return. Inverse rows retain
+ * their explicit product-specific denominator. */
+export function closedEpisodePct(row: { strategy?: string; status?: string; pnl: number | null; pnl_pct?: number | null;
+  episode_basis?: number | null; entry_price: number; quantity: number; partial_closed_contracts?: number | null }): number | undefined {
+  // Non-PE rows and rows still open keep the persisted value verbatim (null
+  // for an open row — never a fabricated 0%).
+  if (row.strategy !== PORTFOLIO_ENGINE_STRATEGY || row.status === "open" || row.pnl == null) return row.pnl_pct ?? undefined;
+  const basis = row.episode_basis ?? row.entry_price * (row.quantity + (Number(row.partial_closed_contracts) || 0));
+  return basis > 0 && Number.isFinite(row.pnl) ? row.pnl / basis * 100 : row.pnl_pct ?? undefined;
+}
+
 export function closeTrade(id: string, exitPrice: number, exitTime: number, closeCommission = 0, overridePnl?: number, opts: { basisQuantity?: number } = {}) {
   // Atomic close via transaction — prevents race condition when two
   // processes (SL/TP checker + signal scanner) try to close the same trade.
@@ -1055,8 +1122,14 @@ export function closeTrade(id: string, exitPrice: number, exitTime: number, clos
     }
     // Guard quantity too: entry_price*quantity can be 0 (or entry_price can
     // be unset) which previously produced pnl/0 = ±Infinity.
-    const basisQty = opts.basisQuantity !== undefined && Number.isFinite(opts.basisQuantity) && opts.basisQuantity > 0 ? opts.basisQuantity : trade.quantity;
-    const denom = trade.entry_price * basisQty;
+    // A-3 (2026-11-07): the % of an episode is on its FULL cost — every share
+    // ever held (add-backs at their fill price via episode_basis), never the
+    // remnant the final leg happened to close. An explicit basisQuantity (the
+    // product-specific caller) still wins over the persisted basis.
+    const explicitBasis = opts.basisQuantity !== undefined && Number.isFinite(opts.basisQuantity) && opts.basisQuantity > 0;
+    const denom = explicitBasis
+      ? trade.entry_price * opts.basisQuantity!
+      : (trade.episode_basis ?? trade.entry_price * (trade.quantity + (Number(trade.partial_closed_contracts) || 0)));
     const pnlPct = denom > 0 && Number.isFinite(pnl) ? (pnl / denom) * 100 : 0;
 
     db.prepare(`UPDATE trades SET exit_price = ?, exit_time = ?, pnl = ?, pnl_pct = ?, status = 'closed', close_commission = ?, close_reason = COALESCE(?, close_reason) WHERE id = ? AND status = 'open'`)
@@ -1124,13 +1197,20 @@ export function closeTradeExplicit(id: string, exitPrice: number, exitTime: numb
  */
 export function accumulatePartialCloseLedger(
   id: string,
-  stage: { realizedNative: number; commissionNative: number; commissionAsset: string; closedContracts: number; remainingContracts?: number },
+  stage: { realizedNative: number; commissionNative: number; commissionAsset: string; closedContracts: number; remainingContracts?: number;
+    fillTime?: number; exitPrice?: number; source?: "fill" | "reconcile" },
 ): { realizedNative: number; commissionNative: number; commissionAsset: string; closedContracts: number } | null {
   const txn = db.transaction(() => {
-    const trade = db.prepare(`SELECT id FROM trades WHERE id = ? AND status = 'open'`).get(id) as any;
+    const trade = db.prepare(`SELECT id, entry_price FROM trades WHERE id = ? AND status = 'open'`).get(id) as any;
     if (!trade) return null;
+    db.prepare(`INSERT INTO trade_realized_legs
+      (trade_id, quantity, entry_price, exit_price, realized_native, commission_native, asset, fill_time, source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(id, stage.closedContracts, trade.entry_price, stage.exitPrice ?? null, stage.realizedNative,
+        stage.commissionNative, stage.commissionAsset, stage.fillTime ?? Date.now(), stage.source ?? "fill");
     db.prepare(`
       UPDATE trades SET
+        episode_basis = COALESCE(episode_basis, entry_price * (quantity + COALESCE(partial_closed_contracts, 0))),
         partial_realized_native = COALESCE(partial_realized_native, 0) + ?,
         partial_commission_native = COALESCE(partial_commission_native, 0) + ?,
         partial_commission_asset = COALESCE(?, partial_commission_asset),
@@ -1180,12 +1260,14 @@ export function increaseOpenTradeQuantity(
     throw new Error(`increaseOpenTradeQuantity ${id}: invalid leg qty=${leg.addQty} price=${leg.fillPrice}`);
   }
   const txn = db.transaction(() => {
-    const trade = db.prepare(`SELECT quantity, entry_price, open_commission FROM trades WHERE id = ? AND status = 'open'`).get(id) as any;
+    const trade = db.prepare(`SELECT quantity, entry_price, open_commission, episode_basis, partial_closed_contracts FROM trades WHERE id = ? AND status = 'open'`).get(id) as any;
     if (!trade) return null;
     const qty = Number(trade.quantity) + leg.addQty;
     const entry = (Number(trade.entry_price) * Number(trade.quantity) + leg.fillPrice * leg.addQty) / qty;
     const fee = (Number(trade.open_commission) || 0) + (Number.isFinite(leg.commission) ? leg.commission : 0);
-    db.prepare(`UPDATE trades SET quantity = ?, entry_price = ?, open_commission = ? WHERE id = ? AND status = 'open'`).run(qty, entry, fee, id);
+    const basis = trade.episode_basis ?? trade.entry_price * (trade.quantity + (trade.partial_closed_contracts ?? 0));
+    db.prepare(`UPDATE trades SET quantity = ?, entry_price = ?, open_commission = ?, episode_basis = ? WHERE id = ? AND status = 'open'`)
+      .run(qty, entry, fee, basis + leg.fillPrice * leg.addQty, id);
     return { quantity: qty, entryPrice: entry, openCommission: fee };
   });
   return txn();
@@ -1208,13 +1290,14 @@ export function getOpenTrades(accountId?: string): TradeRecord[] {
     exitPrice: r.exit_price,
     quantity: r.quantity,
     pnl: r.pnl,
-    pnlPct: r.pnl_pct,
+    pnlPct: closedEpisodePct(r),
     entryTime: r.entry_time,
     exitTime: r.exit_time,
     status: r.status,
     accountId: r.account_id,
     stopLoss: r.stop_loss,
     breakoutN: r.breakout_n ?? undefined,
+    catastropheStop: r.catastrophe_stop ?? undefined,
     takeProfit: r.take_profit,
     marginUsed: r.margin_used ?? undefined,
     orderId: r.order_id ?? undefined,
@@ -1249,7 +1332,7 @@ export function getRecentTrades(limit = 100, accountId?: string): TradeRecord[] 
     exitPrice: r.exit_price,
     quantity: r.quantity,
     pnl: r.pnl,
-    pnlPct: r.pnl_pct,
+    pnlPct: closedEpisodePct(r),
     entryTime: r.entry_time,
     exitTime: r.exit_time,
     status: r.status,
@@ -1276,13 +1359,35 @@ export function getRecentTrades(limit = 100, accountId?: string): TradeRecord[] 
 // sync rows; LEGACY_UNLABELED marks pre-v4 rows backfilled without a real
 // close reason. None of them are real strategy exits.
 export const RECONCILE_CLOSE_SQL =
-  `(close_reason IS NULL OR close_reason NOT IN ('BROKER_GONE_404','MANUAL_CLOSE_UNRECONCILED','BACKFILLED_SYNC','SYNC_DETECTED','MOMENTUM_RECONCILED','MEANREV_RECONCILED','SYNC_DUP_RECONCILED','LEGACY_UNLABELED'))`;
+  `(close_reason IS NULL OR close_reason NOT IN ('BROKER_GONE_404','MANUAL_CLOSE_UNRECONCILED','BACKFILLED_SYNC','SYNC_DETECTED','MOMENTUM_RECONCILED','MEANREV_RECONCILED','PORTFOLIO_RECONCILED','SYNC_DUP_RECONCILED','LEGACY_UNLABELED'))`;
 
 // v8 live sleeves — the default scope for account-less stats queries. The
 // trades table also holds legacy profiles (alpaca_low/high, binance_low/high),
 // shadow_* simulated books, and sync_*/BROKER_SYNC rows; none of those belong
 // in a headline "how is the bot doing" number.
 const V8_ACCOUNTS_SQL = `('${ALL_PROFILE_IDS.join("','")}')`;
+
+/** Closed-episode result (partials included by the final close). Not cash
+ * realized on a calendar date. One reader for stats, modal and /profits. */
+export function getClosedEpisodeResult(accountId?: string, since = 0, until = Number.MAX_SAFE_INTEGER): number {
+  const scope = accountId ? "account_id = ?" : `account_id IN ${V8_ACCOUNTS_SQL}`;
+  const row = db.prepare(`SELECT COALESCE(SUM(pnl), 0) p FROM trades WHERE status = 'closed'
+    AND ${RECONCILE_CLOSE_SQL} AND exit_time > ? AND exit_time <= ? AND ${scope}`)
+    .get(since, until, ...(accountId ? [accountId] : [])) as { p: number };
+  return row.p;
+}
+
+/** Ledger realization: closed episodes + confirmed partials whose final
+ * episode is not yet known (open, or externally reconciled). Linear USD
+ * quote currencies only; inverse native BTC must never be added to dollars. */
+export function getRecognizedRealizedPnl(accountId?: string): number {
+  const scope = accountId ? "account_id = ?" : `account_id IN ${V8_ACCOUNTS_SQL}`;
+  const row = db.prepare(`SELECT COALESCE(SUM(COALESCE(partial_realized_native, 0) - COALESCE(partial_commission_native, 0)), 0) p
+    FROM trades WHERE ${scope} AND (status = 'open' OR NOT ${RECONCILE_CLOSE_SQL})
+      AND (partial_commission_asset IS NULL OR partial_commission_asset IN ('USD','USDT','USDC'))`)
+    .get(...(accountId ? [accountId] : [])) as { p: number };
+  return getClosedEpisodeResult(accountId) + row.p;
+}
 
 /**
  * P0 volume KPI (2026-10-09): "trades" for the owner's 30/day goal are
@@ -1355,7 +1460,7 @@ export function getTradingStats(accountId?: string, periodDays = 1) {
   const closedTrades = db.prepare(`SELECT COUNT(*) as count FROM trades WHERE status = 'closed' AND ${RECONCILE_CLOSE_SQL}${whereAcc}`).get(...bindAcc) as any;
   const winningTrades = db.prepare(`SELECT COUNT(*) as count FROM trades WHERE status = 'closed' AND pnl > 0 AND ${RECONCILE_CLOSE_SQL}${whereAcc}`).get(...bindAcc) as any;
   const openTrades = db.prepare(`SELECT COUNT(*) as count FROM trades WHERE status = 'open'${whereAcc}`).get(...bindAcc) as any;
-  const totalPnl = db.prepare(`SELECT COALESCE(SUM(pnl), 0) as total FROM trades WHERE status = 'closed' AND ${RECONCILE_CLOSE_SQL}${whereAcc}`).get(...bindAcc) as any;
+  const totalPnl = { total: getClosedEpisodeResult(accountId) };
 
   const todayStart = getETDayStart();
   const RECONCILE_FILTER = ` AND ${RECONCILE_CLOSE_SQL}`;
@@ -1373,7 +1478,7 @@ export function getTradingStats(accountId?: string, periodDays = 1) {
   // anchor at the ET-day-start of (N-1) days ago so "7d" = the last 7 ET days
   // inclusive (DST-safe day boundary). periodDays===1 ⇒ identical to today*.
   // periodDays===0 ⇒ all-time (epoch 0), for the "All" dashboard window.
-  const periodStart = periodDays === 0 ? 0 : periodDays <= 1 ? todayStart : getETDayStart(Date.now() - (periodDays - 1) * 86_400_000);
+  const periodStart = getETWindowStart(periodDays);
   const periodPnl = db.prepare(`SELECT COALESCE(SUM(pnl), 0) as total FROM trades WHERE status = 'closed' AND exit_time > ?${RECONCILE_FILTER}${whereAcc}`).get(periodStart, ...bindAcc) as any;
   // Same order semantics as todayTrades above (periodDays=1 ⇒ identical).
   const periodTrades = { count: countExecutedOrders(periodStart, undefined, accountId) };
@@ -1733,6 +1838,15 @@ export function recordFill(row: {
     row.expectedPx, row.submittedPx, row.filledPx, row.filledQty, slippageBps,
     row.fillTime, row.latencyMs, row.broker, row.estPx ?? null
   );
+  // scalePosition writes its settled accumulator before fill telemetry. Bind
+  // that exact leg to the broker timestamp/price when the fill arrives; never
+  // overwrite an already-bound leg or confuse an entry with a reduction.
+  db.prepare(`UPDATE trade_realized_legs SET fill_time = ?, exit_price = ?, order_id = ?
+    WHERE id = (SELECT l.id FROM trade_realized_legs l JOIN trades t ON t.id = l.trade_id
+      WHERE l.trade_id = ? AND l.order_id IS NULL AND l.source = 'fill' AND t.side <> ?
+        AND ABS(l.fill_time - ?) <= 60000 AND ABS(l.quantity - ?) <= MAX(1e-9, ABS(l.quantity) * 1e-6)
+      ORDER BY ABS(l.fill_time - ?), l.id DESC LIMIT 1)`)
+    .run(row.fillTime, row.filledPx, row.orderId, row.tradeId, row.side, row.fillTime, row.filledQty, row.fillTime);
 }
 
 /**
@@ -1901,6 +2015,19 @@ export function getDrawdownSeries(profileId: string, days = 90): { t: number; dd
 
 export function updateTradeCloseReason(tradeId: string, reason: string) {
   db.prepare(`UPDATE trades SET close_reason = ? WHERE id = ?`).run(reason, tradeId);
+}
+
+/** Durable engine intent, written on broker acceptance BEFORE settlement.
+ *  Kept separate from the final label: acceptance alone does not prove a fill. */
+export function setPendingTradeClose(tradeId: string, reason: string, orderId: string): void {
+  db.prepare(`UPDATE trades SET pending_close_reason = ?, pending_close_order_id = ? WHERE id = ? AND status = 'open'`)
+    .run(reason, orderId, tradeId);
+}
+
+export function getPendingTradeClose(tradeId: string): { reason: string; orderId: string } | null {
+  const row = db.prepare(`SELECT pending_close_reason AS reason, pending_close_order_id AS orderId
+    FROM trades WHERE id = ? AND status = 'open'`).get(tradeId) as any;
+  return row?.reason && row?.orderId ? row : null;
 }
 
 /**
@@ -2313,8 +2440,10 @@ export function getDisplayEquitySeries(profileId: string): DisplayEquityRow[] {
  *  `days<=0` means all-time (epoch 0), matching the dashboard's `period=0`
  *  "All" window. */
 export function getEquityHistoryDisplay(profileId: string, days = 30): DisplayEquityRow[] {
-  const since = days <= 0 ? getDisplayHistoryStart() - 1 : days <= 1 ? getETDayStart() : getETDayStart(Date.now() - (days - 1) * 86_400_000);
-  return getDisplayEquitySeries(profileId).filter(r => r.snapshot_time > since);
+  const now = Date.now();
+  const rows = getDisplayEquitySeries(profileId).filter(r => r.snapshot_time <= now);
+  const anchor = equityWindowFromSeries(rows, days, now)?.start.at;
+  return anchor == null ? [] : rows.filter(r => r.snapshot_time >= anchor);
 }
 
 /** Display-only twin of getEquityHistoryByRange — "all" genuinely means all
@@ -2345,33 +2474,58 @@ export function getEquityHistoryByRangeDisplay(profileId: string, range: string)
  * every caller already treats a null result as "unavailable"): we can't
  * trust the $ delta either, not just the %.
  */
-export function getEquityPnlDisplay(profileId: string, periodDays = 1): { pnl: number; pnlPct: number | null; startEquity: number } | null {
-  const series = getDisplayEquitySeries(profileId);
+export interface DisplayStart {
+  at: number;
+  date: string;
+  equity: number;
+  rebased: boolean;
+}
+
+export interface EquityWindow {
+  start: DisplayStart;
+  endAt: number;
+  equity: number;
+  pnl: number;
+  pnlPct: number | null;
+}
+
+/** One boundary/anchor policy for tiles, cards, curves, reports and Telegram.
+ * `now` is also the inclusive upper bound: historical reports cannot read
+ * future marks. An undeclared discontinuity remains unavailable. */
+export function equityWindowFromSeries(series: DisplayEquityRow[], periodDays: number, now: number): EquityWindow | null {
   if (series.length === 0) return null;
-  const latest = series[series.length - 1];
+  let latest: DisplayEquityRow | undefined;
+  for (let i = series.length - 1; i >= 0; i--) if (series[i].snapshot_time <= now) { latest = series[i]; break; }
+  if (!latest) return null;
 
   let startRow: DisplayEquityRow | undefined;
   if (periodDays === 0) {
     const start = getDisplayHistoryStart();
-    startRow = series.find(r => r.snapshot_time >= start) ?? series[0];
+    startRow = series.find(r => r.snapshot_time >= start && r.snapshot_time <= now);
+    if (!startRow && start === 0) startRow = series[0];
   } else {
-    const todayStart = getETDayStart();
-    const periodStart = periodDays <= 1 ? todayStart : getETDayStart(Date.now() - (periodDays - 1) * 86_400_000);
+    const periodStart = getETWindowStart(periodDays, now);
     for (let i = series.length - 1; i >= 0; i--) {
       if (series[i].snapshot_time <= periodStart) { startRow = series[i]; break; }
     }
-    if (!startRow) startRow = series.find(r => r.snapshot_time > periodStart);
+    if (!startRow) startRow = series.find(r => r.snapshot_time > periodStart && r.snapshot_time <= now);
   }
   if (!startRow) return null;
   if (startRow.basis === "discontinuous") return null;
 
   const pnl = latest.equity - startRow.equity;
-  const pnlPct = startRow.rebased ? null : (startRow.equity > 0 ? (pnl / startRow.equity) * 100 : 0);
-  // startEquity rides along so multi-leg callers (src/portfolio/truth.ts
-  // combineEquityPnlLegs) can weight-combine several series' $ pnl into one
-  // aggregate % without re-deriving a start value from pnl/pnlPct (undefined
-  // when pnl is 0) or a second query.
-  return { pnl, pnlPct, startEquity: startRow.equity };
+  const pnlPct = startRow.rebased || startRow.equity <= 0 ? null : (pnl / startRow.equity) * 100;
+  return { pnl, pnlPct, equity: latest.equity, endAt: latest.snapshot_time,
+    start: { at: startRow.snapshot_time, date: getETDateKey(startRow.snapshot_time), equity: startRow.equity, rebased: startRow.rebased } };
+}
+
+export function getEquityWindowDisplay(profileId: string, periodDays = 1, now = Date.now()): EquityWindow | null {
+  return equityWindowFromSeries(getDisplayEquitySeries(profileId), periodDays, now);
+}
+
+export function getEquityPnlDisplay(profileId: string, periodDays = 1, now = Date.now()): { pnl: number; pnlPct: number | null; startEquity: number } | null {
+  const w = getEquityWindowDisplay(profileId, periodDays, now);
+  return w ? { pnl: w.pnl, pnlPct: w.pnlPct, startEquity: w.start.equity } : null;
 }
 
 /** Display-only "first point" anchor — spans every classified era (unlike
@@ -2379,12 +2533,8 @@ export function getEquityPnlDisplay(profileId: string, periodDays = 1): { pnl: n
  *  whether reaching this point required a rebase OR crossed an unclassified
  *  (discontinuous) boundary, so they can suppress a synthetic-basis
  *  percentage. */
-export function getEquityDisplayStart(profileId: string): { equity: number; rebased: boolean } | null {
-  const series = getDisplayEquitySeries(profileId);
-  if (series.length === 0) return null;
-  const start = getDisplayHistoryStart();
-  const first = series.find(r => r.snapshot_time >= start) ?? series[0];
-  return { equity: first.equity, rebased: first.rebased };
+export function getEquityDisplayStart(profileId: string, now = Date.now()): DisplayStart | null {
+  return getEquityWindowDisplay(profileId, 0, now)?.start ?? null;
 }
 
 export function getDB(): Database {
@@ -2416,8 +2566,8 @@ export function saveDailyReport(report: any): void {
     INSERT INTO daily_reports (profile_id, report_date, starting_equity, ending_equity,
       realized_pnl, unrealized_pnl, total_trades, winning_trades, win_rate,
       best_trade_symbol, best_trade_pnl, worst_trade_symbol, worst_trade_pnl,
-      most_active_strategy, generated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      most_active_strategy, closed_episode_pnl, generated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     ON CONFLICT(profile_id, report_date) DO UPDATE SET
       starting_equity      = excluded.starting_equity,
       ending_equity        = excluded.ending_equity,
@@ -2431,12 +2581,13 @@ export function saveDailyReport(report: any): void {
       worst_trade_symbol   = excluded.worst_trade_symbol,
       worst_trade_pnl      = excluded.worst_trade_pnl,
       most_active_strategy = excluded.most_active_strategy,
+      closed_episode_pnl   = excluded.closed_episode_pnl,
       generated_at         = CURRENT_TIMESTAMP
   `).run(
     report.profileId, report.reportDate, report.startingEquity, report.endingEquity,
     report.realizedPnl, report.unrealizedPnl, report.totalTrades, report.winningTrades,
     report.winRate, report.bestTradeSymbol, report.bestTradePnl,
-    report.worstTradeSymbol, report.worstTradePnl, report.mostActiveStrategy
+    report.worstTradeSymbol, report.worstTradePnl, report.mostActiveStrategy, report.closedEpisodePnl ?? null
   );
 }
 
@@ -2508,7 +2659,7 @@ export function getClosedTradesInETDayRange(
     exitPrice: r.exit_price,
     quantity: r.quantity,
     pnl: r.pnl,
-    pnlPct: r.pnl_pct,
+    pnlPct: closedEpisodePct(r),
     entryTime: r.entry_time,
     exitTime: r.exit_time,
     status: r.status,

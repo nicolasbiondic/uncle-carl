@@ -31,7 +31,7 @@
 import { describe, expect, test, beforeAll } from "bun:test";
 import { Database } from "bun:sqlite";
 import {
-  getDB, getETDayStart, saveEquitySnapshot, upsertAssetBalance,
+  getDB, getETDayStart, getETWindowStart, saveEquitySnapshot, upsertAssetBalance,
 } from "../db/database";
 import { setBrokerTruthAvailable } from "../portfolio/truth";
 import { TelegramReporter } from "./telegram-reporter";
@@ -54,7 +54,7 @@ beforeAll(() => {
   setBrokerTruthAvailable("alpaca", true);
   setBrokerTruthAvailable("binance", true);
   todayStart = getETDayStart();
-  weekStart = getETDayStart(Date.now() - 6 * 86_400_000);
+  weekStart = getETWindowStart(7);
   weekTradeTime = weekStart + 2 * 86_400_000; // safely inside the 7D window, before today
 
   // Realization order is the OPPOSITE of economic performance: a cutover
@@ -126,7 +126,7 @@ describe("composeDailyDigest — header: Uncle Carl · date · cierre ET", () =>
     const digest = reporter.composeDailyDigest();
     expect(status.match(/P&L hoy ([+−]\$[\d,]+\.\d{2})/)?.[1]).toBeDefined();
     expect(status.match(/P&L hoy ([+−]\$[\d,]+\.\d{2})/)?.[1]).toBe(digest.match(/P&L hoy ([+−]\$[\d,]+\.\d{2})/)?.[1]);
-    expect(status).toContain("cobrado hoy +$0.00");
+    expect(status).toContain("realizado por fills hoy +$0.00");
     expect(status).not.toContain("no realizado");
   });
 
@@ -162,9 +162,9 @@ describe("Rendimiento 7D — active sleeves, ≥1 weekly close, best→worst, no
     const lines = msg.split("\n");
     const idx = lines.indexOf("<b>Rendimiento 7D a mercado</b>");
     expect(idx).toBeGreaterThan(-1);
-    expect(lines[idx + 1]).toBe("Momentum Stocks MtM +$50.00 · realizado −$32.86 · 1W/1L");
-    expect(lines[idx + 2]).toBe("Momentum Cripto MtM +$10.00 · realizado −$3.91 · 0W/1L");
-    expect(lines[idx + 3]).toBe("Reversión Stocks MtM −$100.00 · realizado +$296.03 · 5W/1L");
+    expect(lines[idx + 1]).toBe("Momentum Stocks MtM +$50.00 · realizado por fills −$32.86 · 1W/1L");
+    expect(lines[idx + 2]).toBe("Momentum Cripto MtM +$10.00 · realizado por fills −$3.91 · 0W/1L");
+    expect(lines[idx + 3]).toBe("Reversión Stocks MtM −$100.00 · realizado por fills +$296.03 · 5W/1L");
   });
 
   test("the reconcile close never inflates meanrev_stocks' 7D pnl or W count", () => {
@@ -183,16 +183,18 @@ describe("Rendimiento 7D — active sleeves, ≥1 weekly close, best→worst, no
 
 describe("realized vs. mark-to-market — the numbers cannot be misread", () => {
   test("open positions moving with no closes report realized zero and non-zero unrealized", () => {
+    // Both readings at or before "now": the money reader never reads a
+    // future-dated mark (a dated digest must not see the next day's rows).
     const now = Date.now();
-    saveEquitySnapshot("alpaca_main", 102_668, 90_100, 3, now);
-    saveEquitySnapshot("binance_main", 10_945, 5_100, 1, now + 1);
+    saveEquitySnapshot("alpaca_main", 102_668, 90_100, 3, now - 1);
+    saveEquitySnapshot("binance_main", 10_945, 5_100, 1, now);
     try {
       const msg = reporter.composeDailyDigest();
       expect(msg).toContain("Sin cierres hoy");
       expect(msg).toContain("P&L hoy +$1000.00");
       expect(msg).not.toContain("Cobrado hoy +$1000.00");
     } finally {
-      getDB().prepare("DELETE FROM equity_snapshots WHERE snapshot_time >= ?").run(now);
+      getDB().prepare("DELETE FROM equity_snapshots WHERE snapshot_time >= ?").run(now - 1);
     }
   });
 
@@ -205,7 +207,7 @@ describe("realized vs. mark-to-market — the numbers cannot be misread", () => 
     });
     try {
       const msg = reporter.composeDailyDigest();
-      expect(msg).toContain("Cobrado desde la entrada +$43 en 1 cierre");
+      expect(msg).toContain("Realizado por fills (neto, desde entrada) +$43 en 1 cierre");
       expect(msg).toContain("Cierres +$43 · posiciones ");
       expect(msg).toContain(" en el día");
       expect(msg).not.toContain("$10,041.50");
@@ -226,8 +228,11 @@ describe("composeDailyDigest — no top-symbol, no reject breakdown (operator-on
 
 describe("Binance decomposition — FAPI + DAPI reconcile exactly, no double count", () => {
   test("USDT + USDC + BTC == Total, sourced from fresh asset rows", () => {
-    const msg = reporter.composeDailyDigest();
-    expect(msg).toContain("Binance $10,445 · USDT $4,731 · USDC $5,000 · BTC $714");
+    const summaries = reporter.getAccountSummaries!;
+    reporter.getAccountSummaries = () => [...summaries().filter(a => a.id !== "momentum_crypto"),
+      { id: "momentum_crypto", equity: 4731 }, { id: "momentum_crypto_usdc", equity: 5000 }];
+    try { expect(reporter.composeDailyDigest()).toContain("Binance $10,445 · USDT $4,731 · USDC $5,000 · BTC $714"); }
+    finally { reporter.getAccountSummaries = summaries; }
     // 4,731 + 5,000 + 714 = 10,445 — reconciles exactly (whole-dollar fixture).
   });
 
@@ -299,7 +304,9 @@ describe("Binance decomposition includes CoinM (DAPI) exactly once, once applica
       // BTC = FAPI BTC (714) + coinm (500) = 1,214. USDC unchanged (5,000).
       // USDT = 10,945 − 5,000 − 1,214 = 4,731 (coinm cancels out of USDT by construction).
       const msg = reporter.composeDailyDigest();
-      expect(msg).toContain("Binance $10,945 · USDT $4,731 · USDC $5,000 · BTC $1,214");
+      // No USDC margin summary: do not invent components from a wallet row.
+      expect(msg).toContain("Binance $10,945");
+      expect(msg).not.toContain("USDC $");
       // Never counted twice: FAPI-only would read $10,445, DAPI-only $500.
       expect(msg).not.toContain("Binance $10,445");
     } finally {
@@ -333,7 +340,7 @@ describe("realized today vs P&L today — a gain earned before today (2026-09-28
       } else {
         expect(msg).toContain("Cierres −$396 en el día");
       }
-      expect(msg).toContain("Cobrado desde la entrada +$4,768 en 1 cierre");
+      expect(msg).toContain("Realizado por fills (neto, desde entrada) +$4,768 en 1 cierre");
       expect(msg).not.toContain("ya estaba ganado");
       expect(msg).not.toContain("no realizado");
     } finally {

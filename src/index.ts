@@ -20,7 +20,7 @@ import { DashboardServer } from "./dashboard/server";
 import { attachSessionPersistence } from "./dashboard/auth-store";
 import { createSessionStore } from "./dashboard/sessionPersistence";
 import { TelegramReporter } from "./telegram/telegram-reporter";
-import { BrokerSync } from "./sync/BrokerSync";
+import { BrokerSync, registerSleeveOwnedSymbols } from "./sync/BrokerSync";
 import { buildBrokerSyncSources } from "./sync/brokerSyncSource";
 import { DailyReporter } from "./reports/DailyReporter";
 import { createLogger } from "./utils/logger";
@@ -64,6 +64,7 @@ import { stopPriceFromEntry } from "./account/BinanceSleeveReconciler";
 import { fapiClientOrderId } from "./executor/binance-executor";
 import { builtinPortfolio } from "./portfolios/builtin";
 import { initPlatformPortfolios, loadPlatformPortfolioDefinitions, markPendingPortfoliosActive, resolvePortfoliosSource } from "./portfolios/store";
+import { portfolioEngineOwnedSymbols } from "./portfolios/validate";
 import type { MomentumPortfolioPlan, MeanRevPortfolioPlan, StatePersistenceSpec, PortfolioDefinition } from "./portfolios/types";
 
 const log = createLogger("Main");
@@ -1162,6 +1163,12 @@ async function main() {
     // label (owner edit, cutover script, un-archive) is applied now.
     const applied = markPendingPortfoliosActive(getDB());
     log.info(`📁 Portfolio source: db (${defs.length} platform_portfolios definitions${applied.length > 0 ? `; applied pending edits: ${applied.join(", ")}` : ""})`);
+    // BrokerSync ownership boundary (B-4): the live portfolio engines' symbols beyond the static
+    // incumbent universes (RW8's SH) are theirs to adopt — registered BEFORE BrokerSync starts below.
+    const owned = portfolioEngineOwnedSymbols(defs);
+    registerSleeveOwnedSymbols("alpaca", owned.alpaca);
+    registerSleeveOwnedSymbols("binance", owned.binance);
+    if (owned.alpaca.length + owned.binance.length > 0) log.info(`📁 Portfolio-engine symbols registered as sleeve-owned: alpaca [${owned.alpaca.join(", ")}] binance [${owned.binance.join(", ")}]`);
   } else {
     log.info("📁 Portfolio source: code (built-in definitions)");
   }
@@ -1464,10 +1471,6 @@ async function main() {
   dailyReporter.sendTelegramDigest = () => telegram.sendDaily();
   dailyReporter.start();
 
-  // 8. Account manager loops (sync / hard SL / snapshots)
-  log.info("Starting account manager...");
-  await accountManager.start();
-
   // 8b. RW2 — the portfolio engine (docs/reports/RW-reescritura-rentable.md §4, src/portfolio-engine/README.md).
   // Registry definitions with template "portfolio" (PORTFOLIOS_SOURCE=db) put the engine on an
   // EXISTING sleeve: observer = computes and persists, sends nothing, the incumbent trades on;
@@ -1499,6 +1502,10 @@ async function main() {
   });
   for (const p of peBuilt.problems) portfolioAlert("PortfolioCutover", `definition '${p.definitionId}' (${p.sleeve ?? "?"}) ${p.severity === "live_refused" ? "NOT live" : "ignored"}: ${p.message}`);
   portfolioCutoverSleeves = new Set(peBuilt.live.keys());
+  accountManager.setPortfolioEngineSleeves(portfolioCutoverSleeves);
+  // Resolve actual ownership BEFORE starting adoption / stop loops.
+  log.info("Starting account manager...");
+  await accountManager.start();
   for (const plan of peWiring.live) {
     const id = plan.params.sleeve ?? plan.portfolioId;
     if (!peBuilt.live.has(id)) continue;
@@ -2160,7 +2167,7 @@ async function main() {
   log.info(`📈 Stocks: ${getEnabledStocks().length} | Crypto: ${getEnabledCrypto().length}`);
   log.info(`🔗 Brokers: ${connectedBrokers}/${requiredBrokers} connected`);
   log.info(`📡 Broker Sync: every 30s · Rebalance: every 60min`);
-  log.info(`📊 Daily Reports: 23:59 ET`);
+  log.info(`📊 Daily Reports: ~00:01 ET (completed day)`);
   log.info("═══════════════════════════════════════");
 }
 

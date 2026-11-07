@@ -5,7 +5,11 @@
  * G4 cannot reconstruct a journal updated AFTER --now (reported as unavailable).
  * Historical bars have no ingestion timestamp, so G5 proves session coverage in
  * the supplied snapshot, not when those bars originally arrived.
- * 0 healthy; 1 invariant violation; 2 operational failure (takes precedence).
+ * G7 (audit F-2): every cron job's success marker (data/cron-markers, src/ops/cronJobs.ts)
+ * is fresh for its schedule; a stale job pages once per episode. Skipped with --now.
+ * 0 healthy; 1 invariant violation; 2 operational failure of a check (takes precedence;
+ * paged here as an OP:<check> episode); 3 the guardian itself could not run (DB, state file,
+ * Telegram) — paged once per episode by scripts/lib/cron-job.sh via guardian.sh.
  * Only --notify updates data/guardian-state.json; --no-notify is a dry run.
  */
 // No import-time dotenv: bun loads .env when guardian.sh runs it from the repo root,
@@ -25,12 +29,13 @@ import { getPreviousTradingDay, isTradingDay } from "../src/utils/marketHours";
 import { isTreasurySymbol } from "../src/treasury/treasurySymbols";
 import { loadInstanceConfig } from "../src/platform/instance";
 import { alpaca, fapi } from "./broker-truth";
+import { cronJobStatuses, CRON_MARKER_DIR } from "../src/ops/cronJobs";
 
 const HOUR = 3_600_000;
 const STOCKS = ["momentum_stocks", "meanrev_stocks"] as const;
 // Explicit owner-rule scope; do not silently stop checking a disabled sleeve.
 const LIVE_SLEEVE_IDS = [...STOCKS, "momentum_crypto", "momentum_crypto_usdc"] as const;
-type Check = "G1" | "G2" | "G3" | "G4" | "G5" | "G6";
+type Check = "G1" | "G2" | "G3" | "G4" | "G5" | "G6" | "G7";
 export interface Finding { key: string; check: Check; message: string }
 export interface GuardianResult {
   violations: Finding[];
@@ -153,6 +158,8 @@ export function mandatoryCloseFindings(d: DecisionRow, orders: PersistedOrder[])
 export async function evaluateGuardian(opts: {
   db: Database; hist: Database; now: number; root?: string; historical?: boolean;
   noBroker?: boolean; broker?: () => Promise<BrokerPosition[]>; configs?: StockConfigs;
+  /** Cron marker dir (default <root>/data/cron-markers) and host timezone for G7. */
+  cronMarkerDir?: string; cronTz?: string;
 }): Promise<GuardianResult> {
   const { db, hist, now } = opts;
   if (!Number.isFinite(now)) throw new Error("invalid --now");
@@ -248,6 +255,16 @@ export async function evaluateGuardian(opts: {
     const target = loadInstanceConfig().kpiTargets.tradesPerDay;
     result.reports.push(`G6 executed orders today (ET): ${orders} / KPI_TARGET_TRADES_PER_DAY=${target ?? "unset"}; starts last 24h: ${restarts.n} (Account manager started events)`);
   });
+  // G7 — the dead-man's switch. The guardian's own marker is written by its
+  // wrapper after this run, and its staleness is what /healthz stale_jobs and
+  // the outside uptime-watch catch; judging it here would only page itself.
+  if (!opts.historical) await run("G7", () => {
+    const dir = opts.cronMarkerDir ?? resolve(opts.root ?? resolve(import.meta.dir, ".."), CRON_MARKER_DIR);
+    const statuses = cronJobStatuses({ dir, now, tz: opts.cronTz }).filter(s => s.name !== "guardian");
+    for (const s of statuses) if (s.stale)
+      add("G7", s.name, `cron ${s.name}: no success since its run due ${new Date(s.dueRunMs!).toISOString()} (last ok ${s.lastOkMs ? new Date(s.lastOkMs).toISOString() : "never"})`);
+  });
+  else result.reports.push("G7 skipped (--now: markers are not historical)");
   return result;
 }
 
@@ -276,7 +293,7 @@ function readState(path: string): EpisodeState {
   try {
     const s = JSON.parse(readFileSync(path, "utf8"));
     if (s.version !== 1 || !s.active || typeof s.active !== "object" || Array.isArray(s.active)) throw new Error("invalid guardian state");
-    for (const v of Object.values(s.active) as any[]) if (!v || !/^G[1-6]$/.test(v.check) || typeof v.message !== "string" || !Number.isFinite(v.since)) throw new Error("invalid guardian episode");
+    for (const v of Object.values(s.active) as any[]) if (!v || !/^G[1-7]$/.test(v.check) || typeof v.message !== "string" || !Number.isFinite(v.since)) throw new Error("invalid guardian episode");
     return s;
   } catch (e: any) { if (e.code === "ENOENT") return { version: 1, active: {} }; throw e; }
 }
@@ -339,5 +356,5 @@ export async function guardianMain(args = process.argv.slice(2)): Promise<number
 }
 if (import.meta.main) {
   try { process.exitCode = await guardianMain(); }
-  catch (e) { console.error(`GUARDIAN operational failure: ${e instanceof Error ? e.message : e}`); process.exitCode = 2; }
+  catch (e) { console.error(`GUARDIAN operational failure: ${e instanceof Error ? e.message : e}`); process.exitCode = 3; }
 }

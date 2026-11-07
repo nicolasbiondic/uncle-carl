@@ -7,7 +7,8 @@ import {
 } from "../../db/database";
 import { getSymbolsByBroker } from "../../config/symbols";
 import { toBoundedInt } from "../dashboard-utils";
-import { buildConsolidatedEquitySeries } from "../../portfolio/consolidatedEquity";
+import { buildConsolidatedEquitySeries, readDisplayMoneyCurve } from "../../portfolio/consolidatedEquity";
+import { portfolioMainLegs, isMainSeriesApplicable } from "../../portfolio/truth";
 import { RISK_PROFILES, type RiskProfileId } from "../../config/riskProfiles";
 import { displayBucketMs, resampleEquityForDisplay, windowDays } from "../equityResample";
 
@@ -35,6 +36,18 @@ export function registerStrategyRoutes(app: express.Application, _am: AccountMan
     // beyond "Today" (equityResample.ts: why raw points looked flat).
     const days = windowDays(req.query.days === undefined ? undefined : toBoundedInt(req.query.days, 30, 0, 365), range);
     const bucketMs = displayBucketMs(days);
+
+    if (!range || range === "all") {
+      const ids = !profileId || profileId === "consolidated" ? portfolioMainLegs()
+        : profileId === "binance_total" ? ["binance_main", ...(isMainSeriesApplicable("coinm") ? ["binance_coinm_main"] : [])]
+        : [profileId];
+      const curve = readDisplayMoneyCurve(ids, days);
+      const stockOnly = ids.length === 1 && (profileId === "alpaca_main" || RISK_PROFILES[profileId as RiskProfileId]?.broker === "alpaca");
+      const rows = resampleEquityForDisplay(curve.rows, bucketMs, stockOnly && days !== 1);
+      // Array response remains compatible. Metadata on its retained last
+      // point supplies the header; clients never recompute a second return.
+      return res.json(rows.map((r, i) => i === rows.length - 1 ? { ...r, moneyWindow: curve.window } : r));
+    }
 
     // Consolidated: aggregate equity from broker totals (alpaca_main + binance_main
     // [+ binance_coinm_main once DAPI is applicable]). These rows are written by

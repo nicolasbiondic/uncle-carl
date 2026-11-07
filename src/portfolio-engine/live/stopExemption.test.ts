@@ -8,7 +8,7 @@
 // is bot-managed, not sync-owned → never auto-closed (no phantom deletion).
 
 import { describe, test, expect, beforeAll, beforeEach } from "bun:test";
-import { getDB, isPortfolioEngineRow, PORTFOLIO_ENGINE_STRATEGY } from "../../db/database";
+import { getDB, getOpenTrades, isPortfolioEngineRow, PORTFOLIO_ENGINE_STRATEGY } from "../../db/database";
 import { makeTestDb, seedOpenTrade } from "../../test-support/db";
 import { makeAccountManager } from "../../test-support/account";
 import { BrokerSync } from "../../sync/BrokerSync";
@@ -42,6 +42,31 @@ describe("isPortfolioEngineRow", () => {
 });
 
 describe("checkAllStopLoss — PORTFOLIO rows are skipped", () => {
+  test.each([["momentum_stocks", "AAPL"], ["meanrev_stocks", "XLP"]])("adoption by live portfolio sleeve %s is immediately stop-exempt (%s)", async (sleeve, symbol) => {
+    const stops: string[] = [], closes: string[] = [];
+    const manager = makeAccountManager({ alpaca: {
+      isConnected: () => true,
+      getAccount: async () => ({ equity: "100000", cash: "50000" }),
+      getCachedPrice: () => 0,
+      getRiskPrice: async () => 90,
+      getLatestPrice: async () => 90,
+      getPositions: async () => [{ symbol, side: "buy", quantity: 10, avgEntryPrice: 100, currentPrice: 90, unrealizedPnl: -100, unrealizedPnlPct: -10 }],
+      getOpenStopOrders: async () => [],
+      placeStopLossOrder: async (p: any) => { stops.push(p.symbol); return { ok: true, orderId: "stop" }; },
+      closePosition: async (s: string) => { closes.push(s); return { success: true, filledPrice: 90, commission: 0 }; },
+    } });
+    manager.setPortfolioEngineSleeves([sleeve]);
+    await withMarketOpen(async () => {
+      for (let i = 0; i < 3; i++) await (manager as any).syncAlpacaAccount();
+      expect(getOpenTrades(sleeve)).toHaveLength(1);
+      expect(isPortfolioEngineRow(getOpenTrades(sleeve)[0])).toBe(true);
+      await (manager as any).checkAllStopLoss();
+    });
+    expect(stops).toEqual([]);
+    expect(closes).toEqual([]);
+    expect(getOpenTrades(sleeve)).toHaveLength(1);
+  });
+
   test("a -10% breach closes the MOMENTUM control row, not the PORTFOLIO row", async () => {
     seedOpenTrade("pf_test_spy", "momentum_stocks", { symbol: "SPY", strategy: PORTFOLIO_ENGINE_STRATEGY, entryPrice: 100, quantity: 10 });
     seedOpenTrade("ctl_aapl", "momentum_stocks", { symbol: "AAPL", strategy: "MOMENTUM", entryPrice: 100, quantity: 10 });

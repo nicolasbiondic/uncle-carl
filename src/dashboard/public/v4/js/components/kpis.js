@@ -20,8 +20,11 @@ function figure(html, days) {
  *  rest of the headline (pnl − closes), so they add up to it exactly. The
  *  since-entry figure is not shown on any tile — the modal has it. When the
  *  closes can't be measured (a start price missing) only the counts show. */
-export function closesSub(b) {
+export function closesSub(b, pnl) {
   if (!b) return "";
+  // The headline the tile shows (G-1: fresh, never the 30 s closes cache); a
+  // payload without one carries closes + positions, which IS that headline.
+  if (pnl == null) pnl = b.pnl ?? b.rounded?.pnl ?? (b.closedInWindow != null && b.positions != null ? b.closedInWindow + b.positions : null);
   const closes = n(b.closesCount), trims = n(b.trimsCount);
   if (closes === 0 && trims === 0) return t("no closes", "sin cierres");
   const word = (c, one, many) => `${num(c, 0)} ${c === 1 ? one : many}`;
@@ -29,9 +32,11 @@ export function closesSub(b) {
     closes > 0 ? word(closes, t("close", "cierre"), t("closes", "cierres")) : "",
     trims > 0 ? word(trims, t("trim", "recorte"), t("trims", "recortes")) : "",
   ].filter(Boolean).join(", ");
-  if (b.closedInWindow == null || b.positions == null) return counts;
+  if (b.closedInWindow == null || pnl == null) return counts;
   const fig = (v) => `<b style="color:${pnlColor(v)}">${moneySigned(v, 0)}</b>`;
-  return `${t("closes", "cierres")} ${fig(b.closedInWindow)} · ${t("positions", "posiciones")} ${fig(b.positions)}`;
+  const roundedCloses = Math.round(b.closedInWindow);
+  const roundedPositions = Math.round(pnl) - roundedCloses;
+  return `${t("closes", "cierres")} ${fig(roundedCloses)} · ${t("positions", "posiciones")} ${fig(roundedPositions)}`;
 }
 
 /** Consolidated "today"/period figures derived from the v2 profiles payload so
@@ -69,7 +74,8 @@ function consolidated(state) {
     pnl7dPct: agg?.pnl7dPct ?? null,
     periodBreakdown: agg?.periodBreakdown ?? null,
     breakdown7d: agg?.breakdown7d ?? null,
-    winRate: totalClosed > 0 ? (wins / totalClosed) * 100 : (n(d?.portfolio?.winRate) || 0),
+    // No closes yet ⇒ null, rendered "—" (never a fabricated 0%).
+    winRate: totalClosed > 0 ? (wins / totalClosed) * 100 : (d?.portfolio?.winRate ?? null),
     todayTrades, totalTrades,
   };
 }
@@ -103,36 +109,17 @@ export function sinceStartSub(ss) {
   if (!ss) return "";
   const when = ss.startedAt ? new Date(ss.startedAt).toLocaleDateString(store.state.lang === "es" ? "es" : "en-GB", { day: "numeric", month: "short", year: "numeric" }) : "";
   const title = when ? t(`Since the system started, ${when}`, `Desde que empezó el sistema, ${when}`) : "";
-  return `<span title="${esc(title)}"><b style="color:${pnlColor(ss.pnl)}">${moneySigned(ss.pnl, 0)}</b> ${pctSigned(ss.pct)} ${t("since start", "desde el inicio")}</span>`;
+  return `<span title="${esc(title)}"><b style="color:${pnlColor(ss.pnl)}">${moneySigned(ss.pnl, 0)}</b> ${ss.pct == null ? "" : pctSigned(ss.pct)} ${t("since start", "desde el inicio")}</span>`;
 }
 
 export function renderKpis() {
   const s = store.state;
   const k = consolidated(s);
   const pnlL = s.period === 1 ? t("Today P&L", "P&L Hoy") : t(`${periodLabel(s.period)} P&L`, `P&L ${periodLabel(s.period)}`);
-  // Delta % beside each P&L. Prefer the server-computed broker-truth pct
-  // (rebase-aware: null when an all-time methodology jump makes a simple return
-  // meaningless). When it's null AND we're on the consolidated view, fall back
-  // to an HONEST derived %: the All window uses return-on-seed (Σ initialEquity,
-  // the true invested base — same basis as the broker cards), NOT the rebased
-  // display anchor; the fixed 7D uses the window-start equity (now − 7d P&L),
-  // which self-heals once a recent rebase ages out of the window. An actual 0
-  // still renders "0.0%"; only a truly underivable value hides.
-  const isConsolidated = s.view === "consolidated";
-  const seed = (s.dashboard?.accounts || []).reduce((sum, a) => sum + n(a.initialEquity), 0);
-  // Derived % when the server pct is null (rebased anchor): All(0) uses return on
-  // seed capital (Σ initialEquity, the true invested base); 7D/30D use the
-  // window-start equity (now − window P&L), self-healing once a recent rebase
-  // ages out of the window. Today(1) never fabricates — a 1-day return over a
-  // synthetic anchor is meaningless. Consolidated view only (account-wide basis).
-  const derivedPct = (serverPct, pnl, period) => {
-    if (serverPct != null) return serverPct;
-    if (!isConsolidated || pnl == null || period === 1) return null;
-    const base = period === 0 ? seed : (k.equity == null ? null : k.equity - pnl);
-    return base && base > 0 ? (pnl / base) * 100 : null;
-  };
-  const periodPct = derivedPct(k.periodPnlPct, k.periodPnl, s.period);
-  const pnl7dPct = derivedPct(k.pnl7dPct, k.pnl7d, 7);
+  // The server's null is intentional (rebased/unavailable). Never divide by
+  // another base to manufacture a percentage beside that same money figure.
+  const periodPct = k.periodPnlPct;
+  const pnl7dPct = k.pnl7dPct;
   const pctSpan = (v) => v == null ? "" : ` <span class="kv sub">${pctSigned(v)}</span>`;
   // The figure opens the breakdown whenever its bridge exists (old servers
   // without the breakdown fields keep a plain, non-clickable figure).
@@ -146,11 +133,11 @@ export function renderKpis() {
   return (
     kpi(t("Total equity", "Patrimonio"), k.equity == null ? "—" : money(k.equity, 0), "", sinceStartSub(sinceStart(s)), "equity") +
     renderProfiles() +
-    kpi(pnlL, pnlValue(k.periodPnl, periodPct, k.periodBreakdown, s.period), "", closesSub(k.periodBreakdown), "today") +
-    (s.period === 7 ? "" : kpi(t("7D P&L", "P&L 7D"), pnlValue(k.pnl7d, pnl7dPct, k.breakdown7d, 7), "sm", closesSub(k.breakdown7d))) +
+    kpi(pnlL, pnlValue(k.periodPnl, periodPct, k.periodBreakdown, s.period), "", closesSub(k.periodBreakdown, k.periodPnl), "today") +
+    (s.period === 7 ? "" : kpi(t("7D P&L", "P&L 7D"), pnlValue(k.pnl7d, pnl7dPct, k.breakdown7d, 7), "sm", closesSub(k.breakdown7d, k.pnl7d))) +
     returnKpi(s.kpis) +
     volumeKpi(k, s.kpis) +
-    kpi(t("Win rate", "% Ganadas"), pct(k.winRate, 0), "sm", t("all-time closes", "cierres históricos"), "win")
+    kpi(t("Win rate", "% Ganadas"), k.winRate == null ? "—" : pct(k.winRate, 0), "sm", t("all-time closes", "cierres históricos"), "win")
   );
 }
 

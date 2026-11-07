@@ -17,7 +17,7 @@
 // fresh install/fork shows the raw figures with every target null.
 
 import {
-  countExecutedOrders, getETDayStart, getEquityHistoryByRangeDisplay,
+  countExecutedOrders, getETDayStart, getETWindowStart, getEquityHistoryByRangeDisplay,
 } from "../db/database";
 import { buildConsolidatedEquitySeries } from "./consolidatedEquity";
 import { loadInstanceConfig, type KpiTargets } from "../platform/instance";
@@ -52,7 +52,7 @@ export function computeKpiSnapshot(now: number = Date.now()): KpiSnapshot {
 
   // Volume — ET-day windows, the same convention as every "today" stat.
   const today = countExecutedOrders(getETDayStart(now), now);
-  const weekStart = getETDayStart(now - 6 * 86_400_000);
+  const weekStart = getETWindowStart(7, now);
   const avg7d = countExecutedOrders(weekStart, now) / 7;
 
   // Return — 30d window of the consolidated series ("1m" range).

@@ -2,12 +2,15 @@
 // Persisted keys survive reloads. Components read store.state and subscribe to
 // re-render on change.
 
-const PERSIST = ["view", "period", "lang", "theme", "tab", "page", "posGroups", "botTabSeen"];
+// `view` (a sleeve filter) is deliberately NOT persisted: a reload always opens the
+// whole account, so a forgotten filter can never pass for the total (audit G-5).
+const PERSIST = ["period", "lang", "theme", "tab", "page", "posGroups", "botTabSeen"];
+try { localStorage.removeItem("uc4_view"); } catch {} // retire the old persisted filter
 const load = (k, d) => { try { const v = localStorage.getItem("uc4_" + k); return v == null ? d : JSON.parse(v); } catch { return d; } };
 
 export const store = {
   state: {
-    view: load("view", "consolidated"),     // consolidated | a live sleeve id (dynamic, see dashboard.accounts)
+    view: "consolidated",                   // consolidated | a live sleeve id (dynamic, see dashboard.accounts); session only
     period: load("period", 1),              // 1 | 7 | 30 | 0(all)  — global time filter
     lang: load("lang", "en"),               // en | es
     theme: load("theme", "dark"),           // dark | terminal | light
@@ -27,7 +30,6 @@ export const store = {
     dashboard: null,
     profiles: [],
     connections: {},
-    daysRunning: 0,
     me: null,          // /api/auth/me payload (set at boot)
     platformMe: null,  // /api/platform/me payload (account identity; may be null)
   },

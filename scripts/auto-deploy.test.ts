@@ -872,18 +872,21 @@ describe("auto-deploy.sh deploy isolation: the gate never runs in, or changes, t
     ["typecheck", "exit 1", "true"],
     ["test", "true", "exit 1"],
   ] as const) {
-    test(`a failed ${name} gate leaves the live checkout untouched and pages once per SHA, retrying every poll`, async () => {
+    test(`a failed ${name} gate leaves the live checkout untouched, pages once per SHA, and retries with backoff (not every poll)`, async () => {
       const { root, work, shaA, shaB } = makeRepoPair(VERSION_FILES.B, VERSION_FILES.A);
       writeFileSync(join(work, "data", ".deployed-sha"), `${shaA}\n`);
       const sentinel = join(root, "started.marker");
       const ran = join(root, "gate-runs");
+      const T0 = 1_800_000_000;
       const env = {
         REPO: work,
         GATE_TYPECHECK_CMD: `echo x >> ${ran}; ${tc}`,
         GATE_TEST_CMD: test_,
         START_CMD: `touch ${sentinel}`,
         HEALTH_URL: "http://127.0.0.1:18999/healthz",
+        DEPLOY_NOW: String(T0),
       };
+      const runs = () => readFileSync(ran, "utf8").trim().split("\n").length;
       try {
         const first = await runScript(env);
         expect(first.code).not.toBe(0);
@@ -896,17 +899,75 @@ describe("auto-deploy.sh deploy isolation: the gate never runs in, or changes, t
         expect(read(join(work, "data", ".deployed-sha"))).toBe(shaA);
         expect(existsSync(sentinel)).toBe(false);
         expect(read(join(work, "data", ".deploy-gatefail-paged"))).toBe(shaB); // one page per failing SHA
-        // retried every poll: the gate runs again, still nothing moves, still ONE page
-        const second = await runScript(env);
-        expect(second.code).not.toBe(0);
-        expect(readFileSync(ran, "utf8").trim().split("\n").length).toBe(2);
+        expect(read(join(work, "data", ".deploy-gate-fail")).split(" ")[2]).toBe("1");
+        // the next poll (2 min later) does NOT re-run bun install + typecheck + the suite
+        const second = await runScript({ ...env, DEPLOY_NOW: String(T0 + 120) });
+        expect(second.code).toBe(0);
+        expect(second.out).toContain("backoff");
+        expect(runs()).toBe(1);
+        // once the backoff (4 min after the 1st failure) elapsed, it gates again: still nothing moves, still ONE page
+        const third = await runScript({ ...env, DEPLOY_NOW: String(T0 + 240) });
+        expect(third.code).not.toBe(0);
+        expect(runs()).toBe(2);
         expect(git(work, "rev-parse", "HEAD")).toBe(shaA);
         expect(read(join(work, "data", ".deploy-gatefail-paged"))).toBe(shaB);
+        // …and the next wait doubles (8 min)
+        const [, , attempts, next] = read(join(work, "data", ".deploy-gate-fail")).split(" ");
+        expect(attempts).toBe("2");
+        expect(Number(next)).toBe(T0 + 240 + 480);
+        expect((await runScript({ ...env, DEPLOY_NOW: String(T0 + 240 + 479) })).out).toContain("backoff");
+        expect(runs()).toBe(2);
+        // removing the marker is the documented manual retry
+        rmSync(join(work, "data", ".deploy-gate-fail"));
+        await runScript({ ...env, DEPLOY_NOW: String(T0 + 300) });
+        expect(runs()).toBe(3);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
-    }, 30_000);
+    }, 45_000);
   }
+
+  test("the backoff is capped at one hour", async () => {
+    const { root, work, shaA, shaB } = makeRepoPair(VERSION_FILES.B, VERSION_FILES.A);
+    writeFileSync(join(work, "data", ".deployed-sha"), `${shaA}\n`);
+    const T0 = 1_800_000_000;
+    const env = { REPO: work, GATE_TYPECHECK_CMD: "exit 1", GATE_TEST_CMD: "true", START_CMD: "true", HEALTH_URL: "http://127.0.0.1:18999/healthz" };
+    try {
+      await runScript({ ...env, DEPLOY_NOW: String(T0) });
+      const key = read(join(work, "data", ".deploy-gate-fail")).split(" ").slice(0, 2).join(" ");
+      expect(key.startsWith(shaB)).toBe(true);
+      writeFileSync(join(work, "data", ".deploy-gate-fail"), `${key} 9 ${T0}\n`);
+      await runScript({ ...env, DEPLOY_NOW: String(T0) });
+      const [, , attempts, next] = read(join(work, "data", ".deploy-gate-fail")).split(" ");
+      expect(attempts).toBe("10");
+      expect(Number(next)).toBe(T0 + 3600);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("a SHA whose gate already passed is not gated again (cached per SHA + gate commands)", async () => {
+    const { root, work, shaA, shaB } = makeRepoPair(VERSION_FILES.B, VERSION_FILES.A);
+    writeFileSync(join(work, "data", ".deployed-sha"), `${shaA}\n`);
+    const ran = join(root, "gate-runs");
+    const server = okServer();
+    const env = { REPO: work, GATE_TYPECHECK_CMD: `echo x >> ${ran}`, GATE_TEST_CMD: "true", START_CMD: "true", ...healthy(server) };
+    try {
+      // the gate passes but the live tree moves meanwhile → deferred to the next poll
+      const deferred = await runScript({ ...env, GATE_TEST_CMD: `echo dirt > ${work}/dirt.txt` });
+      expect(deferred.out).toContain("NOT fast-forwarding");
+      rmSync(join(work, "dirt.txt"));
+      const cached = await runScript({ ...env, GATE_TEST_CMD: `echo dirt > ${work}/dirt.txt` });
+      expect(cached.code).toBe(0);
+      expect(cached.out).toContain("gate already passed");
+      expect(readFileSync(ran, "utf8").trim().split("\n").length).toBe(1);
+      expect(git(work, "rev-parse", "HEAD")).toBe(shaB);
+      expect(cached.out).toContain("DEPLOYED");
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   test("a failed gate copies the tail of its output into the script's log (deploy.log is kept ≥ 90 days, /tmp is not)", async () => {
     const { root, work } = makeRepoPair();
@@ -1218,4 +1279,83 @@ describe("auto-deploy.sh deploy isolation: the gate never runs in, or changes, t
     expect(unit).toMatch(/^Environment=TMPDIR=\/dev\/shm$/m);
     expect(unit).toMatch(/^TimeoutStartSec=1800$/m);
   });
+});
+
+// ── Audit F-5 (2026-11-07): a degraded-but-alive bot on the new commit is a
+// successful deploy (a broker outage used to roll good deploys back), and a
+// restart that fails pages instead of exiting silently.
+describe("auto-deploy.sh post-deploy health: degraded on the expected commit", () => {
+  const serve = (body: Record<string, unknown>, status = 200) => Bun.serve({ port: 0, fetch: () => Response.json(body, { status }) });
+  const probe = (port: number, expect?: string) => runHealthCheckOnly({
+    HEALTH_URL: `http://127.0.0.1:${port}/healthz`,
+    HEALTH_CHECK_ATTEMPTS: "1", HEALTH_CHECK_INTERVAL: "0", HEALTH_CHECK_TIMEOUT: "2",
+    ...(expect ? { HEALTH_EXPECT_COMMIT: expect } : {}),
+  });
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+
+  for (const [name, body, expected, code] of [
+    ["degraded + matching 7-char commit + no dead loop → accepted", { status: "degraded", commit: SHA.slice(0, 7), broker_unreachable_count: 1 }, SHA, 0],
+    ["degraded + full matching commit → accepted", { status: "degraded", commit: SHA }, SHA, 0],
+    ["degraded on ANOTHER commit (an old process still answering) → rejected", { status: "degraded", commit: "fedcba9" }, SHA, 1],
+    ["degraded with a dead loop → rejected", { status: "degraded", commit: SHA.slice(0, 7), dead_loop_count: 1 }, SHA, 1],
+    ["degraded with no expected commit (plain --health-check-only) → rejected", { status: "degraded", commit: SHA.slice(0, 7) }, undefined, 1],
+    ["degraded with a too-short commit → rejected", { status: "degraded", commit: "0" }, SHA, 1],
+  ] as const) {
+    test(name, async () => {
+      const server = serve(body as Record<string, unknown>);
+      try {
+        const r = await probe(server.port, expected);
+        expect(r.code).toBe(code);
+        if (code === 0) expect(r.out).toContain("degraded accepted");
+      } finally { server.stop(true); }
+    });
+  }
+
+  test("a 503 'dead' body with the right commit is still a failure", async () => {
+    const server = serve({ status: "dead", commit: SHA.slice(0, 7), dead_loop_count: 1 }, 503);
+    try { expect((await probe(server.port, SHA)).code).toBe(1); } finally { server.stop(true); }
+  });
+
+  test("full run: a deploy that comes up degraded on the new commit is DEPLOYED, not rolled back", async () => {
+    const { root, work, shaA, shaB } = makeRepoPair({ "src/a.ts": "export const a = 1;\n" });
+    writeFileSync(join(work, "data", ".deployed-sha"), `${shaA}\n`);
+    const server = serve({ status: "degraded", commit: shaB.slice(0, 7), broker_unreachable_count: 2 });
+    try {
+      const { code, out } = await runScript({
+        REPO: work, GATE_TYPECHECK_CMD: "true", GATE_TEST_CMD: "true", START_CMD: "true",
+        HEALTH_URL: `http://127.0.0.1:${server.port}/healthz`, HEALTH_CHECK_ATTEMPTS: "2", HEALTH_CHECK_INTERVAL: "0", HEALTH_CHECK_TIMEOUT: "2",
+      });
+      expect(code).toBe(0);
+      expect(out).toContain("degraded accepted");
+      expect(out).toContain(`DEPLOYED ${shaB.slice(0, 7)}`);
+      expect(readFileSync(join(work, "data", ".deployed-sha"), "utf8").trim()).toBe(shaB);
+      expect(existsSync(join(work, "data", ".deploy-rejected-sha"))).toBe(false);
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  test("full run: START_CMD failing after the gate passed pages the OPS chat", async () => {
+    const { root, work, shaA, shaB } = makeRepoPair({ "src/a.ts": "export const a = 1;\n" });
+    writeFileSync(join(work, "data", ".deployed-sha"), `${shaA}\n`);
+    appendFileSync(join(work, ".git", "info", "exclude"), ".env\n");
+    writeFileSync(join(work, ".env"), "TELEGRAM_BOT_TOKEN=123:abc\nTELEGRAM_OPS_CHAT_ID=-100\n");
+    const sent: string[] = [];
+    const tg = Bun.serve({ port: 0, fetch: async (req) => { sent.push(new URLSearchParams(await req.text()).get("text") ?? ""); return Response.json({ ok: true }); } });
+    try {
+      const { code, out } = await runScript({
+        REPO: work, GATE_TYPECHECK_CMD: "true", GATE_TEST_CMD: "true", START_CMD: "exit 7",
+        HEALTH_URL: "http://127.0.0.1:18999/healthz", TELEGRAM_API_BASE: `http://127.0.0.1:${tg.port}`,
+      });
+      expect(code).toBe(1);
+      expect(out).toContain("restart failed after deploy");
+      expect(sent.length).toBe(1);
+      expect(sent[0]).toContain("RESTART FAILED");
+      expect(sent[0]).toContain(shaB.slice(0, 12));
+    } finally {
+      tg.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20_000);
 });

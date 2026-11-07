@@ -65,7 +65,7 @@ export interface MomentumBrokerAdapter {
    *  `volStop` config). Adapters that persist a stop derive the stop PRICE
    *  from the FILL price with it; absent → the adapter/profile legacy fixed
    *  distance applies unchanged. */
-  openPosition(action: { symbol: string; side: "buy" | "sell"; notionalUsd: number; stopLossPct?: number; role?: "idle-overlay" | "breakout-short" | "breakout-long"; breakout?: { n: number; stopN: number; quantity: number } }): Promise<{ ok: boolean; reason?: string }>;
+  openPosition(action: { symbol: string; side: "buy" | "sell"; notionalUsd: number; stopLossPct?: number; role?: "idle-overlay" | "breakout-short" | "breakout-long"; breakout?: { n: number; stopN: number; quantity: number; catastropheN?: number } }): Promise<{ ok: boolean; reason?: string }>;
   /** Close the entire position for the given symbol/side. `closeReason` is an
    *  optional CANONICAL telemetry label (e.g. TRAIL_STOP_CLOSE_REASON) the
    *  adapter maps onto trades.close_reason; absent (plan-driven signal-flip
@@ -562,12 +562,15 @@ export type BreakoutShortConfig = ({ symbol: "BTC/USD"; symbols?: never } | { sy
   exitDays: number;
   atrDays: number;
   stopN: number;
+  /** Live-only native tail protection in N; default 3. No simulator effect. */
+  catastropheN?: number;
   riskPerN: number;
   /** Optional wall-clock cap, checked at each hourly/daily decision. After expiry,
    * re-entry requires a fresh above-to-below entry-channel crossing. */
   maxHoldHours?: number;
 };
 export const BREAKOUT_SHORT_EXIT = "BREAKOUT_SHORT_EXIT";
+export const BREAKOUT_CATASTROPHE_STOP = "BREAKOUT_CATASTROPHE_STOP";
 export const BREAKOUT_SHORT_STOP = "BREAKOUT_SHORT_STOP";
 export const BREAKOUT_SHORT_PRIORITY = "BREAKOUT_SHORT_PRIORITY";
 export const BREAKOUT_SHORT_DRAWDOWN = "BREAKOUT_SHORT_DRAWDOWN";
@@ -585,11 +588,12 @@ export const breakoutSymbols = (c: BreakoutShortConfig): string[] => c.symbols ?
 export const breakoutHistoryDays = (c: BreakoutShortConfig): number => Math.max(c.entryDays, c.exitDays, c.atrDays + 1);
 export function validateBreakoutShort(c: any): asserts c is BreakoutShortConfig {
   if (!c || typeof c !== "object" || Array.isArray(c) ||
-      Object.keys(c).filter(k => k !== "maxHoldHours" && k !== "symbol" && k !== "symbols").sort().join(",") !== "atrDays,entryDays,exitDays,riskPerN,stopN" ||
+      Object.keys(c).filter(k => k !== "catastropheN" && k !== "maxHoldHours" && k !== "symbol" && k !== "symbols").sort().join(",") !== "atrDays,entryDays,exitDays,riskPerN,stopN" ||
       (c.symbols === undefined ? c.symbol !== "BTC/USD" : c.symbol !== undefined || !Array.isArray(c.symbols) || !c.symbols.length ||
         c.symbols.some((s: unknown) => typeof s !== "string" || !/^[A-Z0-9]+\/USD(C)?$/.test(s)) || new Set(c.symbols).size !== c.symbols.length) ||
       ![c.entryDays, c.exitDays, c.atrDays].every(n => Number.isInteger(n) && n >= 2 && n <= 990) ||
       !Number.isFinite(c.stopN) || c.stopN <= 0 || !Number.isFinite(c.riskPerN) || c.riskPerN <= 0 || c.riskPerN > 0.01 ||
+      (c.catastropheN !== undefined && (!Number.isFinite(c.catastropheN) || c.catastropheN <= 0)) ||
       (c.maxHoldHours !== undefined && (!Number.isFinite(c.maxHoldHours) || c.maxHoldHours <= 0))) {
     throw new Error("breakoutShort requires legacy symbol BTC/USD OR unique symbols (BASE/USD or BASE/USDC), integer days 2..990, positive stopN, riskPerN in (0,0.01] and optional positive maxHoldHours");
   }
@@ -2192,6 +2196,7 @@ export class MomentumEngine {
       }
       if (exposure.resizes > 0 || exposure.deferredUp > 0 || exposure.unsupported > 0) this.persistState();
     };
+    const failedCloses = new Set<string>();
     for (const a of ordered) {
       try {
         if (a.type === "open") await runResizePhase();
@@ -2209,8 +2214,12 @@ export class MomentumEngine {
             closedKeys.add(`${a.symbol}|${a.side}`);
             if (sleeve) sleeveOutput.recordClose(sleeve);
           }
-          else this.log.warn(`close ${a.symbol} failed: ${res.reason}`);
+          else {
+            failedCloses.add(a.symbol);
+            this.log.warn(`close ${a.symbol} failed: ${res.reason}`);
+          }
         } else {
+          if (failedCloses.has(a.symbol)) { bumpBlock("close_failed"); continue; }
           if (a.side === "buy" && breakoutLongPositions.some(p => p.symbol === a.symbol)) {
             const freed = breakoutLongPositions.filter(p => p.symbol === a.symbol).reduce((s, p) => s + Math.abs(p.notional), 0);
             const closed = await closeBreakoutLong(BREAKOUT_LONG_PRIORITY, a.symbol);
@@ -2308,6 +2317,7 @@ export class MomentumEngine {
         }
       } catch (e: any) {
         this.log.error(`action ${a.type} ${a.symbol} threw: ${e.message}`);
+        if (a.type === "close") failedCloses.add(a.symbol);
         if (a.type === "open" && sleeve) sleeveOutput.recordOpenFailure(sleeve, e.message);
       }
     }
@@ -2328,7 +2338,7 @@ export class MomentumEngine {
       if (!remaining.some(p => p.symbol === symbol) && Number.isFinite(notionalUsd) && notionalUsd > 0 &&
           (this.cfg.maxGrossExposureMult === undefined || gross + notionalUsd <= equity * this.cfg.maxGrossExposureMult)) {
         try {
-          const res = await this.broker.openPosition({ symbol, side: "sell", notionalUsd, role: "breakout-short", breakout: { n: channel.state.n, stopN: bc.stopN, quantity: equity * bc.riskPerN / channel.state.n } });
+          const res = await this.broker.openPosition({ symbol, side: "sell", notionalUsd, role: "breakout-short", breakout: { n: channel.state.n, stopN: bc.stopN, quantity: equity * bc.riskPerN / channel.state.n, ...(bc.catastropheN !== undefined ? { catastropheN: bc.catastropheN } : {}) } });
           intendedOpenUsd += notionalUsd;
           if (res.ok) {
             if (bc.maxHoldHours !== undefined) {
@@ -2352,7 +2362,7 @@ export class MomentumEngine {
       if (!remaining.some(p => p.symbol === symbol) && Number.isFinite(notionalUsd) && notionalUsd > 0 &&
           (this.cfg.maxGrossExposureMult === undefined || gross + notionalUsd <= equity * this.cfg.maxGrossExposureMult)) {
         try {
-          const res = await this.broker.openPosition({ symbol, side: "buy", notionalUsd, role: "breakout-long", breakout: { n: channel.state.n, stopN: bl.stopN, quantity } });
+          const res = await this.broker.openPosition({ symbol, side: "buy", notionalUsd, role: "breakout-long", breakout: { n: channel.state.n, stopN: bl.stopN, quantity, ...(bl.catastropheN !== undefined ? { catastropheN: bl.catastropheN } : {}) } });
           intendedOpenUsd += notionalUsd;
           if (res.ok) {
             if (bl.maxHoldHours !== undefined) this.saveBreakoutLongState(symbol, { ...this.breakoutLongBySymbol[symbol], entryAt: now, aboveEntry: true });
@@ -2668,16 +2678,13 @@ export class MomentumEngine {
    * cfg.timeStop): close any held universe position whose clock anchor is
    * expired on the decision grid (holdExpired). Runs right after applyTrailStops, BEFORE the risk/
    * regime/kill-switch gates — an expired hold must close even while entries
-   * are blocked. A position with no anchor (opened before the feature/state
-   * existed, or state lost) is anchored at NOW and never fired on first
-   * sighting — conservative: it restarts the clock rather than fabricating
-   * an expiry we didn't measure (persistence makes this the rare path;
-   * normal deploys restore real anchors).
+   * are blocked. Recover a missing anchor from the row's entry time, so lost
+   * state cannot extend the owner's maximum hold. Only unknown ages use NOW.
    */
   private async applyTimeStops(now: number): Promise<RebalanceAction[]> {
     const cfg = this.cfg.timeStop!;
     const actions: RebalanceAction[] = [];
-    let positions: CurrentPosition[];
+    let positions: Awaited<ReturnType<MomentumBrokerAdapter["getOpenPositions"]>>;
     try {
       positions = await this.broker.getOpenPositions();
     } catch (e: any) {
@@ -2696,11 +2703,8 @@ export class MomentumEngine {
 
     for (const p of held) {
       const key = `${p.symbol}|${p.side}`;
-      const entryAt = this.entryMarks.get(key);
-      if (entryAt === undefined) {
-        this.entryMarks.set(key, now);
-        continue;
-      }
+      const entryAt = this.entryMarks.get(key) ?? (validRiskAnchor(p.entryTime, now) || now);
+      this.entryMarks.set(key, entryAt);
       if (!this.holdExpired(now, entryAt, cfg.maxHoldHours)) continue;
       const reason = `time stop: held ${((now - entryAt) / 3_600_000).toFixed(1)}h ${now - entryAt >= cfg.maxHoldHours * 3_600_000 ? ">=" : "~="} ${cfg.maxHoldHours}h`;
       try {

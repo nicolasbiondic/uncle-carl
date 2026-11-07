@@ -1,6 +1,9 @@
 #!/usr/bin/env bun
 // Geometry guard, not a pixel baseline. No DB/broker imports or instance data.
 // By default starts the visual harness with generated, synthetic fixtures.
+// Covers the Overview's five analytics tabs (Bot, Equity, Performance, Volume,
+// Activity), the P&L bridge and broker modals, the portfolio filter chip, and
+// every one of them in English AND Spanish (longer words are what overflow).
 // --ci: desktop Overview only; --sizes WxH,...: focused regression replay.
 // --base URL [--login]: live, read-only (only login/logout may mutate).
 // Screenshots + report.json: reports/dashboard-layout/ or --out DIR.
@@ -12,9 +15,13 @@ import { parseArgs } from "node:util";
 
 const { values } = parseArgs({ options: {
   base: { type: "string" }, login: { type: "boolean" }, ci: { type: "boolean" },
-  sizes: { type: "string" }, out: { type: "string" },
+  sizes: { type: "string" }, out: { type: "string" }, langs: { type: "string" },
 }, strict: true });
 const OUT = resolve(values.out || "reports/dashboard-layout");
+const LANGS = (values.langs || "en,es").split(",").map((l) => {
+  if (l !== "en" && l !== "es") throw new Error(`Invalid language: ${l}`);
+  return l;
+});
 const SIZES = (values.sizes || "1280x720,1366x768,1440x900,1747x892,1920x1080,2000x857,2560x1440,390x844")
   .split(",").map((s) => {
     if (!/^\d+x\d+$/.test(s)) throw new Error(`Invalid viewport: ${s}`);
@@ -87,14 +94,18 @@ function syntheticFixtures(dir: string) {
   save("trades", trades);
   const stats = { totalTrades: 60, closedTrades: 40, todayTrades: 8, winRate: 57,
     periodEquityPnl: 234.56, periodEquityPnlPct: 0.23 };
+  // One display-start object for "since start", the All tile and the cards (A-1).
+  const sinceStart = { pnl: 4_000, pnlPct: 4.17, equity: 100_000, endAt: now,
+    start: { at: now - 120 * 864e5, date: "2026-07-10", equity: 96_000, rebased: false } };
   save("profiles-7d", [{ id: "synthetic", pnlAggregate: {
-    equity: 100_000, periodPnl: 234.56, periodPnlPct: 0.23, pnl7d: 1234.56, pnl7dPct: 1.25,
+    equity: 100_000, periodPnl: 234.56, periodPnlPct: 0.23, pnl7d: 1234.56, pnl7dPct: 1.25, sinceStart, displayStart: sinceStart.start,
     periodRealized: 123.45, periodRealizedCount: 8, realized7d: 654.32, realized7dCount: 24,
     // Same-window bridge under each P&L tile (closes + positions == the headline); wide figures on purpose.
     periodBreakdown: { closedInWindow: -1234.56, positions: 1469.12, closesCount: 10, trimsCount: 8, startPrices: "bars" },
     breakdown7d: { closedInWindow: -2345.67, positions: 3580.23, closesCount: 48, trimsCount: 30, startPrices: "marks" },
   }, brokerAccounts: ["alpaca", "binance"].map((brokerId) => ({
     brokerId: `${brokerId}_main`, equity: 50_000, firstEquity: 48_000, stats,
+    sinceStart: { ...sinceStart, pnl: 2_000, equity: 50_000, start: { ...sinceStart.start, equity: 48_000 } },
     marginBreakdown: brokerId === "binance" ? { usdtFutures: 25_000, usdcFutures: 25_000 } : undefined,
     perAccountStats: Object.fromEntries(accounts.filter((a) => a.broker === brokerId).map((a) => [a.id, stats])),
   })) }]);
@@ -118,6 +129,18 @@ function syntheticFixtures(dir: string) {
   save("api-activity", trades.map((t) => ({ created_at: t.exitTime, account_id: t.accountId,
     message: `Synthetic close ${t.symbol}: confirmed fill (layout fixture)` })));
   save("api-ai-quorum-summary", { status: "none" });
+  // Volume tab: every row carries a long run of block reasons, the widest case.
+  save("api-funnel", { days: 7, accounts: defs.map(([id], i) => ({
+    accountId: id, passes: 168, universe: 8, signalsLong: 12 + i, signalsShort: 3, entries: 14, exits: 11,
+    blocks: { risk_gate: 12, regime: 7, market_trend: 5, gross_cap: 3, capacity: 2, no_slot: 4, open_failed: 1, breakout_short_close_failed: 1 },
+    lastBlockNote: null, slotsUsed: 6, slotsTotal: 8, liveOrders: 25 + i, liveOrdersPerDay: 3.6, designOpsPerDay: 0.4, designOrdersPerDay: 0.8,
+  })), totals: { liveOrdersPerDay: 14.4, designOrdersPerDay: 3.2 } });
+  save("api-analytics-slippage", { count: 120, p50: 2.1, p95: 9.4, meanLatencyMs: 380 });
+  // P&L bridge modal: wide figures on purpose.
+  save("api-v2-pnl-breakdown", { periodDays: 1, windowStart: now - 6 * 3600e3, pnl: 234.56, startPrices: "bars", realized: -11234.56,
+    count: 10, closesCount: 10, trimsCount: 8, earnedBefore: -9999.99, closedInWindow: -1234.56, openChange: 1000.12, openCount: 51, holding: 469.0, positions: 1469.12,
+    closes: Array.from({ length: 10 }, (_, i) => ({ accountId: "momentum_stocks", symbol: `DEMO${String(i + 1).padStart(3, "0")}`, kind: i % 3 ? "close" : "trim",
+      entryTime: now - 5 * 864e5, exitTime: now - 3600e3, quantity: 10, realized: -1234.5 - i * 100, earnedBefore: -999.9 - i * 90, inWindow: -234.6 - i * 10 })) });
   save("api-v2-sleeves-risk", { sleeves: [] });
   save("api-connections", { alpaca: { connected: true }, binance: { connected: true } });
   save("api-config-keys", {});
@@ -132,7 +155,11 @@ function syntheticFixtures(dir: string) {
 
 // Explicit exceptions: intentional hidden-scrollbar horizontal carousels.
 // Do NOT allow .scroll, #opsBody or #anBody: those must fit on desktop.
-const HORIZONTAL_ALLOWLIST = ["#newsScroll", ".nav", ".kpis", "#ticker"];
+// The KPI strip is NOT exempt on desktop: fit.js drops its sparklines and the
+// win rate before it would scroll, so a strip that still overflows is a failure.
+// Phones keep the strip's own sideways scroll (their page scrolls anyway).
+const DESKTOP_CAROUSELS = ["#newsScroll", ".nav", "#ticker"];
+const PHONE_CAROUSELS = [...DESKTOP_CAROUSELS, ".kpis"];
 function scrollContainers(allowlist: string[]) {
   const label = (el: Element) => el.tagName.toLowerCase() + (el.id ? "#" + el.id : "")
     + (typeof el.className === "string" && el.className.trim() ? "." + el.className.trim().split(/\s+/).slice(0, 3).join(".") : "");
@@ -212,24 +239,29 @@ async function main() {
       localStorage.setItem("uc4_tab", '"equity"');
     });
     try {
-      for (const viewport of SIZES) {
-        // Fresh SPA per size: opsTab is module-local, and hash navigation alone
-        // would carry the last viewport's Trades tab into the Positions check.
+      for (const viewport of SIZES) for (const lang of (viewport.width >= 981 && viewport.height >= 540 ? LANGS : LANGS.slice(0, 1))) {
+        // Fresh SPA per size and language: opsTab is module-local, and hash
+        // navigation alone would carry the last viewport's Trades tab into the
+        // Positions check.
         const page = activePage = await context.newPage();
         page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.addInitScript((l) => localStorage.setItem("uc4_lang", JSON.stringify(l)), lang);
         await page.setViewportSize(viewport);
         const desktop = viewport.width >= 981 && viewport.height >= 540;
-        const capture = async (view: string) => {
+        const suffix = lang === "en" ? "" : `-${lang}`;
+        const capture = async (name: string) => {
+          const view = name + suffix;
           await settle(page);
           const screenshot = `${viewport.width}x${viewport.height}-${view}.png`;
           await page.screenshot({ path: join(OUT, screenshot), fullPage: !desktop });
-          const scrollers = await page.evaluate(scrollContainers, HORIZONTAL_ALLOWLIST);
+          const scrollers = await page.evaluate(scrollContainers, desktop ? DESKTOP_CAROUSELS : PHONE_CAROUSELS);
           const failures = desktop ? scrollers.filter((s) => (s.element === "document" && s.y) || (s.x && !s.allowed))
             .map((s) => s.element) : [];
           report.push({ viewport: `${viewport.width}x${viewport.height}`, view, desktop, screenshot, scrollers, failures });
           for (const s of scrollers.filter((s) => s.x || s.y)) console.log(
             `${failures.includes(s.element) ? "FAIL" : desktop ? "INFO" : "PHONE"}\t${viewport.width}x${viewport.height}\t${view}\t${s.element}\t${s.x ? `${s.sw}/${s.cw}` : "—"}\t${s.y ? `${s.sh}/${s.ch}` : "—"}${s.allowed ? " (carousel)" : ""}`);
         };
+        const loaded = () => page.waitForFunction(() => document.querySelector("#anBody")?.textContent?.trim() !== "…");
         console.log("STATUS\tVIEWPORT\tVIEW\tELEMENT\tX scroll/client\tY scroll/client");
         await page.goto(`${base}/#/resumen`, { waitUntil: "networkidle" });
         await page.locator("#opsBody table tbody tr, #opsBody .empty").first().waitFor();
@@ -241,22 +273,49 @@ async function main() {
         if (!values.base && await page.locator("#opsBody table tbody tr.pos").count() !== 47) throw new Error("Synthetic Positions fixture did not render all 47 rows");
         // The Bot tab is the analytics card's default (what each portfolio is doing).
         await page.locator('[data-atab="bot"]').click();
-        await page.waitForFunction(() => document.querySelector("#anBody")?.textContent?.trim() !== "…");
+        await loaded();
         await page.locator("#anBody .bn-row, #anBody .empty, #anBody .bn-list").first().waitFor();
         await capture("positions-bot");
         await page.locator('[data-atab="equity"]').click();
         await page.locator(values.base ? "#eqChart canvas, #anBody .empty" : "#eqChart canvas").first().waitFor();
         await capture("positions-equity");
         await page.locator('[data-atab="performance"]').click();
-        await page.waitForFunction(() => document.querySelector("#anBody")?.textContent?.trim() !== "…");
+        await loaded();
         await page.locator(values.base ? "#anBody .sc-row, #anBody .empty" : "#anBody .sc-row").first().waitFor();
         if (!values.base && await page.locator("#anBody .sc-row").count() !== 4) throw new Error("Synthetic scorecard did not render all four sleeves");
         await capture("positions-performance");
+        // Volume: nine columns and prose in one of them; the table drops columns instead of scrolling.
+        await page.locator('[data-atab="volume"]').click();
+        await page.locator("#funnelBody table, #funnelBody .muted:not(:has-text('…'))").first().waitFor();
+        if (!values.base && await page.locator("#funnelBody tbody tr").count() !== 4) throw new Error("Synthetic Volume fixture did not render its four rows");
+        await capture("positions-volume");
+        await page.locator('[data-atab="activity"]').click();
+        await loaded();
+        await page.locator("#anBody .act-row, #anBody .empty").first().waitFor();
+        await capture("positions-activity");
+        // The P&L bridge modal (wide figures) and the broker modal, then the portfolio filter chip.
+        if (await page.locator('.kfig[data-act="pnl-why"]').count()) {
+          await page.locator('.kfig[data-act="pnl-why"]').first().click();
+          await page.locator(".pb-modal .pb-bridge, .pb-modal .empty:not(:has-text('Loading')):not(:has-text('Cargando'))").first().waitFor();
+          await capture("modal-pnl");
+          await page.keyboard.press("Escape");
+          await page.locator(".pb-modal").waitFor({ state: "detached" });
+        } else if (!values.base) throw new Error("Synthetic KPI strip has no clickable P&L figure");
+        if (await page.locator("[data-broker]").count()) {
+          await page.locator("[data-broker]").first().click();
+          await page.locator(".bm-modal .bm-row").first().waitFor();
+          await capture("modal-broker");
+          await page.locator(".bm-modal .bm-row").first().click();
+          await page.locator(".viewchip").waitFor();
+          await capture("positions-filtered");
+          await page.locator(".viewchip").click();
+          await page.locator(".viewchip").waitFor({ state: "detached" });
+        } else if (!values.base) throw new Error("Synthetic KPI strip has no broker cell");
         await page.locator('[data-opstab="trades"]').click();
         await page.locator("#opsBody table tbody tr, #opsBody .empty").first().waitFor();
         await capture("trades-performance");
         await page.locator('[data-atab="equity"]').click();
-        await page.waitForFunction(() => document.querySelector("#anBody")?.textContent?.trim() !== "…");
+        await loaded();
         await page.locator(values.base ? "#eqChart canvas, #anBody .empty" : "#eqChart canvas").first().waitFor();
         await capture("trades-equity");
         if (!values.ci) for (const view of ["portafolios", "actividad", "ajustes"]) {

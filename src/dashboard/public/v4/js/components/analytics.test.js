@@ -179,9 +179,10 @@ describe("scorecard — plain-language rows", () => {
     expect(html.replace(/title="[^"]*"/g, "")).not.toMatch(/Few weeks|Con pocas semanas/);
   });
 
-  test("insufficient data is a muted dash, with the escaped reason in its tooltip", () => {
+  test("insufficient data is a muted dash with a plain tooltip; the server's reason text is not printed", () => {
     const html = scorecard({ entities: [entity({ status: "insufficient_data", reason: 'Only 5 sessions, need 20 & "complete" days' })] });
-    expect(html).toContain('<span class="muted" title="Only 5 sessions, need 20 &amp; &quot;complete&quot; days">—</span>');
+    expect(html).toContain('<span class="muted" title="Not enough live data to evaluate the band">—</span>');
+    expect(html).not.toContain("Only 5 sessions");
     expect(html).not.toContain('class="mchip"');
     expect(html).not.toMatch(/>insufficient data<|>datos insuficientes</);
   });
@@ -199,7 +200,8 @@ describe("scorecard — plain-language rows", () => {
   test("other band states keep their bordered chips and titles", () => {
     for (const status of ["below", "within", "above", "unavailable"]) {
       const html = scorecard({ entities: [entity({ status, reason: "band reason" })] });
-      expect(html).toContain('class="mchip" title="band reason"');
+      expect(html).toContain('class="mchip"');
+      expect(html).not.toContain("band reason");
       expect(html).toContain("border-color:");
     }
   });

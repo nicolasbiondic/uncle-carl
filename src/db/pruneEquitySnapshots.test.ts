@@ -42,8 +42,9 @@ test("pruneEquitySnapshots keeps full-res recent + 1/hour older", () => {
   pruneEquitySnapshots(2);
 
   const rows = (db.prepare("SELECT snapshot_time FROM equity_snapshots WHERE profile_id=? ORDER BY snapshot_time ASC").all(P) as any[]).map(r => r.snapshot_time);
-  // 3 recent + 1 (earliest of the 5 same-hour) + 3 distinct-hour = 7
-  expect(rows.length).toBe(7);
+  // The last mark of the old ET day is also a money anchor.
+  expect(rows.length).toBe(8);
+  expect(rows).toContain(oldHour + 4 * 60_000);
   expect(rows).toContain(oldHour);              // baseline of the old hour kept
   expect(rows).not.toContain(oldHour + 60_000); // later same-hour rows pruned
   expect(rows.filter(t => t > now - 10 * 60_000).length).toBe(3); // recent intact

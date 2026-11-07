@@ -1,5 +1,5 @@
 import { store, t, sleeveLabel } from "../store.js";
-import { money, moneyCompact, pnlWhole, quantity, pctSigned, pnlColor, dur, num } from "../fmt.js";
+import { money, moneyCompact, pnlWhole, quantity, pctWhole, pnlColor, dur, num } from "../fmt.js";
 import { esc } from "../ui.js";
 import { renderTrades } from "./trades.js";
 
@@ -266,23 +266,26 @@ export function holdProgress(p, account, nowMs = Date.now()) {
   return { unit: "sessions", elapsed: sessions, limit: MAX_HOLD_SESSIONS, remaining: Math.max(0, MAX_HOLD_SESSIONS - sessions), dots: Math.min(HOLD_DOTS, sessions), closing: sessions >= MAX_HOLD_SESSIONS, heldMs };
 }
 
-/** "closes in 4 days" / "closes in 20 h" (crypto under a day) / "closing".
- *  Crypto days are rounded UP so dots + days always make 5. */
+/** "closes within 4 days" / "closes within 20 h" (crypto under a day) / "due to
+ *  close". The 5-day rule is a ceiling, not an appointment: the portfolio
+ *  engines also rotate their oldest lots earlier (maxHoldStagger), a stop can
+ *  close a position sooner, and weekdays stand in for NYSE sessions. Crypto
+ *  days are rounded UP so dots + days always make 5. */
 export function holdText(h) {
   if (!h) return "—";
-  if (h.closing) return t("closing", "cerrando");
+  if (h.closing) return t("due to close", "toca cerrar");
   if (h.unit === "hours" && h.remaining < 24) {
     const hrs = Math.max(1, Math.ceil(h.remaining));
-    return t(`closes in ${hrs} h`, `cierra en ${hrs} h`);
+    return t(`closes within ${hrs} h`, `cierra en ${hrs} h como máximo`);
   }
   const days = h.unit === "hours" ? Math.ceil(h.remaining / 24) : h.remaining;
-  return days === 1 ? t("closes in 1 day", "cierra en 1 día") : t(`closes in ${days} days`, `cierra en ${days} días`);
+  return days === 1 ? t("closes within 1 day", "cierra en 1 día como máximo") : t(`closes within ${days} days`, `cierra en ${days} días como máximo`);
 }
 
 function holdTitle(h) {
   if (!h) return t("Age unknown", "Antigüedad desconocida");
   const rule = h.unit === "hours" ? `${h.limit} h` : t(`${h.limit} sessions`, `${h.limit} sesiones`);
-  return `${t("Held", "Abierta")} ${dur(h.heldMs)} · ${t("limit", "límite")} ${rule} · ${t("every operation closes at 5 days (owner rule, 2026-10-26)", "toda operación cierra a los 5 días (regla del dueño, 2026-10-26)")}`;
+  return `${t("Held", "Abierta")} ${dur(h.heldMs)} · ${t("limit", "límite")} ${rule} · ${t("Your 5-day rule is the latest a position stays open; the bot can close it earlier (rotation, stop-loss).", "Tu regla de 5 días es lo máximo que una posición sigue abierta; el bot puede cerrarla antes (rotación, stop de pérdida).")}`;
 }
 
 function renderHold(h) {
@@ -308,6 +311,11 @@ function renderPnlBar(p, maxAbsPct) {
 }
 
 export function renderPositions(state, trades) {
+  // No answer yet is not "no positions": say it could not load.
+  if (!state.dashboard) {
+    return `<div class="empty"><div class="big">${t("Could not load the positions", "No se pudieron cargar las posiciones")}</div>
+      ${t("It will retry in a moment.", "Se reintentará en unos instantes.")}</div>`;
+  }
   const rawPos = state.dashboard?.portfolio?.positions || [];
   if (!rawPos.length) {
     // No open positions → surface recently closed trades so the tab is never a
@@ -358,7 +366,7 @@ export function renderPositions(state, trades) {
       <td class="opt3">${priced(p.avgEntryPrice) ? moneyCompact(p.avgEntryPrice) : "—"}</td>
       <td class="opt3">${priced(p.currentPrice) ? moneyCompact(p.currentPrice) : "—"}</td>
       <td>${priced(p.unrealizedPnl)
-        ? `${renderPnlBar(p, maxAbsPct)}<span style="color:${pnlColor(p.unrealizedPnl)}">${pnlWhole(p.unrealizedPnl)} <span class="muted">${pctSigned(p.unrealizedPnlPct)}</span></span>`
+        ? `${renderPnlBar(p, maxAbsPct)}<span style="color:${pnlColor(p.unrealizedPnl)}">${pnlWhole(p.unrealizedPnl)} <span class="muted">${priced(p.unrealizedPnlPct) ? pctWhole(p.unrealizedPnlPct) : "—"}</span></span>`
         : `<span class="muted" title="${esc(t("No price available — not counted in the total", "Sin precio disponible — no cuenta en el total"))}">—</span>`}</td>
       <td>${renderHold(holdProgress(p, acc, now))}</td>
       ${anyTp ? `<td class="opt1">${p.takeProfit ? moneyCompact(p.takeProfit) : "—"}</td>` : ""}
@@ -376,7 +384,7 @@ export function renderPositions(state, trades) {
       <th title="${esc(t("Quantity \u00d7 entry price — the $ actually deployed. \u2014 for COIN-M (contracts, not units)", "Cantidad \u00d7 precio de entrada — el $ realmente invertido. \u2014 en COIN-M (contratos, no unidades)"))}">${t("Notional", "Nocional")}</th>
       <th class="opt3">${t("Entry", "Entrada")}</th><th class="opt3">${t("Now", "Ahora")}</th>
       <th title="${esc(t("Unrealized P&L since entry (not this period's); the bar is the % move against the largest on screen", "P&L sin realizar desde la entrada (no el del período); la barra es el % frente al mayor en pantalla"))}">P&L</th>
-      <th title="${esc(t("Owner rule: every operation closes at 5 days — 5 NYSE sessions for stocks, 120 h for crypto. The dots fill with the position's age.", "Regla del dueño: toda operación cierra a los 5 días — 5 sesiones NYSE en acciones, 120 h en cripto. Los puntos se llenan con la antigüedad."))}">${t("Time", "Tiempo")}</th>
+      <th title="${esc(t("Your 5-day rule: no position stays open longer — 5 market sessions for stocks, 120 h for crypto — though the bot may close it earlier. The dots fill with the position's age.", "Tu regla de 5 días: ninguna posición sigue abierta más tiempo — 5 sesiones de mercado en acciones, 120 h en cripto — aunque el bot puede cerrarla antes. Los puntos se llenan con la antigüedad."))}">${t("Time", "Tiempo")}</th>
       ${anyTp ? `<th class="opt1">TP</th>` : ""}</tr></thead>
     <tbody>${body}</tbody>
     ${renderTotalsRow(pos, anyTp, anyShort)}</table></div>`;

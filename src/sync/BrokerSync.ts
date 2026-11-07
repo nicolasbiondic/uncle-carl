@@ -43,12 +43,29 @@ const SLEEVE_UNIVERSE_ALPACA = new Set<string>([
 ]);
 export const SLEEVE_UNIVERSE_BINANCE = new Set<string>(cryptoSymbols.map(s => s.symbol));
 
+// Symbols the LIVE portfolio-engine definitions trade beyond the static incumbent universes —
+// today SH, the RW8 risk-off hedge of momentum_stocks (B-4, 2026-11-07: SH was in no ownership
+// set, so an unrowed SH position was adopted under alpaca_main and the portfolio engine, which
+// adopts only rowless positions, could then buy the hedge a second time). index.ts registers
+// them from the registry definitions (portfolioEngineOwnedSymbols) BEFORE BrokerSync starts.
+const REGISTERED_SLEEVE_SYMBOLS: Record<"alpaca" | "binance", Set<string>> = { alpaca: new Set(), binance: new Set() };
+
+export function registerSleeveOwnedSymbols(venue: "alpaca" | "binance", symbols: Iterable<string>): void {
+  for (const s of symbols) REGISTERED_SLEEVE_SYMBOLS[venue].add(s);
+}
+
+/** TEST-ONLY: forget every registered symbol. */
+export function _resetRegisteredSleeveSymbolsForTests(): void {
+  REGISTERED_SLEEVE_SYMBOLS.alpaca.clear();
+  REGISTERED_SLEEVE_SYMBOLS.binance.clear();
+}
+
 /** True when `symbol` belongs to a live sleeve on `brokerId` (⇒ BrokerSync must
  *  not adopt it under *_main — the sleeve's own sync owns its reconciliation). */
 export function sleeveOwnsSymbol(brokerId: string, symbol: string): boolean {
   return brokerId.includes("alpaca")
-    ? SLEEVE_UNIVERSE_ALPACA.has(symbol)
-    : SLEEVE_UNIVERSE_BINANCE.has(symbol);
+    ? SLEEVE_UNIVERSE_ALPACA.has(symbol) || REGISTERED_SLEEVE_SYMBOLS.alpaca.has(symbol)
+    : SLEEVE_UNIVERSE_BINANCE.has(symbol) || REGISTERED_SLEEVE_SYMBOLS.binance.has(symbol);
 }
 
 export interface SyncResult {

@@ -76,6 +76,14 @@ describe("audience split — engineering noise can never reach the user chat", (
     expect(restart).toContain("sendOps(");
   });
 
+  test("F-11: the startup banner never claims positions/protections verified before the first sync", () => {
+    const src = readFileSync(join(import.meta.dir, "telegram-reporter.ts"), "utf8");
+    const at = src.indexOf("reinicio inesperado");
+    const banner = src.slice(src.lastIndexOf("sendOps(", at), src.indexOf("\n", at));
+    expect(banner).not.toMatch(/verificadas\./i);
+    expect(banner).toContain("primer sync");
+  });
+
   test("user-facing trading events still use the user chat: fills and closes", async () => {
     const src = readFileSync(join(import.meta.dir, "telegram-reporter.ts"), "utf8");
     const fills = src.slice(src.indexOf("EVENTS.ORDER_FILLED"), src.indexOf("EVENTS.POSITION_CLOSED"));
@@ -434,5 +442,61 @@ describe("scorecard band episodes are per MODEL VERSION (RW2 cutover 2026-10-23)
     // and the new model's own first 'below' pages once, as before
     const r2 = bandEpisodeTransitions(next, { "momentum_stocks@pe-vt15": "below" });
     expect(r2.transitions).toEqual([{ sleeve: "momentum_stocks@pe-vt15", kind: "entered_below" }]);
+  });
+});
+
+// F-3 (2026-11-07): poll() answered commands from ANY chat that found the bot — /status and /trades
+// leaked the book to strangers and a stranger's `/quiet on` silenced the owner's alerts.
+describe("poll() honors commands only from the configured chats", () => {
+  function pollingReporter(updates: Array<{ chat: string; text: string }>, chat: { chatId?: string; opsChatId?: string } = { chatId: "USER", opsChatId: "OPS" }) {
+    const reporter = new TelegramReporter();
+    (reporter as any).enabled = true;
+    (reporter as any).chatId = chat.chatId ?? "";
+    (reporter as any).opsChatId = chat.opsChatId ?? "";
+    const sent: any[] = [];
+    (reporter as any).apiCall = async (method: string, body: any) => {
+      if (method === "getUpdates") return { ok: true, result: updates.map((u, i) => ({ update_id: i + 1, message: { chat: { id: u.chat }, text: u.text, from: { first_name: "x" } } })) };
+      sent.push(body);
+      return { ok: true };
+    };
+    return { reporter, sent };
+  }
+
+  test("a stranger's /status, /trades and /quiet on are ignored: no reply, alerts stay unmuted; the owner's /status is answered", async () => {
+    const { reporter, sent } = pollingReporter([
+      { chat: "STRANGER", text: "/status" }, { chat: "STRANGER", text: "/trades" }, { chat: "STRANGER", text: "/quiet on" },
+      { chat: "USER", text: "/quiet" },
+    ]);
+    await (reporter as any).poll();
+    expect(sent.map(m => m.chat_id)).toEqual(["USER"]);          // only the owner's command was answered
+    expect(sent[0].text).toContain("quiet=off");                  // the stranger's /quiet on did not mute
+    expect((reporter as any).quiet).toBe(false);
+    expect((reporter as any).chatId).toBe("USER");                // no re-detection onto the stranger
+  });
+
+  test("the ops chat may command too; auto-detection happens only while no chat is configured", async () => {
+    const ops = pollingReporter([{ chat: "OPS", text: "/quiet on" }]);
+    await (ops.reporter as any).poll();
+    expect(ops.sent.map(m => m.chat_id)).toEqual(["OPS"]);
+    expect((ops.reporter as any).quiet).toBe(true);
+    const fresh = pollingReporter([{ chat: "FIRST", text: "/start" }, { chat: "SECOND", text: "/status" }], { chatId: "", opsChatId: "" });
+    await (fresh.reporter as any).poll();
+    expect((fresh.reporter as any).chatId).toBe("FIRST");           // first message adopts the chat…
+    expect(fresh.sent.map(m => m.chat_id)).toEqual(["FIRST"]);      // …and the second chat is already a stranger
+    const placeholder = pollingReporter([{ chat: "NEW", text: "/status" }], { chatId: "your_chat_id", opsChatId: "" });
+    await (placeholder.reporter as any).poll();
+    expect((placeholder.reporter as any).chatId).toBe("NEW");
+  });
+
+  test("ignored chats log once per chat per cooldown, never a line per message", async () => {
+    const { reporter } = pollingReporter([{ chat: "S1", text: "/status" }, { chat: "S1", text: "/trades" }, { chat: "S2", text: "/status" }]);
+    const lines: string[] = [];
+    const realWarn = console.warn, realLog = console.log;
+    console.warn = (...a: any[]) => lines.push(a.join(" "));
+    console.log = (...a: any[]) => lines.push(a.join(" "));
+    try { await (reporter as any).poll(); await (reporter as any).poll(); } finally { console.warn = realWarn; console.log = realLog; }
+    const ignored = lines.filter(l => l.includes("unauthorized chat"));
+    expect(ignored).toHaveLength(2); // S1 once, S2 once — across two polls
+    expect(ignored.some(l => l.includes("S1")) && ignored.some(l => l.includes("S2"))).toBe(true);
   });
 });

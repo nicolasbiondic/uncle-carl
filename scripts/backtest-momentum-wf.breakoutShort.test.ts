@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { SimBroker, dailyBarsFromBars, hashReplayConfig, runWithConfig } from "./backtest-momentum-wf";
 import { candidateToReplayConfig, canonicalJson, generateFolds, manifestIdentity, runLoo, runWalkForward, stitchedMetrics, validateCandidate, validateManifest, type ExperimentManifest } from "./walk-forward";
-import { MomentumEngine, turtleChannels, type BreakoutLongConfig, type BreakoutShortConfig, type MomentumBrokerAdapter, type MomentumEngineConfig } from "../src/strategies/momentum/MomentumEngine";
+import { MomentumEngine, turtleChannels, validateBreakoutShort, validateBreakoutLong, type BreakoutLongConfig, type BreakoutShortConfig, type MomentumBrokerAdapter, type MomentumEngineConfig } from "../src/strategies/momentum/MomentumEngine";
 import { INITIAL_RISK_STATE } from "../src/strategies/momentum/RiskGuard";
 import type { CurrentPosition } from "../src/strategies/momentum/Rebalancer";
 import { MemoryPersistence, silentLogger } from "../src/test-support/momentum";
@@ -471,6 +471,34 @@ describe("daily Turtle shorts (Q6, no historical trial)", () => {
 });
 
 describe("Turtle short: synthetic rules, gates and durable state", () => {
+  test("catastropheN is a validated live-only knob on both sides; no 2N strategy-exit change", async () => {
+    for (const catastropheN of [0, -1, NaN, Infinity, null, "3"]) {
+      expect(() => validateBreakoutShort({ ...knob, catastropheN })).toThrow();
+      expect(() => validateBreakoutLong({ ...knob, symbol: undefined, symbols: ["BTC/USD"], catastropheN })).toThrow();
+    }
+    const b = new Broker(), clock = new TestClock(T);
+    const e = new MomentumEngine({ ...cfg, breakoutShort: { ...knob, catastropheN: 4 } }, b, silentLogger, undefined, clock);
+    await e.tick();
+    expect(b.opens[0].breakout).toMatchObject({ n: 20, stopN: 2, catastropheN: 4 });
+    b.price = 129; clock.set(T + H); await e.tick(); // 2N, NOT 4N
+    expect(b.closes).toMatchObject([{ closeReason: "BREAKOUT_SHORT_STOP" }]);
+  });
+
+  test.each(["breakout-short", "breakout-long"] as const)("external catastrophe close resets %s unit age after restart; sustained breach cannot re-open", async role => {
+    const b = new Broker(), clock = new TestClock(T), store = new MemoryPersistence();
+    const leg = { symbols: ["BTC/USD"], entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120 };
+    const c: Partial<MomentumEngineConfig> = { ...cfg, risk: { ...risk, mode: "sizeOnly" },
+      breakoutShort: role === "breakout-short" ? leg : undefined, breakoutLong: role === "breakout-long" ? leg : undefined };
+    b.price = role === "breakout-short" ? 89 : 111;
+    await new MomentumEngine(c, b, silentLogger, store, clock).tick();
+    expect(b.opens).toHaveLength(1);
+    b.positions = []; // native fill + reconciler removed the row
+    clock.set(T + H);
+    await new MomentumEngine(c, b, silentLogger, store, clock).tick();
+    const state = role === "breakout-short" ? store.store!.breakoutBySymbol : store.store!.breakoutLongBySymbol;
+    expect(state!["BTC/USD"].entryAt).toBeUndefined();
+    expect(b.opens).toHaveLength(1);
+  });
   test.each([
     { previousPrice: 89, price: 89, belowEntry: false, belowEntryDays: undefined, opens: 0 },
     { previousPrice: 90, price: 89, belowEntry: true, belowEntryDays: undefined, opens: 1 },

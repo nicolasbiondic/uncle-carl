@@ -6,7 +6,8 @@
 import { describe, test, expect, beforeAll, beforeEach } from "bun:test";
 import { countExecutedOrders, getDB, PORTFOLIO_ENGINE_STRATEGY } from "../../db/database";
 import { makeTestDb, seedOpenTrade } from "../../test-support/db";
-import { PortfolioEngine, type PortfolioEngineOptions } from "./PortfolioEngine";
+import { PortfolioEngine, HEARTBEAT_GRACE_TICKS, type PortfolioEngineOptions } from "./PortfolioEngine";
+import { HeartbeatRegistry } from "../../ops/heartbeat";
 import { HistoricalPriceView } from "./priceView";
 import { getPortfolioDecision, latestPortfolioMemory, listPortfolioDecisions, savePortfolioDecision } from "./persistence";
 import { portfolioClientOrderId } from "./clientOrderId";
@@ -321,6 +322,44 @@ describe("MAX_HOLD with the real Alpaca venue", () => {
   });
 });
 
+describe("a BUY whose cancel never settles (real Alpaca venue)", () => {
+  // B-6: before, the partial was applied and the order marked applied; the late fill became
+  // "excess not ours" at the broker and the sleeve bought the symbol again.
+  test("the pass fails with the buy unapplied and no row; a restart resumes the SAME id and applies the late fill once", async () => {
+    const venue = new FakeVenue();
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    const book = new Map<string, any>();
+    const state = { t: 0, settled: false };
+    const real = new AlpacaVenue({ isConnected: () => true, getPositions: async () => [], getLatestPrice: async () => 500 }, {
+      createOrder: async p => {
+        const id = String(p.client_order_id);
+        if (book.has(id)) throw Object.assign(Error("duplicate client_order_id"), { status: 422 });
+        const o = { id, status: "accepted", filled_qty: "0", filled_avg_price: null };
+        book.set(id, o);
+        return o;
+      },
+      getOrder: async id => book.get(id),
+      getOrderByClientId: async id => book.get(id),
+      cancelOrder: async id => { const o = book.get(id); Object.assign(o, state.settled ? { status: "filled", filled_qty: "10", filled_avg_price: "500" } : { status: "pending_cancel", filled_qty: "4", filled_avg_price: "500" }); },
+    }, { fillTimeoutMs: 1_000, pollIntervalMs: 1_000, releaseConfirmTimeoutMs: 2_000, sleep: async ms => { state.t += ms; }, now: () => state.t });
+    venue.submit = async (order, id) => { venue.submits.push({ order, clientOrderId: id }); return real.submit(order, id); };
+    const opts: Partial<PortfolioEngineOptions> = { decide: fixedDecide({ SPY: 0.5 }) };
+    expect((await engine(venue, opts, histDb()).runSession(WINDOW)).status).toBe("failed");
+    expect(rows()).toEqual([]); // the 4-share partial of a still-working order is NOT booked
+    const journal = getPortfolioDecision(SLEEVE, VERSION, SESSION)!;
+    expect(journal.status).toBe("decided");
+    expect(journal.orders[0]).toMatchObject({ applied: false, result: { status: "unknown", filledQty: 0 } });
+    expect(journal.orders[0].result!.error).toContain("still working");
+    // The order filled fully after the cancel ACK; the restart resumes with the same id.
+    Object.assign(book.get(journal.orders[0].clientOrderId!), { status: "filled", filled_qty: "10", filled_avg_price: "500" });
+    expect((await engine(venue, opts, histDb()).runSession(WINDOW)).status).toBe("resumed");
+    expect(venue.submits.map(s => s.clientOrderId)).toEqual([journal.orders[0].clientOrderId!, journal.orders[0].clientOrderId!]);
+    expect(rows().map(r => [r.symbol, r.quantity])).toEqual([["SPY", 10]]);
+    expect((await engine(venue, opts, histDb()).runSession(WINDOW)).status).toBe("already_done");
+    expect(rows()[0].quantity).toBe(10);
+  });
+});
+
 describe("broker = truth", () => {
   test("broker holds less than the row → the row shrinks before the decision; more → untouched and reported", async () => {
     seedOpenTrade("pf_spy", SLEEVE, { symbol: "SPY", strategy: PORTFOLIO_ENGINE_STRATEGY, entryPrice: 400, quantity: 10 });
@@ -374,6 +413,106 @@ describe("stale data", () => {
     expect(rep2.status).toBe("submitted");
     expect(venue.submits).toHaveLength(2);
     expect(listPortfolioDecisions(SLEEVE)).toHaveLength(1); // same key, overwritten
+  });
+
+  // B-7 (2026-11-07): the five-session rule used to depend on the 04:00 data refresh — a stale
+  // pass skipped the MAX_HOLD closes too.
+  describe("closes-only on stale data", () => {
+    const config: VolManagedConfig = { kind: "volManaged", universe: ["SPY"], inceptionGuardBars: 20, volLookback: 20, covLookback: 20,
+      portfolioVolTarget: 0.15, annualization: 252, perAssetCap: 1, maxGross: 1, maxHoldSessions: 5, maxHoldStagger: true };
+    const STALE_CID = portfolioClientOrderId(SLEEVE, SESSION, "SPY", "stale-close");
+    const stale = () => histDb("2026-10-16", ["SPY"]);
+    const freshDb = () => histDb(AS_OF, ["SPY"]);
+    function setup(expired = true) {
+      seedOpenTrade("lot", SLEEVE, { symbol: "SPY", strategy: PORTFOLIO_ENGINE_STRATEGY, entryPrice: 500, quantity: 4,
+        entryTime: Date.parse(expired ? "2026-10-12T14:00:00Z" : "2026-10-16T14:00:00Z") });
+      const venue = new FakeVenue();
+      venue.positions_ = [{ symbol: "SPY", qty: 4, avgEntryPrice: 500 }];
+      venue.prices_ = { SPY: 510 };
+      return venue;
+    }
+    const opts = (over: Partial<PortfolioEngineOptions> = {}): Partial<PortfolioEngineOptions> => ({ config, decide: coreDecide, ...over });
+
+    test("stale + expired lot → the MAX_HOLD close is sent with its own id, no rebuy; the record stays skipped_stale; a repeat stale tick resends nothing", async () => {
+      const venue = setup();
+      const e = engine(venue, opts(), stale());
+      const rep = await e.runSession(WINDOW);
+      expect(rep.status).toBe("skipped_stale");
+      expect(venue.submits.map(s => [s.clientOrderId, s.order.side, s.order.maxHold, s.order.qty])).toEqual([[STALE_CID, "sell", "close", 4]]);
+      expect(row("SPY")).toMatchObject({ status: "closed", close_reason: "MAX_HOLD" });
+      expect(rows()).toEqual([]); // closes only: nothing bought back on stale data
+      const rec = getPortfolioDecision(SLEEVE, VERSION, SESSION)!;
+      expect(rec.status).toBe("skipped_stale");
+      expect(rec.orders).toHaveLength(1);
+      expect(rec.orders[0]).toMatchObject({ clientOrderId: STALE_CID, applied: true, result: { ok: true, filledQty: 4 } });
+      expect(e.alerts).toHaveLength(1);
+      expect(e.alerts[0]).toContain("1 MAX_HOLD close(s) sent anyway");
+      expect((await e.runSession(WINDOW)).status).toBe("skipped_stale");
+      expect((await engine(venue, opts(), stale()).runSession(WINDOW)).status).toBe("skipped_stale"); // restart, still stale
+      expect(venue.submits).toHaveLength(1);
+      expect(e.alerts).toHaveLength(1);
+    });
+
+    test("a lot that is not expired is left alone on stale data", async () => {
+      const venue = setup(false);
+      expect((await engine(venue, opts(), stale()).runSession(WINDOW)).status).toBe("skipped_stale");
+      expect(venue.submits).toHaveLength(0);
+      expect(row("SPY").status).toBe("open");
+    });
+
+    test("fresh data later in the session → the normal pass decides on the remaining book: no second close, the stale fill stays in the journal", async () => {
+      const venue = setup();
+      await engine(venue, opts(), stale()).runSession(WINDOW);
+      const rep = await engine(venue, opts(), freshDb()).runSession(WINDOW);
+      expect(rep.status).toBe("submitted");
+      expect(venue.submits.filter(s => s.order.side === "sell")).toHaveLength(1);
+      expect(venue.submits.filter(s => s.order.side === "buy").length).toBeGreaterThan(0); // re-entered at the design's weight, new lot
+      expect(row("SPY")).toMatchObject({ status: "open", entry_time: NOW });
+      const rec = getPortfolioDecision(SLEEVE, VERSION, SESSION)!;
+      expect(rec.status).toBe("submitted");
+      expect(rec.orders[0]).toMatchObject({ clientOrderId: STALE_CID, applied: true });
+      expect(rec.orders.filter(o => o.intent.maxHold === "close")).toHaveLength(1);
+      expect(countExecutedOrders(NOW - 1, NOW, SLEEVE)).toBe(venue.submits.length);
+      expect((await engine(venue, opts(), freshDb()).runSession(WINDOW)).status).toBe("already_done");
+    });
+
+    test("another version the same session is not blocked by the closes-only record and never resends the close", async () => {
+      const venue = setup();
+      await engine(venue, opts(), stale()).runSession(WINDOW);
+      const rep = await engine(venue, opts({ strategyVersion: "new-version" }), freshDb()).runSession(WINDOW);
+      expect(rep.status).toBe("submitted");
+      expect(venue.submits.filter(s => s.order.side === "sell")).toHaveLength(1);
+      expect(getPortfolioDecision(SLEEVE, "new-version", SESSION)!.status).toBe("submitted");
+    });
+
+    test("venue outcome unknown during the stale close → failed, journal unapplied; a restart (still stale) resumes the SAME id once; fresh data then decides", async () => {
+      const venue = setup();
+      venue.behavior.SPY = { kind: "throw", error: "socket hang up" };
+      expect((await engine(venue, opts(), stale()).runSession(WINDOW)).status).toBe("failed");
+      const rec = getPortfolioDecision(SLEEVE, VERSION, SESSION)!;
+      expect(rec.status).toBe("skipped_stale");
+      expect(rec.orders[0]).toMatchObject({ clientOrderId: STALE_CID, applied: false, result: { status: "unknown" } });
+      expect(row("SPY").status).toBe("open");
+      venue.behavior = {};
+      expect((await engine(venue, opts(), stale()).runSession(WINDOW)).status).toBe("skipped_stale");
+      expect(venue.submits.map(s => s.clientOrderId)).toEqual([STALE_CID, STALE_CID]); // same id, venue dedups
+      expect(row("SPY")).toMatchObject({ status: "closed", close_reason: "MAX_HOLD" });
+      expect((await engine(venue, opts(), freshDb()).runSession(WINDOW)).status).toBe("submitted");
+      expect(venue.submits.filter(s => s.order.side === "sell")).toHaveLength(2); // the two attempts of ONE order
+      expect(countExecutedOrders(NOW - 1, NOW, SLEEVE)).toBe(venue.submits.length - 1);
+    });
+
+    test("fresh data arriving while a stale close is still unsettled: the close is finished first, then the pass decides", async () => {
+      const venue = setup();
+      venue.behavior.SPY = { kind: "throw", error: "socket hang up" };
+      expect((await engine(venue, opts(), stale()).runSession(WINDOW)).status).toBe("failed");
+      venue.behavior = {};
+      const rep = await engine(venue, opts(), freshDb()).runSession(WINDOW);
+      expect(rep.status).toBe("submitted");
+      expect(venue.submits.filter(s => s.order.side === "sell").map(s => s.clientOrderId)).toEqual([STALE_CID, STALE_CID]);
+      expect(getPortfolioDecision(SLEEVE, VERSION, SESSION)!.orders[0]).toMatchObject({ clientOrderId: STALE_CID, applied: true });
+      expect(row("SPY")).toMatchObject({ status: "open", entry_time: NOW });
+    });
   });
 
   test("one missing symbol is tolerated when maxStaleSymbols allows it", async () => {
@@ -528,6 +667,38 @@ describe("trading kill-switch and stops", () => {
     expect(rep.orders.find(o => o.intent.symbol === "SPY")!.skipped).toBe("trading_disabled");
   });
 
+  // B-2 (2026-11-07): the account-identity halt (instanceManifest → RiskEngine HALTED) only reached
+  // the incumbents through SwitchingAdapter; the portfolio engine — the whole Alpaca book — kept buying.
+  for (const state of ["HALTED", "REDUCING"] as const) test(`RiskEngine ${state} skips every buy of the pass with its own code; sells and MAX_HOLD closes still go`, async () => {
+    seedOpenTrade("pf_tlt", SLEEVE, { symbol: "TLT", strategy: PORTFOLIO_ENGINE_STRATEGY, entryPrice: 90, quantity: 10 });
+    const venue = new FakeVenue();
+    venue.positions_ = [{ symbol: "TLT", qty: 10, avgEntryPrice: 90 }];
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    const e = engine(venue, { decide: fixedDecide({ SPY: 0.5, GLD: 0.1 }), tradingState: () => state });
+    const rep = await e.runSession(WINDOW);
+    expect(rep.status).toBe("submitted");
+    expect(venue.submits.map(s => s.order.side)).toEqual(["sell"]);
+    const code = state === "HALTED" ? "risk_engine_halted" : "risk_engine_reducing";
+    expect(rep.orders.filter(o => o.intent.side === "buy").map(o => o.skipped)).toEqual([code, code]);
+    expect(rep.orders.find(o => o.intent.side === "sell")!.applied).toBe(true);
+    expect(getPortfolioDecision(SLEEVE, VERSION, SESSION)!.orders.filter(o => o.skipped === code)).toHaveLength(2);
+    expect(rows().map(r => r.symbol)).toEqual([]); // TLT sold, nothing bought
+  });
+
+  test("a MAX_HOLD close is sent while HALTED; its rebuy is skipped by the halt, not by an incomplete close", async () => {
+    seedOpenTrade("expired", SLEEVE, { symbol: "SPY", strategy: PORTFOLIO_ENGINE_STRATEGY, entryPrice: 500, quantity: 4, entryTime: Date.parse("2026-10-12T14:00:00Z") });
+    const venue = new FakeVenue();
+    venue.positions_ = [{ symbol: "SPY", qty: 4, avgEntryPrice: 500 }];
+    venue.prices_ = { SPY: 500 };
+    const config: VolManagedConfig = { kind: "volManaged", universe: ["SPY"], inceptionGuardBars: 20, volLookback: 20, covLookback: 20,
+      portfolioVolTarget: 0.15, annualization: 252, perAssetCap: 1, maxGross: 1, maxHoldSessions: 5 };
+    const rep = await engine(venue, { config, decide: coreDecide, tradingState: () => "HALTED" }, histDb(AS_OF, ["SPY"])).runSession(WINDOW);
+    expect(rep.status).toBe("submitted");
+    expect(venue.submits.map(s => `${s.order.side}:${s.order.maxHold}`)).toEqual(["sell:close"]);
+    expect(row("SPY")).toMatchObject({ status: "closed", close_reason: "MAX_HOLD" });
+    expect(rep.orders.find(o => o.intent.maxHold === "rebuy")!.skipped).toBe("risk_engine_halted");
+  });
+
   test("designs with stops: re-decide on the actual book after fills and sync the venue's stops", async () => {
     const venue = new FakeVenue("binance_usdm", { withStops: true });
     venue.prices_ = { BTC: 60_000, ETH: 3_000 };
@@ -601,6 +772,20 @@ describe("tick() scheduling", () => {
     expect(prior.status).toBe("decided");
     expect(prior.orders.map(o => o.applied)).toEqual([true, false]);
     expect(prior.note).toContain("market closed");
+    // The next session (even after a version change/restart) retires the old
+    // journal, not its unsent order ids. Today's target is decided afresh.
+    venue.submit = submit;
+    now = Date.parse("2026-10-21T14:00:00Z");
+    const next = engine(venue, { now: () => now, strategyVersion: "next-version" }, histDb(SESSION));
+    expect((await next.tick()).status).toBe("submitted");
+    const ended = getPortfolioDecision(SLEEVE, VERSION, SESSION)!;
+    expect(ended.status).toBe("submitted");
+    expect(ended.note).toContain("session ended with 1 unsent order(s)");
+    expect(ended.orders[0]).toEqual(prior.orders[0]);
+    expect(ended.orders[1]).toMatchObject({ applied: false, skipped: "session_ended", result: null });
+    expect(venue.submits.slice(1).every(s => s.clientOrderId !== prior.orders[1].clientOrderId)).toBe(true);
+    expect((await next.tick()).status).toBe("already_done");
+    expect(getPortfolioDecision(SLEEVE, VERSION, SESSION)).toEqual(ended);
   });
 
   test("not due → beats and does nothing; due → runs once per session, later ticks are already_done", async () => {
@@ -616,6 +801,31 @@ describe("tick() scheduling", () => {
     expect(venue.submits).toHaveLength(2);
     now = Date.parse("2026-10-24T14:00:00Z"); // Saturday
     expect((await e.tick()).status).toBe("not_due");
+  });
+
+  // F-7 / B-10 (2026-11-07): registered at 24 h × 5 grace, a stopped timer went unnoticed for ~5 days.
+  test("heartbeat at the tick cadence: every tick beats (not_due included), a failed pass is alive-but-failing, ~10 min of silence is stale", async () => {
+    const venue = new FakeVenue();
+    venue.prices_ = { SPY: 500, TLT: 90, GLD: 200 };
+    let now = Date.parse("2026-10-20T13:00:00Z"); // 09:00 ET — not due
+    const registry = new HeartbeatRegistry(() => now);
+    const e = engine(venue, { now: () => now, heartbeats: registry, tickMs: 60_000 });
+    e.start(); e.stop(); // start() registers; stop() clears the timers (the test drives tick() itself)
+    const status = () => registry.snapshot().find(h => h.name === "portfolio:momentum_stocks")!;
+    expect(status()).toMatchObject({ expectedIntervalMs: 60_000, stale: false });
+    now += 60_000 * (HEARTBEAT_GRACE_TICKS + 1);
+    expect(status().stale).toBe(true);                       // silent for 11 ticks → stale
+    expect((await e.tick()).status).toBe("not_due");
+    expect(status()).toMatchObject({ stale: false, ageMs: 0 });  // a not_due tick beats
+    now = Date.parse("2026-10-20T13:36:00Z");
+    venue.positions = async () => { throw new Error("broker down"); };
+    expect((await e.tick()).status).toBe("failed");
+    expect(status()).toMatchObject({ stale: false, consecutiveFailures: 1 }); // alive, dependency failing
+    venue.positions = FakeVenue.prototype.positions;
+    expect((await e.tick()).status).toBe("submitted");
+    expect(status()).toMatchObject({ stale: false, consecutiveFailures: 0 });
+    expect((await e.tick()).status).toBe("already_done");
+    expect(status().ageMs).toBe(0);
   });
 
   test("a failing pass pages after failPageAfter consecutive failures, once per session", async () => {

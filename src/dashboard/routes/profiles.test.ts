@@ -226,8 +226,9 @@ describe("GET /api/v2/sleeves/risk", () => {
     expect(s.realizedPnl).toBe(-120);
     // No state file for the sleeve — DD must be null, never fabricated.
     expect(s.drawdown.currentPct).toBeNull();
-    expect(s.drawdown.softPct).toBeCloseTo(0.10, 6);
-    expect(s.drawdown.hardPct).toBeCloseTo(0.20, 6);
+    expect(s.riskMode).toBe("sizeOnly");
+    expect(s.drawdown.softPct).toBeNull();
+    expect(s.drawdown.hardPct).toBeNull();
   });
 
   test("a running sleeve with no circuit entry defaults to not-paused, mode=live", async () => {

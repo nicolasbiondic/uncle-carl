@@ -8,12 +8,14 @@
 //   - client_order_id idempotency: a 422 naming the field means the order
 //     already exists → query it by client id, never resend;
 //   - a fill that is still working after `fillTimeoutMs` cancels the
-//     REMAINDER by order id (cancelOrder) and reports what filled. NEVER a
-//     full-position DELETE /v2/positions/{symbol}: that liquidates the
-//     account's aggregate (AGENTS.md "Alpaca close semantics") and this bot's
-//     two stock sleeves share one wallet;
-//   - MAX_HOLD closes allow 180 s for paper fills and confirm cancellation
-//     before returning a remainder for the engine's bounded same-pass retry;
+//     REMAINDER by order id (cancelOrder), waits (bounded) until the venue
+//     reports the order TERMINAL and reports what filled; an order still
+//     working after that throws, so the engine's journal stays unapplied and
+//     the same client id resumes next tick. NEVER a full-position
+//     DELETE /v2/positions/{symbol}: that liquidates the account's aggregate
+//     (AGENTS.md "Alpaca close semantics") and this bot's two stock sleeves
+//     share one wallet;
+//   - MAX_HOLD closes allow 180 s for paper fills before that cancel;
 //   - positions and latest prices read through the executor (its limiter,
 //     its cache, its symbol normalization);
 //   - rules: fractional, min notional 5 USD (RW manifest), band from the design.
@@ -210,15 +212,18 @@ export class AlpacaVenue implements VenueAdapter {
   }
 
   async submit(order: OrderIntent, clientOrderId: string): Promise<OrderResult> {
-    if (order.side !== "buy") {
-      const result = await this.submitOrder(order, clientOrderId);
-      // A cancel ACK is not settlement. An unknown/working order can still fill:
-      // leave the engine journal unapplied and recover the SAME id next tick.
-      if (order.maxHold === "close" && (result.status === "unknown" || (result.brokerOrderId && !ALPACA_TERMINAL_STATUSES.has(result.status)))) {
-        throw new Error(`${order.symbol}: close order ${result.brokerOrderId ?? clientOrderId} still working or unknown (${result.error ?? result.status})`);
-      }
-      return result;
+    const result = order.side !== "buy" ? await this.submitOrder(order, clientOrderId) : await this.submitBuySerialized(order, clientOrderId);
+    // A cancel ACK is not settlement, for EVERY order (B-6, 2026-11-07 — it used to hold for
+    // MAX_HOLD closes only: a buy reported "still working" was applied as its partial and a
+    // late fill became shares no sleeve owned). An unknown/working order can still fill:
+    // leave the engine journal unapplied and recover the SAME client id next tick.
+    if (result.status === "unknown" || (result.brokerOrderId && !ALPACA_TERMINAL_STATUSES.has(result.status))) {
+      throw new Error(`${order.symbol}: ${order.side} order ${result.brokerOrderId ?? clientOrderId} still working or unknown (${result.error ?? result.status})`);
     }
+    return result;
+  }
+
+  private async submitBuySerialized(order: OrderIntent, clientOrderId: string): Promise<OrderResult> {
     const previous = AlpacaVenue.buys.get(this.executor) ?? Promise.resolve();
     let release!: () => void;
     const next = new Promise<void>(resolve => { release = resolve; });
@@ -335,11 +340,13 @@ export class AlpacaVenue implements VenueAdapter {
       if (!orderId) break;
       try { latest = await this.client.getOrder(orderId); } catch (e: any) { log.warn(`poll ${orderId}: ${e?.message ?? e}`); }
     }
-    // Still working: cancel the REMAINDER by order id (never the position).
+    // Still working: cancel the REMAINDER by order id (never the position), then wait — bounded —
+    // for the venue to report it TERMINAL: a 204 on DELETE is an ACK, the order is `pending_cancel`
+    // and may still fill. Same loop for every order; submit() throws if it never settles.
     if (orderId) {
       try { await this.client.cancelOrder(orderId); log.warn(`${order.symbol}: order ${orderId} timed out — remainder cancel requested`); }
       catch (e: any) { log.warn(`${order.symbol}: cancel ${orderId} failed (${e?.message ?? e}) — reading final state`); }
-      const deadline = now() + (mandatoryClose ? (this.opts.releaseConfirmTimeoutMs ?? 20_000) : 0);
+      const deadline = now() + (this.opts.releaseConfirmTimeoutMs ?? 20_000);
       do {
         await this.sleep(this.opts.settleMs ?? 1_000);
         try { latest = await this.client.getOrder(orderId); } catch (e: any) { log.warn(`final read ${orderId}: ${e?.message ?? e}`); }

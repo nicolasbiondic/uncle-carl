@@ -163,8 +163,8 @@ describe("equityTickLabel — the label follows the tick type, not the window (p
     const morning = Date.UTC(2026, 9, 1, 14, 0), dayStart = Date.UTC(2026, 9, 1, 4, 0);
     expect(equityTickLabel(dayStart, 2, 7, "es-ES")).not.toBe(equityTickLabel(morning, 3, 7, "es-ES"));
   });
-  test("crosshair label carries the date and the time except on Today", () => {
-    expect(crosshairTimeLabel(ts, 7, "en-US")).toBe("Oct 1 14:00");
-    expect(crosshairTimeLabel(ts, 1, "en-US")).toBe("14:00");
+  test("crosshair label carries the date and the time except on Today, and names the zone", () => {
+    expect(crosshairTimeLabel(ts, 7, "en-US")).toBe("Oct 1 14:00 ET");
+    expect(crosshairTimeLabel(ts, 1, "en-US")).toBe("14:00 ET");
   });
 });

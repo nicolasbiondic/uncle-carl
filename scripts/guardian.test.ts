@@ -54,7 +54,7 @@ function fixture() {
       entry_time: NOW - HOUR, exit_time: null, strategy: "MOMENTUM", status: "open", close_reason: null, ...overrides };
     db.query("INSERT INTO trades VALUES (?,?,?,?,?,?,?,?,?,?)").run(...Object.values(r));
   }
-  const run = (overrides: Partial<Parameters<typeof evaluateGuardian>[0]> = {}) => evaluateGuardian({ db, hist, now: NOW, root, noBroker: true, ...overrides });
+  const run = (overrides: Partial<Parameters<typeof evaluateGuardian>[0]> = {}) => evaluateGuardian({ db, hist, now: NOW, root, noBroker: true, cronMarkerDir: join(dir, "cron-markers"), cronTz: "Etc/GMT+5", ...overrides });
   return { dir, path, histPath, db, hist, trade, decision, run, close() { db.close(); hist.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 const findings = (r: GuardianResult, check: string) => r.violations.filter(f => f.check === check);
@@ -62,6 +62,50 @@ function closeOrder(qty = 10, filled = 0, id = "close") {
   return { intent: { symbol: "ABBV", side: "sell", qty, maxHold: "close" }, clientOrderId: id,
     result: { ok: filled === qty, filledQty: filled, status: filled === qty ? "filled" : "canceled" }, applied: true };
 }
+
+describe("G7 — cron dead-man's switch (audit F-2)", () => {
+  const mark = (dir: string, name: string, ms: number) => {
+    Bun.spawnSync(["mkdir", "-p", join(dir, "cron-markers")]);
+    writeFileSync(join(dir, "cron-markers", name), `${Math.floor(ms / 1000)}\n`);
+  };
+  test("not initialised (no .since) ⇒ evaluated, nothing stale", async () => {
+    const f = fixture();
+    try {
+      const r = await f.run();
+      expect(r.evaluated).toContain("G7"); expect(findings(r, "G7")).toEqual([]);
+    } finally { f.close(); }
+  });
+  test("an overdue job pages G7:<job>; fresh jobs and the guardian's own marker are not judged here", async () => {
+    const f = fixture();
+    try {
+      // NOW = 2026-11-02 11:00 host time (UTC−5, Mon). Tracking since a week ago; only backup and refresh ran today.
+      mark(f.dir, ".since", NOW - 7 * 24 * HOUR);
+      mark(f.dir, "backup-db.ok", NOW - 6 * HOUR);           // 05:00 today ✓
+      mark(f.dir, "refresh-historical.ok", NOW - 6.5 * HOUR); // 04:30 today ✓
+      mark(f.dir, "refresh-stocks.ok", NOW - 6.5 * HOUR);
+      mark(f.dir, "parity-check.ok", NOW - 50 * HOUR);        // Sat 09:00 ✓ (Mon is not a parity day)
+      mark(f.dir, "ai-quorum-stocks.ok", NOW - 66 * HOUR);   // Fri 17:00 ✓
+      mark(f.dir, "ai-quorum-crypto.ok", NOW - 40 * HOUR);   // Sat 19:00: Sunday's run is missing ✗
+      mark(f.dir, "restore-drill.ok", NOW - 29 * HOUR);      // Sun 06:00 ✓
+      const r = await f.run();
+      expect(findings(r, "G7").map(v => v.key)).toEqual(["G7:ai-quorum-crypto"]);
+      expect(findings(r, "G7")[0].message).toContain("cron ai-quorum-crypto");
+      // and it rides the existing once-per-episode machinery
+      const first = episodeTransitions(emptyState(), r, NOW);
+      expect(first.events).toEqual([expect.stringContaining("GUARDIAN PAGE G7:ai-quorum-crypto")]);
+      expect(episodeTransitions(first.state, r, NOW + HOUR).events).toEqual([]);
+    } finally { f.close(); }
+  });
+  test("historical --now runs skip G7 (markers are not historical)", async () => {
+    const f = fixture();
+    try {
+      mark(f.dir, ".since", NOW - 7 * 24 * HOUR);
+      const r = await f.run({ historical: true, configs });
+      expect(r.evaluated).not.toContain("G7");
+      expect(r.reports.join("\n")).toContain("G7 skipped");
+    } finally { f.close(); }
+  });
+});
 
 describe("guardian runtime rules (readonly synthetic fixtures)", () => {
   test("healthy fixture, readonly handles, G6 uses executed-order accounting and restart events (REPORT only)", async () => {
@@ -333,14 +377,14 @@ test("broker-truth import stays inert; shared readers are signed GET-only and CL
   expect(after.split("\n").filter(l => l.includes("console.log("))).toHaveLength(13);
 });
 
-test("cron installs guardian hourly at :20 exactly once; wrapper resolves bun and propagates status/overrides", () => {
+test("cron installs guardian hourly at :20 exactly once; wrapper resolves bun and propagates status/overrides", async () => {
   const dir = mkdtempSync(join(tmpdir(), "guardian-cron-"));
   try {
     const cron = join(dir, "crontab"), store = join(dir, "installed"), bun = join(dir, "bun-fake"), args = join(dir, "args");
     writeFileSync(cron, `#!/bin/bash\nif [ "$1" = '-l' ]; then cat '${store}' 2>/dev/null; else cat > '${store}'; fi\n`, { mode: 0o755 });
     const env = { ...process.env, PATH: `${dir}:${process.env.PATH}` };
     for (let i = 0; i < 2; i++) {
-      const p = Bun.spawnSync(["bash", "scripts/install-cron.sh"], { cwd: root, env });
+      const p = Bun.spawnSync(["bash", "scripts/install-cron.sh"], { cwd: root, env: { ...env, CRON_MARKER_DIR: join(dir, "markers") } });
       expect(p.exitCode).toBe(0);
     }
     const lines = readFileSync(store, "utf8").split("\n");
@@ -348,12 +392,26 @@ test("cron installs guardian hourly at :20 exactly once; wrapper resolves bun an
     expect(lines.filter(l => l.includes("/scripts/guardian.sh"))).toEqual([`20 * * * * ${root}/scripts/guardian.sh >> ${root}/logs/guardian.log 2>&1`]);
     // Use a fixture repo, not the real data/ directory or crontab.
     const scriptDir = join(dir, "scripts");
-    Bun.spawnSync(["mkdir", "-p", scriptDir, join(dir, "data")]);
+    Bun.spawnSync(["mkdir", "-p", join(scriptDir, "lib"), join(dir, "data")]);
     writeFileSync(join(scriptDir, "guardian.sh"), readFileSync(join(root, "scripts/guardian.sh")), { mode: 0o755 });
+    writeFileSync(join(scriptDir, "lib", "cron-job.sh"), readFileSync(join(root, "scripts/lib/cron-job.sh")));
     writeFileSync(bun, `#!/bin/bash\nprintf '%s\\n' "$@" > '${args}'\nexit 1\n`, { mode: 0o755 });
     const p = Bun.spawnSync(["bash", join(scriptDir, "guardian.sh"), "--no-notify", "--no-broker"], { env: { ...env, BUN_BIN: bun } });
     expect(p.exitCode).toBe(1);
     expect(readFileSync(args, "utf8").trim().split("\n")).toEqual(["run", "scripts/guardian.ts", "--notify", "--no-notify", "--no-broker"]);
-    expect(Bun.spawnSync(["bash", join(scriptDir, "guardian.sh")], { env: { ...env, BUN_BIN: join(dir, "missing") } }).exitCode).toBe(2);
+    // a violation (1) is a run that happened: the dead-man's marker is written
+    expect(existsSync(join(dir, "data", "cron-markers", "guardian.ok"))).toBe(true);
+    expect(readFileSync(join(dir, "markers", ".since"), "utf8")).toMatch(/^\d+\n$/);
+    expect(Bun.spawnSync(["bash", join(scriptDir, "guardian.sh")], { env: { ...env, BUN_BIN: join(dir, "missing") } }).exitCode).toBe(3);
+    // a held lock is an overlapping run: exit 0, no marker refresh, no page
+    rmSync(join(dir, "data", "cron-markers", "guardian.ok"));
+    const holder = Bun.spawn(["flock", join(dir, "data", "guardian.lock"), "sleep", "5"]);
+    try {
+      await Bun.sleep(300);
+      const locked = Bun.spawnSync(["bash", join(scriptDir, "guardian.sh")], { env: { ...env, BUN_BIN: bun } });
+      expect(locked.exitCode).toBe(0);
+      expect(locked.stderr.toString()).toContain("skipped");
+      expect(existsSync(join(dir, "data", "cron-markers", "guardian.ok"))).toBe(false);
+    } finally { holder.kill(); }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

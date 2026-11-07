@@ -133,6 +133,8 @@ export interface TradeRecord {
   openCommission?: number;
   /** Daily Turtle N at entry, stored atomically with fill and 2N stop. */
   breakoutN?: number;
+  /** Live-only Turtle catastrophe trigger; the strategy's 2N stop stays separate. */
+  catastropheStop?: number;
   closeCommission?: number;
   stopLoss?: number;
   takeProfit?: number;

@@ -4,9 +4,11 @@
 // finalidad del dashboard." Data: GET /api/bot/now (one object per portfolio +
 // an events list). Every function that builds words is pure and exported so
 // the copy is tested against a fixture of a real day; the only DOM touch is
-// loadBotNow. Times render in the viewer's zone; New York is named next to a
-// stock-market time because that is where the clock that matters lives.
-import { t, isEs } from "../store.js";
+// loadBotNow. Decision moments render in the viewer's zone (New York is named
+// next to a stock-market time); the list of recent actions is grouped by New
+// York day and clocked in New York time, like the P&L tiles. The engine's own
+// sentences and ids are never printed: every cause is a word from reasonWord.
+import { t, isEs, sleeveLabel } from "../store.js";
 import { api } from "../api.js";
 import { money, pnlWhole, n, num } from "../fmt.js";
 import { esc } from "../ui.js";
@@ -18,42 +20,86 @@ const DAY = 86400000;
 
 // ── words ───────────────────────────────────────────────────────────────────
 
-/** "trailing_stop" → "trailing stop". ONE table for every reason code the
- *  events carry; unknown codes read as their words, never as a code. */
-export function reasonWord(code) {
+/** ONE table for every reason code the events, closes and blocks carry
+ *  ("TRAIL_STOP" → "trailing stop"), in plain words. `cadence` ("hourly" |
+ *  "daily") words the engines' generic rebalance honestly: an hourly crypto
+ *  sleeve does not rebalance "daily". A code with no entry reads as nothing —
+ *  the engine's id is never shown to the owner. */
+export function reasonWord(code, cadence) {
   if (!code) return "";
+  const stop = t("stop-loss", "stop de pérdida");
+  const limit5 = t("5-day limit", "límite de 5 días");
+  const matched = t("matched to the broker", "ajuste con el broker");
+  const dd = t("drawdown control", "control de caída");
+  const exit = t("exit signal", "señal de salida");
+  const room = t("made room for a stronger breakout", "dio paso a una ruptura más fuerte");
+  const reb = cadence === "hourly" ? t("hourly rebalance", "rebalanceo horario")
+    : cadence === "daily" ? t("daily rebalance", "rebalanceo diario") : t("rebalance", "rebalanceo");
   const R = {
+    trail_stop: t("trailing stop", "stop dinámico"),
     trailing_stop: t("trailing stop", "stop dinámico"),
-    stop_loss: t("stop-loss", "stop de pérdida"),
-    stop: t("stop-loss", "stop de pérdida"),
-    max_hold: t("5-day limit", "límite de 5 días"),
-    time_stop: t("5-day limit", "límite de 5 días"),
-    breakout_short_time_stop: t("5-day limit", "límite de 5 días"),
+    stop_loss: stop,
+    stop,
+    broker_stop_loss: t("stop-loss at the broker", "stop de pérdida en el broker"),
+    max_hold: limit5,
+    time_stop: limit5,
+    breakout_short_time_stop: limit5,
+    breakout_long_time_stop: limit5,
+    breakout_short_stop: t("breakout stop-loss", "stop de la ruptura"),
+    breakout_long_stop: t("breakout stop-loss", "stop de la ruptura"),
+    breakout_catastrophe_stop: t("emergency stop at the broker", "stop de emergencia en el broker"),
+    breakout_short_exit: t("breakout ended", "fin de la ruptura"),
+    breakout_long_exit: t("breakout ended", "fin de la ruptura"),
+    breakout_short_priority: room,
+    breakout_long_priority: room,
+    breakout_short_drawdown: dd,
+    breakout_long_drawdown: dd,
+    trend_exit: t("trend ended", "terminó la tendencia"),
+    sma_exit: exit,
+    meanrev_exit: exit,
+    idle_overlay_exit: t("idle-cash position closed", "posición de efectivo ocioso cerrada"),
     regime: t("market conditions", "condiciones del mercado"),
     shadow: t("orders simulated", "órdenes simuladas"),
     slot_displaced: t("a stronger pick took its slot", "otro valor más fuerte ocupó su plaza"),
     signal_exit: t("signal faded", "la señal se apagó"),
     signal_entry: t("new signal", "señal nueva"),
     entry: t("new signal", "señal nueva"),
-    rebalance: t("daily rebalance", "rebalanceo diario"),
+    rebalance: reb,
+    momentum_rebalance: reb,
+    portfolio_rebalance: reb,
     daily_rebalance: t("daily rebalance", "rebalanceo diario"),
-    momentum_rebalance: t("daily rebalance", "rebalanceo diario"),
-    drawdown_control: t("drawdown control", "control de caída"),
-    soft_drawdown: t("drawdown control", "control de caída"),
+    exposure_control: t("exposure control", "control de exposición"),
+    drawdown_control: dd,
+    soft_drawdown: dd,
     hard_drawdown: t("drawdown limit", "límite de caída"),
     loss_streak: t("several losses in a row", "varias pérdidas seguidas"),
+    daily_cap: t("daily loss limit", "límite de pérdida diaria"),
     regime_off: t("market below its 200-day average", "mercado bajo su media de 200 días"),
     regime_on: t("market back above its 200-day average", "mercado de nuevo sobre su media de 200 días"),
     market_closed: t("market closed", "mercado cerrado"),
     maintenance: t("maintenance", "mantenimiento"),
     model_cutover: t("new model version", "nueva versión del modelo"),
     cutover: t("new model version", "nueva versión del modelo"),
-    broker_sync: t("matched to the broker", "ajuste con el broker"),
+    broker_sync: matched,
+    momentum_reconciled: matched,
+    portfolio_reconciled: matched,
+    sync_detected: matched,
+    sync_dup_reconciled: matched,
+    backfilled_sync: matched,
+    broker_gone_404: matched,
+    manual_close_unreconciled: matched,
+    manual_close: t("closed by hand", "cierre manual"),
     manual: t("manual", "manual"),
+    treasury_sweep: t("idle cash moved to treasury", "efectivo ocioso a tesorería"),
+    treasury_cover: t("cash taken out of treasury", "efectivo sacado de tesorería"),
     no_signal: t("no signal", "sin señal"),
+    failed: t("the decision failed", "la decisión falló"),
+    skipped_stale: t("price data out of date", "datos de precios desactualizados"),
+    broker_error: t("broker error", "error del broker"),
+    circuit: t("safety stop", "freno de seguridad"),
+    order_rejected: t("order rejected", "orden rechazada"),
   };
-  const key = String(code).toLowerCase();
-  return R[key] || key.replace(/_/g, " ");
+  return R[String(code).toLowerCase()] || "";
 }
 
 /** The portfolio's name as the reader knows it (API label; two words localized). */
@@ -208,7 +254,7 @@ export function chipsOf(p) {
     case "error":
       return [];
     case "paused":
-      return [p.blocked?.reason ? cap(reasonWord(p.blocked.reason)) : "", held].filter(Boolean);
+      return [p.blocked?.reason ? cap(reasonWord(p.blocked.reason, p.cadence?.kind)) : "", held].filter(Boolean);
     case "waiting_first_pass":
       return [held, regime].filter(Boolean);
     case "flat": {
@@ -220,7 +266,7 @@ export function chipsOf(p) {
         if (noSignal) chips.push(p.engine === "meanrev"
           ? (uniW ? t(`None of ${uniW} dropped enough to buy`, `Ninguna de ${uniW} cayó lo suficiente para comprar`) : t("Nothing dropped enough to buy", "Nada cayó lo suficiente para comprar"))
           : (uniW ? t(`None of ${uniW} is trending up`, `Ninguna de ${uniW} está en tendencia alcista`) : t("Nothing is trending up", "Nada está en tendencia alcista")));
-        else if (p.blocked && p.blocked.reason !== "market_closed") chips.push(cap(reasonWord(p.blocked.reason)));
+        else if (p.blocked && p.blocked.reason !== "market_closed") chips.push(cap(reasonWord(p.blocked.reason, p.cadence?.kind)));
       }
       const out = chips.filter(Boolean);
       return out.length ? out : [t("Holds no positions", "Sin posiciones")];
@@ -248,7 +294,10 @@ export function chipsOf(p) {
 export function noteOf(p, o = {}) {
   switch (p.state) {
     case "error":
-      return p.blocked?.detail || t("Something failed and it is not trading; see the Activity tab.", "Algo falló y no está operando; mira la pestaña Actividad.");
+      // The engine's own note is never printed: the status says what happened.
+      return p.blocked?.reason === "skipped_stale"
+        ? t("It skipped its last decision because its price data was out of date.", "Se saltó su última decisión porque los datos de precios estaban desactualizados.")
+        : t("Its last decision failed and it is not trading until the next one; see the Activity tab.", "Su última decisión falló y no opera hasta la siguiente; mira la pestaña Actividad.");
     case "paused":
       return blockedSentence(p, o) || t("Paused; it opens no new positions.", "En pausa; no abre posiciones nuevas.");
     case "waiting_first_pass":
@@ -313,7 +362,7 @@ function portfolioBlock(p, o) {
 
 /** One event as a sentence (no time; the row shows it). `portfolios` maps id →
  *  the /api/bot/now portfolio (for its label and asset words). Pure. */
-const LIMIT_REASON = /^(max_hold|time_stop|breakout_short_time_stop)$/i;
+const LIMIT_REASON = /^(max_hold|time_stop|breakout_(short|long)_time_stop)$/i;
 /** A close forced by the owner's 5-day maximum hold, whatever engine wrote it. */
 const isLimitClose = (e) => ["close", "sell", "stop"].includes(e.kind) && LIMIT_REASON.test(e.reason || "");
 
@@ -333,7 +382,7 @@ function orderOutcomeLabel(reason, count) {
  *  `opts.rebought` marks a 5-day close whose symbol was bought again in the pass. */
 export function eventSentence(ev, portfolios = {}, opts = {}) {
   const known = portfolios[ev.portfolioId];
-  const who = opts.bare ? "" : portfolioName(known?.label || ev.portfolioId || t("The bot", "El bot"));
+  const who = opts.bare ? "" : esc(portfolioName(known?.label || (ev.portfolioId ? sleeveLabel({ id: ev.portfolioId }) : t("The bot", "El bot"))));
   const p = known || { broker: /crypto|binance/i.test(ev.portfolioId || "") ? "binance" : "alpaca", id: ev.portfolioId || "" };
   const qty = n(ev.qty);
   const usd = ev.usd != null ? ` (${money(ev.usd, 0)})` : "";
@@ -374,12 +423,12 @@ export function eventSentence(ev, portfolios = {}, opts = {}) {
     case "treasury": body = t(`${who} moved cash${usd}`, `${who} movió efectivo${usd}`); break;
     case "error": body = t(`Problem in ${who}`, `Problema en ${who}`); break;
     case "warning": body = t(`Warning in ${who}`, `Aviso en ${who}`); break;
-    default: body = `${who} ${esc(String(ev.kind || "").replace(/_/g, " "))}${what === t("its positions", "sus posiciones") ? "" : ` ${what}`}${usd}`;
+    default: body = t(`Activity in ${who}`, `Actividad en ${who}`);
   }
   const outcome = orderOutcomeLabel(ev.reason, ev.count);
-  const reason = ev.reason && !limit ? ` <span class="bn-why">— ${esc(outcome || reasonWord(ev.reason))}</span>` : "";
-  const detail = ev.kind === "error" && ev.detail ? ` <span class="muted">${esc(ev.detail)}</span>` : "";
-  return `${body.trim()}${reason}${detail}`;
+  const why = outcome || reasonWord(ev.reason, known?.cadence?.kind);
+  const reason = why && !limit ? ` <span class="bn-why">— ${esc(why)}</span>` : "";
+  return `${body.trim()}${reason}`;
 }
 
 // ── passes: one line per portfolio decision ─────────────────────────────────
@@ -410,7 +459,7 @@ const posWord = (c) => t(c === 1 ? "position" : "positions", c === 1 ? "posició
 export function passSummary(events, portfolios = {}) {
   const first = events[0];
   const known = portfolios[first.portfolioId];
-  const who = esc(portfolioName(known?.label || first.portfolioId || t("The bot", "El bot")));
+  const who = esc(portfolioName(known?.label || (first.portfolioId ? sleeveLabel({ id: first.portfolioId }) : t("The bot", "El bot"))));
   const p = known || { broker: /crypto|binance/i.test(first.portfolioId || "") ? "binance" : "alpaca", id: first.portfolioId || "" };
   const rb = events.find((e) => e.kind === "rebalance");
   const limits = events.filter(isLimitClose);
@@ -471,16 +520,28 @@ export function passSummary(events, portfolios = {}) {
   return { text: parts.length ? `${who}: ${parts.join(", ")}` : eventSentence(first, portfolios), lines };
 }
 
+/** Which passes the reader has unfolded; survives the 30 s refresh (the tab is
+ *  rebuilt from scratch each time). Session only. Keyed by portfolio + time. */
+const openPasses = new Set();
+const passKey = (row) => `${row.portfolioId}|${row.events[row.events.length - 1].at}`;
+export function rememberOpenPasses(body) {
+  for (const d of body?.querySelectorAll?.("details.bn-pass") ?? []) {
+    d.addEventListener("toggle", () => { if (d.open) openPasses.add(d.dataset.pass); else openPasses.delete(d.dataset.pass); });
+  }
+}
+
 function eventRow(row, names) {
   const e0 = row.events[0], time = row.events[row.events.length - 1].time;
   const pass = row.events.length > 1 || (e0.kind === "rebalance" && e0.rebought?.length);
   if (!pass) return `<div class="bn-ev"><span class="bn-time">${esc(time)}</span><span>${eventSentence(e0, names)}</span></div>`;
   const s = passSummary(row.events, names);
-  return `<div class="bn-ev"><span class="bn-time">${esc(time)}</span><details class="bn-pass"><summary>${s.text}</summary><ul class="bn-lines">${s.lines.map((l) => `<li>${l}</li>`).join("")}</ul></details></div>`;
+  const key = passKey(row);
+  return `<div class="bn-ev"><span class="bn-time">${esc(time)}</span><details class="bn-pass" data-pass="${esc(key)}"${openPasses.has(key) ? " open" : ""}><summary>${s.text}</summary><ul class="bn-lines">${s.lines.map((l) => `<li>${l}</li>`).join("")}</ul></details></div>`;
 }
 
-/** Events newest first, grouped by the viewer's day: [{ label, items }]. Pure. */
-export function groupEventsByDay(events, { now = Date.now(), tz } = {}) {
+/** Events newest first, grouped by New York day (the day the P&L tiles use) and
+ *  clocked in New York time: [{ label, items }]. Pure. */
+export function groupEventsByDay(events, { now = Date.now(), tz = NY } = {}) {
   const sorted = (events || []).filter((e) => Number.isFinite(ts(e.at))).slice().sort((a, b) => ts(b.at) - ts(a.at));
   const groups = [];
   for (const e of sorted) {
@@ -513,7 +574,7 @@ export function renderBotNow(data, o = {}) {
     ? groups.map((g) => `<div class="bn-day">${esc(g.label)}</div>${clusterPasses(g.items).map((row) => eventRow(row, names)).join("")}`).join("")
     : `<div class="muted" style="font-size:var(--t-xs)">${t("No actions in the last few days.", "Sin acciones en los últimos días.")}</div>`;
   return `<div class="bn-list">${blocks}</div>
-    <div class="an-h" style="margin-top:var(--s4)">${t("Recent actions", "Acciones recientes")}</div>
+    <div class="an-h" style="margin-top:var(--s4)">${t("Recent actions", "Acciones recientes")} <span class="muted">${t("(New York time)", "(hora de Nueva York)")}</span></div>
     <div class="bn-events">${events}</div>`;
 }
 
@@ -528,4 +589,5 @@ export async function loadBotNow(body) {
     return;
   }
   body.innerHTML = renderBotNow(await api.botNow());
+  rememberOpenPasses(body);
 }

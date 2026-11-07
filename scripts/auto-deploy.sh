@@ -32,14 +32,22 @@
 #     spending a gate run on it)
 #   • typecheck AND the test suite must pass BEFORE the live tree is touched; a
 #     bad push is never deployed (the running bot keeps serving old code)
-#   • a gate failure PAGES Telegram (once per SHA) and is RETRIED every poll —
+#   • a gate failure PAGES Telegram (once per SHA) and is RETRIED with
+#     exponential backoff (4, 8, 16, 32, then every 60 min; audit F-6,
+#     2026-11-07: a deterministic failure re-ran bun install + typecheck + the
+#     whole suite on the trading VM every 2 min, 26 times on 10-31). The result
+#     is cached per (SHA, gate commands) in data/.deploy-gate-fail and
+#     data/.deploy-gate-pass; `rm data/.deploy-gate-fail` forces a retry now —
 #     data/.deployed-sha tracks what is actually running (2026-07-30: prod ran
 #     Jul-22 code for 8 days because bun moved to mise, the gate died with
 #     "bun: command not found", and nothing paged or retried)
 #   • the bot reloads state from the DB + reconciles with the broker on restart
 #     (designed-safe), so the ~15s restart window only pauses SL/TP checks
 #   • after restart, polls local /healthz (bounded ~30-60s, HEALTH_CHECK_*
-#     env-overridable) before logging DEPLOYED; if it never confirms ok, the
+#     env-overridable) before logging DEPLOYED. `status:"degraded"` (a broker
+#     unreachable or a slow loop — alive by design) is accepted when the body's
+#     commit is the SHA just started and no loop is dead (audit F-5: a deploy
+#     during a broker outage used to be rolled back); if it never confirms, the
 #     script ROLLS BACK (git reset --hard + deps reinstall + re-restart to
 #     the pre-deploy SHA) and marks the bad SHA in data/.deploy-rejected-sha
 #     so the next ~2min poll SKIPS re-deploying the same unhealthy commit —
@@ -75,6 +83,8 @@ DIRTY_PAGED_FILE="$REPO/data/.deploy-dirty-paged"
 FETCH_FAIL_SINCE_FILE="$REPO/data/.deploy-fetch-fail-since"
 FETCH_FAIL_COUNT_FILE="$REPO/data/.deploy-fetch-fail-count"
 FETCH_FAIL_PAGED_FILE="$REPO/data/.deploy-fetch-fail-paged"
+GATE_FAIL_FILE="$REPO/data/.deploy-gate-fail"
+GATE_PASS_FILE="$REPO/data/.deploy-gate-pass"
 # A dirty tree for a minute is an operator mid-edit; for an hour it is an
 # outage of the deploy pipeline. Env-overridable for tests.
 DIRTY_PAGE_AFTER_SEC="${DIRTY_PAGE_AFTER_SEC:-1800}"
@@ -122,7 +132,7 @@ notify() {
   # fetches and their recovery); a successful deploy is log-only (2026-10-11).
   chat=$(grep -oP '^TELEGRAM_OPS_CHAT_ID=\K.+' "$REPO/.env" 2>/dev/null | tail -1)
   [ -n "$token" ] && [ -n "$chat" ] || return 0
-  curl -fsS -m 10 "https://api.telegram.org/bot${token}/sendMessage" \
+  curl -fsS -m 10 "${TELEGRAM_API_BASE:-https://api.telegram.org}/bot${token}/sendMessage" \
     -d "chat_id=${chat}" -d "text=auto-deploy@$(hostname): $1" >/dev/null 2>&1 || true
 }
 
@@ -163,9 +173,13 @@ _clamp_int() {
 # typecheck/tests — no new dep) and requires a TOP-LEVEL status:"ok". A regex
 # grep on the raw body would also match a nested {"foo":{"status":"ok"}};
 # JSON.parse + a top-level property check doesn't, and malformed JSON is
-# rejected by the catch.
+# rejected by the catch. With $2 (the SHA just started) a top-level
+# status:"degraded" is accepted too, exactly when the body's commit is that
+# SHA (7-char or full) and it carries no dead_loop_count: alive, on the new
+# code, only a broker or a slow pass degraded — what uptime-watch.sh calls UP.
+# Exit 0 = ok, 3 = accepted degraded, 1 = not healthy.
 _health_status_ok() {
-  bun -e 'try{const j=JSON.parse(process.argv[1]);process.exit(j&&typeof j==="object"&&!Array.isArray(j)&&j.status==="ok"?0:1)}catch{process.exit(1)}' -- "$1" >/dev/null 2>&1
+  bun -e 'try{const j=JSON.parse(process.argv[1]),e=process.argv[2]||"";if(!j||typeof j!=="object"||Array.isArray(j))process.exit(1);if(j.status==="ok")process.exit(0);const c=typeof j.commit==="string"?j.commit:"";process.exit(j.status==="degraded"&&e&&c.length>=7&&(c===e||e.startsWith(c))&&!("dead_loop_count" in j)?3:1)}catch{process.exit(1)}' -- "$1" "${2:-}" >/dev/null 2>&1
 }
 
 # Post-restart health gate: poll the PUBLIC local /healthz until it reports
@@ -185,13 +199,19 @@ health_check() {
   attempts=$(_clamp_int "${HEALTH_CHECK_ATTEMPTS:-20}" 1 30 20)
   interval=$(_clamp_int "${HEALTH_CHECK_INTERVAL:-3}" 0 15 3)
   req_timeout=$(_clamp_int "${HEALTH_CHECK_TIMEOUT:-3}" 1 15 3)
-  local i body code
+  local i body code verdict expect="${HEALTH_EXPECT_COMMIT:-}"
   for ((i = 1; i <= attempts; i++)); do
     body=$(curl -fsS --max-time "$req_timeout" -w '\n%{http_code}' "$url" 2>/dev/null)
     code="${body##*$'\n'}"
     body="${body%$'\n'*}"
-    if [ "$code" = "200" ] && _health_status_ok "$body"; then
+    verdict=1
+    if [ "$code" = "200" ]; then _health_status_ok "$body" "$expect"; verdict=$?; fi
+    if [ "$verdict" = 0 ]; then
       log "health check OK (attempt $i/$attempts, $url)"
+      return 0
+    fi
+    if [ "$verdict" = 3 ]; then
+      log "health check OK: status degraded accepted — commit ${expect:0:7} is running and no loop is dead (attempt $i/$attempts, $url)"
       return 0
     fi
     if [ "$i" -lt "$attempts" ]; then sleep "$interval"; fi
@@ -371,9 +391,42 @@ else
   log "new commits ${LOCAL:0:7}..${REMOTE:0:7} — gating in ${GATE_DIR} (live checkout untouched)"
 fi
 
-# 3. Gate checkout at the candidate SHA, with its own lockfile-pinned deps.
+# 3. Gate result cache (audit F-6). The key is the SHA plus a hash of the gate
+# commands (constant in prod; a changed gate is a different gate). A passed key
+# is not re-gated; a failed key is retried only after its backoff elapsed.
+NOW_S="${DEPLOY_NOW:-$(date +%s)}"
+GATE_BACKOFF_BASE_SEC=$(_clamp_int "${GATE_BACKOFF_BASE_SEC:-240}" 0 3600 240)
+GATE_BACKOFF_MAX_SEC=$(_clamp_int "${GATE_BACKOFF_MAX_SEC:-3600}" 0 86400 3600)
+GATE_KEY="$REMOTE $(printf '%s\n%s' "$GATE_TYPECHECK_CMD" "$GATE_TEST_CMD" | sha256sum | cut -c1-12)"
+GATE_CACHED_PASS=0
+if [ "$(cat "$GATE_PASS_FILE" 2>/dev/null || true)" = "$GATE_KEY" ]; then
+  GATE_CACHED_PASS=1
+else
+  read -r f_sha f_hash f_attempts f_next 2>/dev/null < "$GATE_FAIL_FILE" || true
+  if [ "${f_sha:-} ${f_hash:-}" = "$GATE_KEY" ] && [[ "${f_next:-}" =~ ^[0-9]+$ ]] && [ "$NOW_S" -lt "$f_next" ]; then
+    log "gate failed ${f_attempts:-?}x on ${REMOTE:0:7} — next retry in $(( f_next - NOW_S ))s (backoff; rm data/.deploy-gate-fail to retry now). Nothing deployed."
+    exit 0
+  fi
+fi
+# record_gate_fail — bump the attempt count of this key and schedule its retry.
+record_gate_fail() {
+  local sha hash attempts next delay n i
+  read -r sha hash attempts next 2>/dev/null < "$GATE_FAIL_FILE" || true
+  if [ "${sha:-} ${hash:-}" = "$GATE_KEY" ] && [[ "${attempts:-}" =~ ^[0-9]+$ ]]; then n=$(( attempts + 1 )); else n=1; fi
+  delay="$GATE_BACKOFF_BASE_SEC"
+  for ((i = 1; i < n && delay < GATE_BACKOFF_MAX_SEC; i++)); do delay=$(( delay * 2 )); done
+  [ "$delay" -gt "$GATE_BACKOFF_MAX_SEC" ] && delay="$GATE_BACKOFF_MAX_SEC"
+  echo "$GATE_KEY $n $(( NOW_S + delay ))" > "$GATE_FAIL_FILE" 2>/dev/null || true
+  log "gate attempt $n failed on ${REMOTE:0:7}; next retry in ${delay}s"
+}
+
+if [ "$GATE_CACHED_PASS" = 1 ]; then
+  log "gate already passed for ${REMOTE:0:7} (cached) — not re-running it"
+else
+# 3a. Gate checkout at the candidate SHA, with its own lockfile-pinned deps.
 if ! prepare_gate_checkout "$REMOTE"; then
   log "GATE FAIL: could not build the gate checkout ${GATE_DIR} at ${REMOTE:0:7} — NOT deploying (live checkout untouched)"
+  record_gate_fail
   page_gate_fail "checkout" "$REMOTE"
   exit 1
 fi
@@ -383,6 +436,7 @@ fi
 if ! (cd "$GATE_DIR" && bash -c "$GATE_TYPECHECK_CMD") >/tmp/uc-deploy-typecheck.log 2>&1; then
   log "GATE FAIL: typecheck — NOT deploying (live checkout untouched; see /tmp/uc-deploy-typecheck.log)"
   log_gate_tail /tmp/uc-deploy-typecheck.log
+  record_gate_fail
   page_gate_fail "typecheck" "$REMOTE"
   exit 1
 fi
@@ -394,11 +448,14 @@ if ! (cd "$GATE_DIR" && TMPDIR="$GATE_TMPDIR" bash -c "$GATE_TEST_CMD") >/tmp/uc
   rm -rf "$GATE_TMPDIR"
   log "GATE FAIL: tests — NOT deploying (live checkout untouched; see /tmp/uc-deploy-test.log)"
   log_gate_tail /tmp/uc-deploy-test.log
+  record_gate_fail
   page_gate_fail "test" "$REMOTE"
   exit 1
 fi
 rm -rf "$GATE_TMPDIR"
-rm -f "$GATEFAIL_PAGED_FILE" 2>/dev/null || true
+rm -f "$GATEFAIL_PAGED_FILE" "$GATE_FAIL_FILE" 2>/dev/null || true
+echo "$GATE_KEY" > "$GATE_PASS_FILE" 2>/dev/null || true
+fi
 
 # 4a. The gate can last minutes: make sure the live checkout is still what it
 # was and still clean before touching it. Otherwise defer to the next poll
@@ -432,6 +489,7 @@ bun install --frozen-lockfile >/dev/null 2>&1 || log "bun install reported issue
 touch "$REPO/data/.deploy-restart" 2>/dev/null || true
 if bash -c "$START_CMD" >/dev/null 2>&1; then
   log "restart issued — waiting for /healthz to confirm"
+  HEALTH_EXPECT_COMMIT="$REMOTE"   # a degraded-but-alive bot on this commit counts as healthy
   if health_check; then
     log "DEPLOYED ${REMOTE:0:7}"
     echo "$REMOTE" > "$DEPLOYED_SHA_FILE" 2>/dev/null || true
@@ -447,6 +505,7 @@ if bash -c "$START_CMD" >/dev/null 2>&1; then
     # Deps must match the reverted code — the failed commit may have changed them.
     bun install --frozen-lockfile >/dev/null 2>&1 || log "rollback bun install reported issues"
     touch "$REPO/data/.deploy-restart" 2>/dev/null || true
+    HEALTH_EXPECT_COMMIT="$LOCAL"
     if bash -c "$START_CMD" >/dev/null 2>&1 && health_check; then
       log "rollback OK — reverted to ${LOCAL:0:7} and healthy"
       echo "$LOCAL" > "$DEPLOYED_SHA_FILE" 2>/dev/null || true
@@ -461,5 +520,8 @@ if bash -c "$START_CMD" >/dev/null 2>&1; then
   fi
 else
   log "ERROR: $START_CMD restart failed after deploy"
+  # The live tree already holds ${REMOTE}; .deployed-sha does not, so the next
+  # poll walks it back (step 2b). Whether the bot is up at all is unknown.
+  notify "🚨 RESTART FAILED after the gate passed on ${REMOTE:0:12}: '$START_CMD' exited non-zero — the bot may be down or still on the old code. Check: ./start.sh status"
   exit 1
 fi

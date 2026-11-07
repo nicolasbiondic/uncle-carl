@@ -28,7 +28,7 @@ describe("dead analytics tabs are gone", () => {
   });
 
   test("api.js no longer exposes callers for the removed backend endpoints", () => {
-    for (const key of ["regime", "marketContext", "derivatives", "breadth", "events", "cot", "alerts", "agent", "scenario", "correlations", "strategiesMatrix", "toggleStrategy", "strategies", "riskMetrics", "backtestLatest"]) {
+    for (const key of ["regime", "marketContext", "derivatives", "breadth", "events", "cot", "alerts", "agent", "scenario", "correlations", "strategiesMatrix", "toggleStrategy", "strategies", "riskMetrics", "backtestLatest", "configKeys"]) {
       expect(api[key]).toBeUndefined();
     }
   });

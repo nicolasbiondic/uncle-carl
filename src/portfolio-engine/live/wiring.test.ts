@@ -267,13 +267,13 @@ describe("construction failures leave the sleeve to the incumbent", () => {
 });
 
 describe("heartbeat and scheduler", () => {
-  test("start() registers the plan's heartbeat (daily, grace 5) and a tick beats it; stop() clears the timers", async () => {
+  test("start() registers the heartbeat at the tick cadence (grace 10 ticks) and a tick beats it; stop() clears the timers", async () => {
     const alpaca = fakeAlpaca();
     const wiring = resolve([peDefinition("momentum_stocks", { runMode: "observer" })]);
     const s = sources(alpaca, { engineOverrides: { decide: fixedDecide({ SPY: 0.5 }), tradingEnabled: () => true, tickMs: 3_600_000 } });
     const built = buildPortfolioEngines(wiring, s.src);
     const stop = startPortfolioEngines(built.observers);
-    expect(s.registered).toEqual([["portfolio:momentum_stocks", 86_400_000, { graceMultiplier: 5 }]]);
+    expect(s.registered).toEqual([["portfolio:momentum_stocks", 3_600_000, { graceMultiplier: 10 }]]);
     await built.observers[0].tick();
     expect(s.beats).toContain("portfolio:momentum_stocks");
     stop();

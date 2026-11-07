@@ -29,6 +29,7 @@ import type {
   MeanRevConnorsParams,
   MomentumTsmParams,
   PortfolioAccountId,
+  PortfolioDefinition,
   PortfolioEngineParams,
   PortfolioParams,
   PortfolioTemplate,
@@ -140,6 +141,21 @@ export function portfolioUniverse(template: PortfolioTemplate, params: Portfolio
   }
   const u = (params as MomentumTsmParams).universe;
   return Array.isArray(u) ? u : [];
+}
+
+/** Every symbol a LIVE portfolio-engine definition may hold on each venue (universe + overlay
+ *  hedge/defensive assets, e.g. RW8's SH): BrokerSync's ownership boundary must cover them so an
+ *  unrowed position is left to the engine's own adoption, never filed under *_main. */
+export function portfolioEngineOwnedSymbols(defs: readonly PortfolioDefinition[]): { alpaca: string[]; binance: string[] } {
+  const out = { alpaca: new Set<string>(), binance: new Set<string>() };
+  for (const d of defs) {
+    if (d.template !== "portfolio" || !d.enabled) continue;
+    const p = d.params as PortfolioEngineParams;
+    if (p?.runMode !== "live") continue;
+    const venue = p.venue === "alpaca" ? "alpaca" : "binance";
+    for (const s of portfolioUniverse("portfolio", p)) out[venue].add(s);
+  }
+  return { alpaca: [...out.alpaca].sort(), binance: [...out.binance].sort() };
 }
 
 export function validateMomentumParams(

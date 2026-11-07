@@ -36,6 +36,12 @@ button { font-family: inherit; cursor: pointer; }
 .hdr .brand { display: flex; align-items: center; gap: var(--s2); font-weight: 700; font-size: var(--t-md); }
 .hdr .brand .ic { color: var(--accent); }
 .hdr .clock { color: var(--muted); font-family: var(--mono); font-size: var(--t-xs); }
+/* Data may be old (server unreachable / live feed down): see header.js staleNotice. */
+.stale { color: var(--warn); font-size: var(--t-xs); font-weight: 600; flex-shrink: 1; min-width: 0; }
+/* "Only <portfolio> · show all": the filter chip at the end of the ops card tabs. */
+.viewchip { margin-left: auto; align-self: center; appearance: none; background: var(--accent-soft); border: 1px solid var(--border-2); border-radius: var(--r2); color: var(--text); font: 600 var(--t-xs) var(--sans); padding: 2px 10px; cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewchip:hover { border-color: var(--accent); }
+.viewchip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .icn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: var(--r1); border: 1px solid var(--border); background: var(--bg-1); color: var(--text-2); }
 .icn:hover { color: var(--text); border-color: var(--border-2); }
 .icn.danger:hover { color: var(--down); border-color: var(--down); }
@@ -155,8 +161,7 @@ button { font-family: inherit; cursor: pointer; }
    strip as one sideways-scrolling row, without the sparklines. */
 .kpis.fit-1 .pspark { display: none; }
 .kpis.fit-2 [data-k="win"] { display: none; }
-@media (max-width: 980px) { .kpi.bk .pspark { display: none; } }.spark-plot { position: relative; height: 36px; cursor: crosshair; }
-.spark-plot svg { width: 100%; height: 36px; display: block; }
+@media (max-width: 980px) { .kpi.bk .pspark { display: none; } }
 /* TradingView Lightweight Charts™ containers (equity tab, candle modal) —
    the library's `autoSize: true` owns a ResizeObserver on this box and keeps
    its <canvas> matched to it; we only need to give it a starting height. */
@@ -173,9 +178,6 @@ button { font-family: inherit; cursor: pointer; }
 .tip b { font-size: var(--t-sm); } .tip .tt { color: var(--muted); font-size: 10px; }
 
 /* grid + cards */
-.grid { display: grid; gap: var(--s4); padding-top: var(--s4); }
-.grid.cols-2 { grid-template-columns: 1fr 1fr; }
-.grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
 .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--r3); padding: var(--s4); }
 .card h3 { margin: 0 0 var(--s3); font-size: var(--t-md); font-weight: 700; display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }
 .card-note { color: var(--muted); font-size: var(--t-xs); text-transform: uppercase; letter-spacing: .05em; }
@@ -201,8 +203,15 @@ tfoot tr.totals .muted { font-weight: 500; }
 /* Volumen y embudo (P0 2026-10-09): blocks column is prose, not a figure.
    Since 2026-10-12 it is the analytics card's "Volume" tab (it used to be a
    card under Positions/Trades and crushed that table in the 100dvh lock). */
-#funnelPanel th.blocks, #funnelPanel td.blocks { text-align: left; max-width: 340px; }
+#funnelPanel th.blocks, #funnelPanel td.blocks { text-align: left; }
 #funnelPanel td, #funnelPanel th { padding: 4px var(--s2); font-size: var(--t-xs); white-space: nowrap; }
+/* The blocks are prose: they wrap (never widen the table), and the table gives
+   columns away before it would scroll sideways (fit.js adds fit-N). */
+#funnelPanel td.blocks { white-space: normal; max-width: 220px; min-width: 90px; }
+#funnelPanel table.fit-1 .fo1 { display: none; }
+#funnelPanel table.fit-2 .fo2 { display: none; }
+#funnelPanel table.fit-3 .fo3 { display: none; }
+#funnelPanel table.fit-4 .fo4 { display: none; }
 #funnelPanel .funnel-total { margin-top: var(--s2); color: var(--muted); font-size: var(--t-xs); }
 #funnelPanel .funnel-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); margin-bottom: var(--s2); }
 .ops-wrap { display: flex; flex-direction: column; gap: var(--s4); }
@@ -435,15 +444,6 @@ tfoot tr.totals .muted { font-weight: 500; }
 .symlink { cursor: pointer; border-bottom: 1px dotted var(--border-2); }
 .symlink:hover { color: var(--accent); border-bottom-color: var(--accent); }
 
-/* settings slideover */
-.so-backdrop { position: fixed; inset: 0; z-index: 9500; background: rgba(0,0,0,.45); animation: fadeIn 120ms var(--ease); }
-.so { position: absolute; top: 0; right: 0; bottom: 0; width: min(340px, 92vw); background: var(--bg-1); border-left: 1px solid var(--border-2); box-shadow: var(--shadow-2); display: flex; flex-direction: column; animation: soIn 200ms var(--ease); }
-@keyframes soIn { from { transform: translateX(40px); opacity: 0; } to { transform: none; opacity: 1; } }
-.so-head { display: flex; align-items: center; justify-content: space-between; padding: var(--s4); border-bottom: 1px solid var(--border); font-size: var(--t-md); }
-.so-body { padding: var(--s4); overflow-y: auto; }
-.so-body label { display: block; color: var(--muted); font-size: var(--t-xs); text-transform: uppercase; letter-spacing: .05em; margin: var(--s4) 0 var(--s2); }
-.so-body label:first-child { margin-top: 0; }
-
 /* news — one row, always shown: a plain label on the left, two-line cards
    scrolling to the right (source + age on the first line, the headline on two). */
 #newsBar { margin-top: var(--s4); }
@@ -509,7 +509,6 @@ code { font-family: var(--mono); background: var(--bg-2); padding: 1px 5px; bord
 @keyframes flashUp { 0% { background: var(--up-soft); } 100% { background: transparent; } }
 @keyframes flashDown { 0% { background: var(--down-soft); } 100% { background: transparent; } }
 @keyframes shimmer { 0% { background-position: -200px 0; } 100% { background-position: 200px 0; } }
-.fade-up { animation: fadeUp var(--dur) var(--ease) both; }
 .kpis, #newsBar { animation: fadeIn 260ms var(--ease) both; }
 .live .d { animation: breath 2.4s ease-in-out infinite; }
 .flash-up { animation: flashUp 720ms var(--ease); border-radius: var(--r1); }
@@ -603,9 +602,8 @@ code { font-family: var(--mono); background: var(--bg-2); padding: 1px 5px; bord
 @media (max-width: 1600px) { .kpi { padding-right: var(--s3); } .kpi + .kpi { padding-left: var(--s3); } }
 @media (max-width: 1440px) { .kpi .kv { font-size: clamp(18px, 2.3vh, 22px); } }
 @media (max-width: 1300px) { .kpi { padding-right: var(--s2); } .kpi + .kpi { padding-left: var(--s2); } }
-@media (max-width: 1100px) { .grid.cols-4 { grid-template-columns: 1fr 1fr; } }
-@media (max-width: 980px) { .grid.cols-2 { grid-template-columns: 1fr; } .kpi .kv { font-size: var(--t-lg); } }
-@media (max-width: 560px) { .grid.cols-4 { grid-template-columns: 1fr; } .wrap { padding: 0 var(--s3); } .hdr { gap: var(--s2); } .hdr .clock { display: none; } }
+@media (max-width: 980px) { .kpi .kv { font-size: var(--t-lg); } }
+@media (max-width: 560px) { .wrap { padding: 0 var(--s3); } .hdr { gap: var(--s2); } .hdr .clock { display: none; } }
 
 /* ── Broker accounts panel (components/accounts.js) ───────────────────── */
 .acc-list { display: flex; flex-direction: column; gap: var(--s3); }
@@ -664,7 +662,9 @@ code { font-family: var(--mono); background: var(--bg-2); padding: 1px 5px; bord
 .pf-check input { width: auto; }
 .pf-errlist { margin: 0; padding-left: 18px; }
 .pf-errlist li { margin-bottom: 2px; }
-/* The create/edit modals open ON TOP of the already-open Portfolios
-   slideover (.so-backdrop, z-index 9500) — .cm-backdrop alone (9000) would
-   render BEHIND it, visible nowhere and unclickable. */
+/* The create/edit modals sit above the page and the other modals (.cm-backdrop is 9000). */
 .pf-modal-backdrop { z-index: 9600; }
+
+/* Activity log (activity.js): one plain sentence per row. */
+.act-log { font-size: var(--t-xs); }
+.act-row { padding: 3px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }

@@ -7,11 +7,16 @@
 # backup. READ-ONLY on both DBs; --notify pages the OPS chat only when a
 # divergence exists (the .ts reads TELEGRAM_* from .env via src/config's
 # dotenv). Exit codes: 0 parity / 1 divergence / 2 operational failure.
+# 0 and 1 mean "the monitor ran" (data/cron-markers/parity-check.ok); 2 pages
+# OPS once per episode through scripts/lib/cron-job.sh (audit F-2).
 # ══════════════════════════════════════════════
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
+# shellcheck source=lib/cron-job.sh
+source "$ROOT_DIR/scripts/lib/cron-job.sh"
+cron_job_start parity-check 0 1
 
 # Resolve bun the same robust way refresh-historical.sh/backup-db.sh do
 # (cron has no interactive PATH; this host's bun may live under ~/.bun).
@@ -25,4 +30,4 @@ if [ -z "$BUN_BIN" ] || [ ! -x "$BUN_BIN" ]; then
   exit 2
 fi
 
-exec "$BUN_BIN" run scripts/parity-check.ts --notify "$@"
+"$BUN_BIN" run scripts/parity-check.ts --notify "$@"

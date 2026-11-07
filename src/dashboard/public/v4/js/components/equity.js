@@ -99,9 +99,11 @@ export function equityTickLabel(ts, tickMarkType, period, locale = "en-US") {
 }
 
 /** Pure: the crosshair's time label — the full ET date plus the time (the
- *  axis ticks are deliberately coarse; the crosshair is where precision goes). */
+ *  axis ticks are deliberately coarse; the crosshair is where precision goes),
+ *  with the zone named: every clock on the dashboard is ET, and a hover time
+ *  without its zone was read as the viewer's local time. */
 export function crosshairTimeLabel(ts, period, locale = "en-US") {
-  return period === 1 ? formatAxisTick(ts, 1, locale) : `${formatAxisTick(ts, 30, locale)} ${formatAxisTick(ts, 1, locale)}`;
+  return `${period === 1 ? formatAxisTick(ts, 1, locale) : `${formatAxisTick(ts, 30, locale)} ${formatAxisTick(ts, 1, locale)}`} ET`;
 }
 
 /** Pure: the crosshair tooltip's content for one hovered point — value, %
@@ -139,21 +141,27 @@ export async function loadEquity(containerId) {
   const el = byId(containerId);
   if (!el) return;
   const s = store.state;
-  const rows = (await api.equityHistory({ account: s.view, days: s.period === 0 ? undefined : s.period, range: s.period === 0 ? "all" : undefined }))
+  const payload = await api.equityHistory({ account: s.view, days: s.period === 0 ? undefined : s.period, range: s.period === 0 ? "all" : undefined });
+  const hasMoneyWindow = payload.at(-1) && Object.hasOwn(payload.at(-1), "moneyWindow");
+  const moneyWindow = payload.at(-1)?.moneyWindow;
+  const rows = payload
     .filter((r) => Number.isFinite(r.equity) && r.equity > 0)
     .map((r) => ({ v: r.equity, t: r.snapshot_time, rebased: !!r.rebased }));
   if (rows.length < 2) { el.innerHTML = `<div class="empty">${t("Not enough equity data yet", "Aún no hay suficientes datos")}</div>`; return; }
 
   const vals = rows.map((r) => r.v);
   const rebasedStart = rows[0].rebased;
-  const { chg, chgPct, up } = windowChange(vals, rebasedStart);
+  const { chg, chgPct, up } = moneyWindow
+    ? { chg: moneyWindow.pnl, chgPct: moneyWindow.pnlPct, up: moneyWindow.pnl >= 0 }
+    : hasMoneyWindow ? { chg: null, chgPct: null, up: true }
+    : windowChange(vals, rebasedStart);
   const col = up ? "var(--up)" : "var(--down)";
   const pctHtml = chgPct == null ? "" : ` (${pctSigned(chgPct)})`;
 
   el.innerHTML = `
     <div style="display:flex;align-items:baseline;gap:var(--s3);margin-bottom:var(--s2)">
       <span style="font-size:var(--t-lg);font-weight:800">${money(vals[vals.length - 1], 0)}</span>
-      <span style="color:${col}">${moneySigned(chg)}${pctHtml} · ${periodLabel(s.period)}</span></div>
+      <span style="color:${col}">${chg == null ? "—" : moneySigned(chg)}${pctHtml} · ${periodLabel(s.period)}</span></div>
     <div class="lwchart" id="eqChart" style="height:280px;margin-bottom:var(--s3)"></div>`;
 
   const chartEl = byId("eqChart");
@@ -194,7 +202,7 @@ export async function loadEquity(containerId) {
     if (!Number.isFinite(v)) { tp.style.opacity = "0"; return; }
     const { pct, timeLabel } = tooltipData(v, anchor, param.time * 1000, period, rebasedStart);
     const pctHtml2 = pct == null ? "" : ` <span style="color:${pnlColor(pct)}">${pctSigned(pct, 2)}</span>`;
-    tp.innerHTML = `<b>${money(v, 0)}</b>${pctHtml2}<br><span class="tt">${esc(timeLabel)}</span>`;
+    tp.innerHTML = `<b>${money(v, 0)}</b>${pctHtml2}<br><span class="tt">${esc(timeLabel)} ET</span>`;
     tp.style.opacity = "1";
     const rect = chartEl.getBoundingClientRect();
     const tw = tp.offsetWidth, th = tp.offsetHeight;

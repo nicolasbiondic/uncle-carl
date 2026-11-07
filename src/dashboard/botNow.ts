@@ -10,6 +10,8 @@ import { decideRegime, type RegimeMemory } from "../portfolio-engine/contingency
 import { isMarketOpen, isTradingDay, getPreviousTradingDay } from "../utils/marketHours";
 import type { RiskState } from "../strategies/momentum/RiskGuard";
 import type { PersistedOrder } from "../portfolio-engine/live/persistence";
+import { RISK_PROFILES, type RiskProfileId } from "../config/riskProfiles";
+import { notionalUsd } from "../portfolio/notional";
 
 export interface BotNowRuntime {
   id: string;
@@ -61,7 +63,7 @@ export interface BotNowDeps {
   db: Database;
   runtime: readonly BotNowRuntime[];
   summaries: readonly { id: string; label: string; broker: string; equity: number; mode?: string }[];
-  positions?: readonly { profileId?: string; quantity: number; currentPrice: number; avgEntryPrice: number }[];
+  positions?: readonly { profileId?: string; symbol?: string; quantity: number; currentPrice: number; avgEntryPrice: number; contractSize?: number }[];
   historical?: Database | null;
   now?: number;
   readState?: (path: string) => any;
@@ -122,7 +124,7 @@ function portfolioOrderOutcome(order: PersistedOrder): PortfolioOrderOutcome | n
 }
 
 function portfolioCounts(row: any): BotNowDecision {
-  const orders = json(row.orders_json, []) as PersistedOrder[];
+  const orders: PersistedOrder[] = row.parsedOrders;
   const filled = orders.filter(o => (o.result?.filledQty ?? 0) > 0);
   // A MAX_HOLD close whose remainder the same-pass retry (`<id>-r1`) filled completed:
   // only the retry leg's own outcome counts.
@@ -173,7 +175,16 @@ export function buildBotNow(deps: BotNowDeps): { asOf: number; portfolios: BotNo
   const activities = db.query("SELECT * FROM activity_log WHERE created_at >= ? AND created_at <= ? ORDER BY created_at DESC").all(since, now) as any[];
   const orders = db.query(`SELECT o.*, s.reason AS signal_reason FROM orders o LEFT JOIN signals s ON s.id = o.signal_id
     WHERE o.created_at >= ? AND o.created_at <= ? ORDER BY o.created_at DESC`).all(since, now) as any[];
-  const peRows = db.query("SELECT * FROM portfolio_decisions WHERE mode = 'live' ORDER BY decided_at DESC, id DESC").all() as any[];
+  // Seven days of events plus the latest decision of each account/version
+  // (even an idle old version must retain its last known state). Do not load
+  // and re-parse the lifetime journal on every dashboard refresh.
+  const peRows = (db.query(`SELECT * FROM portfolio_decisions WHERE mode = 'live' AND decided_at <= ?1
+    AND (decided_at >= ?2 OR id IN (
+      SELECT id FROM (SELECT id, ROW_NUMBER() OVER (
+        PARTITION BY account_id, strategy_version ORDER BY decided_at DESC, id DESC
+      ) rn FROM portfolio_decisions WHERE mode = 'live' AND decided_at <= ?1) WHERE rn = 1
+    )) ORDER BY decided_at DESC, id DESC`).all(now, since) as any[])
+    .map(row => ({ ...row, parsedOrders: json(row.orders_json, []) as PersistedOrder[] }));
   // The governor owns this table; a fresh installation may not have built
   // it yet. Never initialize/migrate it from a dashboard read.
   const modes = db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sleeve_modes'").get()
@@ -192,8 +203,9 @@ export function buildBotNow(deps: BotNowDeps): { asOf: number; portfolios: BotNo
     const equityUsd = finite(summary.equity) ? summary.equity : snap?.equity ?? 0;
     const livePositions = deps.positions?.filter(p => p.profileId === summary.id);
     const positions = livePositions ? livePositions.length : rows.length;
-    const investedUsd = livePositions ? livePositions.reduce((sum, p) => sum + Math.abs(p.quantity * (p.currentPrice > 0 ? p.currentPrice : p.avgEntryPrice)), 0)
-      : stocks && snap ? Math.max(0, snap.equity - snap.cash) : rows.reduce((sum, r) => sum + Math.abs(r.quantity * r.entry_price), 0);
+    const investedUsd = livePositions ? livePositions.reduce((sum, p) => sum + (notionalUsd(summary.broker, p.symbol ?? "", p.quantity,
+      p.currentPrice > 0 ? p.currentPrice : p.avgEntryPrice, p.contractSize) ?? 0), 0)
+      : stocks && snap ? Math.max(0, snap.equity - snap.cash) : rows.reduce((sum, r) => sum + (notionalUsd(summary.broker, r.symbol, r.quantity, r.entry_price) ?? 0), 0);
     const grossX = equityUsd > 0 ? investedUsd / equityUsd : 0;
     const shadow = engine !== "portfolio" && modes.some(m => m.sleeve === summary.id && m.mode === "shadow");
     const persisted = runtime?.statePath ? (deps.readState ?? readState)(runtime.statePath) : null;
@@ -251,9 +263,18 @@ function buildEvents(db: Database, now: number, decisions: any[], orders: any[],
   const base = (at: number, portfolioId: string | null, kind: BotNowEvent["kind"], reason: string): BotNowEvent =>
     ({ at, portfolioId, kind, reason, symbol: null, qty: null, usd: null, pnlUsd: null, detail: null });
   const peIds = new Set<string>();
+  const portfolioSellTimes = new Map<string, number[]>();
   for (const d of decisions) {
-    const persisted = json(d.orders_json, []) as PersistedOrder[];
-    for (const o of persisted) if (o.result?.brokerOrderId) peIds.add(o.result.brokerOrderId);
+    const persisted: PersistedOrder[] = d.parsedOrders;
+    for (const o of persisted) {
+      if (o.result?.brokerOrderId) peIds.add(o.result.brokerOrderId);
+      if (o.intent.side === "sell" && (o.result?.filledQty ?? 0) > 0) {
+        const key = `${d.account_id}|${o.intent.symbol}`;
+        const times = portfolioSellTimes.get(key) ?? [];
+        times.push(d.updated_at);
+        portfolioSellTimes.set(key, times);
+      }
+    }
     if (d.decided_at < since || d.decided_at > now) continue;
     const counts = portfolioCounts(d);
     const filled = persisted.filter(o => (o.result?.filledQty ?? 0) > 0);
@@ -274,10 +295,10 @@ function buildEvents(db: Database, now: number, decisions: any[], orders: any[],
   const closes = db.query("SELECT * FROM trades WHERE status = 'closed' AND exit_time >= ? AND exit_time <= ? ORDER BY exit_time DESC").all(since, now) as any[];
   for (const t of closes) {
     // Portfolio-engine sells are already represented by their one pass event.
-    if (t.close_reason === "PORTFOLIO_REBALANCE" && decisions.some(d => d.account_id === t.account_id && json(d.orders_json, []).some((o: PersistedOrder) => o.intent.side === "sell" && o.intent.symbol === t.symbol && (o.result?.filledQty ?? 0) > 0 && Math.abs(d.updated_at - t.exit_time) < 30 * 60_000))) continue;
+    if (t.close_reason === "PORTFOLIO_REBALANCE" && portfolioSellTimes.get(`${t.account_id}|${t.symbol}`)?.some(at => Math.abs(at - t.exit_time) < 30 * 60_000)) continue;
     const reason = t.close_reason ?? "CLOSE";
     out.push({ ...base(t.exit_time, t.account_id, reason === "MODEL_CUTOVER" ? "cutover" : /STOP/.test(reason) ? "stop" : "close", reason),
-      symbol: t.symbol, qty: t.quantity, usd: t.quantity * (t.exit_price ?? 0), pnlUsd: t.pnl ?? null });
+      symbol: t.symbol, qty: t.quantity, usd: notionalUsd(RISK_PROFILES[t.account_id as RiskProfileId]?.broker ?? "", t.symbol, t.quantity, t.exit_price ?? 0), pnlUsd: t.pnl ?? null });
   }
   const resizeActivities = activities.filter(a => /^Resized /.test(a.message));
   for (const o of orders) {

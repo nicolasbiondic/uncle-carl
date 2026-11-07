@@ -2,8 +2,8 @@
 // (2026-10-02, replaced the hand-rolled SVG) + position/trade overlays +
 // orderbook & tape for crypto. Opened by clicking any [data-sym] cell.
 import { api } from "../api.js";
-import { t } from "../store.js";
-import { num, etTime, etDate, n, pnlColor, moneySigned, pctSigned } from "../fmt.js";
+import { t, sleeveLabel } from "../store.js";
+import { num, etTime, etDate, n, pnlColor, moneySigned, pnlWhole, pctWhole } from "../fmt.js";
 import { esc, icon } from "../ui.js";
 import { trapFocus } from "../focus-trap.js";
 import { loadChartLib, readThemeColors, baseChartOptions, disposeChart, tickLabel } from "../lwchart.js";
@@ -192,7 +192,7 @@ function legend(positions) {
   if (!positions.length) return "";
   return `<div class="chips" style="margin-top:var(--s2)">` + positions.map((p) => {
     const isL = p.side === "buy" || p.side === "long";
-    return `<span class="mchip"><span class="l">${esc(p.profileId || "")} ${isL ? "LONG" : "SHORT"}</span><b style="color:${pnlColor(p.unrealizedPnl)}">${moneySigned(p.unrealizedPnl)} (${pctSigned(p.unrealizedPnlPct)})</b></span>`;
+    return `<span class="mchip"><span class="l">${esc(p.profileId ? sleeveLabel({ id: p.profileId }) : "")} ${isL ? t("long", "compra") : t("short", "venta")}</span><b style="color:${pnlColor(p.unrealizedPnl)}">${pnlWhole(p.unrealizedPnl)} (${pctWhole(p.unrealizedPnlPct)})</b></span>`;
   }).join("") + `</div>`;
 }
 

@@ -56,8 +56,14 @@ manifest candidate (runbook below).
 - Schedule: stocks one pass per ET trading day at >= 09:35 on the previous
   completed session; crypto >= 00:00:15 UTC on the just-closed UTC day
   (`live/schedule.ts`; `engine.start()` ticks every 60 s). Heartbeat
-  `portfolio:<sleeve>`, daily, grace x5, registered by `start()`, beaten by
-  every idle or successful tick.
+  `portfolio:<sleeve>` at the TICK cadence (60 s, grace `HEARTBEAT_GRACE_TICKS`
+  = 10 ticks, so a dead timer is stale in ~10 min), registered by `start()` and
+  beaten by every tick (`not_due`, `already_done`, a completed pass); a failed
+  pass calls `beatFailed` (alive, dependency failing) and pages after
+  `failPageAfter` consecutive failures. Until 2026-11-07 it was 24 h x 5
+  (~5 days to notice a dead timer). Enforced: `PortfolioEngine.test.ts`
+  ("heartbeat at the tick cadence…") and `live/wiring.test.ts` ("start()
+  registers the heartbeat at the tick cadence").
 
 ### Semantics
 
@@ -81,6 +87,41 @@ manifest candidate (runbook below).
   its native stop at open only, so the boot step arms one per handed-back row
   (`placeStopMarketClose`, profile stop %); a failure pages "protect it
   manually". Stops the engine placed itself (`pe-s-`) stay at the venue.
+
+### The live pass (what `PortfolioEngine.ts` does around the pure core)
+
+- MAX_HOLD close, Alpaca: `AlpacaVenue` gives a paper fill 180 s before it
+  cancels the remainder, then waits until the order is terminal (a cancel ACK is
+  not settlement; a still-working order throws so the journal stays unapplied and
+  the same client id resumes next tick). If the close settled `canceled`/`expired`
+  with a remainder, the engine journals a second sell for the remainder under the
+  same client id plus `-r1` BEFORE sending it, once, ahead of any rebuy; a restart
+  resumes only the unapplied leg. A rebuy never goes into a lot whose close is
+  incomplete (`max_hold_close_incomplete`). Enforced: `PortfolioEngine.test.ts`
+  (the `-r1` tests: retry is bounded, age preserved, an ambiguous retry fill
+  survives a restart) and `venues/alpaca.test.ts`.
+- Stale data, closes only (live mode; an observer sends nothing): if the universe is not fresh at `asOf` (the 04:00
+  refresh did not land), the pass is `skipped_stale` and takes no decision, but
+  every lot already past `maxHoldSessions` is still closed (leg `stale-close`,
+  its own deterministic id, same `-r1` and held-shares retries; no rebuy, no
+  resize, no new target). They are journaled on the session's `skipped_stale`
+  record (`diagnostics.closesOnly`), so a repeat stale tick sends nothing twice;
+  when fresh data lands the normal pass carries those orders into its journal
+  and finishes any still-retrying close before deciding. So the owner's
+  five-session rule does not depend on the data refresh. Only designs with
+  `maxHoldSessions` do this. Enforced: `PortfolioEngine.test.ts` ("closes-only
+  on stale data").
+- RiskEngine buy gate: the engine reads the RiskEngine TRADING STATE
+  (`tradingState`, default the process-wide engine: the account-identity halt or
+  `RISK_ENGINE_STATE`). `HALTED` or `REDUCING` skips every BUY of the pass with
+  `risk_engine_halted` / `risk_engine_reducing`; sells, trims and MAX_HOLD closes
+  always go (a close never consults it, and the rebuy of a MAX_HOLD pair is
+  skipped by the halt, not by an incomplete close). Per-order notional caps are
+  NOT consulted (a levered portfolio order legitimately exceeds them);
+  `TRADING_ENABLED=false` likewise skips buys only. The treasury sweep's buy
+  honors the same state. Enforced: `PortfolioEngine.test.ts` ("RiskEngine
+  HALTED / REDUCING skips every buy…", "a MAX_HOLD close is sent while
+  HALTED…"), `src/treasury/TreasurySweep.test.ts`.
 
 ### Fail closed (toward the incumbent, with a page)
 
@@ -142,16 +183,28 @@ unlinked) pages every boot ("orphaned").
   Rolling back appends nothing by itself: add an entry for the incumbent's
   config in the next deploy (until then new incumbent rows are stamped with
   the engine's version; their `since` bounds it).
-- Peripheral consumers of the INCUMBENT's config: `scripts/parity-check.ts`
-  skips a sleeve whose live manager is the engine (reads `platform_portfolios`;
-  explicit SKIPPED line, no page) — decision parity for the engine is an open
-  item (OPEN.md); `liveSleeveConfig(sleeve).managedBy` says "portfolio" and its
-  derivation is the rollback config; the dashboard registry lists the
-  incumbent row as "gestionado por el motor de cartera (pe_x)" and the `pe_*`
-  row with the sleeve's band; the governor registers the sleeve itself under
-  the engine's version (`index.ts`). Cost calibration and the decision funnel
-  get no observations from the engine (no `fills`/`decision_passes` rows —
-  OPEN.md).
+- Decision parity is implemented: `scripts/parity-check.ts` finds the sleeves
+  whose live manager is the engine (`portfolioEngineLiveSleeves`, reads
+  `platform_portfolios`) and, instead of the incumbent's simulator, runs an
+  EXACT DECISION REPLAY of each live `portfolio_decisions` row: it rebuilds the
+  `HistoricalPriceView`, the persisted pre-order positions/equity and the
+  preceding same-version memory, runs `decide()` on the version's manifest
+  strategy and compares weights, regime, MAX_HOLD close intents and kernel
+  diagnostics (float tolerance 8 ε, `PORTFOLIO_FLOAT_TOLERANCE`). Changed INPUT
+  diagnostics are `DATA REVISED` (paged only if the regime/target set flips);
+  same inputs with changed outputs are `DIVERGENCE`; a missing or duplicate live
+  decision for a NYSE session is a `portfolio_session` divergence. Execution
+  drift (fills vs plan) is reported, never paged. Enforced:
+  `scripts/parity-check.test.ts` ("synthetic fixture: same kernel, exact input
+  book/memory… → parity", "tampered weight with identical input diagnostics →
+  DIVERGENCE", "renderSummary prints portfolio decisions…", no `SKIPPED` line).
+  Other consumers of the INCUMBENT's config: `liveSleeveConfig(sleeve).managedBy`
+  says "portfolio" and its derivation is the rollback config; the dashboard
+  registry lists the incumbent row as "gestionado por el motor de cartera (pe_x)"
+  and the `pe_*` row with the sleeve's band; the governor registers the sleeve
+  itself under the engine's version (`index.ts`). Cost calibration and the
+  decision funnel still get no observations from the engine (no
+  `fills`/`decision_passes` rows — OPEN.md).
 
 ### Runbook (per sleeve; `scripts/portfolio-engine-cutover.ts`, dry-run by default)
 
@@ -177,8 +230,8 @@ zero-observation exception and portfolio rollback: `docs/reports/rw5-contingenci
    adopts and trades the delta. Verify: `activity_log` rows
    "adopted"/"released", rows `strategy = 'PORTFOLIO'`, no pages, `/healthz/full`
    heartbeat fresh, the incumbent's engine absent from the boot log, the next
-   04:45 parity cron printing `SKIPPED — live manager is the portfolio engine`
-   for the sleeve.
+   04:45 parity cron printing the sleeve's section as an "exact decision
+   replay" (`PARITY` / `DATA REVISED` per session; never a `SKIPPED` line).
 4. Rollback: `--mode rollback` (back to observer, keeps evidence) or
    `--mode rollback --remove` (deletes the definition), `--apply`, restart. The
    boot re-tags the `PORTFOLIO` rows and arms Binance stops before the
@@ -291,7 +344,15 @@ hedge, it refuses rather than silently retaining that contributor; a
 replacement hypothesis must be pre-registered first. Sensitivity replays
 must never mutate the registered candidate block.
 
-## RW6 optional lot renewal (drafts only)
+## RW6 optional lot renewal (opt-in knobs; LIVE on both stock sleeves)
+
+Status 2026-11-07: `maxHoldSessions: 5` has been live on `momentum_stocks` and
+`meanrev_stocks` since 2026-10-26, `maxHoldStagger` since 2026-10-28, and the SH
+hedge (the `hedge` paragraph below) on `momentum_stocks` since 2026-10-29 (owner
+rules; `src/portfolio/modelVersions.ts`). The "drafts only" / "no live
+activation" sentences below were written before those activations and describe
+the research-time contract of the knobs, not the current wiring. How the live
+pass executes them: "The live pass" above.
 
 `volManaged.maxHoldSessions` is absent by default (no changed decisions,
 memory, telemetry or config/candidate hashes). Positive integer, stocks only
@@ -373,5 +434,7 @@ ETFs (`scripts/lib/liveStockExcludes.ts`; `validatePortfolioManifest` enforces i
 
 No definition is written by the code (that is each cutover's script run).
 `factorCore` cannot run until a live point-in-time membership source exists.
-The engine writes no `fills` and no `decision_passes` rows, and no decision
-parity exists for it (both in OPEN.md with falsifiers).
+The engine writes no `fills` and no `decision_passes` rows, so cost calibration
+and the decision funnel are blind to it (OPEN.md, with falsifier). Decision
+parity is NOT in this list any more: it is implemented (see "Interplay with the
+shared Alpaca wallet" above, `scripts/parity-check.ts`).

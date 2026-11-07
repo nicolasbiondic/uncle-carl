@@ -12,7 +12,11 @@
 
 import { describe, test, expect, beforeAll, beforeEach } from "bun:test";
 import { getDB, getSyncState, setSyncState } from "../db/database";
-import { BrokerSync, sleeveOwnsSymbol } from "./BrokerSync";
+import { readFileSync } from "node:fs";
+import { BrokerSync, sleeveOwnsSymbol, registerSleeveOwnedSymbols, _resetRegisteredSleeveSymbolsForTests } from "./BrokerSync";
+import { portfolioEngineOwnedSymbols } from "../portfolios/validate";
+import { currentModelVersion } from "../portfolio/modelVersions";
+import type { PortfolioDefinition } from "../portfolios/types";
 import type { BrokerSyncSource } from "./brokerSyncSource";
 import { makeTestDb } from "../test-support/db";
 import { captureBursts } from "../test-support/events";
@@ -88,6 +92,45 @@ describe("sleeveOwnsSymbol (ownership boundary)", () => {
   test("Binance crypto universe is sleeve-owned", () => {
     expect(sleeveOwnsSymbol("binance_testnet", "BTC/USD")).toBe(true);
     expect(sleeveOwnsSymbol("binance_testnet", "PEPE/USD")).toBe(false);
+  });
+
+  // B-4 (2026-11-07): SH — the RW8 risk-off hedge the live momentum_stocks portfolio engine buys —
+  // was in no ownership set, so an unrowed SH position was adopted under alpaca_main; the engine
+  // (which adopts only rowless positions) could then buy the hedge a second time.
+  describe("live portfolio-engine symbols registered from the definitions", () => {
+    function liveDef(over: Partial<PortfolioDefinition["params"]> & Record<string, any> = {}, def: Partial<PortfolioDefinition> = {}): PortfolioDefinition {
+      const version = currentModelVersion("momentum_stocks")!;
+      const manifest = JSON.parse(readFileSync(new URL(`../../${version.manifest}`, import.meta.url), "utf8"));
+      const strategy = manifest.candidates.find((c: any) => c.name === version.candidate).portfolio.strategy;
+      return {
+        id: "pe_momentum_stocks", name: "E1", template: "portfolio", account: "alpaca_main", capital: 50_000, mode: "live", enabled: true,
+        params: { engine: "portfolio", venue: "alpaca", runMode: "live", sleeve: "momentum_stocks", strategyVersion: version.id,
+          heartbeatName: "portfolio:momentum_stocks", loggerContext: "Portfolio:momentum_stocks", strategy, ...over } as any,
+        ...def,
+      };
+    }
+    beforeEach(() => _resetRegisteredSleeveSymbolsForTests());
+
+    test("the live RW8 definition owns SH (universe + overlay hedge); observer/disabled definitions own nothing", () => {
+      const owned = portfolioEngineOwnedSymbols([liveDef()]);
+      expect(owned.alpaca).toContain("SH");
+      expect(owned.alpaca).toContain("SPY");
+      expect(owned.binance).toEqual([]);
+      expect(portfolioEngineOwnedSymbols([liveDef({ runMode: "observer" })]).alpaca).toEqual([]);
+      expect(portfolioEngineOwnedSymbols([liveDef({}, { enabled: false })]).alpaca).toEqual([]);
+      expect(sleeveOwnsSymbol("alpaca_paper", "SH")).toBe(false); // before registration: the hole this closes
+      registerSleeveOwnedSymbols("alpaca", owned.alpaca);
+      expect(sleeveOwnsSymbol("alpaca_paper", "SH")).toBe(true);
+      expect(sleeveOwnsSymbol("binance_testnet", "SH")).toBe(false);
+    });
+
+    test("an unrowed SH position on the broker is NOT adopted under alpaca_main once registered", async () => {
+      registerSleeveOwnedSymbols("alpaca", portfolioEngineOwnedSymbols([liveDef()]).alpaca);
+      const source = fakeSource({ positions: [makePos("SH"), makePos("TSLA")] });
+      await new BrokerSync([source], 30_000).syncAll();
+      const rows = getDB().prepare(`SELECT symbol, account_id FROM trades WHERE status = 'open'`).all() as any[];
+      expect(rows).toEqual([{ symbol: "TSLA", account_id: "alpaca_main" }]);
+    });
   });
 });
 

@@ -23,10 +23,18 @@ leave your machine.
 - Reconciles against the broker every cycle — **the broker is truth, the
   local database is a cache** that gets corrected, never the other way
   around.
-- Primary + broker-native stop-loss protection on every open position.
+- Risk protection is **per strategy design**, not one stop on every position.
+  The momentum-engine sleeves (the Binance ones) give each position a stop
+  price and place a broker-native stop order with it. The portfolio-engine
+  sleeves (the shipped stock sleeves) carry **no per-position stop**: their
+  protection is volatility-targeted sizing, per-asset and gross-exposure
+  caps, a risk-off switch on the S&P 500's 200-day average (with an
+  inverse-ETF hedge on one of them) and a five-session maximum hold. Check a
+  portfolio's design before assuming a stop exists.
 - A live web dashboard (equity, P&L per sleeve, open/closed trades, activity
-  log over WebSocket) and an outbound-only Telegram bot (`/status`,
-  `/trades`, `/help`, plus error/circuit-breaker alerts).
+  log over WebSocket) and a Telegram bot: alerts go out, and the commands
+  (`/status`, `/trades`, `/profits`, `/report`, `/quiet`, `/help`) are
+  answered only to the chats you configure.
 - A built-in walk-forward research protocol (nested + purged folds, PSR/DSR
   gates, stress/leave-one-out checks) so a strategy change has to clear the
   same bar the shipped defaults did.
@@ -121,7 +129,17 @@ can:
   restore it.
 
 The server refuses overlapping universes on one account and a total capital
-above the account's equity. Changes apply on the next restart.
+above the account's equity.
+
+**When a change takes effect.** Edits are saved at once but never applied
+live: they are marked *pending restart* and take effect only when the bot
+process next starts (`./start.sh` restarts it, or the service manager does
+after a crash or a reboot). A restart restarts the whole bot, every sleeve
+with it. On boot the bot reads the saved portfolios and accounts, checks the
+open positions against the broker (the broker is truth) and builds each
+engine whose account is connected. A restart is not an order: it neither
+guarantees one nor skips one, and an engine only trades when its own schedule
+and safety checks allow it.
 
 ## Security
 

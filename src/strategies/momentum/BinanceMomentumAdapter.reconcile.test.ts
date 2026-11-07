@@ -6,7 +6,7 @@
 
 import { describe, test, expect, beforeAll } from "bun:test";
 import { Database } from "bun:sqlite";
-import { getDB, updateTradeCloseReason } from "../../db/database";
+import { getDB, getOpenTrades, updateTradeCloseReason } from "../../db/database";
 import { BinanceMomentumAdapter } from "./BinanceMomentumAdapter";
 import { makeTestDb, seedOpenTrade } from "../../test-support/db";
 import { momentumCryptoPortfolioPlan, momentumUsdcPortfolioPlan } from "../../index";
@@ -17,6 +17,8 @@ import { validateMomentumParams } from "../../portfolios/validate";
 import { MomentumEngine } from "./MomentumEngine";
 import { MemoryPersistence, silentLogger } from "../../test-support/momentum";
 import { TestClock } from "../../utils/clock";
+import { ensureTurtleCatastropheStop, turtleStopClientOrderId } from "../../account/BinanceSleeveReconciler";
+import { eventBus, EVENTS } from "../../utils/events";
 
 beforeAll(() => {
   makeTestDb();
@@ -176,7 +178,7 @@ describe("BinanceMomentumAdapter close_reason telemetry — TRAIL_STOP vs signal
       expect(plan).toEqual(momentumUsdcPortfolioPlan());
       if (plan.template !== "momentum_tsm" || plan.adapter.kind !== "binance_usdm") throw new Error("expected USDM momentum");
       expect(plan.adapter.options.breakoutShortSymbols).toEqual(symbols);
-      const reads: string[] = [], orders: Array<{ symbol: string; quantity: number }> = [];
+      const reads: string[] = [], orders: Array<{ symbol: string; quantity: number }> = [], stops: any[] = [];
       const raw = Array.from({ length: 264 }, (_, i) => {
         const t = day - (263 - i) * 86400000;
         // Forming day has a huge range; yesterday's low permits the strict breach.
@@ -198,7 +200,8 @@ describe("BinanceMomentumAdapter close_reason telemetry — TRAIL_STOP vs signal
           orders.push({ symbol: s.symbol, quantity });
           return { id: `usdc-bo13-e2e-${s.symbol}`, quantity, status: "filled", filledPrice: 89, filledAt: day + 15000 };
         },
-        placeStopMarketClose: async () => { throw new Error("Turtle has a daily-close stop, no native stop"); },
+        getOpenProtectiveOrders: async () => [],
+        placeStopMarketClose: async (...args: any[]) => { stops.push(args); return true; },
       } as any;
       const adapter = new BinanceMomentumAdapter({ getBars: async () => { throw new Error("no Alpaca proxy"); } } as any, bin, plan.adapter.options);
       for (const symbol of symbols) {
@@ -210,11 +213,13 @@ describe("BinanceMomentumAdapter close_reason telemetry — TRAIL_STOP vs signal
       const report = await new MomentumEngine(plan.engineConfig, adapter, silentLogger, new MemoryPersistence(), new TestClock(day + 15000)).tick();
       expect(orders.map(o => o.symbol)).toEqual(symbols);
       expect(report.actions.filter(a => a.type === "open")).toHaveLength(13);
+      expect(stops).toHaveLength(13);
       const held = await new BinanceMomentumAdapter({} as any, bin, plan.adapter.options).getOpenPositions();
       expect(held).toHaveLength(13);
       for (const p of held) {
         expect(p.role).toBe("breakout-short"); expect(p.quantity * p.breakoutN!).toBeCloseTo(50, 10);
         expect(p.stopLoss).toBeCloseTo(89 + 2 * p.breakoutN!, 10);
+        expect(stops.find(s => s[0] === p.symbol)?.slice(1, 4)).toEqual(["sell", 89 + 3 * p.breakoutN!, p.quantity]);
       }
       expect(new Set(reads)).toEqual(new Set(Object.values(USDC_SYMBOL_MAP)));
       expect(await new BinanceMomentumAdapter({} as any, bin, plan.adapter.options).openPosition({ symbol: "BTC/USD", side: "sell", notionalUsd: 10, role: "breakout-short", breakout: { n: 20, stopN: 2, quantity: 0.1 } })).toMatchObject({ ok: false });
@@ -291,7 +296,7 @@ describe("BinanceMomentumAdapter close_reason telemetry — TRAIL_STOP vs signal
     cancelAllOrders: async () => {},
   } as any);
 
-  test.each(["TRAIL_STOP", "TREND_EXIT", "IDLE_OVERLAY_EXIT", "BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN", "BREAKOUT_SHORT_TIME_STOP", "BREAKOUT_LONG_EXIT", "BREAKOUT_LONG_STOP", "BREAKOUT_LONG_PRIORITY", "BREAKOUT_LONG_DRAWDOWN", "BREAKOUT_LONG_TIME_STOP"])("engine close persists close_reason=%s", async closeReason => {
+  test.each(["BREAKOUT_CATASTROPHE_STOP", "TRAIL_STOP", "TREND_EXIT", "IDLE_OVERLAY_EXIT", "BREAKOUT_SHORT_EXIT", "BREAKOUT_SHORT_STOP", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_SHORT_DRAWDOWN", "BREAKOUT_SHORT_TIME_STOP", "BREAKOUT_LONG_EXIT", "BREAKOUT_LONG_STOP", "BREAKOUT_LONG_PRIORITY", "BREAKOUT_LONG_DRAWDOWN", "BREAKOUT_LONG_TIME_STOP"])("engine close persists close_reason=%s", async closeReason => {
     const id = `trail-close-binance-${closeReason}`;
     seedOpenTrade(id, "momentum_crypto_trailreason", {
       symbol: "BTC/USD", market: "crypto", quantity: 0.2, entryTime: Date.now(),
@@ -308,14 +313,17 @@ describe("BinanceMomentumAdapter close_reason telemetry — TRAIL_STOP vs signal
   test.each([
     ...["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"].map(symbol => ({ symbol, quoteAsset: "USDT" as QuoteAsset })),
     ...Object.keys(USDC_SYMBOL_MAP).map(symbol => ({ symbol, quoteAsset: "USDC" as QuoteAsset })),
-  ])("Turtle %j stores N, fill and 2N stop atomically; restart recovers ownership, no native stop", async ({ symbol, quoteAsset }) => {
+  ])("Turtle %j stores 2N separately and installs a sized 3N catastrophe stop", async ({ symbol, quoteAsset }) => {
     const accountId = `breakout-persistence-${symbol}`;
     let stops = 0, submittedQty = 0;
     const bin = {
       isConnected: () => true, getPrice: async (native: string) => { expect(native).toBe(symbol.split("/")[0] + quoteAsset); return 100; },
       getPositions: async () => [{ symbol: symbol.split("/")[0] + quoteAsset, positionAmt: -0.2, entryPrice: 99, unrealizedProfit: 0 }],
       placeOrder: async (s: any, qty: number) => { expect(s).toMatchObject({ symbol, side: "sell" }); submittedQty = qty; return { id: `breakout-fill-${symbol}`, quantity: 0.2, status: "filled", filledPrice: 99, filledAt: Date.now(), createdAt: Date.now(), updatedAt: Date.now() }; },
-      placeStopMarketClose: async () => { stops++; return true; },
+      getOpenProtectiveOrders: async () => [],
+      placeStopMarketClose: async (s: string, side: string, price: number, qty: number, id: string) => {
+        stops++; expect([s, side, price, qty, id]).toEqual([symbol, "sell", 108, 0.2, turtleStopClientOrderId({ id: `breakout-fill-${symbol}`, accountId })]); return true;
+      },
       closePosition: async () => ({ success: true, filledPrice: 105, commission: 0, realizedPnl: -1.2 }), cancelAllOrders: async () => {},
     } as any;
     const plan = momentumCryptoPortfolioPlan();
@@ -323,25 +331,29 @@ describe("BinanceMomentumAdapter close_reason telemetry — TRAIL_STOP vs signal
     const options = quoteAsset === "USDT" ? plan.adapter.options : { quoteAsset, candleTimeframe: "1Day" as const, breakoutShortSymbols: Object.keys(USDC_SYMBOL_MAP) };
     const a = new BinanceMomentumAdapter({} as any, bin, { ...options, accountId });
     expect(await a.openPosition({ symbol, side: "sell", notionalUsd: 20, role: "breakout-short", breakout: { n: 3, stopN: 2, quantity: 0.2 } })).toEqual({ ok: true });
-    expect(stops).toBe(0); expect(submittedQty).toBe(0.2);
+    expect(stops).toBe(1); expect(submittedQty).toBe(0.2);
+    expect((getDB().query("SELECT catastrophe_stop FROM trades WHERE id = ?").get(`breakout-fill-${symbol}`) as any).catastrophe_stop).toBe(108);
     const restarted = new BinanceMomentumAdapter({} as any, bin, { accountId, quoteAsset });
     expect(await restarted.getOpenPositions()).toMatchObject([{ symbol, role: "breakout-short", entryPrice: 99, breakoutN: 3, stopLoss: 105, quantity: 0.2 }]);
     expect(await restarted.closePosition({ symbol, side: "sell", closeReason: "BREAKOUT_SHORT_STOP" })).toEqual({ ok: true });
     expect(await restarted.getRealisedPnlSince(0)).toBeCloseTo(-1.2);
   });
 
-  test.each(["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"])("Turtle LONG %s persists fill-minus-2N, exact quantity and role across restart, without a native stop", async symbol => {
+  test.each(["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "ADA/USD", "AVAX/USD", "DOGE/USD", "LINK/USD"])("Turtle LONG %s preserves 2N and installs a configurable catastrophe stop", async symbol => {
     const accountId = `breakout-long-${symbol}`; let stops = 0, submittedQty = 0;
     const bin = {
       isConnected: () => true, getPrice: async () => 100,
       getPositions: async () => [{ symbol: symbol.split("/")[0] + "USDT", positionAmt: 0.2, entryPrice: 101, unrealizedProfit: 0 }],
       placeOrder: async (s: any, qty: number) => { expect(s).toMatchObject({ symbol, side: "buy" }); submittedQty = qty; return { id: `breakout-long-fill-${symbol}`, quantity: 0.2, status: "filled", filledPrice: 101, filledAt: Date.now(), createdAt: Date.now(), updatedAt: Date.now() }; },
-      placeStopMarketClose: async () => { stops++; return true; },
+      getOpenProtectiveOrders: async () => [],
+      placeStopMarketClose: async (s: string, side: string, price: number, qty: number) => {
+        stops++; expect([s, side, price, qty]).toEqual([symbol, "buy", 89, 0.2]); return true;
+      },
       closePosition: async () => ({ success: true, filledPrice: 95, commission: 0, realizedPnl: -1.2 }), cancelAllOrders: async () => {},
     } as any;
     const a = new BinanceMomentumAdapter({} as any, bin, { accountId, breakoutLongSymbols: [symbol] });
-    expect(await a.openPosition({ symbol, side: "buy", notionalUsd: 20, role: "breakout-long", breakout: { n: 3, stopN: 2, quantity: 0.2 } })).toEqual({ ok: true });
-    expect(stops).toBe(0); expect(submittedQty).toBe(0.2);
+    expect(await a.openPosition({ symbol, side: "buy", notionalUsd: 20, role: "breakout-long", breakout: { n: 3, stopN: 2, catastropheN: 4, quantity: 0.2 } })).toEqual({ ok: true });
+    expect(stops).toBe(1); expect(submittedQty).toBe(0.2);
     const restarted = new BinanceMomentumAdapter({} as any, bin, { accountId });
     expect(await restarted.getOpenPositions()).toMatchObject([{ symbol, side: "buy", role: "breakout-long", entryPrice: 101, breakoutN: 3, stopLoss: 95, quantity: 0.2 }]);
     expect(await restarted.closePosition({ symbol, side: "buy", closeReason: "BREAKOUT_LONG_STOP" })).toEqual({ ok: true });
@@ -354,6 +366,82 @@ describe("BinanceMomentumAdapter close_reason telemetry — TRAIL_STOP vs signal
     for (const bad of [{ ...action, symbol: "ETH/USD" }, { ...action, symbol: "UNKNOWN/USD" }, { ...action, side: "sell" as const }, { ...action, breakout: undefined }, { ...action, breakout: { ...action.breakout, quantity: NaN } }]) {
       expect((await a.openPosition(bad)).reason).toContain("configured, mapped USDT buy");
     }
+  });
+
+  test.each(["USDT", "USDC"] as const)("%s Turtle post-fill stop failure retains the unit and pages once", async quoteAsset => {
+    const accountId = `failed-catastrophe-${quoteAsset}`, symbol = quoteAsset === "USDT" ? "BTC/USD" : "BTC/USDC";
+    const pages: any[] = [], handler = (p: any) => { if (p.context === "TurtleCatastropheStop") pages.push(p); };
+    let closes = 0;
+    const bin: any = {
+      isConnected: () => true, getPrice: async () => 100,
+      getPositions: async () => [{ symbol: `BTC${quoteAsset}`, positionAmt: -1, entryPrice: 100, unrealizedProfit: 0 }],
+      placeOrder: async () => ({ id: accountId, quantity: 1, status: "filled", filledPrice: 100 }),
+      getOpenProtectiveOrders: async () => [], placeStopMarketClose: async () => false,
+      closePosition: async () => { closes++; return { success: true }; },
+    };
+    eventBus.on(EVENTS.ERROR_BURST, handler);
+    try {
+      const adapter = new BinanceMomentumAdapter({} as any, bin, { accountId, quoteAsset, breakoutShortSymbols: [symbol] });
+      expect(await adapter.openPosition({ symbol, side: "sell", notionalUsd: 100, role: "breakout-short", breakout: { n: 5, stopN: 2, quantity: 1 } })).toEqual({ ok: true });
+      expect(await adapter.getOpenPositions()).toMatchObject([{ symbol, stopLoss: 110, breakoutN: 5 }]);
+      expect(closes).toBe(0); expect(pages).toHaveLength(1);
+    } finally { eventBus.removeListener(EVENTS.ERROR_BURST, handler); }
+  });
+
+  for (const quoteAsset of ["USDT", "USDC"] as const) for (const side of ["sell", "buy"] as const) {
+    test.each(["EXIT", "STOP", "TIME_STOP", "PRIORITY", "DRAWDOWN", "MODEL_CUTOVER"])(`${quoteAsset} Turtle ${side} %s cancels ONLY its unit stop`, async kind => {
+      const accountId = `cancel-turtle-${quoteAsset}-${side}-${kind}`, id = accountId;
+      const symbol = quoteAsset === "USDT" ? "BTC/USD" : "BTC/USDC";
+      seedOpenTrade(id, accountId, { symbol, market: "crypto", side, strategy: side === "sell" ? "BREAKOUT_SHORT" : "BREAKOUT_LONG", quantity: 1, entryTime: Date.now() });
+      const cancels: any[] = [];
+      const bin: any = {
+        isConnected: () => true,
+        getPositions: async () => [{ symbol: `BTC${quoteAsset}`, positionAmt: side === "sell" ? -2 : 2, entryPrice: 100 }],
+        closePosition: async (_s: string, qty: number, _side: string, opts: any) => {
+          expect(qty).toBe(1); expect(opts).toMatchObject({ skipOrderCleanup: true, onAccepted: expect.any(Function) });
+          return { success: true, filledPrice: 100, realizedPnl: 0, commission: 0 };
+        },
+        cancelAllOrders: async (...args: any[]) => { cancels.push(args); },
+      };
+      const closeReason = kind === "MODEL_CUTOVER" ? kind : `${side === "sell" ? "BREAKOUT_SHORT" : "BREAKOUT_LONG"}_${kind}`;
+      expect(await new BinanceMomentumAdapter({} as any, bin, { accountId, quoteAsset }).closePosition({ symbol, side, closeReason })).toEqual({ ok: true });
+      expect(cancels).toEqual([[symbol, { onlyClientOrderIds: [turtleStopClientOrderId({ id, accountId })] }]]);
+      expect((getDB().query("SELECT close_reason FROM trades WHERE id = ?").get(id) as any).close_reason).toBe(closeReason);
+    });
+  }
+
+  test("concurrent ensure/close serializes install before cancellation; stale ensure cannot orphan a stop", async () => {
+    const accountId = "turtle-ensure-close-race", symbol = "BTC/USD";
+    seedOpenTrade(accountId, accountId, { symbol, market: "crypto", side: "sell", strategy: "BREAKOUT_SHORT", quantity: 1, breakoutN: 5, stopLoss: 110 });
+    const trade = getOpenTrades(accountId)[0], trace: string[] = [];
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>(r => { release = r; }), readStarted = new Promise<void>(r => { entered = r; });
+    const bin: any = {
+      isConnected: () => true,
+      getPositions: async () => [{ symbol: "BTCUSDT", positionAmt: -1, entryPrice: 100 }],
+      getOpenProtectiveOrders: async () => { entered(); await gate; return []; },
+      placeStopMarketClose: async () => { trace.push("install"); return true; },
+      closePosition: async () => { trace.push("close"); return { success: true, filledPrice: 100, realizedPnl: 0, commission: 0 }; },
+      cancelAllOrders: async () => { trace.push("cancel"); },
+    };
+    const ensuring = ensureTurtleCatastropheStop(bin, trade, "BTCUSDT");
+    await readStarted;
+    const closing = new BinanceMomentumAdapter({} as any, bin, { accountId }).closePosition({ symbol, side: "sell", closeReason: "BREAKOUT_SHORT_EXIT" });
+    release(); await ensuring; expect(await closing).toEqual({ ok: true });
+    await ensureTurtleCatastropheStop(bin, trade, "BTCUSDT");
+    expect(trace).toEqual(["install", "close", "cancel"]);
+  });
+
+  test("an unconfirmed Turtle close keeps its catastrophe stop and its row", async () => {
+    const accountId = "turtle-close-not-confirmed", symbol = "BTC/USD";
+    seedOpenTrade(accountId, accountId, { symbol, market: "crypto", side: "sell", strategy: "BREAKOUT_SHORT" });
+    let cancels = 0;
+    const bin: any = {
+      isConnected: () => true, getPositions: async () => [{ symbol: "BTCUSDT", positionAmt: -1, entryPrice: 100 }],
+      closePosition: async () => ({ success: false, filledPrice: 0 }), cancelAllOrders: async () => { cancels++; },
+    };
+    expect((await new BinanceMomentumAdapter({} as any, bin, { accountId }).closePosition({ symbol, side: "sell" })).ok).toBe(false);
+    expect(cancels).toBe(0); expect(getOpenTrades(accountId)).toHaveLength(1);
   });
   test("Turtle rejects unconfigured/unmapped symbols, wrong wallet/side and malformed units before broker access", async () => {
     const action = { symbol: "ETH/USD", side: "sell" as const, notionalUsd: 20, role: "breakout-short" as const, breakout: { n: 3, stopN: 2, quantity: 0.2 } };

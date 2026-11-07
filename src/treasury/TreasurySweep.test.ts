@@ -127,6 +127,17 @@ describe("due windows", () => {
     expect(treasuryCoverDue(AT_1555ET, "")).toBe(true);
     expect(treasuryCoverDue(AT_1555ET, "2026-09-22")).toBe(false);
   });
+  test("half-day cover starts at 12:50 ET, runs once, and never after the 13:00 close", async () => {
+    const day = getETDayStart(Date.UTC(2026, 10, 27, 17)); // Black Friday
+    expect(treasuryCoverDue(day + (12 * 60 + 49) * 60_000, "")).toBe(false);
+    expect(treasuryCoverDue(day + (12 * 60 + 50) * 60_000, "")).toBe(true);
+    expect(treasuryCoverDue(day + 13 * 60 * 60_000, "")).toBe(false);
+    const broker = fakeBroker({ cash: -5_000, equity: 100_000, price: 100, positions: [{ symbol: "SGOV", quantity: 500, avgEntryPrice: 99.5 }] });
+    const ts = new TreasurySweep(CFG, broker);
+    await ts.tick(day + (12 * 60 + 50) * 60_000);
+    await ts.tick(day + (12 * 60 + 55) * 60_000);
+    expect(broker.placed.map(o => [o.side, o.qty])).toEqual([["sell", 150]]);
+  });
   test("market closed → nothing is due (weekend)", () => {
     const saturday = Date.UTC(2026, 8, 26, 17, 0, 0);
     expect(treasurySweepDue(saturday, "")).toBe(false);
@@ -187,6 +198,18 @@ describe("sweep pass (buy the excess over the buffer)", () => {
     const ts = new TreasurySweep(CFG, broker, () => false);
     await ts.tick(AT_11ET);
     expect(broker.placed.length).toBe(0);
+  });
+
+  test("RiskEngine HALTED / REDUCING → buy skipped (day done), no order; the cover SELL still runs", async () => {
+    for (const state of ["HALTED", "REDUCING"] as const) {
+      const broker = fakeBroker({ cash: 30_000, equity: 100_000 });
+      const ts = new TreasurySweep(CFG, broker, () => true, () => state);
+      await ts.tick(AT_11ET);
+      expect(broker.placed.length).toBe(0);
+      const cover = fakeBroker({ cash: -5_000, equity: 100_000, price: 100, positions: [{ symbol: "SGOV", quantity: 500, avgEntryPrice: 99.5 }] });
+      await new TreasurySweep(CFG, cover, () => true, () => state).tick(AT_1555ET);
+      expect(cover.placed.map(o => o.side)).toEqual(["sell"]);
+    }
   });
 
   test("proven order failure (null) → retried within the day (idempotent id makes that safe)", async () => {

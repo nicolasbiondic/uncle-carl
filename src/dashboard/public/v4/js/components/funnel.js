@@ -11,6 +11,7 @@ import { api } from "../api.js";
 import { store, t, sleeveLabel } from "../store.js";
 import { byId, esc } from "../ui.js";
 import { num, n } from "../fmt.js";
+import { fitTablesIn } from "../fit.js";
 
 let data = null;
 let slippage = null; // /api/analytics/slippage — execution quality (moved here from Performance, 2026-10-25)
@@ -27,6 +28,10 @@ const BLOCK_LABELS = () => ({
   no_slot: t("no slot", "sin hueco"),
   no_data: t("no data", "sin datos"),
   open_failed: t("open failed", "apertura fallida"),
+  close_failed: t("close failed", "cierre fallido"),
+  breakout_long_close_failed: t("close failed", "cierre fallido"),
+  breakout_short_close_failed: t("close failed", "cierre fallido"),
+  idle_overlay_close_failed: t("close failed", "cierre fallido"),
 });
 
 function accountLabel(id) {
@@ -34,31 +39,36 @@ function accountLabel(id) {
   return sleeveLabel(acc || { id });
 }
 
-function blocksHtml(blocks, note) {
+/** Blocks by reason in words; the same word counts once ("close failed" from
+ *  three engine keys), and an unknown key reads "other" — the engine's key and
+ *  its note are never printed. */
+export function blocksHtml(blocks) {
   const labels = BLOCK_LABELS();
-  const parts = Object.entries(blocks || {})
-    .filter(([, v]) => n(v) > 0)
-    .sort((a, b) => b[1] - a[1])
-    .map(([k, v]) => `${esc(labels[k] || k)} ${num(v, 0)}`);
-  if (!parts.length) return `<span class="muted">—</span>`;
-  const txt = parts.join(" · ");
-  return note ? `<span title="${esc(note)}">${txt}</span>` : txt;
+  const merged = new Map();
+  for (const [k, v] of Object.entries(blocks || {})) {
+    if (!(n(v) > 0)) continue;
+    const word = labels[k] || t("other", "otros");
+    merged.set(word, (merged.get(word) || 0) + n(v));
+  }
+  if (!merged.size) return `<span class="muted">—</span>`;
+  return [...merged].sort((a, b) => b[1] - a[1]).map(([w, v]) => `${esc(w)} ${num(v, 0)}`).join(" · ");
 }
 
 function tableHtml() {
   if (!data) return `<div class="muted">…</div>`;
   if (!data.accounts?.length) return `<div class="muted">${t("No decision passes recorded yet", "Aún no hay pasadas de decisión registradas")}</div>`;
+  const windowDays = n(data.days, days) || days;
   const rows = data.accounts.map((a) => `
     <tr>
       <td>${esc(accountLabel(a.accountId))}</td>
-      <td>${num(a.passes, 0)}</td>
-      <td>${num(a.signalsLong + a.signalsShort, 0)}</td>
+      <td class="fo4">${num(a.passes, 0)}</td>
+      <td class="fo3">${num(n(a.signalsLong) + n(a.signalsShort), 0)}</td>
       <td>${num(a.entries, 0)}</td>
       <td>${num(a.exits, 0)}</td>
-      <td class="blocks">${blocksHtml(a.blocks, a.lastBlockNote)}</td>
-      <td>${a.slotsUsed == null ? "—" : `${num(a.slotsUsed, 0)}/${num(a.slotsTotal, 0)}`}</td>
-      <td>${num(a.liveOrdersPerDay, 2)}</td>
-      <td>${a.designOrdersPerDay == null ? "—" : num(a.designOrdersPerDay, 2)}</td>
+      <td class="blocks">${blocksHtml(a.blocks)}</td>
+      <td class="fo2">${a.slotsUsed == null ? "—" : `${num(a.slotsUsed, 0)}/${num(a.slotsTotal, 0)}`}</td>
+      <td>${num(a.liveOrders, 0)}</td>
+      <td class="fo1">${a.designOrdersPerDay == null ? "—" : num(a.designOrdersPerDay * windowDays, 0)}</td>
     </tr>`).join("");
   const target = store.state.kpis?.targets?.tradesPerDay ?? null;
   const totals = data.totals || {};
@@ -70,14 +80,14 @@ function tableHtml() {
     <div class="scroll"><table>
       <thead><tr>
         <th>${t("Portfolio", "Portafolio")}</th>
-        <th title="${t("Decision passes in the window", "Pasadas de decisión en la ventana")}">${t("Decisions", "Decisiones")}</th>
-        <th>${t("Signals", "Señales")}</th>
+        <th class="fo4" title="${t("Decision passes in the window", "Pasadas de decisión en la ventana")}">${t("Decisions", "Decisiones")}</th>
+        <th class="fo3">${t("Signals", "Señales")}</th>
         <th>${t("Entries", "Entradas")}</th>
         <th>${t("Exits", "Salidas")}</th>
         <th class="blocks">${t("Blocks by reason", "Bloqueos por motivo")}</th>
-        <th title="${t("Slots used/total (latest pass)", "Huecos ocupados/total (última pasada)")}">${t("Slots", "Huecos")}</th>
-        <th title="${t("Executed orders per day, live window", "Órdenes ejecutadas por día, ventana vivo")}">${t("Live/d", "Vivo/d")}</th>
-        <th title="${t("Validated design, orders/day (complete ops ×2)", "Diseño validado, órdenes/día (operaciones completas ×2)")}">${t("Design/d", "Diseño/d")}</th>
+        <th class="fo2" title="${t("Slots used/total (latest pass)", "Huecos ocupados/total (última pasada)")}">${t("Slots", "Huecos")}</th>
+        <th title="${t("Orders executed in the window", "Órdenes ejecutadas en la ventana")}">${t("Orders", "Órdenes")}</th>
+        <th class="fo1" title="${t("Orders the validated design expects in the window (complete operations ×2)", "Órdenes que espera el diseño validado en la ventana (operaciones completas ×2)")}">${t("Design", "Diseño")}</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
@@ -106,6 +116,15 @@ export function renderFunnelPanel() {
   </div>`;
 }
 
+/** Columns give way, never a sideways scroll: the table's own fit groups
+ *  (fit.js adds fit-1.. while it overflows; app.css maps them to .fo1..). */
+function paintFunnel() {
+  const body = byId("funnelBody");
+  if (!body) return;
+  body.innerHTML = tableHtml();
+  fitTablesIn(body);
+}
+
 export async function loadFunnel() {
   if (loading) return;
   loading = true;
@@ -116,8 +135,7 @@ export async function loadFunnel() {
   } finally {
     loading = false;
   }
-  const body = byId("funnelBody");
-  if (body) body.innerHTML = tableHtml();
+  paintFunnel();
 }
 
 export function setFunnelDays(v) {

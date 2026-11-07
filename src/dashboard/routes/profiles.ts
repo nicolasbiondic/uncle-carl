@@ -6,16 +6,20 @@ import type { AccountManager } from "../../account/AccountManager";
 import {
   getProfiles,
   getBrokerAccounts,
-  getTradingStats, getAssetBalances, getEquityPnlDisplay, getDB,
+  getTradingStats, getAssetBalances, getEquityPnlDisplay, getDB, getETWindowStart,
+  getClosedEpisodeResult, getRecognizedRealizedPnl,
 } from "../../db/database";
 import {
-  getBrokerSnapshotNow, getBrokerFirstEquity, getPortfolioEquityNow,
-  isMainSeriesApplicable, combineEquityPnlLegs,
+  getBrokerSnapshotNow, getPortfolioEquityNow,
+  isMainSeriesApplicable, combineEquityPnlLegs, readDisplayMoneyWindow, portfolioMainLegs,
 } from "../../portfolio/truth";
 import { ALL_PROFILE_IDS, RISK_PROFILES, type RiskProfileId } from "../../config/riskProfiles";
 import { toBoundedInt } from "../dashboard-utils";
 import { cached } from "../cache";
-import { computePnlBreakdown, type BreakdownPosition } from "../../portfolio/pnlBreakdown";
+import { computeRealizedAttribution, type BreakdownPosition, type RealizedAttribution } from "../../portfolio/pnlBreakdown";
+import { readMoneyWindow, tileMoney, readBinanceMarginBreakdown, readEquityDrawdown, MONEY_LABELS } from "../../portfolio/money";
+import { currentModelVersion } from "../../portfolio/modelVersions";
+import { builtinPortfolio } from "../../portfolios/builtin";
 import { openHistoricalReadonly } from "../../portfolio/scorecard";
 import { DEFAULT_RISK_CONFIG, type RiskState } from "../../strategies/momentum/RiskGuard";
 import { getLastConstructedSleeveGovernor } from "../../governor/SleeveGovernor";
@@ -94,35 +98,45 @@ export interface TileBreakdown {
   closesCount: number;
   trimsCount: number;
   startPrices: "marks" | "bars";
+  realized: number;
+  rounded: { pnl: number; closes: number; positions: number } | null;
 }
 
 /** One attribution per window, shared by the tiles (/api/v2/profiles) and the
- *  modal (/api/v2/pnl-breakdown) through the 30s cache: the bridge walks the
- *  portfolio journals, so it is computed once per window, not per request. */
-function breakdownFor(am: AccountManager, periodDays: number) {
-  return cached(`pnl_breakdown_${periodDays}`, 30_000, () => {
-    const legs = ["alpaca_main", "binance_main", ...(isMainSeriesApplicable("coinm") ? ["binance_coinm_main"] : [])];
-    const agg = combineEquityPnlLegs(legs, periodDays);
-    const openPositions: BreakdownPosition[] = (am.getConsolidatedState?.()?.positions || []).map((p: any) => ({
-      accountId: p.profileId, symbol: p.symbol, market: p.market, side: p.side, quantity: p.quantity,
-      entryPrice: p.avgEntryPrice, entryTime: p.openedAt, currentPrice: p.currentPrice,
-    }));
+ *  modal (/api/v2/pnl-breakdown). G-1 (2026-11-07): only the CLOSES are cached
+ *  (30s — the bridge walks the portfolio journals); the headline and the open
+ *  book are read fresh on every request, so "positions" = headline − closes
+ *  can never carry a P&L the cache captured 30 seconds ago. */
+function breakdownFor(am: AccountManager, periodDays: number, now = Date.now()) {
+  const start = periodDays === 0
+    ? readDisplayMoneyWindow(portfolioMainLegs(), 0, now)?.start.at ?? 0
+    : getETWindowStart(periodDays, now);
+  // Only closes are cached; every request reads its headline and open book.
+  const closing: RealizedAttribution = cached(`money_closes_${periodDays}_${start}`, 30_000, () => {
     const hist = openHistoricalReadonly();
-    try {
-      const b = computePnlBreakdown({ db: getDB(), hist, periodDays, pnl: agg?.pnl ?? null, openPositions });
-      // The modal lists the largest legs; the counts keep the full totals.
-      const closes = [...b.closes].sort((x, y) => Math.abs(y.realized ?? 0) - Math.abs(x.realized ?? 0)).slice(0, 20);
-      return { ...b, closes, pnlPct: agg?.pnlPct ?? null, generatedAt: Date.now() };
-    } finally {
-      try { hist?.close(); } catch {}
-    }
+    try { return computeRealizedAttribution(getDB(), hist, start, now); }
+    finally { hist?.close(); }
   });
+  const openPositions: BreakdownPosition[] = (am.getConsolidatedState?.()?.positions || []).map((p: any) => ({
+    accountId: p.profileId, symbol: p.symbol, market: p.market, side: p.side, quantity: p.quantity,
+    entryPrice: p.avgEntryPrice, entryTime: p.openedAt, currentPrice: p.currentPrice,
+  }));
+  const hist = openHistoricalReadonly();
+  try {
+    const { window, breakdown: b } = readMoneyWindow({ days: periodDays, now, hist, positions: openPositions, closing });
+    // The modal lists the largest legs; the counts keep the full totals.
+    const closes = [...b.closes].sort((x, y) => Math.abs(y.realized ?? 0) - Math.abs(x.realized ?? 0)).slice(0, 20);
+    return { ...b, closes, pnlPct: window?.pnlPct ?? null, displayStart: window?.start ?? null,
+      rounded: tileMoney(b.pnl, b).rounded, labels: MONEY_LABELS, generatedAt: now };
+  } finally {
+    try { hist?.close(); } catch {}
+  }
 }
 
-function tileBreakdown(am: AccountManager, periodDays: number): TileBreakdown | null {
+function tileBreakdown(am: AccountManager, periodDays: number, now: number, pnl: number | null): TileBreakdown | null {
   try {
-    const b = breakdownFor(am, periodDays);
-    return { closedInWindow: b.closedInWindow, positions: b.positions, closesCount: b.closesCount, trimsCount: b.trimsCount, startPrices: b.startPrices };
+    const b = breakdownFor(am, periodDays, now);
+    return { ...tileMoney(pnl, { closedInWindow: b.closedInWindow, closesCount: b.closesCount, trimsCount: b.trimsCount, startPrices: b.startPrices }), realized: b.realized };
   } catch { return null; }
 }
 
@@ -132,6 +146,7 @@ export function registerProfileRoutes(app: express.Application, am: AccountManag
     try {
       // Dashboard time filter: ?days=1 (today) | 7 | 30 | 0 (all-time) …
       const periodDays = toBoundedInt(req.query.days, 1, 0, 365);
+      const now = Date.now();
       const profiles = getProfiles();
       const result   = [];
       const db = require("../../db/database").getDB();
@@ -143,28 +158,31 @@ export function registerProfileRoutes(app: express.Application, am: AccountManag
       // frontend recombination. Computed once (account-wide, not per dashboard
       // profile row) and attached identically to every `result` entry; this
       // bot only ever runs the single "default" profile in practice.
-      const aggLegs = ["alpaca_main", "binance_main", ...(isMainSeriesApplicable("coinm") ? ["binance_coinm_main"] : [])];
-      const aggPeriod = combineEquityPnlLegs(aggLegs, periodDays);
-      const aggPnl7d  = combineEquityPnlLegs(aggLegs, 7);
+      const aggLegs = portfolioMainLegs();
+      const aggPeriod = readDisplayMoneyWindow(aggLegs, periodDays, now);
+      const aggPnl7d  = readDisplayMoneyWindow(aggLegs, 7, now);
+      const sinceStart = periodDays === 0 ? aggPeriod : readDisplayMoneyWindow(aggLegs, 0, now);
       // Realized (closed-trade) P&L over the SAME windows (since entry — the
       // older sub-line; kept for older readers) and the same-window bridge the
       // tiles show now: closes + positions == the headline (2026-11-06; the
       // since-entry figure read as a contradiction next to the equity delta).
       // Full attribution: /api/v2/pnl-breakdown.
-      const periodStats = getTradingStats(undefined, periodDays);
-      const stats7d = periodDays === 7 ? periodStats : getTradingStats(undefined, 7);
-      const periodBreakdown = tileBreakdown(am, periodDays);
-      const breakdown7d = periodDays === 7 ? periodBreakdown : tileBreakdown(am, 7);
+      const periodBreakdown = tileBreakdown(am, periodDays, now, aggPeriod?.pnl ?? null);
+      const breakdown7d = periodDays === 7 ? periodBreakdown : tileBreakdown(am, 7, now, aggPnl7d?.pnl ?? null);
       const pnlAggregate = {
         equity: getPortfolioEquityNow().total,
+        displayStart: sinceStart?.start ?? null,
+        sinceStart,
+        labels: MONEY_LABELS,
         periodPnl: aggPeriod?.pnl ?? null,
         periodPnlPct: aggPeriod?.pnlPct ?? null,
         pnl7d: aggPnl7d?.pnl ?? null,
         pnl7dPct: aggPnl7d?.pnlPct ?? null,
-        periodRealized: periodStats.periodPnl,
-        periodRealizedCount: periodStats.periodClosedTrades,
-        realized7d: stats7d.periodPnl,
-        realized7dCount: stats7d.periodClosedTrades,
+        periodRealized: periodBreakdown?.realized ?? null,
+        periodRealizedCount: periodBreakdown ? periodBreakdown.closesCount + periodBreakdown.trimsCount : null,
+        realized7d: breakdown7d?.realized ?? null,
+        realized7dCount: breakdown7d ? breakdown7d.closesCount + breakdown7d.trimsCount : null,
+        closedEpisodeResult: getClosedEpisodeResult(),
         periodBreakdown,
         breakdown7d,
       };
@@ -205,7 +223,6 @@ export function registerProfileRoutes(app: express.Application, am: AccountManag
             const broker = RISK_PROFILES[id].broker;
             return isBinance ? broker.startsWith("binance") : broker === "alpaca";
           });
-          const brokerPrefix = isBinance ? "binance_%" : "alpaca_%";
           const openCount  = db.prepare(
             `SELECT COUNT(*) as c FROM trades WHERE status = 'open' AND account_id IN (${sleeveIds.map(() => "?").join(",")})`
           ).get(...sleeveIds) as any;
@@ -219,25 +236,7 @@ export function registerProfileRoutes(app: express.Application, am: AccountManag
           // sub-wallet broker-truth reads, one per Binance product) + the
           // FAPI account's own per-asset breakdown (broker_asset_balances,
           // refreshed by BrokerSync from the SAME default USDT executor).
-          const marginBreakdown = (() => {
-            if (!isBinance) return null;
-            const summaries = am.getAccountSummaries?.() ?? [];
-            const byId = (id: string) => summaries.find((s: any) => s.id === id)?.equity;
-            const btcRow = assets.find((a: any) => a.asset === "BTC");
-            return {
-              usdtFutures: byId("momentum_crypto") ?? null,
-              usdcFutures: byId("momentum_crypto_usdc") ?? null,
-              fapiBtcCollateral: btcRow ? btcRow.usd_value : null,
-              // Sourced from binance_coinm_main broker truth directly (never
-              // the momentum_btc sleeve summary): DAPI truth exists
-              // independently of MOMENTUM_COINM_ENABLED (mandate 2026-07-19)
-              // — the sleeve summary is only populated while momentum_btc is
-              // ACTIVE (live/close-only), which would blank this component
-              // whenever the flag is off, even though the wallet is still
-              // being synced read-only.
-              coinmMargin: coinmSnap?.equity ?? null,
-            };
-          })();
+          const marginBreakdown = isBinance ? readBinanceMarginBreakdown(am.getAccountSummaries?.() ?? [], now) : null;
           const sleeveStats = sleeveIds.map(id => getTradingStats(id, periodDays));
           const stats      = combineStats(sleeveStats);
           const stratConfig = ba.strategy_config ? JSON.parse(ba.strategy_config) : {};
@@ -257,13 +256,6 @@ export function registerProfileRoutes(app: express.Application, am: AccountManag
               equityPnl7dPct: eq7d?.pnlPct ?? null,
             };
           });
-          const firstSnap  = db.prepare(
-            "SELECT MIN(snapshot_time) as t FROM equity_snapshots WHERE synthetic = 0 AND profile_id LIKE ?"
-          ).get(brokerPrefix.replace("_", "%")) as any;
-          const firstTrade = db.prepare(
-            "SELECT MIN(entry_time) as t FROM trades WHERE account_id LIKE ?"
-          ).get(brokerPrefix) as any;
-          const startedAt  = Math.min(firstSnap?.t || Infinity, firstTrade?.t || Infinity);
 
           // R3 fix (2026-05-10): use the broker-truth _main snapshot as the
           // first equity anchor so the broker cards' "Total P&L %" uses the
@@ -276,11 +268,11 @@ export function registerProfileRoutes(app: express.Application, am: AccountManag
           // ONLY — the frontend's all-time % = equity − firstEquity, so the
           // entire current COIN-M balance was showing up as Binance profit.
           // Sum the SAME legs here so the anchor matches what's displayed.
-          const binanceFirst = getBrokerFirstEquity("binance");
-          const firstEquity = !isBinance
-            ? getBrokerFirstEquity(brokerBase)
-            : binanceFirst == null ? null
-            : binanceFirst + (coinmApplicable ? (getBrokerFirstEquity("coinm") ?? 0) : 0);
+          const mainLegs = isBinance && coinmApplicable ? ["binance_main", "binance_coinm_main"] : [`${brokerBase}_main`];
+          const brokerStart = readDisplayMoneyWindow(mainLegs, 0, now, false)?.start ?? null;
+          const brokerSinceStart = readDisplayMoneyWindow(mainLegs, 0, now);
+          const firstEquity = brokerStart?.equity ?? null;
+          const startedAt = brokerStart?.at ?? Infinity;
 
           // Authoritative full-broker equity delta for the selected window and
           // the fixed 7D window — sourced from `${brokerBase}_main` broker-
@@ -289,9 +281,8 @@ export function registerProfileRoutes(app: express.Application, am: AccountManag
           // (mandate 2026-07-19: "add DAPI movement to P&L") via the same
           // fail-closed combine as the equity figure above — never a partial
           // FAPI-only P&L once COIN-M has ever synced.
-          const mainLegs = isBinance && coinmApplicable ? ["binance_main", "binance_coinm_main"] : [`${brokerBase}_main`];
-          const periodEq = combineEquityPnlLegs(mainLegs, periodDays);
-          const eq7d      = combineEquityPnlLegs(mainLegs, 7);
+          const periodEq = combineEquityPnlLegs(mainLegs, periodDays, now);
+          const eq7d      = combineEquityPnlLegs(mainLegs, 7, now);
 
           brokerAccountsData.push({
             id: ba.id,
@@ -309,6 +300,9 @@ export function registerProfileRoutes(app: express.Application, am: AccountManag
             // first observed broker equity) — same anchor, live source now.
             initialEquity: firstEquity,
             firstEquity,
+            displayStart: brokerStart,
+            sinceStart: brokerSinceStart,
+            labels: MONEY_LABELS,
             status: am.executor[ba.broker_id.includes("binance") ? "binance" : "alpaca"]?.isConnected?.() ? "connected" : "disconnected",
             marginBreakdown,
             assets: assets.map((a: any) => ({
@@ -405,11 +399,26 @@ export function registerProfileRoutes(app: express.Application, am: AccountManag
       const result = summaries.map((s: any) => {
         const id = s.id as RiskProfileId;
         const circuit = circuits[id] ?? { paused: false, reason: "", resumeAt: 0 };
+        // G-2 (2026-11-07): what the modal shows is a MEASURE, never a pause
+        // threshold. A portfolio-engine sleeve has no incumbent RiskState
+        // file (the October files are fossils): its drawdown is read from
+        // its own equity history; a risk.mode=sizeOnly sleeve has no
+        // soft/hard/daily caps (nothing pauses), so those are null.
+        const portfolioEngine = currentModelVersion(id)?.engine === "portfolio";
+        let params: any = {};
+        try {
+          params = builtinPortfolio(id).params ?? {};
+          if (process.env.PORTFOLIOS_SOURCE === "db" && getDB().query("SELECT 1 FROM sqlite_master WHERE name='platform_portfolios'").get()) {
+            const row = getDB().query("SELECT params_json FROM platform_portfolios WHERE id=?").get(id) as { params_json: string } | null;
+            if (row) params = JSON.parse(row.params_json) ?? {};
+          }
+        } catch { params = {}; }
+        const sizeOnly = params?.risk?.mode === "sizeOnly";
         const file = SLEEVE_STATE_FILES[id];
-        const persisted = file ? readPersistedRiskState(file) : null;
+        const persisted = !portfolioEngine && file ? readPersistedRiskState(file) : null;
         const currentEquity = s.equity;
-        const ddPct = persisted && persisted.peakEquity > 0 && Number.isFinite(currentEquity)
-          ? (persisted.peakEquity - currentEquity) / persisted.peakEquity : null;
+        const ddPct = portfolioEngine ? readEquityDrawdown(id) : persisted && persisted.peakEquity > 0 && Number.isFinite(currentEquity)
+          ? Math.max(0, (persisted.peakEquity - currentEquity) / persisted.peakEquity) : null;
         const dailyLossPct = persisted && persisted.dayStartEquity > 0 && Number.isFinite(currentEquity)
           ? (persisted.dayStartEquity - currentEquity) / persisted.dayStartEquity : null;
         const governorMode = governor ? governor.getMode(id, "live") : "live";
@@ -422,17 +431,28 @@ export function registerProfileRoutes(app: express.Application, am: AccountManag
           paused: circuit.paused,
           reason: circuit.reason || null,
           resumeAt: circuit.resumeAt || null,
-          drawdown: { currentPct: ddPct, softPct: DEFAULT_RISK_CONFIG.softDrawdownPct, hardPct: DEFAULT_RISK_CONFIG.hardDrawdownPct },
-          dailyLoss: { currentPct: dailyLossPct, capPct: DEFAULT_RISK_CONFIG.dailyLossCapPct },
+          // API: percentages are fractions (0.1 = 10%). A measure is not a
+          // pause threshold: PE/sizeOnly have null soft/hard/daily caps.
+          riskMode: portfolioEngine ? "portfolio" : sizeOnly ? "sizeOnly" : "pause",
+          drawdown: { currentPct: ddPct, softPct: portfolioEngine || sizeOnly ? null : DEFAULT_RISK_CONFIG.softDrawdownPct,
+            hardPct: portfolioEngine || sizeOnly ? null : DEFAULT_RISK_CONFIG.hardDrawdownPct },
+          dailyLoss: { currentPct: dailyLossPct, capPct: portfolioEngine || sizeOnly ? null : DEFAULT_RISK_CONFIG.dailyLossCapPct },
           consecutiveLosses: persisted?.consecutiveLosses ?? null,
-          lossLimit: DEFAULT_RISK_CONFIG.consecutiveLossLimit,
+          lossLimit: portfolioEngine || sizeOnly ? null : DEFAULT_RISK_CONFIG.consecutiveLossLimit,
           equity: currentEquity,
           // Closed-trade P&L (reconcile rows excluded) — NOT the summary's
           // totalPnl, which is equity − initial equity and so already
           // includes the open positions' unrealized P&L (prod 2026-09-25:
           // momentum_stocks showed "Realized +$5.5k" while its closed trades
           // summed −$1.45k).
-          realizedPnl: getTradingStats(id).totalPnl,
+          // A-2 (2026-11-07): "Realized" = closed episodes + the partial legs
+          // of rows still open (sleeveRealizedPnl, the ledger the engine
+          // sizes with). Closed-only read "+$200" while the ledger's net
+          // realized was −$23 (prod 2026-11-07).
+          realizedPnl: getRecognizedRealizedPnl(id),
+          realizedLabel: MONEY_LABELS.recognizedRealized,
+          closedEpisodeResult: getClosedEpisodeResult(id),
+          labels: MONEY_LABELS,
         };
       });
       res.json({ sleeves: result, generatedAt: Date.now() });

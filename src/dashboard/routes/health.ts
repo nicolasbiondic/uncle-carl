@@ -21,6 +21,7 @@ import { VERSION_INFO } from "../../utils/version";
 import { getDefaultRiskEngine } from "../../risk/RiskEngine";
 import { getPublishedManifest } from "../../ops/instanceManifest";
 import { getLastConstructedSleeveGovernor } from "../../governor/SleeveGovernor";
+import { cronJobStatuses } from "../../ops/cronJobs";
 
 // Critical loops are the live trading sleeves + sync/SL loops — anything NOT
 // observational (shadow_* books and funding_monitor are informational only).
@@ -84,7 +85,25 @@ function brokerUnreachableCount(): number {
   return Object.values(brokerUnreachableByVenue()).filter(v => v.unreachable).length;
 }
 
-export function registerHealthRoutes(app: express.Application, am: AccountManager): void {
+export interface HealthRouteOptions {
+  /** data/cron-markers by default (relative to the bot's cwd, the repo root). */
+  cronMarkerDir?: string;
+  cronTz?: string;
+  now?: () => number;
+}
+
+export function registerHealthRoutes(app: express.Application, am: AccountManager, opts: HealthRouteOptions = {}): void {
+  // Overdue cron jobs (audit F-2): a COUNT only — no job names, paths or times
+  // on the public endpoint. scripts/uptime-watch.sh (outside prod) pages on it,
+  // which is what notices a guardian that stopped running. Never affects the
+  // HTTP status or `status`: a missed backup is not a dead trading loop, and
+  // the watchdog must not restart the bot over it.
+  const staleJobs = (): number => {
+    try {
+      return cronJobStatuses({ dir: opts.cronMarkerDir, tz: opts.cronTz, now: opts.now?.() }).filter(j => j.stale).length;
+    } catch { return 0; }
+  };
+
   // Public liveness probe — no business data.
   app.get("/healthz", (_req, res) => {
     try {
@@ -134,6 +153,7 @@ export function registerHealthRoutes(app: express.Application, am: AccountManage
         status: staleCritical.length > 0 || brokerDown > 0 ? "degraded" : "ok",
         ...(staleCritical.length > 0 ? { stale_loop_count: staleCritical.length } : {}),
         ...(brokerDown > 0 ? { broker_unreachable_count: brokerDown } : {}),
+        stale_jobs: staleJobs(),
         version: DASHBOARD_VERSION,
         // Runtime code-version identity (2026-07-27 zombie-process fix): lets
         // a post-deploy check confirm the LIVE process is on the commit that

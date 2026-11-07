@@ -36,6 +36,8 @@
  *     first reference-data CLOSE crossing the LIVE row stop agrees with the
  *     live decision bar (hourly ±2h, daily same UTC day). Its matched sim
  *     unit's exit is aligned only for comparison; output keeps both times.
+ *     BREAKOUT_CATASTROPHE_STOP is a declared live-only native backstop:
+ *     explain the matched unit's exit without requiring a reference CLOSE.
  *
  * Decisions, not P&L: fill prices/quantities are expected to differ; the
  * SYMBOLS and their approximate TIMES are not. Positions already open at
@@ -675,6 +677,7 @@ export interface SleeveParityResult {
 export const STALE_SYMBOL_DAYS = 7;
 
 export interface ExplainedBreakoutStop {
+  liveOnly?: boolean;
   symbol: string;
   entryDate: string;
   simDate: string;
@@ -704,17 +707,19 @@ export function compareCryptoReplay(
     ? Math.floor(a / 86_400_000) === Math.floor(b / 86_400_000)
     : Math.abs(a - b) <= MATCH_TOLERANCE_HOURS_CRYPTO * 3_600_000;
   const rows = tradingDb.prepare(
-    `SELECT symbol, side, entry_time, entry_price, exit_time, stop_loss, strategy FROM trades
+    `SELECT symbol, side, entry_time, entry_price, exit_time, stop_loss, strategy, close_reason FROM trades
      WHERE account_id = ? AND status != 'open' AND entry_time < ? AND exit_time >= ? AND exit_time < ?
-       AND ((strategy = 'BREAKOUT_SHORT' AND close_reason = 'BREAKOUT_SHORT_STOP')
+       AND ((strategy IN ('BREAKOUT_SHORT', 'BREAKOUT_LONG') AND close_reason = 'BREAKOUT_CATASTROPHE_STOP')
+         OR (strategy = 'BREAKOUT_SHORT' AND close_reason = 'BREAKOUT_SHORT_STOP')
          OR (strategy = 'BREAKOUT_LONG' AND close_reason = 'BREAKOUT_LONG_STOP'))
      ORDER BY entry_time ASC`,
   ).all(sleeve, endMs, epochMs, endMs) as Array<{
-    symbol: string; side: string; entry_time: number; entry_price: number; exit_time: number; stop_loss: number | null; strategy: string;
+    symbol: string; side: string; entry_time: number; entry_price: number; exit_time: number; stop_loss: number | null; strategy: string; close_reason: string;
   }>;
   const adjustedTrades = [...closedTrades], used = new Set<number>(), explained: ExplainedBreakoutStop[] = [];
   for (const r of rows) {
     const long = r.strategy === "BREAKOUT_LONG";
+    const catastrophe = r.close_reason === "BREAKOUT_CATASTROPHE_STOP";
     if (!r.stop_loss || !Number.isFinite(r.stop_loss) || !(r.entry_price > 0)
       || r.side !== (long ? "buy" : "sell") || (long ? r.stop_loss >= r.entry_price : r.stop_loss <= r.entry_price)) continue;
     const symbol = sleeve === "momentum_crypto_usdc" ? r.symbol.replace(/\/USDC$/, "/USD") : r.symbol;
@@ -724,7 +729,7 @@ export function compareCryptoReplay(
     for (let i = 0; i < closedTrades.length; i++) {
       const t = closedTrades[i];
       if (used.has(i) || t.symbol !== symbol || t.side !== r.side || t.entryAt === undefined
-        || t.reason === "fold_end" || t.exitAt >= endMs || t.engineCloseReason !== `${r.strategy}_STOP`) continue;
+        || (!catastrophe && (t.reason === "fold_end" || t.exitAt >= endMs || t.engineCloseReason !== `${r.strategy}_STOP`))) continue;
       const matchesEntry = r.entry_time < epochMs ? t.entryAt === r.entry_time
         : t.entryAt >= epochMs && sameDecision(t.entryAt, r.entry_time);
       const diff = Math.abs(t.entryAt - r.entry_time);
@@ -733,6 +738,13 @@ export function compareCryptoReplay(
     if (best < 0) continue;
     used.add(best);
     const t = closedTrades[best];
+    if (catastrophe) {
+      // Declared live-only native backstop; no reference close crossing is
+      // expected. Waive ONLY this matched unit, never other entries/exits.
+      explained.push({ symbol, entryDate: isoInstant(r.entry_time), simDate: isoInstant(t.exitAt), liveDate: isoInstant(r.exit_time), referenceDate: isoInstant(r.exit_time), stopPrice: r.stop_loss, liveOnly: true });
+      adjustedTrades[best] = { ...t, exitAt: r.exit_time, reason: "stop" };
+      continue;
+    }
     // An ordinary matched stop (especially a seed carrying the SAME row stop)
     // needs no explanation and remains under the normal comparison contract.
     if (Math.abs(t.exitAt - r.exit_time) <= MATCH_TOLERANCE_HOURS_CRYPTO * 3_600_000) continue;
@@ -1058,7 +1070,9 @@ export function renderSummary(results: SleeveParityResult[]): string {
       lines.push(`  ☑️  acknowledged (explained, not paged): ${d.type} ${d.symbol}${d.simDate ? ` sim=${d.simDate}` : ""}${d.liveDate ? ` live=${d.liveDate}` : ""}`);
     }
     for (const e of r.explained ?? []) {
-      lines.push(`  ☑️  explained (stop anchored to the testnet fill): ${e.symbol} entry=${e.entryDate} sim=${e.simDate} live=${e.liveDate} stop=${e.stopPrice} first reference close=${e.referenceDate}`);
+      lines.push(e.liveOnly
+        ? `  ☑️  explained (live-only Turtle catastrophe stop): ${e.symbol} entry=${e.entryDate} sim=${e.simDate} live=${e.liveDate}`
+        : `  ☑️  explained (stop anchored to the testnet fill): ${e.symbol} entry=${e.entryDate} sim=${e.simDate} live=${e.liveDate} stop=${e.stopPrice} first reference close=${e.referenceDate}`);
     }
     if (r.divergences.length === 0) {
       lines.push("  ✅ PARITY — no divergences");

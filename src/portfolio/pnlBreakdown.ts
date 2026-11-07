@@ -44,7 +44,7 @@
 // ══════════════════════════════════════════════
 
 import type { Database } from "bun:sqlite";
-import { getETDayStart, getPnlWindowMarks, RECONCILE_CLOSE_SQL } from "../db/database";
+import { getETDayStart, getETWindowStart, getPnlWindowMarks, RECONCILE_CLOSE_SQL } from "../db/database";
 import { ALL_PROFILE_IDS, RISK_PROFILES } from "../config/riskProfiles";
 
 const HOUR = 3_600_000;
@@ -65,8 +65,7 @@ export const MARKABLE_ACCOUNTS: ReadonlySet<string> = new Set([
  *  getEquityPnlDisplay use the same rule): 0 = all-time, 1 = today's ET day,
  *  N = the ET day start of N−1 days ago. */
 export function windowStartFor(periodDays: number, now = Date.now()): number {
-  if (periodDays === 0) return 0;
-  return periodDays <= 1 ? getETDayStart(now) : getETDayStart(now - (periodDays - 1) * DAY);
+  return getETWindowStart(periodDays, now);
 }
 
 function direction(side: string): 1 | -1 {
@@ -145,6 +144,8 @@ interface RowLite {
   openCommission: number;
   /** Contracts/shares the row's partial ledger booked (0 = never trimmed). */
   partialClosed: number;
+  partialRealized: number;
+  partialCommission: number;
 }
 
 interface RawLeg {
@@ -178,10 +179,12 @@ function rowLite(r: any): RowLite {
     quantity: Number(r.quantity) || 0, entryPrice: Number(r.entry_price) || 0, entryTime: Number(r.entry_time) || 0,
     exitTime: r.exit_time == null ? null : Number(r.exit_time), openCommission: Number(r.open_commission) || 0,
     partialClosed: Number(r.partial_closed_contracts) || 0,
+    partialRealized: Number(r.partial_realized_native) || 0,
+    partialCommission: Number(r.partial_commission_native) || 0,
   };
 }
 
-const ROW_COLS = `id, account_id, symbol, market, side, quantity, entry_price, entry_time, exit_time, open_commission, partial_closed_contracts`;
+const ROW_COLS = `id, account_id, symbol, market, side, quantity, entry_price, entry_time, exit_time, open_commission, partial_closed_contracts, partial_realized_native, partial_commission_native`;
 
 /** The row of (account, symbol) that was open at instant `at` — one open row
  *  per (sleeve, symbol) by construction; null when none (a rebuy's own row
@@ -207,7 +210,7 @@ function stockJournalLegs(db: Database, since: number): { sells: RawLeg[]; buys:
   try {
     rows = db.prepare(
       `SELECT account_id a, decided_at d, book_json b, orders_json o FROM portfolio_decisions
-        WHERE decided_at >= ? AND account_id IN (${STOCK_JOURNAL_ACCOUNTS.map(() => "?").join(",")}) ORDER BY decided_at ASC`,
+        WHERE mode = 'live' AND decided_at >= ? AND account_id IN (${STOCK_JOURNAL_ACCOUNTS.map(() => "?").join(",")}) ORDER BY decided_at ASC`,
     ).all(since, ...STOCK_JOURNAL_ACCOUNTS) as any[];
   } catch { return { sells, buys }; }
   for (const j of rows) {
@@ -301,29 +304,39 @@ export interface RealizedAttribution {
   closedInWindow: number | null;
   closes: CloseContribution[];
   startPrices: StartPriceSource;
+  /** Inverse native ledgers cannot be added to USD. They remain explicitly
+   * outside the bridge's realized legs (inside its holding residual). */
+  excludedAccounts: string[];
+  /** Old fills did not persist fees/basis per leg. Their known net accumulator
+   * is allocated across their dated fills; never claimed as exact telemetry. */
+  precision: "exact" | "legacy_allocated" | "incomplete";
 }
 
 interface OpenRowInfo { row: RowLite; trims: RawLeg[]; buys: BuyLeg[] }
 
-function attribute(db: Database, start: StartPrices, windowStart: number): RealizedAttribution & { openRows: Map<string, OpenRowInfo> } {
-  const accounts = [...ALL_PROFILE_IDS];
+function attribute(db: Database, start: StartPrices, windowStart: number, until: number, accountIds: readonly string[]): RealizedAttribution & { openRows: Map<string, OpenRowInfo> } {
+  const excludedAccounts = accountIds.filter(id => !MARKABLE_ACCOUNTS.has(id));
+  const accounts = accountIds.filter(id => MARKABLE_ACCOUNTS.has(id));
+  if (!accounts.length) return { windowStart, realized: 0, closesCount: 0, count: 0, trimsCount: 0,
+    earnedBefore: 0, closedInWindow: 0, closes: [], startPrices: start.source, excludedAccounts, precision: "exact", openRows: new Map() };
   const inList = accounts.map(() => "?").join(",");
   const closedRaw = db.prepare(
-    `SELECT ${ROW_COLS}, exit_price, pnl, partial_realized_native pr, partial_commission_native pc
+    `SELECT ${ROW_COLS}, exit_price, pnl, CASE WHEN ${RECONCILE_CLOSE_SQL} THEN 0 ELSE 1 END reconciled
        FROM trades
-      WHERE status = 'closed' AND exit_time > ? AND ${RECONCILE_CLOSE_SQL} AND account_id IN (${inList})
+      WHERE status = 'closed' AND exit_time > ? AND exit_time <= ? AND account_id IN (${inList})
       ORDER BY exit_time DESC`,
-  ).all(windowStart, ...accounts) as any[];
+  ).all(windowStart, until, ...accounts) as any[];
   const openRaw = db.prepare(
-    `SELECT ${ROW_COLS} FROM trades WHERE status = 'open' AND account_id IN (${inList})`,
-  ).all(...accounts) as any[];
+    `SELECT ${ROW_COLS} FROM trades WHERE entry_time <= ? AND (status = 'open' OR exit_time > ?) AND account_id IN (${inList})`,
+  ).all(until, until, ...accounts) as any[];
 
   const closedRows = new Map<string, RowLite>();
   const legs: RawLeg[] = [];
   for (const r of closedRaw) {
     const row = rowLite(r);
     closedRows.set(row.id, row);
-    const partialNet = (Number(r.pr) || 0) - (Number(r.pc) || 0);
+    if (r.reconciled) continue; // unknown external final leg, not trading
+    const partialNet = row.partialRealized - row.partialCommission;
     const pnl = r.pnl == null ? null : Number(r.pnl);
     legs.push({
       row, kind: "close", qty: row.quantity, basis: row.entryPrice,
@@ -343,18 +356,44 @@ function attribute(db: Database, start: StartPrices, windowStart: number): Reali
   const involved = [...closedRows.values(), ...[...openRows.values()].map(o => o.row)];
   const since = involved.length ? Math.min(...involved.map(r => r.entryTime)) : windowStart;
   const journal = stockJournalLegs(db, since);
-  const partials = dropFinalLegs([...journal.sells, ...cryptoFillLegs(db, involved)], closedRows);
+  const fallback = dropFinalLegs([...journal.sells, ...cryptoFillLegs(db, involved)], closedRows);
+  const partials: RawLeg[] = [];
+  let precision: RealizedAttribution["precision"] = "exact";
+  let missingPartial = false;
+  const legQuery = db.prepare(`SELECT * FROM trade_realized_legs WHERE trade_id = ? ORDER BY fill_time, id`);
+  for (const row of involved) {
+    const persisted = legQuery.all(row.id) as any[];
+    const exact = persisted.filter(l => l.source === "fill" && ["USD", "USDT", "USDC"].includes(l.asset));
+    for (const l of exact) partials.push({ row, kind: "trim", qty: l.quantity, basis: l.entry_price,
+      price: l.exit_price, time: l.fill_time, realized: l.realized_native - l.commission_native, openCommission: 0 });
+    // Match the telemetry/journal copy of a newly persisted leg, including
+    // reconciliation reductions (which must not become fabricated P&L).
+    const old = fallback.filter(l => l.row.id === row.id && !persisted.some(p =>
+      Math.abs(p.fill_time - l.time) <= 120_000 && Math.abs(p.quantity - l.qty) <= Math.max(1e-8, l.qty * 1e-6)));
+    const remainingNet = row.partialRealized - row.partialCommission
+      - persisted.reduce((s, l) => s + l.realized_native - l.commission_native, 0);
+    if (old.length) {
+      const gross = old.reduce((s, l) => s + (l.realized ?? 0), 0);
+      const weight = old.reduce((s, l) => s + l.qty, 0);
+      const adjustment = remainingNet - gross;
+      if (Math.abs(adjustment) > 1e-8) precision = "legacy_allocated";
+      for (const l of old) partials.push({ ...l, realized: l.realized == null ? null : l.realized + adjustment * l.qty / weight });
+    } else if (Math.abs(remainingNet) > 0.005) {
+      missingPartial = true; // never silently date an undated native sum
+      precision = "incomplete";
+    }
+  }
 
   let realized = 0;
   let earned = 0;
   let unknownStart = false;
-  let unknownLeg = false;
+  let unknownLeg = missingPartial;
   let closesCount = 0, trimsCount = 0;
   const closes: CloseContribution[] = [];
   const markable = (row: RowLite) => MARKABLE_ACCOUNTS.has(row.accountId);
 
   const consider = (l: RawLeg) => {
-    if (!(l.time > windowStart)) return; // before the window: not this period's
+    if (!(l.time > windowStart && l.time <= until)) return;
     if (l.kind === "close") closesCount++; else trimsCount++;
     if (l.realized == null) unknownLeg = true; else realized += l.realized;
     let before: number | null = 0;
@@ -385,12 +424,13 @@ function attribute(db: Database, start: StartPrices, windowStart: number): Reali
     windowStart, realized, closesCount, count: closesCount, trimsCount, earnedBefore,
     closedInWindow: earnedBefore == null || unknownLeg ? null : realized - earnedBefore,
     closes, startPrices: start.source, openRows,
+    excludedAccounts, precision,
   };
 }
 
 /** Realized attribution alone (Telegram's /status line). */
-export function computeRealizedAttribution(db: Database, hist: Database | null, windowStart: number): RealizedAttribution {
-  const { openRows: _o, ...ra } = attribute(db, new StartPrices(db, hist, windowStart), windowStart);
+export function computeRealizedAttribution(db: Database, hist: Database | null, windowStart: number, until = Date.now(), accountIds: readonly string[] = ALL_PROFILE_IDS): RealizedAttribution {
+  const { openRows: _o, ...ra } = attribute(db, new StartPrices(db, hist, windowStart), windowStart, until, accountIds);
   return ra;
 }
 
@@ -426,10 +466,31 @@ export function computePnlBreakdown(opts: {
   pnl: number | null;
   openPositions: BreakdownPosition[];
   now?: number;
+  accountIds?: readonly string[];
+  windowStart?: number;
+  closing?: RealizedAttribution;
 }): PnlBreakdown {
-  const windowStart = windowStartFor(opts.periodDays, opts.now);
+  const windowStart = opts.windowStart ?? windowStartFor(opts.periodDays, opts.now);
   const start = new StartPrices(opts.db, opts.hist, windowStart);
-  const { openRows, ...ra } = attribute(opts.db, start, windowStart);
+  let openRows: Map<string, OpenRowInfo>;
+  let ra: RealizedAttribution;
+  if (opts.closing) {
+    ra = opts.closing;
+    openRows = new Map();
+    const since = Math.min(opts.now ?? Date.now(), ...opts.openPositions.map(p => p.entryTime));
+    for (const buy of stockJournalLegs(opts.db, since).buys) {
+      if (buy.time > (opts.now ?? Date.now())) continue;
+      const key = `${buy.row.accountId}|${buy.row.symbol}`;
+      const open = openRows.get(key) ?? { row: buy.row, trims: [], buys: [] };
+      open.buys.push(buy);
+      openRows.set(key, open);
+    }
+  } else {
+    const result = attribute(opts.db, start, windowStart, opts.now ?? Date.now(), opts.accountIds ?? ALL_PROFILE_IDS);
+    openRows = result.openRows;
+    const { openRows: _o, ...closing } = result;
+    ra = closing;
+  }
 
   let openChange = 0;
   let openUnknown = false;

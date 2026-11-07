@@ -75,7 +75,9 @@ describe("one compact card per portfolio", () => {
     expect(chipsOf(paused)).toEqual(["Drawdown limit", "Holds 3 stocks and ETFs ($1,200)"]);
     expect(noteOf(paused, O)).toBe("Trading paused until Tuesday 09:35 New York: it fell too far from its peak.");
     expect(statusOf({ ...base, state: "error" })).toEqual({ word: "Problem", color: "var(--down)" });
-    expect(noteOf({ ...base, state: "error", blocked: { reason: "broker", detail: "Alpaca rejected the key" } }, O)).toBe("Alpaca rejected the key");
+    // The engine's own note is never printed (audit G-13).
+    expect(noteOf({ ...base, state: "error", blocked: { reason: "failed", detail: "Alpaca rejected the key" } }, O)).toBe("Its last decision failed and it is not trading until the next one; see the Activity tab.");
+    expect(noteOf({ ...base, state: "error", blocked: { reason: "skipped_stale", detail: "stale bars: SPY" } }, O)).toBe("It skipped its last decision because its price data was out of date.");
     const cash = { ...base, state: "flat", regime: { riskOn: false, ref: "SPY", distancePct: -2.3 } };
     expect(chipsOf(cash)).toEqual(["S&P 500 −2.3% vs its 200-day average"]);
     expect(chipsOf({ ...base, state: "flat" })).toEqual(["Holds no positions"]);
@@ -120,7 +122,7 @@ describe("recent actions", () => {
     expect(eventSentence(cutover, names)).toContain("Momentum Stocks switched to a new model version");
     expect(eventSentence({ kind: "buy", portfolioId: "meanrev_stocks", qty: 32, usd: 48200 }, names)).toBe("Mean Reversion Stocks bought 32 stocks ($48,200)");
     expect(eventSentence({ kind: "stop", portfolioId: "momentum_crypto_usdc", symbol: "SOL/USDC", pnlUsd: -88.4, reason: "stop_loss" }, names)).toBe('Momentum Crypto USDC was stopped out of SOL/USDC, −$88 <span class="bn-why">— stop-loss</span>');
-    expect(eventSentence({ kind: "error", portfolioId: null, detail: "<b>x</b>" }, names)).toBe('Problem in The bot <span class="muted">&lt;b&gt;x&lt;/b&gt;</span>');
+    expect(eventSentence({ kind: "error", portfolioId: null, detail: "<b>x</b>" }, names)).toBe("Problem in The bot"); // the event's detail (engine prose) is not printed
     expect(eventSentence({ kind: "error", portfolioId: "momentum_stocks", reason: "REJECTED", count: 2 }, names)).toBe('Problem in Momentum Stocks <span class="bn-why">— 2 orders rejected</span>');
     expect(eventSentence({ kind: "warning", portfolioId: "momentum_stocks", reason: "PARTIAL", count: 1 }, names)).toBe('Warning in Momentum Stocks <span class="bn-why">— 1 order partially filled</span>');
     expect(eventSentence({ kind: "warning", portfolioId: "momentum_stocks", reason: "UNFILLED", count: 2 }, names)).toBe('Warning in Momentum Stocks <span class="bn-why">— 2 orders unfilled after timeout</span>');
@@ -191,7 +193,7 @@ describe("recent actions", () => {
 
   test("the tab shows a pass as one line with the per-symbol lines behind a disclosure", () => {
     const html = renderBotNow(FX, O);
-    expect(html).toContain('<span class="bn-time">09:35</span><details class="bn-pass"><summary>Momentum Stocks: closed 2 positions at the 5-day limit (−$344) and re-bought them, 1 new buy ($6,400)</summary>');
+    expect(html).toContain('<span class="bn-time">09:35</span><details class="bn-pass" data-pass="momentum_stocks|2026-10-22T13:35:00Z"><summary>Momentum Stocks: closed 2 positions at the 5-day limit (−$344) and re-bought them, 1 new buy ($6,400)</summary>');
     expect(html).toContain("<li>closed SPY at the 5-day limit (−$210) and re-bought it</li>");
     expect(html).not.toContain("sold SPY");
     expect(html.match(/<details/g)).toHaveLength(1);
@@ -200,7 +202,16 @@ describe("recent actions", () => {
   test("reason codes map to words in one table; unknown codes read as words, never as codes", () => {
     expect(reasonWord("trailing_stop")).toBe("trailing stop");
     expect(reasonWord("slot_displaced")).toBe("a stronger pick took its slot");
-    expect(reasonWord("something_new")).toBe("something new");
+    expect(reasonWord("something_new")).toBe(""); // an unknown code is not shown, never as raw words
+    expect(reasonWord("TRAIL_STOP")).toBe("trailing stop");
+    expect(reasonWord("BREAKOUT_CATASTROPHE_STOP")).toBe("emergency stop at the broker");
+    expect(reasonWord("BROKER_STOP_LOSS")).toBe("stop-loss at the broker");
+    expect(reasonWord("MANUAL_CLOSE_UNRECONCILED")).toBe("matched to the broker");
+    for (const code of ["BREAKOUT_LONG_TIME_STOP", "BREAKOUT_LONG_EXIT", "BREAKOUT_SHORT_PRIORITY", "BREAKOUT_LONG_DRAWDOWN", "TREND_EXIT", "SMA_EXIT", "MEANREV_EXIT", "IDLE_OVERLAY_EXIT", "SYNC_DETECTED", "BROKER_GONE_404", "MANUAL_CLOSE", "STOP_LOSS", "SLOT_DISPLACED", "MODEL_CUTOVER"]) expect(reasonWord(code)).not.toBe("");
+    // The generic rebalance is worded by cadence: an hourly crypto sleeve does not rebalance "daily".
+    expect(reasonWord("MOMENTUM_REBALANCE", "hourly")).toBe("hourly rebalance");
+    expect(reasonWord("MOMENTUM_REBALANCE", "daily")).toBe("daily rebalance");
+    expect(reasonWord("MOMENTUM_REBALANCE")).toBe("rebalance");
     expect(reasonWord(null)).toBe("");
     for (const code of ["MAX_HOLD", "TIME_STOP", "BREAKOUT_SHORT_TIME_STOP"]) expect(reasonWord(code)).toBe("5-day limit");
     store.state.lang = "es";
@@ -247,7 +258,8 @@ describe("the tab", () => {
     expect(html).toContain('<span class="bn-dot" style="background:var(--warn)"></span>Invested, trading smaller</span>');
     expect(html.match(/class="bn-tl"/g)).toHaveLength(4);   // each card carries its time line
     expect(html.match(/class="bn-chip"/g).length).toBeGreaterThanOrEqual(8);
-    expect(html).toContain(">Recent actions<");
+    expect(html).toContain(">Recent actions <");
+    expect(html).toContain("(New York time)");
     expect(html).toContain('<div class="bn-day">Today</div>');
     expect(html).toContain('<span class="bn-time">12:02</span>');
   });

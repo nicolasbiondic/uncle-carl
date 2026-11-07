@@ -18,7 +18,7 @@
 
 import {
   getDB, PORTFOLIO_ENGINE_STRATEGY, accumulatePartialCloseLedger, closeTradeExplicit,
-  getTradingStats, insertActivity, pnlOf, getETDateKey,
+  getRecognizedRealizedPnl, insertActivity, pnlOf, getETDateKey,
 } from "../../db/database";
 import type { Position } from "../types";
 
@@ -98,11 +98,7 @@ export function positionsFromRows(rows: readonly SleeveRow[], includeEntrySessio
  *  scope — the same number the existing sleeves' ledgers use) plus the
  *  partial legs still sitting on open rows. */
 export function sleeveRealizedPnl(accountId: string): number {
-  const closed = getTradingStats(accountId).totalPnl as number;
-  const open = getDB().prepare(
-    `SELECT COALESCE(SUM(partial_realized_native), 0) AS p FROM trades WHERE account_id = ? AND status = 'open'`,
-  ).get(accountId) as any;
-  return (Number(closed) || 0) + (Number(open?.p) || 0);
+  return getRecognizedRealizedPnl(accountId);
 }
 
 /** First live run: every open row of the sleeve that is not yet ours is
@@ -159,10 +155,10 @@ function insertOpenRow(cfg: RowsConfig, id: string, symbol: string, qty: number,
   getDB().prepare(`
     INSERT INTO trades (id, symbol, market, side, strategy, entry_price, quantity, entry_time, status,
                         account_id, profile_id, strategy_version, open_commission, partial_realized_native,
-                        partial_commission_native, partial_commission_asset, partial_closed_contracts)
-    VALUES (?, ?, ?, 'buy', ?, ?, ?, ?, 'open', ?, ?, ?, 0, 0, 0, ?, 0)
+                        partial_commission_native, partial_commission_asset, partial_closed_contracts, episode_basis)
+    VALUES (?, ?, ?, 'buy', ?, ?, ?, ?, 'open', ?, ?, ?, 0, 0, 0, ?, 0, ?)
   `).run(id, symbol, cfg.market, PORTFOLIO_ENGINE_STRATEGY, price, qty, nowMs, cfg.accountId, cfg.accountId,
-    cfg.strategyVersion, cfg.quoteAsset);
+    cfg.strategyVersion, cfg.quoteAsset, qty * price);
 }
 
 export interface FillApplied {
@@ -182,7 +178,7 @@ export function applyBuyFill(cfg: RowsConfig, symbol: string, filledQty: number,
   const db = getDB();
   const txn = db.transaction((): FillApplied => {
     const row = db.prepare(
-      `SELECT id, quantity, entry_price FROM trades WHERE account_id = ? AND symbol = ? AND status = 'open' AND side = 'buy'
+      `SELECT id, quantity, entry_price, episode_basis, partial_closed_contracts FROM trades WHERE account_id = ? AND symbol = ? AND status = 'open' AND side = 'buy'
        ORDER BY entry_time ASC LIMIT 1`,
     ).get(cfg.accountId, symbol) as any;
     if (!row) {
@@ -194,8 +190,9 @@ export function applyBuyFill(cfg: RowsConfig, symbol: string, filledQty: number,
     const avgAfter = (row.quantity * row.entry_price + filledQty * avgPrice) / qtyAfter;
     // A portfolio→portfolio cutover may add to an older version's row. The episode still
     // belongs to the version that OPENED it, just as on partial sells and final closes.
-    db.prepare(`UPDATE trades SET quantity = ?, entry_price = ?, strategy = ? WHERE id = ? AND status = 'open'`)
-      .run(qtyAfter, avgAfter, PORTFOLIO_ENGINE_STRATEGY, row.id);
+    const basis = row.episode_basis ?? row.entry_price * (row.quantity + (row.partial_closed_contracts ?? 0));
+    db.prepare(`UPDATE trades SET quantity = ?, entry_price = ?, strategy = ?, episode_basis = ? WHERE id = ? AND status = 'open'`)
+      .run(qtyAfter, avgAfter, PORTFOLIO_ENGINE_STRATEGY, basis + filledQty * avgPrice, row.id);
     return { rowId: row.id, kind: "increased", qtyAfter, avgEntryAfter: avgAfter, realized: 0 };
   });
   return txn();
@@ -218,17 +215,18 @@ export function applySellFill(
   const db = getDB();
   const txn = db.transaction((): FillApplied | null => {
     const row = db.prepare(
-      `SELECT id, quantity, entry_price, partial_realized_native FROM trades
+      `SELECT id, quantity, entry_price, partial_realized_native, partial_commission_native, partial_closed_contracts, episode_basis FROM trades
        WHERE account_id = ? AND symbol = ? AND status = 'open' AND side = 'buy' ORDER BY entry_time ASC LIMIT 1`,
     ).get(cfg.accountId, symbol) as any;
     if (!row) return null;
     const qty = Math.min(filledQty, row.quantity);
+    const reconciled = closeReason === PORTFOLIO_RECONCILED_CLOSE_REASON;
     const leg = pnlOf("buy", row.entry_price, avgPrice, qty).pnl;
     const remaining = row.quantity - qty;
     if (remaining <= epsilon * Math.max(1, row.quantity)) {
-      const partial = Number(row.partial_realized_native) || 0;
+      const partial = (Number(row.partial_realized_native) || 0) - (Number(row.partial_commission_native) || 0);
       const total = partial + leg;
-      const basis = row.entry_price * row.quantity;
+      const basis = row.episode_basis ?? row.entry_price * (row.quantity + (row.partial_closed_contracts ?? 0));
       const pct = basis > 0 ? (total / basis) * 100 : 0;
       const closed = closeTradeExplicit(row.id, avgPrice, nowMs, total, pct, closeReason);
       if (!closed) return null;
@@ -237,6 +235,7 @@ export function applySellFill(
     accumulatePartialCloseLedger(row.id, {
       realizedNative: leg, commissionNative: 0, commissionAsset: cfg.quoteAsset,
       closedContracts: qty, remainingContracts: remaining,
+      fillTime: nowMs, exitPrice: avgPrice, source: reconciled ? "reconcile" : "fill",
     });
     return { rowId: row.id, kind: "decreased", qtyAfter: remaining, avgEntryAfter: row.entry_price, realized: leg };
   });

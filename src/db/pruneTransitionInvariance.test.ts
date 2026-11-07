@@ -70,7 +70,7 @@ test("pruning preserves a configured transition's boundary rows — display anch
   expect(before.start!.rebased).toBe(true);
 
   const pruned = pruneEquitySnapshots(2);
-  expect(pruned).toBe(1); // only the non-boundary filler (9,850) is prunable
+  expect(pruned).toBe(0); // 9,850 is now protected as the ET day's final mark
 
   const after = snapshot();
   expect(after).toEqual(before);
@@ -80,7 +80,7 @@ test("pruning preserves a configured transition's boundary rows — display anch
   ).all() as { equity: number }[]).map(r => r.equity);
   expect(survivors).toContain(4_750); // era4 last (rebase anchor) survives
   expect(survivors).toContain(9_800); // era5 first (rebase anchor) survives
-  expect(survivors).not.toContain(9_850); // true filler row was thinned
+  expect(survivors).toContain(9_850); // daily close also survives
 });
 
 // ══════════════════════════════════════════════

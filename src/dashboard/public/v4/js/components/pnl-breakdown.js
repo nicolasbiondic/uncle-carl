@@ -8,7 +8,7 @@
 //   open positions' move + holding costs and other   = positions (tile)
 //   closes + positions                                = the period P&L
 import { t } from "../store.js";
-import { moneySigned, pnlColor, etDate, etDateTime, dur, n } from "../fmt.js";
+import { pnlWhole, pnlColor, etDate, etDateTime, dur, n } from "../fmt.js";
 import { esc, icon } from "../ui.js";
 import { trapFocus } from "../focus-trap.js";
 import { api } from "../api.js";
@@ -24,7 +24,7 @@ function periodName(days) {
   return t(`${days}D P&L`, `P&L ${days}D`);
 }
 
-const amount = (v) => v == null ? "—" : `<span style="color:${pnlColor(v)}">${moneySigned(v)}</span>`;
+const amount = (v) => v == null ? "—" : `<span style="color:${pnlColor(v)}">${pnlWhole(v)}</span>`;
 
 function bridgeRow(label, v, cls = "", note = "") {
   return `<tr class="${cls}"><td>${label}${note ? ` <span class="muted">${note}</span>` : ""}</td><td class="r">${amount(v)}</td></tr>`;
@@ -89,7 +89,7 @@ export function renderBreakdown(b) {
     </div>`;
 
   return `<div class="pb-body">
-    <div class="pb-top"><b style="color:${pnlColor(b.pnl)}">${periodName(days)} ${b.pnl == null ? "—" : moneySigned(b.pnl)}</b> <span class="muted">· ${esc(since)}</span></div>
+    <div class="pb-top"><b style="color:${pnlColor(b.pnl)}">${periodName(days)} ${b.pnl == null ? "—" : pnlWhole(b.pnl)}</b> <span class="muted">· ${esc(since)}</span></div>
     <p class="pb-intro">${intro}</p>
     <table class="pb-bridge"><tbody>${rows.join("")}</tbody></table>
     ${approx}
@@ -115,8 +115,12 @@ export function openPnlBreakdown(days) {
   root.addEventListener("click", (e) => { if (e.target.closest("[data-pbclose]")) close(); });
   document.addEventListener("keydown", escClose);
   release = trapFocus(root);
+  // A slow answer for a modal that was closed (or replaced by another window's)
+  // must not paint into the new one: each opening owns its own root.
+  const mine = root;
   api.pnlBreakdown(d).then((b) => {
-    const body = root?.querySelector("#pbBody");
+    if (root !== mine) return;
+    const body = mine.querySelector("#pbBody");
     if (body) body.innerHTML = renderBreakdown(b);
   });
 }

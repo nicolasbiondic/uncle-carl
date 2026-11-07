@@ -35,10 +35,11 @@
 import {
   getOpenTrades, closeTrade, closeTradeExplicit, insertTrade, insertActivity,
   updateTradeCloseReason, getDB, isSyncOwned, pnlOf,
-  getPartialCloseLedger, accumulatePartialCloseLedger,
+  getPartialCloseLedger, accumulatePartialCloseLedger, getPendingTradeClose,
 } from "../db/database";
 import type { TradeRecord } from "../utils/types";
 import { BinanceExecutor, fapiClientOrderId } from "../executor/binance-executor";
+import { symbolLocks } from "../executor/symbolLock";
 import { hasInflightEngineClose } from "../sync/inflightCloses";
 import { USDC_SYMBOL_MAP } from "../executor/binance/quoteAsset";
 import { positionUsd, type CoinMPosition } from "../executor/binance-coinm-executor";
@@ -106,6 +107,7 @@ export class UnreconciledGrace {
 }
 
 export interface ProtectiveOrderReadback {
+  clientOrderId?: string;
   symbol: string;
   side: string;
   quantity: number;
@@ -172,11 +174,11 @@ export interface LinearBrokerPosition {
 /** Structural view of BinanceExecutor — exactly what the reconciler touches. */
 export interface LinearSleeveExecutor {
   getPositions(): Promise<LinearBrokerPosition[]>;
-  getRecentTrades(binanceSymbol: string, limit: number, sinceMs?: number): Promise<{ realizedPnl: number; commission: number; price: number; qty: number; side: string; time: number }[]>;
-  hasFilledStopClose(binanceSymbol: string, closeSide: "BUY" | "SELL", qty: number, sinceMs: number): Promise<boolean>;
+  getRecentTrades(binanceSymbol: string, limit: number, sinceMs?: number): Promise<{ realizedPnl: number; commission: number; price: number; qty: number; side: string; time: number; orderId?: string }[]>;
+  hasFilledStopClose(binanceSymbol: string, closeSide: "BUY" | "SELL", qty: number, sinceMs: number, clientOrderId?: string): Promise<boolean>;
   placeStopMarketClose(internalSymbol: string, positionSide: "buy" | "sell", stopPrice: number, quantity?: number, clientOrderId?: string): Promise<boolean>;
   getOpenProtectiveOrders(symbol?: string): Promise<ProtectiveOrderReadback[]>;
-  cancelAllOrders(internalSymbol: string, opts?: { aggregateFlat?: boolean }): Promise<void>;
+  cancelAllOrders(internalSymbol: string, opts?: { aggregateFlat?: boolean; onlyClientOrderIds?: readonly string[] }): Promise<void>;
   closePosition(symbol: string, quantity: number, side: "buy" | "sell"): Promise<{ success: boolean }>;
   getAlgoOrderHistory?(binanceSymbol: string, sinceMs?: number): Promise<any[]>;
 }
@@ -294,6 +296,68 @@ export interface LinearReconcileDeps {
   grace: UnreconciledGrace;
 }
 
+export const isTurtleUnit = (trade: Pick<TradeRecord, "strategy">): boolean =>
+  trade.strategy === "BREAKOUT_SHORT" || trade.strategy === "BREAKOUT_LONG";
+export const turtleStopClientOrderId = (trade: Pick<TradeRecord, "id" | "accountId">): string =>
+  fapiClientOrderId(`turtle-catastrophe:${trade.accountId}:${trade.id}`);
+
+// Separate from the executor's mutation lock: serialize the whole ensure vs
+// close lifecycle, including DB writes. No stop may be placed AFTER cleanup.
+export function withTurtleProtectionLock<T>(accountId: string, symbol: string, fn: () => Promise<T>, onTimeout: () => T): Promise<T> {
+  return symbolLocks.withLock("turtle_protection", `${accountId}:${symbol}`, { label: "Turtle protection" }, fn, onTimeout);
+}
+
+const turtleStopFailures = new WeakMap<object, Set<string>>();
+/** Shared by post-fill install and BOTH startup/periodic Binance syncs.
+ * Legacy units already persist entry N; their live-only default is 3N.
+ * Never use today's ATR, the strategy's 2N trigger, or another owner's stop. */
+export async function ensureTurtleCatastropheStop(exec: LinearSleeveExecutor, trade: TradeRecord, brokerSymbol: string): Promise<void> {
+  await withTurtleProtectionLock(trade.accountId!, trade.symbol, async () => {
+    const failures = turtleStopFailures.get(exec) ?? new Set<string>();
+    turtleStopFailures.set(exec, failures);
+    try {
+      const row = getDB().prepare("SELECT status FROM trades WHERE id = ? AND account_id = ?").get(trade.id, trade.accountId!) as any;
+      if (row?.status !== "open") return;
+      const n = trade.breakoutN;
+      const stopPrice = trade.catastropheStop ?? (n ? trade.entryPrice + (trade.side === "sell" ? 3 : -3) * n : NaN);
+      if (!Number.isFinite(stopPrice) || !(stopPrice > 0) ||
+          (trade.side === "buy" ? stopPrice >= trade.entryPrice : stopPrice <= trade.entryPrice)) throw new Error("invalid entry N/catastrophe trigger");
+      const clientOrderId = turtleStopClientOrderId(trade);
+      const orders = await exec.getOpenProtectiveOrders(trade.symbol);
+      const ours = orders.filter(o => o.clientOrderId === clientOrderId);
+      const protectedUnit = verifyProtectiveStop(ours, { brokerSymbol, positionSide: trade.side, entryPrice: trade.entryPrice, stopPrice, quantity: trade.quantity });
+      // A working id with unexpected parameters is NOT permission to submit a
+      // duplicate (or cancel another order). Page and retry after inspection.
+      if (!protectedUnit && (ours.length || !await exec.placeStopMarketClose(trade.symbol, trade.side, stopPrice, trade.quantity, clientOrderId))) {
+        throw new Error("native catastrophe stop not confirmed");
+      }
+      getDB().prepare("UPDATE trades SET catastrophe_stop = ? WHERE id = ? AND status = 'open' AND catastrophe_stop IS NULL").run(stopPrice, trade.id);
+      failures.delete(trade.id);
+    } catch (e: any) {
+      if (!failures.has(trade.id)) {
+        failures.add(trade.id);
+        const message = `Turtle catastrophe stop failed: ${trade.accountId} ${trade.symbol} (${trade.id}): ${e?.message ?? e} — unit retained; sync will retry`;
+        log.error(message);
+        eventBus.emit(EVENTS.ERROR_BURST, { context: "TurtleCatastropheStop", message, count: 1, windowMs: 0, firstAt: Date.now(), lastAt: Date.now() });
+      }
+    }
+  }, () => undefined);
+}
+
+/** Retry cleanup after crashes/failed cancellation, scoped to exact closed
+ * unit ids. Never sweep the bot namespace or manual orders. */
+async function cleanClosedTurtleStops(exec: LinearSleeveExecutor, spec: LinearSleeveSpec): Promise<void> {
+  const rows = getDB().prepare("SELECT id, symbol, account_id AS accountId FROM trades WHERE account_id = ? AND status = 'closed' AND strategy IN ('BREAKOUT_SHORT', 'BREAKOUT_LONG')").all(spec.accountId) as Pick<TradeRecord, "id" | "symbol" | "accountId">[];
+  if (!rows.length) return;
+  const byId = new Map(rows.map(t => [turtleStopClientOrderId(t), t]));
+  for (const order of await exec.getOpenProtectiveOrders()) {
+    const trade = byId.get(order.clientOrderId ?? "");
+    if (trade && spec.toBrokerSymbol(trade.symbol) === order.symbol) {
+      await withTurtleProtectionLock(spec.accountId, trade.symbol, () => exec.cancelAllOrders(trade.symbol, { onlyClientOrderIds: [turtleStopClientOrderId(trade)] }), () => undefined);
+    }
+  }
+}
+
 /**
  * The full linear-sleeve reconciliation pass:
  *   Phase 1 — open in DB, flat on broker → attribute closing fills (grace via
@@ -324,6 +388,9 @@ export async function reconcileLinearBinanceSleeve(deps: LinearReconcileDeps, sp
     const live = posMap.get(trade.symbol);
     if (live && live.positionAmt !== 0) {
       grace.clear(trade.id); // consecutive semantics: a re-match resets the count
+      if (isTurtleUnit(trade) && spec.toBrokerSymbol(trade.symbol)) {
+        await ensureTurtleCatastropheStop(exec, trade, spec.toBrokerSymbol(trade.symbol)!);
+      }
       if (spec.refreshUnrealizedOnMatch) {
         const pos = acc.positions.get(trade.symbol);
         if (pos) {
@@ -348,6 +415,9 @@ export async function reconcileLinearBinanceSleeve(deps: LinearReconcileDeps, sp
     }
     await closeFlatRow(exec, acc, grace, spec, trade);
   }
+
+  try { await cleanClosedTurtleStops(exec, spec); }
+  catch (e: any) { log.warn(`${spec.brand} Turtle stop cleanup failed; retry next sync: ${e?.message ?? e}`); }
 
   // Phase 2 — on the broker but not tracked → protect-then-adopt.
   // shadow_* rows are simulated fills (no broker position behind them) — they
@@ -436,7 +506,7 @@ async function closeFlatRow(
   if (!bnSymbol) return;
   const closeSide = trade.side === "buy" ? "SELL" : "BUY";
 
-  let closingFills: { realizedPnl: number; commission: number; price: number; qty: number; side: string; time: number }[] = [];
+  let closingFills: { realizedPnl: number; commission: number; price: number; qty: number; side: string; time: number; orderId?: string }[] = [];
   let settlementFailed = false;
   const fetchFills = async () => {
     const recentTrades = await exec.getRecentTrades(bnSymbol, 1000, trade.entryTime);
@@ -487,7 +557,7 @@ async function closeFlatRow(
   let attributionUnavailable = false;
   if (closedQty > 0) {
     try {
-      stopFilled = await exec.hasFilledStopClose(bnSymbol, closeSide, trade.quantity, trade.entryTime);
+      stopFilled = await exec.hasFilledStopClose(bnSymbol, closeSide, trade.quantity, trade.entryTime, isTurtleUnit(trade) ? turtleStopClientOrderId(trade) : undefined);
     } catch (e: any) {
       attributionUnavailable = true;
       log.warn(`${spec.brand} stop attribution: order history unavailable for ${trade.symbol}: ${e?.message ?? e}`);
@@ -501,6 +571,7 @@ async function closeFlatRow(
         const type = String(order.orderType ?? order.type ?? order.actualOrderType ?? "").toUpperCase();
         const qty = Number(order.executedQty ?? order.totalQty ?? order.quantity ?? order.qty ?? 0);
         return ["FILLED", "TRIGGERED", "FINISHED"].includes(status) && type.includes("STOP") &&
+          (!isTurtleUnit(trade) || (order.clientAlgoId ?? order.clientOrderId) === turtleStopClientOrderId(trade)) &&
           String(order.side ?? "").toUpperCase() === closeSide && qty + 1e-12 >= trade.quantity &&
           (Number(order.updateTime ?? order.triggerTime ?? order.time ?? 0) || 0) >= trade.entryTime;
       });
@@ -512,11 +583,17 @@ async function closeFlatRow(
 
   // Broker realized PnL as overridePnl so pnl AND pnl_pct derive from the same
   // number (their signs can't disagree).
-  const reason = closedQty > 0
-    ? (stopFilled ? "BROKER_STOP_LOSS" : attributionUnavailable ? "MANUAL_CLOSE_UNRECONCILED" : "MANUAL_CLOSE")
+  const pending = getPendingTradeClose(trade.id);
+  // A canceled/unfilled engine order must not relabel a later manual/native
+  // close. Only the accepted order's own fills can settle its pending intent.
+  const pendingQty = pending ? closingFills.filter(f => f.orderId === pending.orderId).reduce((sum, f) => sum + f.qty, 0) : 0;
+  const reason = pending && pendingQty >= trade.quantity * (1 - 1e-6) ? pending.reason : closedQty > 0
+    ? (stopFilled ? (isTurtleUnit(trade) ? "BREAKOUT_CATASTROPHE_STOP" : "BROKER_STOP_LOSS") : attributionUnavailable ? "MANUAL_CLOSE_UNRECONCILED" : "MANUAL_CLOSE")
     : "MANUAL_CLOSE_UNRECONCILED";
   const result = closeTrade(trade.id, exitPrice, exitTime, closeCommission, pnl);
   if (!result) return;
+
+  if (isTurtleUnit(trade)) await exec.cancelAllOrders(trade.symbol, { onlyClientOrderIds: [turtleStopClientOrderId(trade)] });
 
   acc.positions.delete(trade.symbol);
   grace.clear(trade.id);

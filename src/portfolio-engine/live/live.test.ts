@@ -113,11 +113,11 @@ describe("registry hook: template 'portfolio'", () => {
   };
   const def: PortfolioDefinition = { id: "xasset_trend", name: "D1", template: "portfolio", account: "alpaca_main", capital: 50_000, mode: "live", enabled: false, params };
 
-  test("buildPortfolioPlan returns the engine plan with a daily heartbeat", () => {
+  test("buildPortfolioPlan returns the engine plan with a per-tick heartbeat", () => {
     const plan = buildPortfolioPlan(def, Date.now());
     expect(plan).toEqual({
       template: "portfolio", portfolioId: "xasset_trend", account: "alpaca_main", capital: 50_000, params,
-      heartbeat: { name: "portfolio:d1", intervalMs: 86_400_000, graceMultiplier: 5 },
+      heartbeat: { name: "portfolio:d1", intervalMs: 60_000, graceMultiplier: 10 },
     });
     expect(() => buildPortfolioPlan({ ...def, params: { ...params, engine: "x" } as any }, Date.now())).toThrow(/params.engine/);
   });
@@ -137,7 +137,7 @@ describe("registry hook: template 'portfolio'", () => {
     expect(e.accountId).toBe("xasset_trend");
     expect(e.mode).toBe("observer");
     e.start(); e.stop();
-    expect(registered).toEqual([["portfolio:d1", 86_400_000, { graceMultiplier: 5 }]]);
+    expect(registered).toEqual([["portfolio:d1", 60_000, { graceMultiplier: 10 }]]);
     expect(() => buildPortfolioEngine(plan, { venue: new FakeVenue("binance_usdm"), historicalDb: db })).toThrow(/venue/);
     const core = { ...plan, params: { ...params, strategy: { kind: "factorCore" } as any } };
     expect(() => buildPortfolioEngine(core, { venue: new FakeVenue("alpaca"), historicalDb: db })).toThrow(/MembershipView/);

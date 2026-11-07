@@ -66,7 +66,7 @@ describe("bandChipHtml", () => {
     const html = bandChipHtml({ status: "below", liveCumReturnPct: -3.25, p5Pct: -1.1 });
     expect(html).toContain("var(--down)");
     expect(html).toContain("Below band");
-    expect(html).toContain("-3.3% vs p5 -1.1%"); // live vs p5 detail, num(…, 1)
+    expect(html).toContain("−3% vs worst expected −1%"); // whole numbers (owner: no decimals in tables)
   });
   test("within/above are green; insufficient_data is muted and translated", () => {
     store.state.lang = "es";
@@ -92,15 +92,16 @@ describe("portfolioRowHtml", () => {
     store.state.lang = "es";
     const html = portfolioRowHtml({ ...P, enabled: false, status: "pending_restart", validation: "unvalidated" });
     expect(html).toContain("desactivado");
-    expect(html).toContain("pendiente de reinicio");
+    expect(html).toContain("se aplica en el próximo reinicio");
     expect(html).toContain("no validado");
   });
   test("RW2: an incumbent row managed by the live portfolio engine says so and is NOT 'disabled'; the definition row names its template", () => {
     store.state.lang = "es";
     const html = portfolioRowHtml({ ...P, managedBy: "pe_momentum_stocks" });
-    expect(html).toContain("gestionado por el motor de cartera (pe_momentum_stocks)");
+    expect(html).toContain("gestionado por el motor de cartera");
+    expect(html).not.toContain("(pe_momentum_stocks)");
     expect(html).not.toContain("desactivado");
-    expect(portfolioRowHtml({ ...P, id: "pe_momentum_stocks", template: "portfolio", managedBy: null })).toContain("Motor de cartera (RW2)");
+    expect(portfolioRowHtml({ ...P, id: "pe_momentum_stocks", template: "portfolio", managedBy: null })).toContain("Motor de cartera");
     expect(portfolioRowHtml({ ...P, managedBy: null })).not.toContain("gestionado por");
   });
 });
@@ -108,20 +109,20 @@ describe("portfolioRowHtml", () => {
 describe("renderPortfoliosBody", () => {
   test("null (route not mounted) and empty list degrade honestly", () => {
     store.state.lang = "en";
-    expect(renderPortfoliosBody(null)).toContain("route not mounted");
+    expect(renderPortfoliosBody(null)).toContain("Could not load the portfolios");
     expect(renderPortfoliosBody([])).toContain("No portfolios");
   });
   test("declares the running source (code vs db) above the table", () => {
     store.state.lang = "en";
-    expect(renderPortfoliosBody([P])).toContain("PORTFOLIOS_SOURCE=code");
-    expect(renderPortfoliosBody([{ ...P, origin: "db" }])).toContain("PORTFOLIOS_SOURCE=db");
+    expect(renderPortfoliosBody([P])).toContain("built into the program");
+    expect(renderPortfoliosBody([{ ...P, origin: "db" }])).toContain("saved in the database");
   });
   test("not writable: no New-portfolio button, no Actions column, shows the unlock note", () => {
     store.state.lang = "en";
     const html = renderPortfoliosBody([P], { writable: false, presets: [], accounts: [] });
     expect(html).not.toContain("data-pf-new");
     expect(html).not.toContain("data-pf-edit=");
-    expect(html).toContain("PORTFOLIOS_SOURCE=db");
+    expect(html).toContain("switched off on this installation");
   });
   test("writable: New-portfolio button and per-row Edit/Archive controls appear", () => {
     store.state.lang = "en";

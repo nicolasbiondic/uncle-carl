@@ -229,8 +229,8 @@ function buildPortfolioEnginePlan(def: PortfolioDefinition): PortfolioEnginePlan
     account: def.account,
     capital: def.capital,
     params: p,
-    // Once-a-day loop: same cadence/grace as the daily stock sleeves.
-    heartbeat: { name: p.heartbeatName, intervalMs: 86_400_000, graceMultiplier: 5 },
+    // The engine's tick loop beats every minute (not_due included); ~10 min of silence = dead loop.
+    heartbeat: { name: p.heartbeatName, intervalMs: 60_000, graceMultiplier: 10 },
   };
 }
 

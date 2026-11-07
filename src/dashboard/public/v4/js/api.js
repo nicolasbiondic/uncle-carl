@@ -49,7 +49,8 @@ export const api = {
   connections: () => soft("/api/connections", {}),
   activity: (limit = 60, type) => soft("/api/activity" + qs({ limit, type: type && type !== "all" ? type : "" }), []),
   aiQuorum: () => soft("/api/ai-quorum/summary", { status: "none" }),
-  trades: (limit = 100, account) => soft("/api/trades" + qs({ limit, account }), []),
+  // null = the feed failed (an error, not "no trades").
+  trades: (limit = 100, account) => soft("/api/trades" + qs({ limit, account }), null),
   equityHistory: ({ account = "consolidated", days, range } = {}) => soft("/api/equity/history" + qs({ account, days, range }), []),
   // Owner KPIs + decision funnel (P0 2026-10-09 — src/dashboard/routes/kpis.ts)
   kpis: () => soft("/api/kpis", null),
@@ -70,8 +71,6 @@ export const api = {
   candles: (symbol, tf = "1h", limit = 200) => soft(`/api/candles/${encodeURIComponent(symbol)}` + qs({ tf, limit })),
   orderbook: (symbol, limit = 10) => soft("/api/orderbook" + qs({ symbol, limit })),
   tape: (symbol, limit = 24) => soft("/api/tape" + qs({ symbol, limit })),
-  // admin
-  configKeys: () => soft("/api/config/keys"),
   // platform identity + sessions (src/dashboard/routes/platform.ts)
   platformMe: () => soft("/api/platform/me", null),
   platformSessions: () => soft("/api/platform/sessions", null),

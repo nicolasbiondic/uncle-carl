@@ -10,6 +10,7 @@ import {
 import { getOrCreateSession } from "../auth-store";
 import { cached } from "../cache";
 import { toBoundedInt } from "../dashboard-utils";
+import { ALL_PROFILE_IDS } from "../../config/riskProfiles";
 
 export function registerDataRoutes(app: express.Application, am: AccountManager): void {
   // ── GET /api/dashboard ──────────────────────────────────────────────────
@@ -23,8 +24,15 @@ export function registerDataRoutes(app: express.Application, am: AccountManager)
   // kept: trades.js (api.trades()) + ops script scripts/baseline-report.ts.
   app.get("/api/trades", (req, res) => {
     const limit = toBoundedInt(req.query.limit, 100, 1, 1000);
-    const key   = `trades_${limit}_${req.query.account || "all"}`;
-    res.json(cached(key, 5_000, () => getRecentTrades(limit, req.query.account as any)));
+    // The cache key is built from the account, so it must come from a closed set:
+    // an arbitrary string would add one never-evicted entry per value (audit G-20).
+    const raw = req.query.account;
+    const account = typeof raw === "string" && raw !== "" ? raw : undefined;
+    if (account !== undefined && !(ALL_PROFILE_IDS as readonly string[]).includes(account)) {
+      return res.status(400).json({ error: "unknown account" });
+    }
+    const key   = `trades_${limit}_${account ?? "all"}`;
+    res.json(cached(key, 5_000, () => getRecentTrades(limit, account as any)));
   });
 
   // ── GET /api/stats ──────────────────────────────────────────────────────

@@ -26,6 +26,18 @@
 #      and calls nobody ("pending" mode).
 #   7. Read-only runtime guardian at :20 every hour (scripts/guardian.sh),
 #      pages OPS once on violation and once on recovery.
+#   8+9. Stock-only historical retries at 06:00 and 08:30 host-local
+#      (refresh-historical.sh --retry-stocks): a no-op unless no stock refresh
+#      succeeded since today's 04:00 — the portfolio engines trade from those
+#      bars (audit F-10).
+#   10. Weekly restore drill, Sunday 05:15 host-local (scripts/restore-drill.sh):
+#      restores the latest backup into a temp dir and opens the encrypted
+#      account registry with the backed-up key (audit F-9).
+# Every job reports to the dead-man's switch (scripts/lib/cron-job.sh →
+# data/cron-markers/, checked by guardian G7 and /healthz stale_jobs; the
+# schedule mirror is src/ops/cronJobs.ts, kept equal by
+# scripts/cronJobs.schedule.test.ts). This installer seeds
+# data/cron-markers/.since: tracking starts now, not at some past run.
 # ══════════════════════════════════════════════
 
 set -euo pipefail
@@ -38,9 +50,10 @@ WATCHDOG_SCRIPT="$ROOT_DIR/scripts/watchdog.sh"
 PARITY_SCRIPT="$ROOT_DIR/scripts/parity-check.sh"
 GUARDIAN_SCRIPT="$ROOT_DIR/scripts/guardian.sh"
 AI_QUORUM_SCRIPT="$ROOT_DIR/scripts/ai-quorum.sh"
+DRILL_SCRIPT="$ROOT_DIR/scripts/restore-drill.sh"
 LOG_DIR="$ROOT_DIR/logs"
 
-for s in "$BACKUP_SCRIPT" "$REFRESH_SCRIPT" "$WATCHDOG_SCRIPT" "$PARITY_SCRIPT" "$GUARDIAN_SCRIPT" "$AI_QUORUM_SCRIPT"; do
+for s in "$BACKUP_SCRIPT" "$REFRESH_SCRIPT" "$WATCHDOG_SCRIPT" "$PARITY_SCRIPT" "$GUARDIAN_SCRIPT" "$AI_QUORUM_SCRIPT" "$DRILL_SCRIPT"; do
   if [ ! -x "$s" ]; then
     chmod +x "$s"
   fi
@@ -54,6 +67,16 @@ BACKUP_TAG="# uncle-carl-backup"
 # 04:00 host-local, half an hour before the backup so the fresh bars are captured.
 REFRESH_LINE="0 4 * * * $REFRESH_SCRIPT >> $LOG_DIR/refresh-historical.log 2>&1"
 REFRESH_TAG="# uncle-carl-refresh-historical"
+
+# Stock-only retries of the 04:00 refresh (no-ops when it succeeded).
+REFRESH_RETRY1_LINE="0 6 * * * $REFRESH_SCRIPT --retry-stocks >> $LOG_DIR/refresh-historical.log 2>&1"
+REFRESH_RETRY1_TAG="# uncle-carl-refresh-retry-0600"
+REFRESH_RETRY2_LINE="30 8 * * * $REFRESH_SCRIPT --retry-stocks >> $LOG_DIR/refresh-historical.log 2>&1"
+REFRESH_RETRY2_TAG="# uncle-carl-refresh-retry-0830"
+
+# Weekly restore drill, Sunday 05:15 host-local (after the 04:30 backup).
+DRILL_LINE="15 5 * * 0 $DRILL_SCRIPT >> $LOG_DIR/restore-drill.log 2>&1"
+DRILL_TAG="# uncle-carl-restore-drill"
 
 WATCHDOG_LINE="*/5 * * * * $WATCHDOG_SCRIPT >> $LOG_DIR/watchdog.log 2>&1"
 WATCHDOG_TAG="# uncle-carl-watchdog"
@@ -94,6 +117,16 @@ add_entry "$PARITY_TAG" "$PARITY_LINE"
 add_entry "$GUARDIAN_TAG" "$GUARDIAN_LINE"
 add_entry "$AIQ_STOCKS_TAG" "$AIQ_STOCKS_LINE"
 add_entry "$AIQ_CRYPTO_TAG" "$AIQ_CRYPTO_LINE"
+add_entry "$REFRESH_RETRY1_TAG" "$REFRESH_RETRY1_LINE"
+add_entry "$REFRESH_RETRY2_TAG" "$REFRESH_RETRY2_LINE"
+add_entry "$DRILL_TAG" "$DRILL_LINE"
+
+MARKER_DIR="${CRON_MARKER_DIR:-$ROOT_DIR/data/cron-markers}"
+mkdir -p "$MARKER_DIR"
+if [ ! -f "$MARKER_DIR/.since" ]; then
+  date +%s > "$MARKER_DIR/.since.tmp" && mv "$MARKER_DIR/.since.tmp" "$MARKER_DIR/.since"
+  echo "➕ Dead-man's switch tracking starts now ($MARKER_DIR/.since)"
+fi
 
 if [ "$NEW" != "$CURRENT" ]; then
   echo "$NEW" | crontab -

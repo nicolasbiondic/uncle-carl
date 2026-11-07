@@ -307,17 +307,20 @@ describe("placeOrder", () => {
     expect(calls).toContain("GET /fapi/v2/positionRisk");
   });
 
-  test("cancels a partial residual, confirms terminal, and returns final position quantity", async () => {
+  test.each([false, true])("partial cancel uses OUR terminal fill (userTrades fallback=%s), not the 2x account aggregate", async (fromTrades) => {
     const calls: string[] = [];
     const exec = make({
       signedRequest: async (method: string, path: string) => {
         calls.push(`${method} ${path}`);
         if (method === "POST" && path === "/fapi/v1/leverage") return {};
         if (method === "POST" && path === "/fapi/v1/order") return { status: "PARTIALLY_FILLED", orderId: 11, avgPrice: "100", executedQty: "0.5" };
-        if (method === "GET" && path === "/fapi/v1/order") return { status: calls.includes("DELETE /fapi/v1/order") ? "CANCELED" : "PARTIALLY_FILLED" };
+        if (method === "GET" && path === "/fapi/v1/order") return { status: calls.includes("DELETE /fapi/v1/order") ? "CANCELED" : "PARTIALLY_FILLED", executedQty: "0.6", avgPrice: fromTrades ? "0" : "102" };
         if (method === "DELETE" && path === "/fapi/v1/order") return {};
-        if (method === "GET" && path === "/fapi/v2/positionRisk") return [{ symbol: "BTCUSDT", positionAmt: "0.4", entryPrice: "101", unRealizedProfit: "0", leverage: "2", updateTime: "1" }];
-        if (method === "GET" && path === "/fapi/v1/userTrades") throw new Error("commission history lag");
+        if (method === "GET" && path === "/fapi/v2/positionRisk") return [{ symbol: "BTCUSDT", positionAmt: "1.2", entryPrice: "101", unRealizedProfit: "0", leverage: "2", updateTime: "1" }];
+        if (method === "GET" && path === "/fapi/v1/userTrades") {
+          if (!fromTrades) throw new Error("commission history lag");
+          return [{ orderId: 11, qty: "0.6", price: "102" }, { orderId: 10, qty: "0.6", price: "100" }];
+        }
         throw new Error(`unexpected request ${method} ${path}`);
       },
     }) as any;
@@ -325,8 +328,8 @@ describe("placeOrder", () => {
     exec.leverageBySymbol.set("BTCUSDT", 2);
     const signal = { id: "partial", symbol: "BTC/USD", market: "crypto", side: "buy", strategy: "MOMENTUM", strength: "strong", price: 100, timestamp: Date.now(), indicators: {}, reason: "test" } as any;
     const order = await exec.placeOrder(signal, 1, "momentum_crypto");
-    expect(order?.quantity).toBe(0.4);
-    expect(order?.filledPrice).toBe(101);
+    expect(order?.quantity).toBe(0.6);
+    expect(order?.filledPrice).toBe(102);
     expect(calls).toContain("DELETE /fapi/v1/order");
     expect(calls).toContain("GET /fapi/v2/positionRisk");
   });
@@ -709,7 +712,7 @@ describe("getOpenProtectiveOrders — algo-order quantity shape (totalQty, no or
         if (path === "/fapi/v1/openOrders") return [];
         if (path === "/fapi/v1/openAlgoOrders") return [{
           symbol: "BTCUSDT", orderType: "STOP_MARKET", reduceOnly: "true",
-          side: "SELL", totalQty: "3", triggerPrice: "47000",
+          side: "SELL", totalQty: "3", triggerPrice: "47000", clientAlgoId: "uc-fapi-turtle-unit",
         }];
         throw new Error(`unexpected path ${path}`);
       },
@@ -717,6 +720,28 @@ describe("getOpenProtectiveOrders — algo-order quantity shape (totalQty, no or
     const orders = await exec.getOpenProtectiveOrders("BTC/USDT");
     expect(orders).toHaveLength(1);
     expect(orders[0].quantity).toBe(3);
+    expect(orders[0].clientOrderId).toBe("uc-fapi-turtle-unit");
+  });
+});
+
+describe("Turtle exact-id ownership", () => {
+  test("cleanup cancels only the unit id in BOTH stores, even with aggregateFlat", async () => {
+    const id = fapiClientOrderId("turtle-unit"), sibling = fapiClientOrderId("other-sleeve");
+    const deleted: string[] = [];
+    const exec = make({ signedRequest: async (method: string, path: string, params: any) => {
+      if (method === "DELETE") { deleted.push(`${path}:${params.orderId ?? params.algoId}`); return {}; }
+      if (path === "/fapi/v1/openOrders") return [id, sibling, "manual"].map((clientOrderId, i) => ({ orderId: i + 1, clientOrderId, type: "STOP_MARKET", reduceOnly: true }));
+      if (path === "/fapi/v1/openAlgoOrders") return [id, sibling, "manual"].map((clientAlgoId, i) => ({ algoId: i + 11, clientAlgoId, orderType: "STOP_MARKET", reduceOnly: true }));
+      throw new Error(path);
+    } });
+    await exec.cancelAllOrders("BTC/USD", { aggregateFlat: true, onlyClientOrderIds: [id] });
+    expect(deleted).toEqual(["/fapi/v1/order:1", "/fapi/v1/algoOrder:11"]);
+  });
+  test("regular-stop attribution requires the requested client id", async () => {
+    const id = fapiClientOrderId("turtle-unit"), sibling = fapiClientOrderId("other-sleeve");
+    const exec = make({ signedRequest: async () => [{ clientOrderId: sibling, status: "FILLED", type: "STOP_MARKET", side: "BUY", executedQty: "1", updateTime: 1000 }] });
+    expect(await exec.hasFilledStopClose("BTCUSDT", "BUY", 1, 1, id)).toBe(false);
+    expect(await exec.hasFilledStopClose("BTCUSDT", "BUY", 1, 1, sibling)).toBe(true);
   });
 });
 

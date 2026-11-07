@@ -55,19 +55,16 @@ export function walletBreakdownTitle(account) {
 function brokerCell(key, group, bt, stats) {
   // Headline numbers come from BROKER-TRUTH (bt = the v2 brokerAccounts entry:
   // the same `${broker}_main` snapshot source the TODAY/ALL KPIs use), so the
-  // two broker cells SUM to the headline KPI. The old per-sleeve sums (kept as
-  // a fallback) miss unrealized P&L on open positions — which is exactly why
-  // Alpaca −24 + Binance +28 didn't reconcile with −298.
-  const btOk = !!(bt && bt.equity != null);
-  const equity = btOk ? n(bt.equity) : group.reduce((s, a) => s + n(a.equity), 0);
-  const first = n(bt?.firstEquity);
-  const allPnl = btOk && first > 0 ? n(bt.equity) - first : group.reduce((s, a) => s + n(a.totalPnl), 0);
-  const allBase = btOk && first > 0 ? first : group.reduce((s, a) => s + n(a.initialEquity), 0);
-  const allPct = allBase > 0 ? (allPnl / allBase) * 100 : 0;
-  const periodPnl = btOk && bt.stats?.periodEquityPnl != null
-    ? n(bt.stats.periodEquityPnl)
-    : group.reduce((s, a) => s + n(stats[a.id]?.periodEquityPnl ?? stats[a.id]?.todayPnl), 0);
-  const periodPct = btOk && Number.isFinite(bt.stats?.periodEquityPnlPct) ? bt.stats.periodEquityPnlPct : null;
+  // two broker cells SUM to the headline KPI. No fallback to per-sleeve sums
+  // (A-11, 2026-11-07): they miss unrealized P&L, collateral and treasury —
+  // Alpaca −24 + Binance +28 once "reconciled" against a −298 headline — and
+  // a null from the server is deliberate: it renders "—". The return since
+  // start is the server's display-start window (A-1), the same anchor as the
+  // All tile and the "since start" sub-line.
+  const equity = bt?.equity ?? null;
+  const allPct = bt?.sinceStart?.pnlPct ?? null;
+  const periodPnl = bt?.stats?.periodEquityPnl ?? null;
+  const periodPct = bt?.stats?.periodEquityPnlPct ?? null;
   const pausedCount = group.filter((a) => a.paused).length;
   const on = group.some((a) => store.state.view === a.id);
   const name = BROKER_LABEL[key] || key;
@@ -86,10 +83,10 @@ function brokerCell(key, group, bt, stats) {
     <div class="kpi bk sm${on ? " on" : ""}" data-broker="${esc(key)}" role="button" tabindex="0" title="${esc(title)}">
       <div class="bk-text">
         <span class="kl"><span class="pdot" style="background:${dotColor(key)}"></span><b>${esc(name)}</b>${status}</span>
-        <span class="kv">${money(equity, 0)} <span class="kv sub" title="${esc(t("Return since the start of the current system", "Rentabilidad desde el inicio del sistema actual"))}"><span style="color:${pnlColor(allPct)}">${pctSigned(allPct)}</span> ${t("total", "total")}</span></span>
-        <span class="ks">${esc(periodLabel(store.state.period))} <b style="color:${pnlColor(periodPnl)}">${moneySigned(periodPnl, 0)}</b>${periodPct == null ? "" : ` ${pctSigned(periodPct)}`}</span>
+        <span class="kv">${equity == null ? "—" : money(equity, 0)} ${allPct == null ? "" : `<span class="kv sub" title="${esc(t("Return since the display start", "Rentabilidad desde el inicio display"))}"><span style="color:${pnlColor(allPct)}">${pctSigned(allPct)}</span> ${t("total", "total")}</span>`}</span>
+        <span class="ks">${esc(periodLabel(store.state.period))} <b style="color:${pnlColor(periodPnl)}">${periodPnl == null ? "—" : moneySigned(periodPnl, 0)}</b>${periodPct == null ? "" : ` ${pctSigned(periodPct)}`}</span>
       </div>
-      <div class="pspark" data-spark="${esc(key)}_main" aria-hidden="true"></div>
+      <div class="pspark" data-spark="${key === "binance" ? "binance_total" : `${esc(key)}_main`}" aria-hidden="true"></div>
     </div>`;
 }
 
@@ -97,12 +94,8 @@ function brokerCell(key, group, bt, stats) {
  *  their first equity (the same anchors as each broker cell's "total %", so the
  *  three figures agree). Null while any broker lacks its first anchor. */
 export function sinceStart(state) {
-  const brokers = (state.profiles || []).flatMap((p) => p.brokerAccounts || []);
-  if (!brokers.length || brokers.some((b) => b.equity == null || !(n(b.firstEquity) > 0))) return null;
-  const equity = brokers.reduce((sum, b) => sum + n(b.equity), 0);
-  const first = brokers.reduce((sum, b) => sum + n(b.firstEquity), 0);
-  const starts = brokers.map((b) => Number(b.startedAt)).filter((x) => Number.isFinite(x) && x > 0);
-  return { pnl: equity - first, pct: ((equity - first) / first) * 100, startedAt: starts.length ? Math.min(...starts) : null };
+  const w = state.profiles?.[0]?.pnlAggregate?.sinceStart;
+  return w == null ? null : { pnl: w.pnl, pct: w.pnlPct, startedAt: w.start.at, displayStart: w.start };
 }
 
 export function renderProfiles() {

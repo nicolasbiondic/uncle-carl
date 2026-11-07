@@ -1085,6 +1085,29 @@ describe("MomentumEngine getRealisedPnlSince fail-closed", () => {
 });
 
 describe("MomentumEngine timeStop (time barrier — third barrier, OFF by default)", () => {
+  test("lost state recovers a 130h-old row and TIME_STOP closes on the first tick", async () => {
+    const now = Date.parse("2026-11-07T00:00:00Z"), broker = new FakeBroker();
+    broker.setCandles("UP1", ramp(100, 130));
+    broker.positions = [{ symbol: "UP1", side: "buy", quantity: 1, notional: 3000, entryTime: now - 130 * 3_600_000 }];
+    await new MomentumEngine({ universe: ["UP1"], scorer: { topLongs: 1, minLongScore: 0.001 }, timeStop: { maxHoldHours: 120 } },
+      broker, silentLogger, undefined, new TestClock(now)).tick();
+    expect(broker.closed).toMatchObject([{ symbol: "UP1", closeReason: TIME_STOP_CLOSE_REASON }]);
+    expect(broker.opened).toEqual([]);
+  });
+
+  test.each(["rejected", "throws", "ok"])("flip requires a confirmed close (%s)", async outcome => {
+    const broker = new FakeBroker();
+    broker.setCandles("UP1", ramp(100, 150));
+    broker.positions = [{ symbol: "UP1", side: "sell", quantity: 1, notional: 1000 }];
+    if (outcome === "rejected") broker.closePosition = async a => { broker.closed.push(a); return { ok: false, reason: "not confirmed" }; };
+    if (outcome === "throws") broker.closePosition = async a => { broker.closed.push(a); throw new Error("timeout"); };
+    const report = await new MomentumEngine({ universe: ["UP1"], notionalPctPerSlot: 0.2, scorer: { topLongs: 1, minLongScore: 0.001 }, regime: { enabled: false } }, broker, silentLogger).tick();
+    expect(report.decisions[0]?.action).toBe("long");
+    expect(broker.closed).toMatchObject([{ symbol: "UP1", side: "sell" }]);
+    expect(broker.opened).toHaveLength(outcome === "ok" ? 1 : 0);
+    expect(broker.positions[0]?.side).toBe(outcome === "ok" ? "buy" : "sell");
+  });
+
   /** In-memory persistence — same JSON round-trip fidelity as the file store. */
   function memoryPersistence(initial: MomentumPersistedState | null = null) {
     let stored: MomentumPersistedState | null = initial;

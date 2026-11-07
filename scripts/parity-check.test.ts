@@ -288,6 +288,22 @@ describe("Turtle units carried across the parity epoch", () => {
 });
 
 describe("testnet-fill-anchored Turtle stops", () => {
+  test.each(["momentum_crypto", "momentum_crypto_usdc"] as const)("%s: declared catastrophe exit explains ONLY its matched unit, including a still-open sim", sleeve => {
+    const f = fixture();
+    try {
+      f.db.run("UPDATE trades SET close_reason = 'BREAKOUT_CATASTROPHE_STOP' WHERE id = 'btc'");
+      if (sleeve === "momentum_crypto_usdc") f.db.run("UPDATE trades SET account_id = ?, symbol = REPLACE(symbol, '/USD', '/USDC')", [sleeve]);
+      f.hist.run("DELETE FROM historical_bars"); // not a close-based crossing
+      f.trades[1] = { ...f.trades[1], reason: "fold_end", exitAt: end, engineCloseReason: undefined };
+      const r = compareCryptoReplay(f.db, f.hist, sleeve, data, f.trades, f.seeds, epoch, end);
+      expect(r.explained).toMatchObject([{ symbol: "BTC/USD", liveOnly: true }]);
+      expect(r.divergences).toEqual([]);
+      expect(renderSummary([{ sleeve, status: "compared", staleSymbols: [], epoch: isoInstant(epoch), ...r }])).toContain("live-only Turtle catastrophe stop");
+      f.trades[1].entryAt = epoch; // unrelated unit: no symbol-wide waiver
+      const mismatch = compareCryptoReplay(f.db, f.hist, sleeve, data, f.trades, f.seeds, epoch, end);
+      expect(mismatch.explained).toEqual([]); expect(mismatch.divergences.length).toBeGreaterThan(0);
+    } finally { f.db.close(); f.hist.close(); }
+  });
   const H = 3_600_000, D = 24 * H, epoch = Date.parse("2026-11-03T03:00:00Z"), end = Date.parse("2026-11-05T08:00:00Z");
   const data = { source: "binance_futures", timeframe: "1h", barMinutes: 60 };
   const btcEntry = Date.parse("2026-11-04T03:00:20Z"), liveExit = Date.parse("2026-11-04T23:00:21Z");

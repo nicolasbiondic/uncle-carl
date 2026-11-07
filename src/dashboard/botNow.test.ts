@@ -34,6 +34,30 @@ const filled = (side: "buy" | "sell", symbol: string, currentWeight: number, tar
 });
 
 describe("bot now: states and live sources", () => {
+  test("inverse BTC notional uses $100 contract size for the book and close events", () => {
+    const f = fixture("momentum_btc");
+    f.deps.summaries = [{ id: "momentum_btc", label: "Inverse", broker: "binance_coinm", equity: 1000 }];
+    f.deps.positions = [{ profileId: "momentum_btc", symbol: "BTC/USD", quantity: 6, currentPrice: 76000, avgEntryPrice: 75000 }];
+    seedOpenTrade("inverse", "momentum_btc", { symbol: "BTC/USD", market: "crypto", quantity: 6, entryPrice: 75000 });
+    f.db.query("UPDATE trades SET status='closed', exit_time=?, exit_price=76000, pnl=8 WHERE id='inverse'").run(NOW - 1000);
+    const result = f.build();
+    expect(result.portfolios[0].investedUsd).toBe(600);
+    expect(result.portfolios[0].grossX).toBe(0.6);
+    expect(result.events.find(e => e.kind === "close")?.usd).toBe(600);
+  });
+
+  test("only recent journal rows plus each version's latest are loaded; old orders cannot hide current events", () => {
+    const f = fixture("momentum_stocks", "portfolio");
+    f.pe({ session: "old", decided_at: NOW - 9 * 86400000, updated_at: NOW - 9 * 86400000,
+      orders_json: JSON.stringify([filled("buy", "old-id", 0, 1)]) });
+    f.pe({ session: "latest", decided_at: NOW - 8 * 86400000, updated_at: NOW - 8 * 86400000 });
+    f.order({ external_id: "old-id", symbol: "SPY", market: "stock" });
+    const r = f.build();
+    expect(r.portfolios[0].lastDecision?.at).toBe(NOW - 8 * 86400000);
+    expect(r.events.some(e => e.kind === "buy" && e.symbol === "SPY")).toBe(true);
+    expect(r.events.some(e => e.kind === "rebalance")).toBe(false);
+  });
+
   test("flat/no_signal is raw signals, not a gate-filtered zero", () => {
     const f = fixture(); f.pass({ signals_long: 0, signals_raw_long: 2, block_note: "regime: vol spike", blocks: '{"regime":2}' });
     const p = f.build().portfolios[0];
