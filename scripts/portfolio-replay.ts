@@ -34,8 +34,16 @@
  * hysteresis, core members, overlay state) travels to the next fold inside
  * the protocol's initialRiskState (PortfolioChainState.portfolioMemory).
  *
- * Long-only; cash may go negative (gross > 1) — no margin rejections are
- * modelled (the designs cap gross at 1.8/2.0 by construction).
+ * Long-only; cash may go negative (gross > 1). Two live behaviours are NOT
+ * modelled (audit 2026-11-07, H-1/H-2):
+ * - the Alpaca venue clips any buy that would lift the ACCOUNT's gross (both
+ *   stock sleeves together) above ALPACA_ACCOUNT_MAX_GROSS × equity, while a
+ *   design here only obeys its own cap (2.5× on momentum_stocks); prod logged
+ *   no such clip in the 90 days to 2026-11-07;
+ * - every planned order fills in full at the session's open, so a MAX_HOLD
+ *   close that live fills partly, is cancelled and retries its remainder once
+ *   (`-r1`) before the rebuy is a clean close + rebuy here; 5 of 289 live
+ *   orders were incomplete closes, all on 2026-11-02, none since the retry.
  */
 
 import { Database } from "bun:sqlite";
