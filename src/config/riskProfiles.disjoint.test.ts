@@ -29,7 +29,7 @@ describe("momentum_stocks ∩ meanrev_stocks universes", () => {
     expect(overlap).toEqual([]);
   });
 
-  test("RW8 tradable universe includes the SH overlay, disjoint from meanrev and treasury (not a core asset)", () => {
+  test("RW11 tradable universe = the 2x-ETF core + the SH overlay, disjoint from meanrev and treasury; SPY is signal-only", () => {
     const version = currentModelVersion("momentum_stocks")!;
     const manifest = JSON.parse(readFileSync(new URL(`../../${version.manifest}`, import.meta.url), "utf8"));
     const params = manifest.candidates.find((c: any) => c.name === version.candidate).portfolio;
@@ -39,6 +39,15 @@ describe("momentum_stocks ∩ meanrev_stocks universes", () => {
     expect(tradable.filter(s => MEANREV_UNIVERSE.includes(s))).toEqual([]);
     expect(tradable.filter(isTreasurySymbol)).toEqual([]);
     expect(isTreasurySymbol("SH")).toBe(false);
+    // RW11: the four 2x ETFs are core assets of momentum_stocks and of nobody else; SPY feeds the
+    // SMA200 switch but is not tradable by this sleeve any more (its rows are sold at the cutover pass).
+    for (const s of ["SSO", "QLD", "USD", "UGL"]) {
+      expect(MOMENTUM_STOCKS_UNIVERSE).toContain(s);
+      expect(MEANREV_UNIVERSE).not.toContain(s);
+      expect(isTreasurySymbol(s)).toBe(false);
+    }
+    expect(params.strategy.regimeOverlay.signals.map((s: any) => s.symbol)).toEqual(["SPY"]);
+    expect(tradable).not.toContain("SPY");
     // BrokerSync's ownership boundary (B-4) is derived from the same tradable universe: a live
     // definition carrying this strategy registers SH as sleeve-owned, never an alpaca_main orphan.
     const owned = portfolioEngineOwnedSymbols([{ id: "pe", name: "E1", template: "portfolio", account: "alpaca_main", capital: 1, mode: "live", enabled: true,

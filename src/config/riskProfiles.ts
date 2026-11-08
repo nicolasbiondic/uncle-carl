@@ -172,9 +172,13 @@ export const ALL_PROFILE_IDS: RiskProfileId[] = [
 // a shared symbol produces a phantom open DB row (the April incident class).
 // Enforced by riskProfiles.disjoint.test.ts. +SMH added 2026-07-25 (owner
 // mandate, Sol-reviewed, production-parity walk-forward — dominates the
-// incumbent on Sharpe/worst-window/return with maxDD +2pp).
+// incumbent on Sharpe/worst-window/return with maxDD +2pp). RW11 (owner,
+// 2026-11-08, docs/reports/RW-reescritura-rentable.md §22–22.1): the 2x ETFs
+// SSO/QLD/USD/UGL replace SPY/QQQ/SMH/GLD in the CORE universe (same order as
+// the live manifest's candidate). SPY stays the SMA200 switch's SIGNAL (data
+// only, not tradable) and SH the risk-off hedge — neither is a core asset here.
 export const MOMENTUM_STOCKS_UNIVERSE = [
-  "SPY", "QQQ", "IWM", "GLD", "AAPL", "MSFT", "NVDA", "META", "GOOGL", "AMZN", "SMH",
+  "SSO", "QLD", "IWM", "UGL", "AAPL", "MSFT", "NVDA", "META", "GOOGL", "AMZN", "USD",
 ];
 
 // momentum_crypto TSM universe (8 Binance Futures perps, "BASE/USD" internal

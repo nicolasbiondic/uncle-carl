@@ -117,7 +117,7 @@ describe("the version table", () => {
   });
 
   test("RW8 stock hedge appends after RW7 at the approved epoch; inherited rows keep their opening version", () => {
-    const list = MODEL_VERSIONS.momentum_stocks, v = list.at(-1)!, previous = list.at(-2)!;
+    const list = MODEL_VERSIONS.momentum_stocks, v = list.find(v => v.id === "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger-sh50")!, previous = list[list.indexOf(v) - 1];
     expect(v).toMatchObject({ id: "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger-sh50", engine: "portfolio",
       since: "2026-10-29T13:00:00Z", modelStart: "2026-10-29" });
     expect(previous.id).toBe("momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger");
@@ -126,6 +126,25 @@ describe("the version table", () => {
     expect(modelVersionAt("momentum_stocks", T(v.since))!.id).toBe(v.id);
     expect(rowModelVersion("momentum_stocks", { strategy_version: previous.id, entry_time: T(v.since) })).toBe(previous.id);
     expect(MODEL_VERSIONS.meanrev_stocks.at(-1)!.since).toBe("2026-10-28T13:00:00Z");
+  });
+
+  test("RW11 (vt45 + 2x ETFs) appends only momentum_stocks after RW8: since = the first NYSE pass after the deploy (Mon 2026-11-09 09:35 EST = 14:35Z), modelStart = the NEXT session (that pass sells the inherited SPY/QQQ/SMH/GLD)", () => {
+    const list = MODEL_VERSIONS.momentum_stocks, v = list.at(-1)!, previous = list.at(-2)!;
+    expect(v).toMatchObject({ id: "momentum_stocks@pe-vt45-g250-sma200-fv5-mh5-stagger-sh50-etf2x", engine: "portfolio",
+      since: "2026-11-09T14:00:00Z", modelStart: "2026-11-10",
+      manifest: "experiments/rw11-e1-vt45-etf-v1.json", candidate: "e1-vt45-etf",
+      artifact: { dir: "data/backtests/71124f620a0a5d0c666e341f9368982d4335286d7a79a5bf65ddb06f9e8c8f77", shiftDays: 0 } });
+    expect(previous.id).toBe("momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger-sh50");
+    expect(previous.artifact!.shiftDays).toBe(v.artifact!.shiftDays);
+    expect(T(v.since)).toBeGreaterThan(T(previous.since));
+    expect(new Date(T(v.since)).getUTCDay()).toBe(1); // Monday
+    expect(T("2026-11-09T14:35:00Z")).toBeGreaterThan(T(v.since)); // the 09:35 ET pass (EST) belongs to the new version
+    expect(modelVersionAt("momentum_stocks", T(v.since) - 1)!.id).toBe(previous.id);
+    expect(modelVersionAt("momentum_stocks", T(v.since))!.id).toBe(v.id);
+    expect(rowModelVersion("momentum_stocks", { strategy_version: previous.id, entry_time: T(v.since) })).toBe(previous.id);
+    for (const sleeve of ["meanrev_stocks", "momentum_crypto", "momentum_crypto_usdc"]) {
+      expect(T(MODEL_VERSIONS[sleeve].at(-1)!.since)).toBeLessThan(T(v.since));
+    }
   });
 
   test("RW8 bo8 appends only hourly crypto at the approved strictly later epoch; inherited rows keep their opening version", () => {
@@ -170,7 +189,7 @@ describe("the version table", () => {
   test("the scorecard's MODEL_START IS the current version's modelStart (one source), for every scorecard sleeve", () => {
     expect(MODEL_START).toEqual(currentModelStarts());
     expect(MODEL_START).toEqual({
-      momentum_stocks: "2026-10-29",
+      momentum_stocks: "2026-11-10",
       meanrev_stocks: "2026-10-29",
       momentum_crypto: "2026-11-03",
       momentum_crypto_usdc: "2026-11-06",

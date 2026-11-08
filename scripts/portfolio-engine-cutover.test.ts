@@ -389,13 +389,13 @@ describe("Q5 RW5d: pe-vt15 → cash design, without handing the sleeve back to T
   });
 });
 
-describe("RW8: momentum_stocks cuts over atomically from RW7; meanrev stays unchanged", () => {
-  test("CLI live plan passes on a staged COPY; SH design replaces only momentum_stocks, original definitions stay untouched", () => {
+describe("RW11: momentum_stocks cuts over atomically from RW8 (vt45 + 2x ETFs); meanrev stays unchanged", () => {
+  test("CLI live plan passes on a staged COPY; the RW11 design replaces only momentum_stocks, original definitions stay untouched", () => {
     const db = getDB();
     const sleeves = ["momentum_stocks"];
     const beforeVersions = { ...MODEL_VERSIONS,
       momentum_stocks: MODEL_VERSIONS.momentum_stocks.slice(0, -1) };
-    // Synthetic equivalents of the current registry definitions; no prod read.
+    // Synthetic equivalents of the current registry definitions (prod: the RW8 row the cutover script wrote); no prod read.
     for (const sleeve of [...sleeves, "meanrev_stocks"]) {
       const old = beforeVersions[sleeve].at(-1)!;
       const args = base({ sleeve, manifest: old.manifest!, candidate: old.candidate!, versionName: old.id.split("@")[1], minObserved: 0 });
@@ -405,6 +405,13 @@ describe("RW8: momentum_stocks cuts over atomically from RW7; meanrev stays unch
       }
     }
     const before = loadPlatformPortfolioRows(db);
+    // The deployed code (RW11 appended) REFUSES the registry's RW8 row live: that is the fallback-to-builtin boot
+    // index.ts pages about until the script below runs in prod (the row is source 'owner', so the seed never refreshes it).
+    const stale = resolvePortfolioWiring({ defs: loadPlatformPortfolioDefinitions(db), venueReady: { alpaca: null, binance_usdm: null, binance_usdc: null } });
+    expect(stale.live.map(p => p.params.sleeve)).toEqual(["meanrev_stocks"]);
+    expect(stale.problems.map(p => `${p.definitionId}:${p.severity}`)).toEqual(["pe_momentum_stocks:live_refused"]);
+    expect(stale.problems[0].message).toContain("is not the LAST entry of MODEL_VERSIONS");
+    expect(before.find(r => r.id === "pe_momentum_stocks")!.source).toBe("owner");
     const copy = Database.deserialize(db.serialize());
     try {
       copy.transaction(() => {
@@ -429,44 +436,58 @@ describe("RW8: momentum_stocks cuts over atomically from RW7; meanrev stays unch
         const v = MODEL_VERSIONS[sleeve].at(-1)!, block = manifestBlock(v.manifest!, v.candidate!);
         // Snapshot AFTER commit: serialize() during the transaction exposes
         // its old committed image to the separate CLI connection.
-        const path = join(tmp, `rw8-${sleeve}.db`);
+        const path = join(tmp, `rw11-${sleeve}.db`);
         copy.exec(`VACUUM INTO '${path}'`);
         const bytes = readFileSync(path);
         expect(main(["--sleeve", sleeve, "--mode", "live", "--manifest", v.manifest!, "--candidate", v.candidate!,
           "--version-name", v.id.split("@")[1], "--min-observed", "0", "--db", path])).toBe(0);
         expect(readFileSync(path)).toEqual(bytes); // CLI dry-run really wrote nothing
         expect(p.strategy).toEqual(block.strategy);
-        expect((p.strategy as VolManagedConfig).maxHoldSessions).toBe(5);
-        expect((p.strategy as VolManagedConfig).maxHoldStagger).toBe(true);
-        expect((p.strategy as VolManagedConfig).regimeOverlay?.hedge).toEqual({ symbol: "SH", fraction: 0.5 });
-        expect(portfolioUniverse("portfolio", p)).toContain("SH");
-        expect(portfolioUniverse("portfolio", p).some(isTreasurySymbol)).toBe(false);
+        const s = p.strategy as VolManagedConfig;
+        expect([s.maxHoldSessions, s.maxHoldStagger, s.portfolioVolTarget, s.perAssetCap, s.maxGross]).toEqual([5, true, 0.45, 0.375, 2.5]);
+        expect(s.regimeOverlay?.hedge).toEqual({ symbol: "SH", fraction: 0.5 });
+        expect(s.regimeOverlay?.signals.map(x => (x as any).symbol)).toEqual(["SPY"]);
+        const tradable = portfolioUniverse("portfolio", p);
+        for (const sym of ["SSO", "QLD", "USD", "UGL", "SH"]) expect(tradable).toContain(sym);
+        for (const sym of ["SPY", "QQQ", "SMH", "GLD"]) expect(tradable).not.toContain(sym);
+        expect(tradable.some(isTreasurySymbol)).toBe(false);
         expect(p.provenance!.designSha256).toBe(designHash({ strategy: block.strategy, venue: block.venue.venue,
           minOrderNotional: block.venue.minOrderNotional, rebalanceBand: block.venue.rebalanceBand }));
+        // The code's built-in fallback IS this row's design (so a fallback boot trades the same model).
+        expect((loadPlatformPortfolioRows(copy).find(r => r.id === `pe_${sleeve}`)!.params as PortfolioEngineParams).provenance!.designSha256)
+          .toBe(designHash(p));
       }
       expect(loadPlatformPortfolioRows(db)).toEqual(before);
     } finally { copy.close(); }
   });
 
-  for (const scenario of ["on", "off", "missing-sh"] as const) test(`RW8 live factory loads overlay bars and buys SH through Alpaca only in risk-off (${scenario})`, async () => {
-    const v = MODEL_VERSIONS.momentum_stocks.at(-1)!;
+  // The first RW11 pass inherits the RW8 book: SPY/QQQ/SMH/GLD rows whose symbols are no longer in the core. They must
+  // be SOLD in that same pass (weight 0, full quantity), never left as orphans — the book is long-only and every row
+  // belongs to the five-session rule. SPY stays in the DATA (the SMA200 switch) but is not tradable any more.
+  for (const scenario of ["on", "off", "missing-sso"] as const) test(`RW11 first live pass sells the inherited SPY/QQQ/SMH/GLD lots and trades the 2x-ETF core; SH only in risk-off (${scenario})`, async () => {
+    const v = MODEL_VERSIONS.momentum_stocks.at(-1)!, previous = MODEL_VERSIONS.momentum_stocks.at(-2)!;
     const config = manifestBlock(v.manifest!, v.candidate!).strategy as VolManagedConfig;
-    const symbols = portfolioUniverse("portfolio", { strategy: config } as PortfolioEngineParams);
+    const inherited = ["SPY", "QQQ", "SMH", "GLD"];
+    const tradable = portfolioUniverse("portfolio", { strategy: config } as PortfolioEngineParams);
     expect(config.universe).not.toContain("SH"); // hedge data must come from overlaySymbols, not the core
-    const asOf = "2026-10-28", session = "2026-10-29";
+    for (const s of inherited) expect(tradable).not.toContain(s);
+    const symbols = [...new Set([...tradable, ...inherited])]; // SPY: signal data; QQQ/SMH/GLD: held-row data only
+    const asOf = "2026-11-06", session = "2026-11-09";
     const sessions = weekdaySessions(asOf, 300);
-    const hist = makeHistDb(Object.fromEntries(symbols.filter(s => scenario !== "missing-sh" || s !== "SH").map((s, j) => [s, { sessions,
+    const hist = makeHistDb(Object.fromEntries(symbols.filter(s => scenario !== "missing-sso" || s !== "SSO").map((s, j) => [s, { sessions,
       close: (i: number) => s === "SPY" ? (i === 299 ? (scenario === "on" ? 140 : 80) : 100 + Math.sin(i))
         : 100 + i * 0.04 + 2 * Math.sin(i * (0.3 + j * 0.1)),
     }])));
     try {
       const view = new HistoricalPriceView({ db: hist, asOf, symbols });
-      const prices = Object.fromEntries(symbols.map(s => [s, view.lastClose(s)!]));
-      seedOpenTrade("rw7-spy", "momentum_stocks", { symbol: "SPY", strategy: "PORTFOLIO", strategyVersion: MODEL_VERSIONS.momentum_stocks.at(-2)!.id,
-        quantity: 10, entryPrice: prices.SPY });
+      const prices = Object.fromEntries(symbols.map(s => [s, view.lastClose(s) ?? 100]));
+      for (const s of inherited) {
+        seedOpenTrade(`rw8-${s}`, "momentum_stocks", { symbol: s, strategy: "PORTFOLIO", strategyVersion: previous.id,
+          quantity: 10, entryPrice: prices[s], entryTime: Date.parse("2026-11-05T14:36:00Z") });
+      }
       const sent: any[] = [];
       const executor: any = { isConnected: () => true,
-        getPositions: async () => [{ symbol: "SPY", market: "stock", side: "buy", quantity: 10, avgEntryPrice: prices.SPY, currentPrice: prices.SPY }],
+        getPositions: async () => inherited.map(s => ({ symbol: s, market: "stock", side: "buy", quantity: 10, avgEntryPrice: prices[s], currentPrice: prices[s] })),
         getLatestPrice: async (s: string) => prices[s], getRegTBuyingPower: async () => 1000000,
         getAccount: async () => ({ equity: "100000", long_market_value: "50000" }),
         client: { createOrder: async (p: any) => { sent.push(p); return { id: `o${sent.length}`, status: "filled", filled_qty: p.qty, filled_avg_price: String(prices[p.symbol]) }; },
@@ -481,29 +502,47 @@ describe("RW8: momentum_stocks cuts over atomically from RW7; meanrev stays unch
       })();
       const wiring = resolvePortfolioWiring({ defs: loadPlatformPortfolioDefinitions(getDB()), venueReady: { alpaca: null, binance_usdm: null, binance_usdc: null } });
       const built = buildPortfolioEngines(wiring, { alpacaExecutor: executor, binanceTransports: {}, historicalDb: () => hist,
-        now: () => Date.parse("2026-10-29T13:35:15Z"), engineOverrides: { tradingEnabled: () => true, alert: () => {} } });
+        now: () => Date.parse("2026-11-09T14:35:15Z"), engineOverrides: { tradingEnabled: () => true, alert: () => {} } });
       expect(built.problems).toEqual([]);
       const report = await built.live.get("momentum_stocks")!.tick();
-      if (scenario === "missing-sh") {
+      const openSymbols = () => (getDB().prepare("SELECT symbol FROM trades WHERE account_id = 'momentum_stocks' AND status = 'open' ORDER BY symbol").all() as any[]).map(r => r.symbol);
+      if (scenario === "missing-sso") {
+        // A core symbol without bars in prod (the four 2x ETFs before their download) skips the pass: nothing is sold or bought.
         expect(report.status).toBe("skipped_stale");
-        expect(report.note).toContain("SH");
+        expect(report.note).toContain("SSO");
         expect(sent).toEqual([]);
+        expect(openSymbols()).toEqual([...inherited].sort());
         return;
       }
       expect(report.status).toBe("submitted"); expect(report.rejected).toBe(0);
       const stored = getPortfolioDecision("momentum_stocks", v.id, session)!;
       expect((stored.memory.portfolioCore as any).regime.riskOff).toBe(scenario === "off");
+      for (const s of inherited) expect(stored.weights[s]).toBeUndefined();
+      // Every inherited lot is sold in full in this pass (sells go first), whatever the regime says.
+      const sells = sent.filter(p => p.side === "sell");
+      expect(sells.map(p => p.symbol).sort()).toEqual([...inherited].sort());
+      for (const p of sells) expect(Number(p.qty)).toBeCloseTo(10, 6);
+      expect(sent.findIndex(p => p.side === "buy")).toBeGreaterThan(sent.map(p => p.side).lastIndexOf("sell"));
+      const buys = sent.filter(p => p.side === "buy").map(p => p.symbol);
+      for (const s of inherited) expect(buys).not.toContain(s);
       if (scenario === "off") {
         expect(Object.keys(stored.weights)).toEqual(["SH"]);
         expect(stored.weights.SH).toBeGreaterThan(0);
-        expect(stored.weights.SH).toBeLessThanOrEqual(0.25);
-        expect(sent.map(p => [p.symbol, p.side])).toEqual([["SPY", "sell"], ["SH", "buy"]]);
-        expect(sent[1]).toMatchObject({ type: "market", time_in_force: "day" });
-        expect((getDB().prepare("SELECT strategy_version v FROM trades WHERE account_id = 'momentum_stocks' AND symbol = 'SH' AND status = 'open'").get() as any).v).toBe(v.id);
+        expect(stored.weights.SH).toBeLessThanOrEqual(0.375);
+        expect(buys).toEqual(["SH"]);
+        expect(openSymbols()).toEqual(["SH"]);
       } else {
         expect(stored.weights.SH).toBeUndefined();
-        expect(sent.some(p => p.symbol === "SH")).toBe(false);
+        expect(buys).not.toContain("SH");
+        for (const s of ["SSO", "QLD", "USD", "UGL"]) { expect(stored.weights[s]).toBeGreaterThan(0); expect(buys).toContain(s); }
+        expect(buys.every(s => config.universe.includes(s))).toBe(true);
+        expect(openSymbols()).toEqual([...buys].sort());
       }
+      // Closed inherited rows keep the version that OPENED them; the new rows carry RW11's.
+      const closed = getDB().prepare("SELECT symbol, strategy_version v FROM trades WHERE account_id = 'momentum_stocks' AND status = 'closed' ORDER BY symbol").all() as any[];
+      expect(closed.map(r => r.symbol)).toEqual([...inherited].sort());
+      for (const r of closed) expect(r.v).toBe(previous.id);
+      for (const r of getDB().prepare("SELECT strategy_version v FROM trades WHERE account_id = 'momentum_stocks' AND status = 'open'").all() as any[]) expect(r.v).toBe(v.id);
       expect(sent.every(p => !isTreasurySymbol(p.symbol))).toBe(true);
       expect((await built.live.get("momentum_stocks")!.tick()).status).toBe("already_done");
     } finally { hist.close(); }

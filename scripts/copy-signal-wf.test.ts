@@ -22,7 +22,7 @@ import { IndexMembershipView, loadSessionSeries } from "./lib/portfolioData";
 import { countPicks } from "./copy-signal-counts";
 import { SEC_FORM4_BUY_SOURCE, knownAtMsFor } from "./lib/secInsider";
 import { usSessionTimestamps, writeDailyFixture } from "./lib/portfolioSynthetic";
-import { LIVE_STOCK_EXCLUDES, missingLiveExcludes } from "./lib/liveStockExcludes";
+import { LIVE_STOCK_EXCLUDES, RETIRED_MOMENTUM_STOCKS_CORES, missingLiveExcludes } from "./lib/liveStockExcludes";
 import type { CopySignalConfig, VenueRules } from "../src/portfolio-engine/types";
 
 const tmp = mkdtempSync(join(tmpdir(), "copy-signal-"));
@@ -143,7 +143,15 @@ describe("copySignal manifest validation", () => {
     expect(() => validateManifest(strip(["NVDA"]))).toThrow(/missing: NVDA/); // momentum_stocks
     expect(() => validateManifest(strip(["JPM", "XLE"]))).toThrow(/missing: JPM, XLE/); // meanrev_stocks
     expect(() => validateManifest({ ...m, candidates: [{ name: "x", cadenceMin: 1440, portfolio: { strategy: copy({ exclude: [] }), venue: alpaca } }] })).toThrow(/shared Alpaca wallet/);
-    expect(missingLiveExcludes(["SPY"]).length).toBe(LIVE_STOCK_EXCLUDES.length - 1);
+    expect(missingLiveExcludes(["SSO"]).length).toBe(LIVE_STOCK_EXCLUDES.length - 1);
+    // RW11 grandfather: a candidate that excludes the WHOLE retired E1 core (pre-registered before 2026-11-08) is held
+    // to that core plus meanrev/treasury; dropping one of its symbols, or a meanrev/treasury one, still fails.
+    const retired = RETIRED_MOMENTUM_STOCKS_CORES[0];
+    const legacy = [...new Set([...retired, ...LIVE_STOCK_EXCLUDES.filter(s => !["SSO", "QLD", "USD", "UGL"].includes(s))])];
+    expect(missingLiveExcludes(legacy)).toEqual([]);
+    expect(missingLiveExcludes(legacy.filter(s => s !== "SMH"))).toEqual(["QLD", "SSO", "UGL", "USD"]);
+    expect(missingLiveExcludes(legacy.filter(s => s !== "JPM"))).toEqual(["JPM"]);
+    expect(() => validateManifest(strip(["QLD"]))).toThrow(/missing: QLD/); // a NEW manifest must exclude the current core
   });
 
   test("copySignal requires data.membership and data.signals; no other kind may set data.signals", () => {
@@ -163,7 +171,10 @@ describe("copySignal manifest validation", () => {
 
 describe("live stock excludes", () => {
   test("the literal lists of the live sleeves and the treasury sweep (a change to a live universe forces a manifest review)", () => {
-    const e1 = "SPY QQQ IWM GLD AAPL MSFT NVDA META GOOGL AMZN SMH".split(" ");
+    // RW11 (2026-11-08): the 2x ETFs replaced SPY/QQQ/SMH/GLD in the live E1 core; the pre-RW11 core is grandfathered
+    // for the manifests pre-registered before it (RETIRED_MOMENTUM_STOCKS_CORES), which are never edited after their run.
+    const e1 = "SSO QLD IWM UGL AAPL MSFT NVDA META GOOGL AMZN USD".split(" ");
+    expect(RETIRED_MOMENTUM_STOCKS_CORES).toEqual(["SPY QQQ IWM GLD AAPL MSFT NVDA META GOOGL AMZN SMH".split(" ")]);
     const e2 = "ABBV AVGO BAC CAT COST CVX DIS GE HD HON JNJ JPM KO LLY MA MCD MRK NFLX NKE ORCL PG QCOM UNH V WMT XLE XLF XLI XLP XLV XOM SLV".split(" ");
     const treasury = ["BOXX", "SGOV", "BIL"];
     expect([...LIVE_STOCK_EXCLUDES]).toEqual([...new Set([...e1, ...e2, ...treasury])].sort());

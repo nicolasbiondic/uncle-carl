@@ -224,10 +224,12 @@ describe("G9 — two completed sessions, absolute AND relative position drift", 
 describe("G10 — current-version drawdown vs stitched OOS worst, investigation only", () => {
   test("all four sleeves, strict OOS threshold, once per episode and recovery; prior model peaks excluded", async () => {
     const f = fixture();
-    const now = Date.parse("2026-11-07T17:00:00Z"), run = (db = f.db) => f.run({ db, now });
+    // After every current modelStart (momentum_stocks' RW11 version starts 2026-11-10): a sleeve with no mark
+    // inside its current version is "no marks … episode retained", not a finding.
+    const now = Date.parse("2026-11-13T17:00:00Z"), run = (db = f.db) => f.run({ db, now });
     try {
       for (const sleeve of ["momentum_stocks", "meanrev_stocks", "momentum_crypto", "momentum_crypto_usdc"]) {
-        for (const [time, equity] of [["2026-09-01T21:00:00Z", 1000], ["2026-10-30T21:00:00Z", 100], ["2026-11-06T21:00:00Z", 79]] as const)
+        for (const [time, equity] of [["2026-09-01T21:00:00Z", 1000], ["2026-11-09T21:00:00Z", 100], ["2026-11-12T21:00:00Z", 79]] as const)
           f.db.query("INSERT INTO equity_snapshots (profile_id,equity,snapshot_time,semantics,synthetic) VALUES (?,?,?,5,0)").run(sleeve, equity, Date.parse(time));
         // Last pre-model base is 100, not the retired model's high of 1000.
         f.db.query("INSERT INTO equity_snapshots (profile_id,equity,snapshot_time,semantics,synthetic) VALUES (?,100,?,5,0)")

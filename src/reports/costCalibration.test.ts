@@ -176,35 +176,35 @@ function buildTradingDb(path: string): void {
     ({ symbol, side, qty, notional: qty * 500, targetWeight: side === "buy" ? 0.5 : 0, currentWeight: side === "buy" ? 0 : 0.5, reduceOnly: side === "sell", ...over });
   const fillRes = (filledQty: number, avgPrice: number | null, status = "filled") => ({ ok: status === "filled", filledQty, avgPrice, status, brokerOrderId: `b-${filledQty}-${avgPrice}` });
   const t = (d: string) => ET_0935(d);
-  // Session 2026-11-03 (after MODEL_START): a MAX_HOLD renewal with a partial close, its -r1 remainder, the rebuy
+  // Session 2026-11-10 (after MODEL_START): a MAX_HOLD renewal with a partial close, its -r1 remainder, the rebuy
   // (decision 510, raw session open 507), a rebalance partial trim of TLT (decision 90, no open from the venue),
   // and an emergency mark (filled, no price). The ONLY trade of SPY closed MANUAL_CLOSE: the journal must not care.
-  journal.run(S, "v", "2026-11-03", "2026-11-02", "live", "submitted", 20_000, "[]", "{}", "[]", "{}", "{}", JSON.stringify([
-    { intent: intent("SPY", "sell", 4, { maxHold: "close" }), clientOrderId: portfolioClientOrderId(S, "2026-11-03", "SPY", "close"), applied: true,
-      result: fillRes(1, 509, "canceled"), filledAt: t("2026-11-03"), label: "max_hold_close", decisionPrice: 510, sessionOpenRaw: 507, submittedAt: t("2026-11-03") },
-    { intent: intent("SPY", "sell", 3, { maxHold: "close" }), clientOrderId: `${portfolioClientOrderId(S, "2026-11-03", "SPY", "close")}-r1`, applied: true,
-      result: fillRes(3, 508.5), filledAt: t("2026-11-03") + 60_000, label: "retry", decisionPrice: 510, sessionOpenRaw: 507, submittedAt: t("2026-11-03") + 60_000 },
-    { intent: intent("SPY", "buy", 4, { maxHold: "rebuy" }), clientOrderId: portfolioClientOrderId(S, "2026-11-03", "SPY", "rebuy"), applied: true,
-      result: fillRes(4, 511), filledAt: t("2026-11-03") + 120_000, label: "max_hold_rebuy", decisionPrice: 510, sessionOpenRaw: 507, submittedAt: t("2026-11-03") + 120_000 },
-    { intent: intent("TLT", "sell", 10, { targetWeight: 0.2, currentWeight: 0.3 }), clientOrderId: portfolioClientOrderId(S, "2026-11-03", "TLT"), applied: true,
-      result: fillRes(10, 89.91), filledAt: t("2026-11-03") + 10_000, label: "rebalance_sell", decisionPrice: 90, sessionOpenRaw: null, submittedAt: t("2026-11-03") + 10_000 },
-    { intent: intent("GLD", "buy", 2), clientOrderId: portfolioClientOrderId(S, "2026-11-03", "GLD"), applied: true,
-      result: { ok: true, filledQty: 2, avgPrice: null, status: "filled", error: "no filled_avg_price" }, filledAt: t("2026-11-03") + 130_000, label: "rebalance_buy", decisionPrice: 200, sessionOpenRaw: 199, submittedAt: t("2026-11-03") + 130_000 },
-    { intent: intent("SH", "buy", 50), clientOrderId: portfolioClientOrderId(S, "2026-11-03", "SH"), applied: true, skipped: "risk_engine_halted", result: null },
-  ]), null, t("2026-11-03") - 60_000, t("2026-11-03") + 200_000);
-  trade.run("spy-journal", "buy", "MANUAL_CLOSE", null, null, 500, 509, 4, 0, 0, t("2026-10-27"), t("2026-11-03"), "closed", S);
-  // Session 2026-11-04: a pre-field journal (no label/prices) — a plain rebalance buy, label inferred, no slippage measurable.
-  journal.run(S, "v", "2026-11-04", "2026-11-03", "live", "submitted", 20_000, "[]", "{}", "[]", "{}", "{}", JSON.stringify([
-    { intent: intent("TLT", "buy", 10), clientOrderId: portfolioClientOrderId(S, "2026-11-04", "TLT"), applied: true, result: fillRes(10, 90.2), filledAt: t("2026-11-04") },
-  ]), null, t("2026-11-04") - 60_000, t("2026-11-04") + 20_000);
+  journal.run(S, "v", "2026-11-10", "2026-11-09", "live", "submitted", 20_000, "[]", "{}", "[]", "{}", "{}", JSON.stringify([
+    { intent: intent("SPY", "sell", 4, { maxHold: "close" }), clientOrderId: portfolioClientOrderId(S, "2026-11-10", "SPY", "close"), applied: true,
+      result: fillRes(1, 509, "canceled"), filledAt: t("2026-11-10"), label: "max_hold_close", decisionPrice: 510, sessionOpenRaw: 507, submittedAt: t("2026-11-10") },
+    { intent: intent("SPY", "sell", 3, { maxHold: "close" }), clientOrderId: `${portfolioClientOrderId(S, "2026-11-10", "SPY", "close")}-r1`, applied: true,
+      result: fillRes(3, 508.5), filledAt: t("2026-11-10") + 60_000, label: "retry", decisionPrice: 510, sessionOpenRaw: 507, submittedAt: t("2026-11-10") + 60_000 },
+    { intent: intent("SPY", "buy", 4, { maxHold: "rebuy" }), clientOrderId: portfolioClientOrderId(S, "2026-11-10", "SPY", "rebuy"), applied: true,
+      result: fillRes(4, 511), filledAt: t("2026-11-10") + 120_000, label: "max_hold_rebuy", decisionPrice: 510, sessionOpenRaw: 507, submittedAt: t("2026-11-10") + 120_000 },
+    { intent: intent("TLT", "sell", 10, { targetWeight: 0.2, currentWeight: 0.3 }), clientOrderId: portfolioClientOrderId(S, "2026-11-10", "TLT"), applied: true,
+      result: fillRes(10, 89.91), filledAt: t("2026-11-10") + 10_000, label: "rebalance_sell", decisionPrice: 90, sessionOpenRaw: null, submittedAt: t("2026-11-10") + 10_000 },
+    { intent: intent("GLD", "buy", 2), clientOrderId: portfolioClientOrderId(S, "2026-11-10", "GLD"), applied: true,
+      result: { ok: true, filledQty: 2, avgPrice: null, status: "filled", error: "no filled_avg_price" }, filledAt: t("2026-11-10") + 130_000, label: "rebalance_buy", decisionPrice: 200, sessionOpenRaw: 199, submittedAt: t("2026-11-10") + 130_000 },
+    { intent: intent("SH", "buy", 50), clientOrderId: portfolioClientOrderId(S, "2026-11-10", "SH"), applied: true, skipped: "risk_engine_halted", result: null },
+  ]), null, t("2026-11-10") - 60_000, t("2026-11-10") + 200_000);
+  trade.run("spy-journal", "buy", "MANUAL_CLOSE", null, null, 500, 509, 4, 0, 0, t("2026-10-27"), t("2026-11-10"), "closed", S);
+  // Session 2026-11-11: a pre-field journal (no label/prices) — a plain rebalance buy, label inferred, no slippage measurable.
+  journal.run(S, "v", "2026-11-11", "2026-11-10", "live", "submitted", 20_000, "[]", "{}", "[]", "{}", "{}", JSON.stringify([
+    { intent: intent("TLT", "buy", 10), clientOrderId: portfolioClientOrderId(S, "2026-11-11", "TLT"), applied: true, result: fillRes(10, 90.2), filledAt: t("2026-11-11") },
+  ]), null, t("2026-11-11") - 60_000, t("2026-11-11") + 20_000);
   // Session before MODEL_START → preModel (the model then was another execution).
   journal.run(S, "old", "2026-10-24", "2026-10-23", "live", "submitted", 20_000, "[]", "{}", "[]", "{}", "{}", JSON.stringify([
     { intent: intent("SPY", "buy", 1), clientOrderId: portfolioClientOrderId(S, "2026-10-24", "SPY"), applied: true, result: fillRes(1, 500), filledAt: t("2026-10-24"), label: "rebalance_buy", decisionPrice: 499 },
   ]), null, t("2026-10-24") - 60_000, t("2026-10-24") + 20_000);
   // An observer journal never counts.
-  journal.run(S, "obs", "2026-11-05", "2026-11-04", "observer", "observed", 20_000, "[]", "{}", "[]", "{}", "{}", JSON.stringify([
+  journal.run(S, "obs", "2026-11-12", "2026-11-11", "observer", "observed", 20_000, "[]", "{}", "[]", "{}", "{}", JSON.stringify([
     { intent: intent("SPY", "buy", 1), clientOrderId: null, applied: false, skipped: "observer", result: null },
-  ]), null, t("2026-11-05"), t("2026-11-05"));
+  ]), null, t("2026-11-12"), t("2026-11-12"));
   db.close();
 }
 
@@ -243,11 +243,11 @@ describe("readPortfolioExecutions / summarizePortfolioExecutions (the engine's j
       const o = readPortfolioExecutions(db, "momentum_stocks", { sinceEtDateKey: "2026-10-29" });
       expect(o.excluded).toEqual({ emergencyMark: 1, preModel: 1 });
       expect(o.obs.map(x => [x.session, x.symbol, x.label, x.labelInferred, x.partial])).toEqual([
-        ["2026-11-03", "SPY", "max_hold_close", false, true],
-        ["2026-11-03", "SPY", "retry", false, false],
-        ["2026-11-03", "SPY", "max_hold_rebuy", false, false],
-        ["2026-11-03", "TLT", "rebalance_sell", false, false],
-        ["2026-11-04", "TLT", "rebalance_buy", true, false],
+        ["2026-11-10", "SPY", "max_hold_close", false, true],
+        ["2026-11-10", "SPY", "retry", false, false],
+        ["2026-11-10", "SPY", "max_hold_rebuy", false, false],
+        ["2026-11-10", "TLT", "rebalance_sell", false, false],
+        ["2026-11-11", "TLT", "rebalance_buy", true, false],
       ]);
       const close = o.obs[0], retry = o.obs[1], rebuy = o.obs[2], trim = o.obs[3], legacy = o.obs[4];
       // sell 509 vs decided 510: (510 − 509)/510 = +19.6 bps cost; vs raw open 507: (507 − 509)/507 = −39.4 bps (a saving)
@@ -277,7 +277,7 @@ describe("readPortfolioExecutions / summarizePortfolioExecutions (the engine's j
       expect(s.byBucket["1k-5k"]!.n).toBe(2); // the -r1 remainder (1 525.5), the rebuy (2 044)
       // Without the model floor the pre-MODEL_START leg counts.
       expect(readPortfolioExecutions(db, "momentum_stocks").obs).toHaveLength(6);
-      expect(readPortfolioExecutions(db, "momentum_stocks", { sinceMs: ET_0935("2026-11-04") }).obs.map(x => x.session)).toEqual(["2026-11-04"]);
+      expect(readPortfolioExecutions(db, "momentum_stocks", { sinceMs: ET_0935("2026-11-11") }).obs.map(x => x.session)).toEqual(["2026-11-11"]);
       expect(readPortfolioExecutions(db, "meanrev_stocks").obs).toEqual([]);
     } finally { db.close(); }
   });
@@ -466,7 +466,7 @@ describe("calibrateSleeveCosts / computeCostCalibration", () => {
       const c = calibrateSleeveCosts(db, null, cfgOf("momentum_stocks"), null);
       expect(c.measured).toBeNull();
       expect(c.verdict).toContain("sin fills comparables");
-      expect(c.verdict).toContain("2026-10-29"); // MODEL_START.momentum_stocks (first full RW7 session)
+      expect(c.verdict).toContain("2026-11-10"); // MODEL_START.momentum_stocks (first full RW11 session)
     } finally { db.close(); }
   });
 });

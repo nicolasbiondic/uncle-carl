@@ -102,6 +102,11 @@ export const MODEL_VERSIONS: Readonly<Record<string, readonly ModelVersion[]>> =
       engine: "portfolio",
       manifest: "experiments/rw8-e1-lev-vt30-g250-maxhold5-stagger-sh50-v1.json", candidate: "e1-lev-vt30-g250-maxhold5-stagger-sh50",
       artifact: { dir: "data/backtests/0bb06b9d548647410edacd52f86c9f11ff66307bd11f6e734e379f8a7492d5da", shiftDays: 0 } },
+    { id: "momentum_stocks@pe-vt45-g250-sma200-fv5-mh5-stagger-sh50-etf2x", since: "2026-11-09T14:00:00Z", modelStart: "2026-11-10",
+      note: "RW §22–22.1 owner mandate (more leverage, criterion P): vol target 45% and perAssetCap 0.375 with 2x ETFs SSO/QLD/USD/UGL in place of SPY/QQQ/SMH/GLD (SPY stays the SMA200 switch, SH the risk-off hedge at 0.5 x core gross); nominal gross still <= 2.5x, staggered five-session holds and account BUY cap 1.9x unchanged; P passed vs 0bb06b9d: CAGR 31.6% vs 23.2%, Sharpe 0.91 vs 0.94, sleeve DD 42.7% vs 30.8%, account DD 31.5% vs 23.6% (<= 35%), mean/max gross 1.68x/2.72x, +295% vs +172% at 5 bp; first pass Monday 2026-11-09 09:35 ET (14:35 UTC, EST) sells the four inherited symbols, so modelStart is the next session",
+      engine: "portfolio",
+      manifest: "experiments/rw11-e1-vt45-etf-v1.json", candidate: "e1-vt45-etf",
+      artifact: { dir: "data/backtests/71124f620a0a5d0c666e341f9368982d4335286d7a79a5bf65ddb06f9e8c8f77", shiftDays: 0 } },
   ],
   meanrev_stocks: [
     { id: "meanrev_stocks@pre-slot10", since: EPOCH, modelStart: null,

@@ -816,7 +816,8 @@ describe("stock sleeves always dispatch to the portfolio-engine replay (the incu
 
 describe("portfolio-engine exact decision replay", () => {
   const sleeve = "momentum_stocks", version = currentModelVersion(sleeve)!;
-  const session = "2026-10-29", asOf = "2026-10-28", now = Date.parse("2026-10-29T22:00:00Z");
+  // Pinned to the CURRENT version's epoch (RW11: since 2026-11-09T14:00Z, first NYSE session 11-09).
+  const session = "2026-11-09", asOf = "2026-11-06", now = Date.parse("2026-11-09T22:00:00Z");
   function fixture() {
     const root = mkdtempSync(join(tmpdir(), "pe-parity-")), dbPath = join(root, "trading.db"), histPath = join(root, "historical.db");
     const db = new Database(dbPath), hist = new Database(histPath);
@@ -832,18 +833,18 @@ describe("portfolio-engine exact decision replay", () => {
     const manifestPath = join(root, version.manifest!);
     mkdirSync(dirname(manifestPath), { recursive: true });
     writeFileSync(manifestPath, JSON.stringify({ candidates: [{ name: version.candidate, portfolio: { strategy: config } }], data: {} }));
-    for (const symbol of config.universe) for (const [i, date] of ["2026-10-21", "2026-10-22", "2026-10-23", "2026-10-26", "2026-10-27", asOf].entries()) {
+    for (const symbol of config.universe) for (const [i, date] of ["2026-10-30", "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", asOf].entries()) {
       const close = symbol === "AAA" ? [95, 99, 97, 102, 101, 106][i] : [85, 87, 86, 89, 91, 92][i];
       hist.query("INSERT INTO historical_bars VALUES (?, '1d', 'alpaca_wide', ?, ?, ?, ?, ?, 1000)")
         .run(symbol, Date.parse(`${date}T04:00:00Z`), close, close + 1, close - 1, close);
     }
-    const book: Position[] = [{ symbol: "AAA", qty: 3, avgEntryPrice: 100, entrySession: "2026-10-23" }];
+    const book: Position[] = [{ symbol: "AAA", qty: 3, avgEntryPrice: 100, entrySession: "2026-11-03" }];
     // Observer memory of THIS version is eligible; another version's newer memory never is.
     const priorMemory = { portfolioCore: { version: 1, signals: {}, stops: {}, regime: {
-      session: "2026-10-27", riskOff: false, signalOff: [false], pending: 0, switched: false, ready: true } } };
+      session: "2026-11-05", riskOff: false, signalOff: [false], pending: 0, switched: false, ready: true } } };
     const insert = db.query("INSERT INTO portfolio_decisions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-    insert.run(1, sleeve, version.id, "2026-10-27", "2026-10-26", "observer", "observed", 1000, "[]", JSON.stringify(priorMemory), "{}", "{}", "[]");
-    insert.run(2, sleeve, "other-version", asOf, "2026-10-27", "observer", "observed", 1000, "[]", '{"wrong":true}', "{}", "{}", "[]");
+    insert.run(1, sleeve, version.id, "2026-11-05", "2026-11-04", "observer", "observed", 1000, "[]", JSON.stringify(priorMemory), "{}", "{}", "[]");
+    insert.run(2, sleeve, "other-version", asOf, "2026-11-05", "observer", "observed", 1000, "[]", '{"wrong":true}', "{}", "{}", "[]");
     const memory = latestPortfolioMemory(sleeve, version.id, { db, beforeSession: session });
     const view = new HistoricalPriceView({ db: hist, asOf, symbols: config.universe });
     const target = decide({ view, config, book: { equity: 1000, positions: book, memory }, executionSession: session });
@@ -934,7 +935,7 @@ describe("portfolio-engine exact decision replay", () => {
   test("memory loader excludes failed/stale and future decisions, including across an older --since window", () => {
     const f = fixture();
     try {
-      f.db.exec(`INSERT INTO portfolio_decisions SELECT 4, account_id, strategy_version, '2026-10-28', '2026-10-27', 'live', 'failed',
+      f.db.exec(`INSERT INTO portfolio_decisions SELECT 4, account_id, strategy_version, '2026-11-06', '2026-11-05', 'live', 'failed',
         equity, book_json, '{"bad":true}', weights_json, diagnostics_json, orders_json FROM portfolio_decisions WHERE id = 3`);
       expect(latestPortfolioMemory(sleeve, version.id, { db: f.db, beforeSession: session })).toEqual(f.memory);
       expect(f.run().portfolio![0].classification).toBe("PARITY");
@@ -974,8 +975,8 @@ describe("portfolio-engine exact decision replay", () => {
   test("--since expands coverage without changing each recorded version's config", () => {
     const f = fixture();
     try {
-      const r = f.run("2026-10-24");
-      expect(r.divergences.filter(d => d.type === "portfolio_session")).toHaveLength(3); // 26, 27, 28 (observer ≠ live)
+      const r = f.run("2026-11-04");
+      expect(r.divergences.filter(d => d.type === "portfolio_session")).toHaveLength(3); // 11-04, 11-05, 11-06 (observer ≠ live)
       expect(r.portfolio![0].classification).toBe("PARITY");
     } finally { f.close(); }
   });
@@ -985,9 +986,9 @@ describe("portfolio-engine exact decision replay", () => {
     expect(lastCompletedStockSession(Date.parse("2026-11-02T20:59:00Z"))).toBe("2026-10-30");
     const f = fixture();
     try {
-      expect(f.run(undefined, Date.parse("2026-10-29T14:00:00Z")).portfolio![0].classification).toBe("PARITY");
+      expect(f.run(undefined, Date.parse("2026-11-09T15:00:00Z")).portfolio![0].classification).toBe("PARITY"); // 10:00 EST: today not completed
       f.db.exec("DELETE FROM portfolio_decisions WHERE id = 3");
-      expect(f.run(undefined, Date.parse("2026-10-29T14:00:00Z")).divergences).toEqual([]);
+      expect(f.run(undefined, Date.parse("2026-11-09T15:00:00Z")).divergences).toEqual([]);
     } finally { f.close(); }
   });
   test("an unknown version fails operationally, never silently compares the incumbent", () => {

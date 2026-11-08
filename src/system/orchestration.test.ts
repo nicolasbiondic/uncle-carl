@@ -578,14 +578,14 @@ describe("§E daily invariant while the Binance price fetch fails (the documente
 // ══════════════════════════════════════════════
 describe("§F cold start with dirty state: broker orphan + DB orphan + stale native stop converge, nothing closed by mistake", () => {
   // Scenario (all three dirt classes at once, loops interleaved like boot):
-  //   • Alpaca holds 5 SPY with NO DB row       → momentum_stocks must adopt
+  //   • Alpaca holds 5 SSO (RW11 core symbol; was SPY until SPY left the universe) with NO DB row → momentum_stocks must adopt
   //     it after the 3-cycle grace (never before), and NOBODY may close it.
   //   • DB holds an open bot-managed JNJ row the broker doesn't have
   //     → neither BrokerSync (bot-managed skip) nor the native-stop pass
   //     (unfilled stop ⇒ no attribution) may fabricate a close.
   //   • DB holds a sync_-owned FOO row the broker doesn't have
   //     → BrokerSync (and ONLY BrokerSync) closes it, SYNC_DETECTED pnl=0.
-  //   • A stale uc8 stop (wrong qty) for SPY sits on the broker book
+  //   • A stale uc8 stop (wrong qty) for SSO sits on the broker book
   //     → after adoption it must be canceled by EXACT id and replaced by ONE
   //     correct stop; a re-run must be idempotent (no second stop).
   //
@@ -610,11 +610,11 @@ describe("§F cold start with dirty state: broker orphan + DB orphan + stale nat
     const placedStops: any[] = [];
     // Broker's open stop book, mutated by cancel/place like the real one.
     let stopBook: Array<{ id: string; clientOrderId: string; symbol: string; side: "buy" | "sell"; qty: number; stopPrice: number; status: string }> =
-      [{ id: "orphan-stop-1", clientOrderId: "manual-old", symbol: "SPY", side: "sell", qty: 3, stopPrice: 96, status: "new" }];
+      [{ id: "orphan-stop-1", clientOrderId: "manual-old", symbol: "SSO", side: "sell", qty: 3, stopPrice: 96, status: "new" }];
     const manager = makeAccountManager({
       alpaca: fakeAlpaca({
         getPositions: async () => [{
-          symbol: "SPY", market: "stock" as const, side: "buy" as const, quantity: 5,
+          symbol: "SSO", market: "stock" as const, side: "buy" as const, quantity: 5,
           avgEntryPrice: 100, currentPrice: 102, unrealizedPnl: 10, unrealizedPnlPct: 2, openedAt: Date.now(),
         }],
         getOpenStopOrders: async () => [...stopBook],
@@ -629,17 +629,17 @@ describe("§F cold start with dirty state: broker orphan + DB orphan + stale nat
       }),
     });
     const brokerSync = new BrokerSync([
-      alpacaSyncSource(() => [{ symbol: "SPY", side: "buy", quantity: 5, entryPrice: 100 }]),
+      alpacaSyncSource(() => [{ symbol: "SSO", side: "buy", quantity: 5, entryPrice: 100 }]),
     ]);
 
     const { bursts, detach } = captureBursts();
     try {
-      // Cycles 1–2: inside the adoption grace — SPY must NOT be adopted yet
+      // Cycles 1–2: inside the adoption grace — SSO must NOT be adopted yet
       // (a broker position can be an engine open whose insert is in flight).
       for (let i = 0; i < 2; i++) {
         await Promise.all([(manager as any).syncAlpacaAccount(), brokerSync.syncAll()]);
       }
-      expect(getDB().prepare("SELECT COUNT(*) AS c FROM trades WHERE symbol = 'SPY'").get()).toEqual({ c: 0 });
+      expect(getDB().prepare("SELECT COUNT(*) AS c FROM trades WHERE symbol = 'SSO'").get()).toEqual({ c: 0 });
 
       // Cycle 3: grace crossed → adopted under its universe owner.
       await Promise.all([(manager as any).syncAlpacaAccount(), brokerSync.syncAll()]);
@@ -647,23 +647,23 @@ describe("§F cold start with dirty state: broker orphan + DB orphan + stale nat
       detach();
     }
 
-    // Adoption: exactly one open SPY row, owned by momentum_stocks, real basis.
+    // Adoption: exactly one open SSO row, owned by momentum_stocks, real basis.
     const spyRows = getDB().prepare(
-      "SELECT account_id, status, strategy, entry_price, quantity FROM trades WHERE symbol = 'SPY'",
+      "SELECT account_id, status, strategy, entry_price, quantity FROM trades WHERE symbol = 'SSO'",
     ).all() as any[];
     expect(spyRows).toEqual([{ account_id: "momentum_stocks", status: "open", strategy: "SYNC_RECOVERY", entry_price: 100, quantity: 5 }]);
     // …and it paged (an orphan is evidence of an upstream bug, never silent).
-    expect(bursts.some(b => b.context === "AccountManager.orphanAdopt" && String(b.message).includes("SPY"))).toBe(true);
+    expect(bursts.some(b => b.context === "AccountManager.orphanAdopt" && String(b.message).includes("SSO"))).toBe(true);
     // BrokerSync ALSO paged the qty drift while the dirty state lasted
     // (broker 5 vs DB 0) — dirty boots are loud, not silently patched.
-    expect(bursts.some(b => b.context === "BrokerSync" && String(b.message).includes("SPY"))).toBe(true);
+    expect(bursts.some(b => b.context === "BrokerSync" && String(b.message).includes("SSO"))).toBe(true);
 
     // The stale wrong-qty stop was canceled by EXACT id; ONE correct stop
     // (own qty 5, 4% under entry) protects the adopted row.
     expect(cancels).toContain("orphan-stop-1");
     expect(placedStops.length).toBe(1);
-    expect(placedStops[0]).toMatchObject({ symbol: "SPY", quantity: 5, stopPrice: 96, accountId: "momentum_stocks" });
-    expect(stopBook.filter(o => o.symbol === "SPY").length).toBe(1); // never two live stops
+    expect(placedStops[0]).toMatchObject({ symbol: "SSO", quantity: 5, stopPrice: 96, accountId: "momentum_stocks" });
+    expect(stopBook.filter(o => o.symbol === "SSO").length).toBe(1); // never two live stops
 
     // DB orphan (bot-managed, broker flat): left OPEN — no fabricated close.
     expect(getDB().prepare("SELECT status, close_reason FROM trades WHERE id = 'orch-f1-jnj'").get()).toEqual({
@@ -679,7 +679,7 @@ describe("§F cold start with dirty state: broker orphan + DB orphan + stale nat
     // Cycle 4 (steady state): idempotent — no re-adoption, no second stop,
     // still zero broker closes.
     await Promise.all([(manager as any).syncAlpacaAccount(), brokerSync.syncAll()]);
-    expect((getDB().prepare("SELECT COUNT(*) AS c FROM trades WHERE symbol = 'SPY' AND status = 'open'").get() as any).c).toBe(1);
+    expect((getDB().prepare("SELECT COUNT(*) AS c FROM trades WHERE symbol = 'SSO' AND status = 'open'").get() as any).c).toBe(1);
     expect(placedStops.length).toBe(1);
     expect(closeCalls).toEqual([]);
   });

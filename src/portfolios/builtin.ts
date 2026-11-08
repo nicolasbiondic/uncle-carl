@@ -118,7 +118,7 @@ export function builtinPortfolios(): PortfolioDefinition[] {
     // append the version, run the cutover script AND update this literal.
     {
       id: "pe_momentum_stocks",
-      name: "momentum_stocks on the portfolio engine (e1-lev-vt30-g250-maxhold5-stagger-sh50)",
+      name: "momentum_stocks on the portfolio engine (e1-vt45-etf)",
       template: "portfolio",
       account: "alpaca_main",
       capital: RISK_PROFILES.momentum_stocks.initialEquity,
@@ -129,13 +129,14 @@ export function builtinPortfolios(): PortfolioDefinition[] {
         sleeve: "momentum_stocks",
         strategy: {
           kind: "volManaged",
-          universe: ["SPY", "QQQ", "IWM", "GLD", "AAPL", "MSFT", "NVDA", "META", "GOOGL", "AMZN", "SMH"],
+          // RW11 (§22–22.1): 2x ETFs SSO/QLD/USD/UGL replace SPY/QQQ/SMH/GLD in the core (SPY stays the switch's signal).
+          universe: ["SSO", "QLD", "IWM", "UGL", "AAPL", "MSFT", "NVDA", "META", "GOOGL", "AMZN", "USD"],
           inceptionGuardBars: 252,
           volLookback: 63,
           covLookback: 21,
-          portfolioVolTarget: 0.3,
+          portfolioVolTarget: 0.45,
           annualization: 252,
-          perAssetCap: 0.25,
+          perAssetCap: 0.375,
           maxGross: 2.5,
           // Q5/RW8: SPY 200-day switch (1 % band); risk-off = core to cash + SH at 0.5× core gross.
           regimeOverlay: { signals: [{ kind: "maTrend", symbol: "SPY", period: 200, sampling: "daily", bandPct: 1 }], combine: "any", coreScale: 0, hedge: { symbol: "SH", fraction: 0.5 } },
@@ -145,15 +146,15 @@ export function builtinPortfolios(): PortfolioDefinition[] {
         },
         venue: "alpaca",
         runMode: "live",
-        strategyVersion: "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger-sh50",
+        strategyVersion: "momentum_stocks@pe-vt45-g250-sma200-fv5-mh5-stagger-sh50-etf2x",
         heartbeatName: "portfolio:momentum_stocks",
         loggerContext: "Portfolio:momentum_stocks",
         minOrderNotional: 5,
         rebalanceBand: 0.01,
         provenance: {
-          manifest: "experiments/rw8-e1-lev-vt30-g250-maxhold5-stagger-sh50-v1.json",
-          candidate: "e1-lev-vt30-g250-maxhold5-stagger-sh50",
-          designSha256: "928a8a4bf29add0a9b999e7da6ce46b61949f7c3b69597460b4382ee36f9a89b",
+          manifest: "experiments/rw11-e1-vt45-etf-v1.json",
+          candidate: "e1-vt45-etf",
+          designSha256: "47165bba1b4da6d4e58915113a35790f5451cc24faac816b8dfe8f5ca2b8c759",
         },
       },
     },

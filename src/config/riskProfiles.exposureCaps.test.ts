@@ -34,12 +34,15 @@ describe("sleeve max gross-exposure caps (locked against REAL production wiring,
     expect(GROSS_CAP_HEADROOM).toBe(1.15);
   });
 
-  test("momentum_stocks (portfolio engine): maxGross 2.5x (Q5, vt30-g250), SH hedge inside the 0.25 per-asset cap", () => {
+  test("momentum_stocks (portfolio engine): nominal maxGross still 2.5x (Q5); RW11 vol target 45%, per-asset 0.375 (SH hedge inside it), 2x ETFs in the core", () => {
     expect(peMaxGross("pe_momentum_stocks")).toBe(2.5);
     const strategy = (builtinPortfolio("pe_momentum_stocks").params as any).strategy;
-    expect(strategy.perAssetCap).toBe(0.25);
-    expect(strategy.portfolioVolTarget).toBe(0.3);
+    expect(strategy.perAssetCap).toBe(0.375);
+    expect(strategy.portfolioVolTarget).toBe(0.45);
     expect(strategy.regimeOverlay?.hedge).toEqual({ symbol: "SH", fraction: 0.5 });
+    // The extra exposure is economic (2x ETFs), not nominal: the 2.5x nominal cap is what the venue's 1.9x account clip sees.
+    for (const s of ["SSO", "QLD", "USD", "UGL"]) expect(strategy.universe).toContain(s);
+    for (const s of ["SPY", "QQQ", "SMH", "GLD"]) expect(strategy.universe).not.toContain(s);
   });
 
   test("meanrev_stocks (portfolio engine): maxGross 1.0x, vol target 15%, per-asset 0.10", () => {

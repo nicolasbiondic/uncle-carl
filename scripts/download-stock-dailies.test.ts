@@ -66,6 +66,8 @@ describe("RW daily stock refresh", () => {
       expect(RW_D1_ETFS).toHaveLength(18);
       for (const s of RW_D1_ETFS) expect(symbols).toContain(s);
       expect(symbols).toContain("SH"); // RW8 risk-off hedge must stay fresh for the live portfolio engine
+      // RW11: the live core's 2x ETFs (and SPY, the switch's signal) must stay fresh; SMH stays on the research tape.
+      for (const s of ["SSO", "QLD", "USD", "UGL", "SPY", "SMH"]) expect(symbols).toContain(s);
       const members = db.query("SELECT ticker FROM index_membership WHERE end_date IS NULL").all() as Array<{ ticker: string }>;
       expect(members.length).toBeGreaterThan(490);
       for (const { ticker } of members) expect(symbols).toContain(ticker);

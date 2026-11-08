@@ -3392,9 +3392,13 @@ describe("historical hypothesis ledger", () => {
     const batches = ids.map(id => ledger.batches.find((b: any) => b.id === id));
     expect(batches.map((b: any) => [b.priorUniqueTrials, b.hypothesisCount, b.resultingUniqueTrials]))
       .toEqual([[472, 1, 473], [473, 2, 475], [475, 1, 476], [476, 1, 477]]);
-    expect(ledger.batches.slice(-4).map((b: any) => b.id)).toEqual(ids);
+    const start = ledger.batches.findIndex((b: any) => b.id === ids[0]);
+    expect(ledger.batches.slice(start, start + 4).map((b: any) => b.id)).toEqual(ids);
     for (const id of ids) expect(ledger.batches.filter((b: any) => b.id === id)).toHaveLength(1);
-    expect(ledger.batches.at(-1).resultingUniqueTrials).toBe(477);
+    // RW11 (§22.1, 2026-11-08) follows: three leverage trials 477→480.
+    expect(ledger.batches.slice(start + 4).map((b: any) => [b.id, b.priorUniqueTrials, b.hypothesisCount, b.resultingUniqueTrials]))
+      .toEqual([["rw11-e1-leverage-2026-11-08", 477, 3, 480]]);
+    expect(ledger.batches.at(-1).resultingUniqueTrials).toBe(480);
     expect(ledger.scope.complete).toBe(false);
     expect(ledger.rw10Controls.trialsAdded).toBe(0);
     expect(rw10Paths).toEqual({ "0bb06b9d": rw8Stocks.candidates[0].path, "2325210c": ledger.rw8Controls.paths["2325210c"],

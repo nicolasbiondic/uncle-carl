@@ -111,10 +111,13 @@ describe("sleeveOwnsSymbol (ownership boundary)", () => {
     }
     beforeEach(() => _resetRegisteredSleeveSymbolsForTests());
 
-    test("the live RW8 definition owns SH (universe + overlay hedge); observer/disabled definitions own nothing", () => {
+    test("the live definition owns SH (universe + overlay hedge) and the RW11 2x ETFs; SPY (signal only) is not owned; observer/disabled definitions own nothing", () => {
       const owned = portfolioEngineOwnedSymbols([liveDef()]);
       expect(owned.alpaca).toContain("SH");
-      expect(owned.alpaca).toContain("SPY");
+      for (const s of ["SSO", "QLD", "USD", "UGL"]) expect(owned.alpaca).toContain(s);
+      // RW11: SPY left the tradable universe (it only feeds the SMA200 switch), so an unrowed SPY is
+      // alpaca_main's to adopt again, like any legacy/manual position.
+      expect(owned.alpaca).not.toContain("SPY");
       expect(owned.binance).toEqual([]);
       expect(portfolioEngineOwnedSymbols([liveDef({ runMode: "observer" })]).alpaca).toEqual([]);
       expect(portfolioEngineOwnedSymbols([liveDef({}, { enabled: false })]).alpaca).toEqual([]);

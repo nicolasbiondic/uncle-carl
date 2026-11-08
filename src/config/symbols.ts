@@ -29,6 +29,8 @@ export interface SymbolEntry {
 // trading input). New symbols default to "tech" below if not listed here.
 const STOCK_SECTORS: Record<string, Sector> = {
   SPY: "index", QQQ: "index", IWM: "index", GLD: "commodity",
+  // RW11 2x ETFs: SSO (S&P 500), QLD (Nasdaq-100), UGL (gold); USD (semiconductors) stays "tech" by default.
+  SSO: "index", QLD: "index", UGL: "commodity",
 };
 
 // ── Stocks sleeve (Alpaca) ──────────────────

@@ -344,8 +344,8 @@ describe("sleeveExpectationArtifacts — the CURRENT model version's artifact, o
         const v = currentModelVersion(sleeve)!;
         expect(arts[sleeve]).toEqual({ dir: v.artifact!.dir, shiftDays: v.artifact!.shiftDays, manifest: v.manifest! });
       }
-      expect(arts.momentum_stocks.dir).toBe("data/backtests/0bb06b9d548647410edacd52f86c9f11ff66307bd11f6e734e379f8a7492d5da");
-      expect(arts.momentum_stocks.manifest).toBe("experiments/rw8-e1-lev-vt30-g250-maxhold5-stagger-sh50-v1.json");
+      expect(arts.momentum_stocks.dir).toBe("data/backtests/71124f620a0a5d0c666e341f9368982d4335286d7a79a5bf65ddb06f9e8c8f77");
+      expect(arts.momentum_stocks.manifest).toBe("experiments/rw11-e1-vt45-etf-v1.json");
       expect(arts.meanrev_stocks.dir).toBe("data/backtests/2325210c8c7ad56fbbec9d833f2ae9ef641ed85a25d9af357eb693d43dfbb50f");
       expect(arts.meanrev_stocks.manifest).toBe("experiments/rw7-e2-meanrev-maxhold5-stagger-v1.json");
       expect(arts.momentum_crypto.dir).toBe("data/backtests/4aca18035a259fac4bfbba41696c6ee19d750dab1cb8fd3d084e47193e4c0f33");

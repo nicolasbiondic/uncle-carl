@@ -210,7 +210,7 @@ describe("create from a validated preset", () => {
     for (const preset of ["momentum_stocks", "meanrev_stocks"]) {
       expect(VALIDATED_PRESETS[preset].template).toBe("portfolio");
       expect(VALIDATED_PRESETS[preset].portfolioEngine).toEqual(preset === "momentum_stocks"
-        ? { version: "momentum_stocks@pe-vt30-g250-sma200-fv5-mh5-stagger-sh50", candidate: "e1-lev-vt30-g250-maxhold5-stagger-sh50" }
+        ? { version: "momentum_stocks@pe-vt45-g250-sma200-fv5-mh5-stagger-sh50-etf2x", candidate: "e1-vt45-etf" }
         : { version: "meanrev_stocks@pe-vt15-mh5-stagger", candidate: "vt15-maxhold5-stagger" });
       const rows = seededRows((r) => { const x = r.find((y) => y.id === `pe_${preset}`)!; x.status = "archived"; x.enabled = false; });
       const out = validateCreatePortfolio(

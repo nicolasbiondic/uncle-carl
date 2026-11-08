@@ -54,7 +54,9 @@ function currentSP500Members(db: Database, date: string): string[] {
 
 export function stockRefreshUniverse(db: Database, date: string): string[] {
   // RW8: SH is the live risk-off hedge, separate from the momentum core universe.
-  return [...new Set([...WIDE_UNIVERSE, ...MOMENTUM_SYMBOLS, ...RW_D1_ETFS, "SH", ...currentSP500Members(db, date)])];
+  // RW11: the core's 2x ETFs (SSO/QLD/USD/UGL) arrive through MOMENTUM_SYMBOLS; SMH left that core but
+  // stays on the research tape (every live/control manifest keeps it in data.universe; SPY/QQQ/GLD are D1 ETFs).
+  return [...new Set([...WIDE_UNIVERSE, ...MOMENTUM_SYMBOLS, ...RW_D1_ETFS, "SH", "SMH", ...currentSP500Members(db, date)])];
 }
 
 export async function refreshStockDailies(opts: {

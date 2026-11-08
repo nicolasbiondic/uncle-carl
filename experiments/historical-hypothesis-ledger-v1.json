@@ -1647,6 +1647,20 @@
       "hypothesisCount": 1, "priorUniqueTrials": 476, "resultingUniqueTrials": 477,
       "inventoryComplete": false, "resultsComplete": false, "executionReported": true,
       "evidence": "RW10 SS21 y SS21.3: +1, 476->477. #476 c5d11742 vs control pre-registrado b37681ff (NO contra System 1): anade largos Turtle 55/20, conserva cortos 55/20; CAGR 12.6832% vs 12.8905% (-0.2073pp), Sharpe 0.4860 vs 0.4939, DD sleeve 49.3033% vs 45.3293%, libro 17.4499%, 2933 operaciones, 3.7239 vs 3.5982 ordenes/dia. CUMPLE C en su letra, pero NO ELEGIDO ni CABLEADO: regla pre-registrada de mayor CAGR elige #475 (16.8365%). No se inventa fracaso C ni se prueba combinado con System 1. Largos por fold 32/38/29; breakoutLong queda apagado. authoritativeArtifactRw10Crypto conserva costes/datos/contadores; manifest mantiene texto DRY-RUN historico, no describe el estado de ejecucion actual. Regla nunca dejar de operar, sin pausa ni reasignacion; stops 2N, 120h y caps compartidos siguen. approved=false, inventario historico incompleto; total 477 coherente con los manifests, sin duplicar BO13 ni RW9."
+    },
+    {
+      "id": "rw11-e1-leverage-2026-11-08",
+      "sourceCommit": "8c7607b (pre-registro SS22 antes de correr)",
+      "sourcePaths": [
+        "experiments/rw11-e1-vt45-margin-v1.json",
+        "experiments/rw11-e1-vt45-etf-v1.json",
+        "experiments/rw11-e1-vt60-etf-v1.json",
+        "scripts/rw11-evaluate.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 3, "priorUniqueTrials": 477, "resultingUniqueTrials": 480,
+      "inventoryComplete": false, "resultsComplete": false, "executionReported": true,
+      "evidence": "RW11 SS22-22.1: +3, 477->480. Mas apalancamiento en momentum_stocks (dueno: opcion B, rompe su congelacion), bruto nominal <= 2.5. Control 0bb06b9d: CAGR 23.18%, Sharpe 0.938, DD sleeve 30.79%, cuenta 23.63%. #477 711742f9 vt45 margen: CAGR 26.69%, Sharpe 0.861, DD 41.10%, cuenta 29.80%, CUMPLE P. #478 71124f62 vt45 ETFs SSO/QLD/USD/UGL: CAGR 31.64%, Sharpe 0.911, DD 42.74%, cuenta 31.52%, bruto max cuenta 1.874, CUMPLE P, mayor CAGR: SE CABLEA. #479 39b27a27 vt60 ETFs: CAGR 33.76%, DD 50.80%, cuenta 37.43%, bruto 1.906: FALLA P2 y P4, se presenta al dueno. Regla nunca dejar de operar, capital fijo."
     }
   ],
   "authoritativeArtifactRw8UsdcBo13": {

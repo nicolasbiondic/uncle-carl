@@ -13,8 +13,22 @@ import { TREASURY_SYMBOLS } from "../../src/treasury/treasurySymbols";
 
 export const LIVE_STOCK_EXCLUDES: readonly string[] = [...new Set([...MOMENTUM_STOCKS_UNIVERSE, ...MEANREV_UNIVERSE, ...TREASURY_SYMBOLS])].sort();
 
-/** The live symbols a candidate's `exclude` fails to list (empty = compliant). */
+/** E1 cores that were live when a committed copySignal manifest was pre-registered and have since been
+ *  replaced. Review of 2026-11-08 (RW11, SPY/QQQ/SMH/GLD → SSO/QLD/USD/UGL): a pre-registered manifest is
+ *  never edited after its run (its identity hash is its artifact's), so `copy-d4-insider-clusters-v1`
+ *  (refuted, artifact a910d39a…) keeps the core it excluded at the time. The four 2x ETFs are not S&P 500
+ *  members, the only domain copySignal draws from, so the exclusion would change nothing in its replay.
+ *  A candidate written since RW11 must exclude the CURRENT core; the live path does not depend on this
+ *  rule at all (copySignal cannot run live, and cutover.ts checks the shared-wallet overlap itself). */
+export const RETIRED_MOMENTUM_STOCKS_CORES: readonly (readonly string[])[] = [
+  ["SPY", "QQQ", "IWM", "GLD", "AAPL", "MSFT", "NVDA", "META", "GOOGL", "AMZN", "SMH"],
+];
+
+/** The live symbols a candidate's `exclude` fails to list (empty = compliant). A candidate that excludes a
+ *  RETIRED E1 core in full is held to that core (see above); everyone else to the current one. */
 export function missingLiveExcludes(exclude: readonly string[]): string[] {
   const have = new Set(exclude);
-  return LIVE_STOCK_EXCLUDES.filter(s => !have.has(s));
+  const grandfathered = RETIRED_MOMENTUM_STOCKS_CORES.some(core => core.every(s => have.has(s)));
+  const required = grandfathered ? [...new Set([...MEANREV_UNIVERSE, ...TREASURY_SYMBOLS])].sort() : LIVE_STOCK_EXCLUDES;
+  return required.filter(s => !have.has(s));
 }
