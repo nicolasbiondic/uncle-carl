@@ -1661,8 +1661,71 @@
       "hypothesisCount": 3, "priorUniqueTrials": 477, "resultingUniqueTrials": 480,
       "inventoryComplete": false, "resultsComplete": false, "executionReported": true,
       "evidence": "RW11 SS22-22.1: +3, 477->480. Mas apalancamiento en momentum_stocks (dueno: opcion B, rompe su congelacion), bruto nominal <= 2.5. Control 0bb06b9d: CAGR 23.18%, Sharpe 0.938, DD sleeve 30.79%, cuenta 23.63%. #477 711742f9 vt45 margen: CAGR 26.69%, Sharpe 0.861, DD 41.10%, cuenta 29.80%, CUMPLE P. #478 71124f62 vt45 ETFs SSO/QLD/USD/UGL: CAGR 31.64%, Sharpe 0.911, DD 42.74%, cuenta 31.52%, bruto max cuenta 1.874, CUMPLE P, mayor CAGR: SE CABLEA. #479 39b27a27 vt60 ETFs: CAGR 33.76%, DD 50.80%, cuenta 37.43%, bruto 1.906: FALLA P2 y P4, se presenta al dueno. Regla nunca dejar de operar, capital fijo."
+    },
+    {
+      "id": "options-vega-r-2026-11-09",
+      "sourceCommit": "834e048 (pre-registro Q9 antes de descargar o correr); 040ac6c (espejo + auditoria ciega); 4f07084 (segundo proveedor); d44d77e (nucleo); 62b7d92 (primera corrida); da7456d (correccion de la tabla h del segundo proveedor, segunda corrida); 6085cb3 (semanas sin vencimiento elegible contadas como efectivo, tercera corrida)",
+      "sourcePaths": [
+        "experiments/options-vega-r-v1.json",
+        "docs/reports/Q9-quorum-expediente.md",
+        "docs/reports/Q9-quorum-decision.md",
+        "scripts/options-mirror-to-sqlite.py",
+        "scripts/download-alpaca-option-bars.ts",
+        "scripts/lib/optionsWeekly.ts",
+        "scripts/options-r.ts",
+        "docs/reports/OR-vega-fase-r-2026-11-09.md"
+      ],
+      "hypothesisCount": 3, "priorUniqueTrials": 480, "resultingUniqueTrials": 483,
+      "inventoryComplete": false, "resultsComplete": false, "executionReported": true,
+      "evidence": "Q9 fase R, personalidad Vega (quorum Q9, decision delegada por el dueno): +3, 480->483. Auditoria ciega PASA (hashes iguales, bid/ask/IV presentes, semanales desde 2010-05-14 SPY y 2011-03-25 QQQ). Artefacto autoritativo 69a144b8 (tercera corrida); conservadas y no autoritativas 23f5bc9c (tabla h del segundo proveedor mal indexada) y a4967757 (las semanas sin vencimiento elegible dentro de la ventana se descartaban en vez de contarse como efectivo; hallado por la verificacion independiente del director). Mismos veredictos en las tres. Ventana primaria O1/O2 2010-05-14 -> 2025-12-05 (813 semanas, 2 en efectivo por falta de vencimiento), O3 2011-03-25 -> 2025-12-05 (768). #480 O1 put ATM cubierta: CAGR 4.6135% vs SPY 14.2015%, exceso medio -16.8176 pb/semana, p 0.9999, DD 26.0251% mid / 26.0534% liquidacion, FALLA 1 y 3b (holdout -1.3840 pb/semana, IC90 [-43.4684, 39.1896]); 3a cumple (signo igual, correlacion 0.9849); correlacion con WPUT 0.84. #481 O2 spread de credito 0.30/0.10 segun el interruptor: CAGR -1.1779%, exceso -27.7398 pb/semana, p 0.9999, DD 19.1591%, FALLA 1, 3b (holdout -18.8491 pb) y 4 (semana 2020-02-21 pierde 2.2311% > 2%: los diferenciales de salida en el crash superaron los de entrada que fija la formula L). #482 O3 compra convexa 0.40: CAGR -1.1283% vs 13.8354%, exceso -27.0277 pb/semana, p 0.9962, DD 37.5199% > 30%, FALLA 1, 2 y 3b (holdout -58.5069 pb, IC90 [-91.8742, -25.7992]). Holm al 10%: ninguno rechaza. NINGUNO PASA: no se construye el conector ni la segunda instalacion (Q9 SS6.4). Regla nunca dejar de operar respetada: semanas en efectivo contadas e informadas, ninguna pata en la sesion de vencimiento, tenencia maxima 4 sesiones."
     }
   ],
+  "authoritativeArtifactOptionsVegaR": {
+    "path": "data/backtests/69a144b88a8580af9fe04ccdc1af297f3726febc1ad37e63a7af5bcbbab7e4a8/",
+    "runs": [
+      { "run": 1, "path": "data/backtests/23f5bc9c566e59be815847ae2115c9ab48281eb8a5c2f270c0275fd5f50c87c1/", "authoritative": false, "supersededBecause": "la tabla h del segundo proveedor buscaba la clave '0-0.15' y el audit escribe '0.0-0.15': toda cotizacion Alpaca con |delta| < 0.15 quedo como ausente (42/133/38 salidas al intrinseco en O1/O2/O3 frente a 11/4/8 tras corregir); solo cambia el lado Alpaca (3a, 3b)", "fixCommit": "da7456d" },
+      { "run": 2, "path": "data/backtests/a4967757294b2b56b2fdcddd544aa05e4290805f336d13fe0d086a76e8ac7679/", "authoritative": false, "supersededBecause": "las semanas sin vencimiento elegible dentro de la ventana primaria (2010-05-21 y 2010-05-28) y del holdout se descartaban en vez de contarse como efectivo (calendar.notTradable); hallado por la verificacion independiente del director (producto de 1+r_SPY 8.0988 frente a 7.9288 del cierre ajustado). Cambian solo las cifras basadas en x de O1 y O2 en la primaria; O3, 3a y 3b identicos", "fixCommit": "6085cb3" },
+      { "run": 3, "path": "data/backtests/69a144b88a8580af9fe04ccdc1af297f3726febc1ad37e63a7af5bcbbab7e4a8/", "authoritative": true, "supersededBecause": null, "fixCommit": null }
+    ],
+    "manifest": "experiments/options-vega-r-v1.json",
+    "report": "docs/reports/OR-vega-fase-r-2026-11-09.md",
+    "audit": "$UC_RESEARCH_DATA_DIR/hist-options-audit.json (copiado en audit.json del artefacto)",
+    "verdict": "NINGUNO PASA. Los tres candidatos rinden menos que SPY con dividendos en la ventana primaria (exceso medio negativo, p >= 0.9962, Holm no rechaza ninguno); O3 ademas supera el 30 % de caida y O2 rompe el tope semanal del 2 % en una semana (2020-02-21). NO se construye el conector de opciones ni la segunda instalacion (Q9 SS6.4).",
+    "figuresNote": "Porcentajes a 4 decimales; exceso x_w = ln(1+r_cand) - ln(1+r_SPY) en pb por semana (entrada a entrada siguiente, mismos dias), SPY con dividendos (adjusted_close del espejo). Contratos enteros a 100.000 $, efectivo al 0 %, venta al bid y compra al ask, 0.05 $ por contrato y lado. Bootstrap por bloques circular de 4 semanas, 10.000 remuestreos, semilla 20261109 (mulberry32); Holm sobre 3 al 10 % unilateral. Ventana primaria desde la primera entrada con vencimiento elegible en >= 95 % de las 52 semanas siguientes (auditoria ciega): SPY 2010-05-14, QQQ 2011-03-25; termina en la ultima entrada cuya salida cae dentro del espejo (2025-12-05); las semanas intermedias sin vencimiento elegible cuentan como efectivo. Tramo comun 2024-02-02 -> 2025-12-05 (97 semanas) en espejo y Alpaca; holdout 2025-12-19 -> 2026-10-30 (46 semanas) solo Alpaca con h = mitad de la mediana del diferencial relativo del espejo por subyacente, tipo y tramo de |delta|. La semana con entrada 2025-12-12 (ultima fecha del espejo) no entra en ningun tramo: su salida cae fuera del espejo y su entrada no es posterior a el.",
+    "holm": { "alpha": 0.1, "ps": [0.9999000099990001, 0.9999000099990001, 0.9962003799620038], "rejected": [false, false, false] },
+    "candidates": [
+      {
+        "trial": 480, "name": "O1-put-writer", "underlying": "SPY",
+        "window": { "primaryStart": "2010-05-14", "primaryEnd": "2025-12-05", "weeks": 813, "traded": 810, "cashNoEligibleExpiration": 2 },
+        "figures": { "cagrPct": 4.6135, "spyCagrPct": 14.2015, "meanExcessBpWeek": -16.8176, "ci90BpWeek": [-24.3202, -9.2057], "p": 0.9999000099990001, "maxDrawdownMidPct": 26.0251, "maxDrawdownLiquidationPct": 26.0534, "worstWeekPct": -13.8396, "ordersPerWeek": 1.9926, "equityEnd": 202027 },
+        "overlap": { "weeks": 97, "mirrorMeanBp": -27.3341, "alpacaMeanBp": -27.7713, "correlation": 0.9849 },
+        "holdout": { "weeks": 46, "meanBp": -1.384, "ci90Bp": [-43.4684, 39.1896], "cagrPct": 9.3398, "spyCagrPct": 10.1317 },
+        "criteria": { "1_pairedExcess": false, "2_drawdown": true, "3a_overlapConsistency": true, "3b_holdout": false, "4_rules": true },
+        "criteriaFailed": ["1_pairedExcess", "3b_holdout"], "verdict": "NO PASA",
+        "informative": { "wputCorrelation": 0.8398, "wputCagrPct": 4.1442, "tbillCagrPct": 6.1037, "fractionalCagrPct": 5.1447, "costsX2CagrPct": 3.3663, "psrExcess": 0.0008 }
+      },
+      {
+        "trial": 481, "name": "O2-credit-spread", "underlying": "SPY",
+        "window": { "primaryStart": "2010-05-14", "primaryEnd": "2025-12-05", "weeks": 813, "traded": 803, "cashNoEligibleExpiration": 2 },
+        "figures": { "cagrPct": -1.1779, "spyCagrPct": 14.2015, "meanExcessBpWeek": -27.7398, "ci90BpWeek": [-39.0724, -15.9192], "p": 0.9999000099990001, "maxDrawdownMidPct": 19.1591, "maxDrawdownLiquidationPct": 19.1544, "worstWeekPct": -2.2311, "ordersPerWeek": 3.9508, "equityEnd": 83131 },
+        "overlap": { "weeks": 97, "mirrorMeanBp": -34.4731, "alpacaMeanBp": -35.6427, "correlation": 0.9832 },
+        "holdout": { "weeks": 46, "meanBp": -18.8491, "ci90Bp": [-70.8537, 27.3701], "cagrPct": -0.1776, "spyCagrPct": 10.1317 },
+        "criteria": { "1_pairedExcess": false, "2_drawdown": true, "3a_overlapConsistency": true, "3b_holdout": false, "4_rules": false },
+        "criteriaFailed": ["1_pairedExcess", "3b_holdout", "4_rules"], "verdict": "NO PASA",
+        "informative": { "tbillCagrPct": 0.2298, "fractionalCagrPct": -1.1874, "costsX2CagrPct": -2.1981, "psrExcess": 0.0003, "weeklyBudgetBreaches": 1 }
+      },
+      {
+        "trial": 482, "name": "O3-convex-buyer", "underlying": "QQQ alcista / SPY bajista",
+        "window": { "primaryStart": "2011-03-25", "primaryEnd": "2025-12-05", "weeks": 768, "traded": 753, "cashNoEligibleExpiration": 1 },
+        "figures": { "cagrPct": -1.1283, "spyCagrPct": 13.8354, "meanExcessBpWeek": -27.0277, "ci90BpWeek": [-42.9258, -10.9424], "p": 0.9962003799620038, "maxDrawdownMidPct": 37.5199, "maxDrawdownLiquidationPct": 37.5309, "worstWeekPct": -1.9997, "ordersPerWeek": 1.9609, "equityEnd": 84609 },
+        "overlap": { "weeks": 97, "mirrorMeanBp": -45.1844, "alpacaMeanBp": -37.7126, "correlation": 0.9917 },
+        "holdout": { "weeks": 46, "meanBp": -58.5069, "ci90Bp": [-91.8742, -25.7992], "cagrPct": -18.8252, "spyCagrPct": 10.1317 },
+        "criteria": { "1_pairedExcess": false, "2_drawdown": false, "3a_overlapConsistency": true, "3b_holdout": false, "4_rules": true },
+        "criteriaFailed": ["1_pairedExcess", "2_drawdown", "3b_holdout"], "verdict": "NO PASA",
+        "informative": { "qqqBenchmarkMeanBp": -34.8351, "fractionalCagrPct": -1.3137, "costsX2CagrPct": -4.5537, "psrExcess": 0.0068 }
+      }
+    ]
+  },
   "authoritativeArtifactRw8UsdcBo13": {
     "verdict": "CUMPLE C; CABLEADO por decision del dueno 2026-11-05 (Procede), segun instruccion de esta tarea. Rechazo inicial por DD individual retirado: Q6 SS6, 2026-11-02. El cableado no esta en el checkout base; no se afirma despliegue verificado.",
     "figuresNote": "SS19.9, Q6 SS5-6. C exige CAGR >=0, mas ordenes/dia que control y DD libro <=35%; la linea del 40% nunca fue regla del dueno, Q2 retirada. DD sleeve +5.9756pp es coste, no veto; el bajista de 2022 empeora. Dias OOS comunes (365), porcentajes a 4 decimales; libro = 50k E1 SH 0bb06b9d + 50k E2 2325210c + 5k candidato + 5k horario b37681ff, capitales fijos, huecos a cero. Ordenes completas / duraciones OOS calendario. Base/stress 17+3/60+5 bps mas funding; USDT proxy historico de USDC, mismos folds y dataHash. Mantiene Sharpe/regimen/cooldown, sizeOnly, exposureControl suelo 0.25 y 120h. Una unidad por moneda, 1N=1% equity, 2N al cierre diario, sin piramides ni cap original de seis unidades correlacionadas; trece stops pueden costar ~26% antes de gaps/costes. approved=false, inventario historico incompleto. Manifest y reporte conservan la condicion pre-registrada retirada. Decision del 2026-11-05 procede de la instruccion recibida, no de un commit en este checkout; no se inventan version, hora ni verificacion de prod.",

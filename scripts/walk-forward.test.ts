@@ -2598,7 +2598,10 @@ describe("experiments/ manifests stay loadable under the extended validator", ()
     // docs/reports/LC-intradia.md) — a deliberately different, independent
     // schema (no `sleeve` field; validateManifest's stocks/crypto/meanrev
     // dispatch does not apply), validated by that kernel itself, not this one.
-    const files = readdirSync(dir).filter(f => f.endsWith(".json") && !f.startsWith("historical-hypothesis-ledger") && !f.startsWith("intraday-"));
+    // "options-*" manifests are the Vega options personality's phase R (quorum Q9,
+    // docs/reports/Q9-quorum-decision.md): their own schema and kernel, pinned by
+    // experiments/historical-hypothesis-ledger.test.ts.
+    const files = readdirSync(dir).filter(f => f.endsWith(".json") && !f.startsWith("historical-hypothesis-ledger") && !f.startsWith("intraday-") && !f.startsWith("options-"));
     expect(files.length).toBeGreaterThan(0);
     for (const f of files) {
       const raw = JSON.parse(readFileSync(join(dir, f), "utf8"));

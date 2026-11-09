@@ -1,0 +1,150 @@
+{
+  "name": "options-vega-r-v1",
+  "line": "Q9 fase R — personalidad Vega (opciones semanales sobre SPY/QQQ), docs/reports/Q9-quorum-decision.md",
+  "description": "Pre-registro (2026-11-09) de los tres candidatos de la personalidad de alto riesgo con opciones, con las correcciones del quórum Q9 aplicadas. Se publica antes de descargar ningún dato o correr nada. Un cambio de cualquier parámetro congelado es un ensayo nuevo en el ledger; el primer resultado se queda.",
+  "preRegisteredAt": "2026-11-09",
+  "trialAccounting": { "priorUniqueTrials": 480, "complete": false },
+  "personality": {
+    "name": "Vega",
+    "capitalUsd": 100000,
+    "weeklyLossBudgetFraction": 0.02,
+    "maxDrawdownBudgetFraction": 0.30,
+    "maxHoldSessions": 5,
+    "neverStopTrading": "las semanas sin contrato operable cuentan como efectivo y se informan; ningún freno pausa la estrategia"
+  },
+  "data": {
+    "primary": {
+      "provider": "lambdaclass/options_portfolio_backtester release data-v1 (cadenas diarias de cierre, origen OPRA)",
+      "release": "https://github.com/lambdaclass/options_portfolio_backtester/releases/tag/data-v1",
+      "sha256": {
+        "SPY_options.parquet": "a7152991b45b81f090f970e945bf88def8093b8ecb9b250e9891cb6d88041f0a",
+        "SPY_underlying.parquet": "847e60a441eb10969d87cd4a6da604257b782d9076168f68d5730b84096c79db",
+        "QQQ_options.parquet": "1f831556cd87ec9d7af43d3b47a69a829ffb2fb199cfcef4ff55d289badf8734",
+        "QQQ_underlying.parquet": "78c015fd7fa9d493cd798d5ae81b3c2ae6dc3b8176e25e7bb90cd4114b103351"
+      },
+      "license": "redistribuido solo para investigación, sin garantía; no se republica",
+      "dbPath": "$UC_RESEARCH_DATA_DIR/hist-options.db",
+      "storedSubset": "filas con 0 <= días naturales a vencimiento <= 12 y 0.80 <= strike / cierre bruto del subyacente <= 1.20; la auditoría se calcula sobre los ficheros completos"
+    },
+    "secondProvider": {
+      "provider": "Alpaca options market data: barras diarias (operaciones OPRA, sin cotizaciones históricas) y /v2/options/contracts con status inactive|active",
+      "from": "2024-02-01",
+      "to": "latest",
+      "contracts": "por cada vencimiento usado y subyacente, puts y calls con strike en [0.85, 1.15] × cierre bruto de la sesión de entrada",
+      "dbPath": "$UC_RESEARCH_DATA_DIR/hist-options.db (tabla propia)"
+    },
+    "prices": {
+      "signalAndBenchmark": "cierres ajustados por dividendos y splits (adjusted_close del subyacente del espejo; para lo posterior al espejo, historical.db alpaca_wide)",
+      "contractMath": "cierres brutos (sin ajustar) para moneyness, delta e intrínseco",
+      "sessions": "las fechas presentes en los cierres diarios de SPY"
+    },
+    "auditGate": {
+      "when": "después de la descarga y antes de cualquier corrida de estrategia; ciega a resultados",
+      "checks": [
+        "sha256 de los cuatro ficheros igual al fijado",
+        "primera y última fecha, días y filas por año y subyacente",
+        "por semana y subyacente: si existe un vencimiento elegible (ver calendar)",
+        "presencia de bid, ask, implied_volatility; recuentos de ask < bid, ask <= 0 y bid = 0",
+        "mediana del diferencial relativo (ask - bid) / mid en las entradas de los últimos 252 días del espejo, por subyacente, tipo y tramo de |delta| [0, 0.15), [0.15, 0.35), [0.35, 0.65]: es el modelo de coste del segundo proveedor"
+      ],
+      "publish": "$UC_RESEARCH_DATA_DIR/hist-options-audit.json y una sección del informe de resultados",
+      "onFailure": "si el espejo no trae bid/ask o vencimientos semanales, no se corre nada; se informa al dueño y cualquier corrida con otros datos se pre-registra de nuevo"
+    }
+  },
+  "calendar": {
+    "week": "semana NYSE con al menos 2 sesiones",
+    "entrySession": "la última sesión de la semana (normalmente el viernes)",
+    "signalSession": "la sesión anterior a la de entrada (normalmente el jueves)",
+    "expiration": "el último vencimiento listado E del subyacente con 2 <= sesiones(entrada, E] <= 5 (normalmente el viernes siguiente)",
+    "exitSession": "la sesión anterior a E (normalmente el jueves): se cierran todas las patas a sus cotizaciones de cierre; nunca se mantiene una pata en la sesión de vencimiento ni se liquida al intrínseco",
+    "betweenExitAndEntry": "efectivo",
+    "notTradable": "si no hay vencimiento elegible o una pata no pasa la selección, la semana es efectivo y se cuenta (se informa con su motivo)",
+    "liveProxy": "las cotizaciones de cierre aproximan órdenes en vivo hacia las 15:45 ET de las sesiones de entrada y salida"
+  },
+  "regime": {
+    "rule": "el interruptor de Uncle Carl: maTrend SPY, period 200, sampling daily, bandPct 1, combine any, confirmación 1, arranque en frío riesgo-apagado, histéresis dentro de la banda (src/portfolio-engine/contingency.ts decideRegime)",
+    "evaluation": "la máquina de estados se evalúa en cada sesión con cierres ajustados; el candidato lee el estado al cierre de la sesión de señal",
+    "riskOn": "alcista",
+    "riskOff": "bajista"
+  },
+  "pricing": {
+    "model": "Black–Scholes europeo, r = 0, q = 0, T = días naturales de la sesión de entrada a E / 365",
+    "impliedVol": "la que iguala el precio teórico al mid ((bid + ask) / 2), por bisección en [0.005, 5.0] con tolerancia 1e-6 en precio y como mucho 100 iteraciones; sin solución o mid < intrínseco = contrato no utilizable para la selección",
+    "delta": "delta de Black–Scholes con esa volatilidad; no se usa la columna delta del proveedor"
+  },
+  "chainFilters": {
+    "usableQuote": "ask > 0, bid >= 0, ask >= bid y (ask - bid) <= max(0.25, 0.5 × mid) dólares",
+    "soldLeg": "además bid > 0"
+  },
+  "costs": {
+    "fills": "se vende al bid y se compra al ask, en la entrada y en la salida",
+    "feeUsdPerContractPerSide": 0.05,
+    "feeNote": "aproximación de las tasas regulatorias y de cámara por contrato (ORF, OCC, TAF, SEC); Alpaca no cobra comisión",
+    "missingQuoteAtExit": "si una pata no tiene cotización utilizable en la salida, se valora al intrínseco con el cierre bruto, empeorado en 0.05 dólares por acción (el corto paga intrínseco + 0.05; el largo recibe max(0, intrínseco - 0.05)); se cuenta y se informa",
+    "secondProviderFills": "precio p = cierre de la barra de la sesión; se vende a p × (1 - h) y se compra a p × (1 + h), con h = la mitad de la mediana del diferencial relativo de la auditoría para el mismo subyacente, tipo y tramo de |delta|; sin barra en la entrada, el contrato no es utilizable; sin barra en la salida, la regla del intrínseco",
+    "collateralYield": "0 % (lo que paga la cuenta paper); la variante con letras del Tesoro a 3 meses (FRED DTB3) se informa aparte"
+  },
+  "sizing": {
+    "equity": "la del cierre de la sesión de entrada, que es todo efectivo porque la semana anterior se cerró en su sesión de salida",
+    "contracts": "enteros (floor); con 0 contratos la semana es efectivo",
+    "O1": "n = floor(equity / (100 × strike)): put cubierta con efectivo; exenta del presupuesto semanal (expediente §3)",
+    "O2": "pérdida máxima por contrato L = 100 × ancho − 100 × (bid corta − ask larga) + 100 × (diferencial corta + diferencial larga en la entrada) + 4 × tasa; n = floor(0.02 × equity / L)",
+    "O3": "coste por contrato C = 100 × ask + 2 × tasa; n = floor(0.02 × equity / C)",
+    "fractionalSensitivity": "la misma corrida con n sin redondear se informa aparte"
+  },
+  "candidates": [
+    {
+      "name": "O1-put-writer",
+      "level": 1,
+      "underlying": "SPY",
+      "rule": "cada semana, vende la put de SPY con strike más cercano al cierre bruto de la entrada (empate: el strike más bajo), cubierta con efectivo; ignora el régimen (referencia: WPUT con nuestros costes)"
+    },
+    {
+      "name": "O2-credit-spread",
+      "level": 3,
+      "underlying": "SPY",
+      "rule": "régimen alcista: vende la put de delta más cercana a -0.30 y compra la put de delta más cercana a -0.10 con strike estrictamente menor; régimen bajista: vende la call más cercana a +0.30 y compra la call más cercana a +0.10 con strike estrictamente mayor; empate: el strike más alejado del dinero; cada pata a no más de 0.10 de su delta objetivo, si no la semana es efectivo"
+    },
+    {
+      "name": "O3-convex-buyer",
+      "level": 2,
+      "underlying": "QQQ en régimen alcista, SPY en régimen bajista",
+      "rule": "régimen alcista: compra la call de QQQ de delta más cercana a +0.40; régimen bajista: compra la put de SPY de delta más cercana a -0.40; empate: el strike más alejado del dinero; a no más de 0.10 de la delta objetivo, si no la semana es efectivo"
+    }
+  ],
+  "windows": {
+    "primary": "desde la primera sesión de entrada a partir de la cual la auditoría encuentra un vencimiento elegible en al menos el 95 % de las 52 semanas siguientes para cada subyacente que el candidato opera, hasta la última entrada cuya salida cae dentro del espejo",
+    "informativeEarly": "lo anterior a la ventana primaria se informa, no decide",
+    "overlap": "entradas desde 2024-02-02 hasta la última cuya salida cae dentro del espejo: los dos proveedores",
+    "holdout": "entradas posteriores a la última fecha del espejo hasta la última cuya salida es <= 2026-11-06 (o el último dato de Alpaca): solo el segundo proveedor"
+  },
+  "benchmark": "SPY con dividendos (cierres ajustados) de la sesión de entrada a la siguiente sesión de entrada; los mismos días que el candidato",
+  "acceptance": {
+    "rule": "un candidato pasa solo si cumple los cuatro puntos; si ninguno pasa, no se construye el conector",
+    "1_pairedExcess": "en la ventana primaria, x_w = ln(1 + r_candidato) − ln(1 + r_SPY) por semana; bootstrap por bloques circular, bloques de 4 semanas, 10.000 remuestreos, semilla 20261109; p = (1 + #{media* <= 0}) / (1 + 10.000); corrección de Holm sobre los 3 candidatos con nivel conjunto 0.10 (unilateral); pasa si Holm rechaza. Media de x_w > 0 equivale a un CAGR mayor que el de SPY en esas semanas",
+    "2_drawdown": "caída máxima de la curva diaria (marcada a mid) en la ventana primaria <= 0.30",
+    "3a_overlapConsistency": "en el tramo común, la corrida con el segundo proveedor y la del espejo tienen el mismo signo de la media de x_w; la correlación del P&L semanal entre las dos se informa",
+    "3b_holdout": "en el tramo posterior al espejo, con el segundo proveedor, la media de x_w > 0; su intervalo bootstrap se informa",
+    "4_rules": "ninguna pata pasa de su sesión de salida (como mucho 4 sesiones tras la entrada); en O2 y O3 ninguna semana pierde más del 2 % del capital de la entrada (corrida con contratos enteros); O1 exento del presupuesto semanal"
+  },
+  "informative": [
+    "corrida con contratos fraccionarios",
+    "colateral a letras del Tesoro a 3 meses (FRED DTB3)",
+    "señal del régimen al cierre de la sesión de entrada en vez de la anterior",
+    "caída marcada a precio de liquidación (cortos al ask, largos al bid)",
+    "QQQ con dividendos como referencia de O3",
+    "correlación semanal de O1 con el índice Cboe WPUT (control del núcleo)",
+    "costes ×2 (diferencial y tasa)",
+    "exceso en la primera y la segunda mitad de la ventana primaria",
+    "PSR del exceso y MinTRL frente a SPY",
+    "semanas con una call corta en el dinero sobre una fecha ex-dividendo de SPY (exposición a asignación anticipada, no modelada)",
+    "semanas en efectivo por motivo; órdenes por semana; cotizaciones ausentes en la salida",
+    "lo anterior a la ventana primaria"
+  ],
+  "ledger": {
+    "batchId": "options-vega-r-2026-11-09",
+    "priorUniqueTrials": 480,
+    "hypothesisCount": 3,
+    "resultingUniqueTrials": 483
+  }
+}

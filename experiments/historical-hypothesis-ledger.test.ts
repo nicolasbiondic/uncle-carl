@@ -3395,10 +3395,11 @@ describe("historical hypothesis ledger", () => {
     const start = ledger.batches.findIndex((b: any) => b.id === ids[0]);
     expect(ledger.batches.slice(start, start + 4).map((b: any) => b.id)).toEqual(ids);
     for (const id of ids) expect(ledger.batches.filter((b: any) => b.id === id)).toHaveLength(1);
-    // RW11 (§22.1, 2026-11-08) follows: three leverage trials 477→480.
+    // RW11 (§22.1, 2026-11-08) follows: three leverage trials 477→480; then Q9's options
+    // personality, pre-registered before any download or run: 480→483.
     expect(ledger.batches.slice(start + 4).map((b: any) => [b.id, b.priorUniqueTrials, b.hypothesisCount, b.resultingUniqueTrials]))
-      .toEqual([["rw11-e1-leverage-2026-11-08", 477, 3, 480]]);
-    expect(ledger.batches.at(-1).resultingUniqueTrials).toBe(480);
+      .toEqual([["rw11-e1-leverage-2026-11-08", 477, 3, 480], ["options-vega-r-2026-11-09", 480, 3, 483]]);
+    expect(ledger.batches.at(-1).resultingUniqueTrials).toBe(483);
     expect(ledger.scope.complete).toBe(false);
     expect(ledger.rw10Controls.trialsAdded).toBe(0);
     expect(rw10Paths).toEqual({ "0bb06b9d": rw8Stocks.candidates[0].path, "2325210c": ledger.rw8Controls.paths["2325210c"],
@@ -3534,4 +3535,104 @@ describe("historical hypothesis ledger", () => {
     expect(c.outerTests).toHaveLength(3);
     expect(folds(c)).toEqual(folds(a));
   }, 120_000);
+
+  test("Q9 options personality (Vega) is pre-registered 480→483 before any download or run, with the quorum's frozen gate", () => {
+    const batch = ledger.batches.find((b: any) => b.id === "options-vega-r-2026-11-09");
+    const m = JSON.parse(readFileSync(join(root, "experiments", "options-vega-r-v1.json"), "utf8"));
+    expect(batch).toMatchObject({ priorUniqueTrials: 480, hypothesisCount: 3, resultingUniqueTrials: 483, inventoryComplete: false });
+    for (const p of batch.sourcePaths) expect(sourcePathPresent(p)).toBe(true);
+    expect(batch.sourcePaths).toContain("experiments/options-vega-r-v1.json");
+    expect(m.trialAccounting).toEqual({ priorUniqueTrials: 480, complete: false });
+    expect(m.ledger).toEqual({ batchId: batch.id, priorUniqueTrials: 480, hypothesisCount: 3, resultingUniqueTrials: 483 });
+    expect(m.candidates.map((c: any) => c.name)).toEqual(["O1-put-writer", "O2-credit-spread", "O3-convex-buyer"]);
+    expect(m.personality).toMatchObject({ name: "Vega", capitalUsd: 100_000, weeklyLossBudgetFraction: 0.02, maxDrawdownBudgetFraction: 0.3, maxHoldSessions: 5 });
+    // Data identity is pinned by hash (the mirror's own CANONICAL_HASHES), never by a mutable URL.
+    expect(Object.keys(m.data.primary.sha256).sort()).toEqual(["QQQ_options.parquet", "QQQ_underlying.parquet", "SPY_options.parquet", "SPY_underlying.parquet"]);
+    for (const h of Object.values(m.data.primary.sha256)) expect(h).toMatch(/^[0-9a-f]{64}$/);
+    expect(Object.keys(m.acceptance).sort()).toEqual(["1_pairedExcess", "2_drawdown", "3a_overlapConsistency", "3b_holdout", "4_rules", "rule"]);
+    expect(m.acceptance["1_pairedExcess"]).toContain("Holm");
+    expect(m.acceptance["1_pairedExcess"]).toContain("20261109");
+    // Until the results are reported, the batch says so.
+    if (!batch.executionReported) expect(batch.evidence).toContain("sin correr");
+  });
+
+  test("Q9 phase R ran: none of O1–O3 passes the frozen gate, the ledger pins the figures and the two runs are declared", () => {
+    const batch = ledger.batches.find((b: any) => b.id === "options-vega-r-2026-11-09");
+    const art = ledger.authoritativeArtifactOptionsVegaR;
+    expect(batch).toMatchObject({ executionReported: true, resultsComplete: false, inventoryComplete: false, priorUniqueTrials: 480, resultingUniqueTrials: 483 });
+    expect(batch.evidence).toContain("NINGUNO PASA");
+    expect(batch.evidence).toContain("69a144b8");
+    expect(batch.evidence).toContain("a4967757");
+    expect(batch.evidence).toContain("23f5bc9c");
+    expect(batch.evidence).toContain("nunca dejar de operar");
+    for (const p of batch.sourcePaths) expect(sourcePathPresent(p)).toBe(true);
+    expect(art.path).toBe("data/backtests/69a144b88a8580af9fe04ccdc1af297f3726febc1ad37e63a7af5bcbbab7e4a8/");
+    // Three runs, all kept; only the last is authoritative, each superseded one names its reason and fix commit.
+    expect(art.runs.map((r: any) => [r.run, r.path.slice(15, 23), r.authoritative, r.fixCommit])).toEqual([[1, "23f5bc9c", false, "da7456d"], [2, "a4967757", false, "6085cb3"], [3, "69a144b8", true, null]]);
+    expect(art.runs.filter((r: any) => r.authoritative).map((r: any) => r.path)).toEqual([art.path]);
+    for (const r of art.runs) expect(r.authoritative ? r.supersededBecause === null : r.supersededBecause.length > 20).toBe(true);
+    expect(art.runs[1].supersededBecause).toContain("director");
+    expect(art.verdict).toContain("NINGUNO PASA");
+    expect(art.verdict).toContain("NO se construye el conector");
+    expect(art.holm).toEqual({ alpha: 0.1, ps: [0.9999000099990001, 0.9999000099990001, 0.9962003799620038], rejected: [false, false, false] });
+    expect(art.candidates.map((c: any) => [c.trial, c.name, c.verdict])).toEqual([[480, "O1-put-writer", "NO PASA"], [481, "O2-credit-spread", "NO PASA"], [482, "O3-convex-buyer", "NO PASA"]]);
+    for (const c of art.candidates) {
+      // Every candidate fails criterion 1 (excess vs SPY) and 3b (holdout); 3a holds for all (same sign, correlation > 0.98).
+      expect(c.criteria["1_pairedExcess"]).toBe(false);
+      expect(c.criteria["3b_holdout"]).toBe(false);
+      expect(c.criteria["3a_overlapConsistency"]).toBe(true);
+      expect(c.criteriaFailed).toEqual(Object.entries(c.criteria).filter(([, v]) => v !== true).map(([k]) => k));
+      expect(c.figures.meanExcessBpWeek).toBeLessThan(0);
+      expect(c.figures.cagrPct).toBeLessThan(c.figures.spyCagrPct);
+      expect(c.overlap.correlation).toBeGreaterThan(0.98);
+      expect(Math.sign(c.overlap.mirrorMeanBp)).toBe(Math.sign(c.overlap.alpacaMeanBp));
+    }
+    expect(art.candidates[1].figures.worstWeekPct).toBeLessThan(-2); // O2's single budget breach (2020-02-21)
+    expect(art.candidates[2].figures.maxDrawdownMidPct).toBeGreaterThan(30); // O3 over the 30 % budget
+    expect(art.candidates[0].informative.wputCorrelation).toBeGreaterThan(0.8); // O1 tracks Cboe WPUT: the core is right
+  });
+
+  testWithDb("Q9 phase R artifacts exist on disk and reproduce the ledger's figures", () => {
+    const art = ledger.authoritativeArtifactOptionsVegaR;
+    const r4 = (x: number) => Math.round(x * 1e4) / 1e4;
+    for (const path of art.runs.map((r: any) => r.path)) {
+      const dir = join(root, path);
+      if (!existsSync(join(dir, "summary.json"))) { console.warn(`Q9 artifact ${path} not on this machine, skipped`); continue; }
+      const s = JSON.parse(readFileSync(join(dir, "summary.json"), "utf8"));
+      const resolved = JSON.parse(readFileSync(join(dir, "manifest-resolved.json"), "utf8"));
+      const m = JSON.parse(readFileSync(join(root, art.manifest), "utf8"));
+      for (const key of ["name", "trialAccounting", "candidates", "data", "calendar", "pricing", "chainFilters", "costs", "sizing", "windows", "acceptance", "ledger"]) expect(resolved[key]).toEqual(m[key]);
+      for (const [f, h] of Object.entries(m.data.primary.sha256)) expect(s.dataHashes[f]).toBe(h);
+      expect(s.anyPass).toBe(false);
+      expect(s.holm.rejected).toEqual([false, false, false]);
+      if (path === art.path) expect(s.holm).toEqual(art.holm);
+      art.candidates.forEach((c: any) => {
+        const e = s.candidates[c.name], p = e.primary;
+        expect(e.pass).toBe(false);
+        expect(e.criteria).toEqual(c.criteria);
+        // Every run shares the window bounds, CAGRs, drawdowns and traded count; the superseded runs dropped the
+        // two cash weeks (811 vs 813) so their x-based figures differ slightly and are pinned only for the authoritative run.
+        expect([e.window.primaryStart, e.window.primaryEnd, p.traded]).toEqual([c.window.primaryStart, c.window.primaryEnd, c.window.traded]);
+        expect([r4(p.cagr * 100), r4(p.spyCagr * 100), r4(p.maxDrawdownMid * 100), r4(p.maxDrawdownLiquidation * 100), r4(p.worstWeekPct * 100)])
+          .toEqual([c.figures.cagrPct, c.figures.spyCagrPct, c.figures.maxDrawdownMidPct, c.figures.maxDrawdownLiquidationPct, c.figures.worstWeekPct]);
+        if (path === art.path) {
+          expect([p.weeks, r4(e.bootstrap.mean * 1e4), e.bootstrap.p, e.bootstrap.ci90.map((x: number) => r4(x * 1e4))]).toEqual([c.window.weeks, c.figures.meanExcessBpWeek, c.figures.p, c.figures.ci90BpWeek]);
+          // no week inside the window is missing: entries are consecutive research weeks (the run-2 bug dropped two)
+          const rows = readFileSync(join(dir, `weekly-${c.name}-primary.jsonl`), "utf8").trim().split("\n").map(l => JSON.parse(l));
+          for (let i = 1; i < rows.length; i++) expect(rows[i].entry).toBe(rows[i - 1].nextEntry);
+          expect(rows.filter((r: any) => r.reason === "no eligible expiration").length).toBe(c.window.cashNoEligibleExpiration);
+        }
+        expect(p.anyLegIntoExpiration).toBe(false);
+        expect(p.maxHoldSessions).toBeLessThanOrEqual(4);
+        // the mirror side is identical in both runs; only the Alpaca side differs (the h-table fix)
+        expect([e.overlapMirror.weeks, r4(e.overlapMirror.meanX * 1e4)]).toEqual([c.overlap.weeks, c.overlap.mirrorMeanBp]);
+        if (path !== art.runs[0].path) {
+          expect([r4(e.overlapAlpaca.meanX * 1e4), r4(e.overlapCorrelation), r4(e.holdout.meanX * 1e4)]).toEqual([c.overlap.alpacaMeanBp, c.overlap.correlation, c.holdout.meanBp]);
+          expect(e.holdoutBootstrap.ci90.map((x: number) => r4(x * 1e4))).toEqual(c.holdout.ci90Bp);
+        }
+      });
+      expect(existsSync(join(dir, "audit.json"))).toBe(true);
+      expect(JSON.parse(readFileSync(join(dir, "audit.json"), "utf8")).gate.pass).toBe(true);
+    }
+  }, 60_000);
 });

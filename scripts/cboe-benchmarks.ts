@@ -12,6 +12,9 @@
  * "WPUT kx" sells k times the puts against the same collateral: k·(r − rf) + rf per day, with a
  * declared approximation of the 3-month T-bill by calendar year (RF below). Like
  * scripts/leverage-frontier.ts it ignores margin calls and assumes the levered seller survives.
+ * The leverage is rebalanced DAILY, so its worst 5-session windows are an optimistic bound for a
+ * weekly put-writer that does not rebalance. "worst 5 sessions" is a rolling 5-session window,
+ * not a calendar week.
  *
  * Usage: bun run scripts/cboe-benchmarks.ts
  */
