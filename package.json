@@ -8,7 +8,7 @@
     "start": "bun run src/index.ts",
     "dev": "bun --watch src/index.ts",
     "setup": "bun run scripts/setup.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p labs/memecoin/tsconfig.json",
     "release": "bun run scripts/release.ts",
     "baseline": "bun run scripts/baseline-report.ts",
     "verify": "bun run scripts/verify-smoke.ts",
