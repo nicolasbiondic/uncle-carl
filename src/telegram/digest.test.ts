@@ -109,13 +109,13 @@ describe("composeDailyDigest — header: Uncle Carl · date · cierre ET", () =>
   test("title line", () => {
     const msg = reporter.composeDailyDigest();
     expect(msg).toContain("📊 <b>Uncle Carl</b> ·");
-    expect(msg).toContain("· cierre ET");
+    expect(msg.split("\n")[0]).toMatch(/· [a-záéíóú]+ \d+ [a-z]+$/);
   });
 
   test("realized Hoy is zero when no real trade closed today", () => {
     const msg = reporter.composeDailyDigest();
-    expect(msg).toContain("Sin cierres hoy");
-    expect(msg).toContain("P&L hoy +$0.00 (0.00%)");
+    expect(msg).toContain("Cerradas hoy: 0 operaciones, +$0 en total (desde que se abrieron)");
+    expect(msg).toContain("Hoy +$0 (+0,0 %)");
   });
 
   test("/status and the digest use the same today equity delta", async () => {
@@ -124,35 +124,38 @@ describe("composeDailyDigest — header: Uncle Carl · date · cierre ET", () =>
     await (reporter as any).cmdStatus("test");
     const status = sent[0] as string;
     const digest = reporter.composeDailyDigest();
-    expect(status.match(/P&L hoy ([+−]\$[\d,]+\.\d{2})/)?.[1]).toBeDefined();
-    expect(status.match(/P&L hoy ([+−]\$[\d,]+\.\d{2})/)?.[1]).toBe(digest.match(/P&L hoy ([+−]\$[\d,]+\.\d{2})/)?.[1]);
-    expect(status).toContain("realizado por fills hoy +$0.00");
+    expect(status.match(/Hoy ([+−]\$[\d,]+)/)?.[1]).toBeDefined();
+    expect(status.match(/Hoy ([+−]\$[\d,]+)/)?.[1]).toBe(digest.match(/Hoy ([+−]\$[\d,]+)/)?.[1]);
+    expect(status).toContain("Cerradas hoy: 0 operaciones, +$0 en total");
     expect(status).not.toContain("no realizado");
   });
 
   test("7D and Inicio are both non-null and DIFFERENT — Inicio is periodDays=0, never the 7D figure or a sleeve sum", () => {
     const msg = reporter.composeDailyDigest();
     // 7D: (102168−101850)+(10445−10200)=563 over start 112050 → +0.50%
-    expect(msg).toContain("P&L 7D +$563.00 (+0.50%)");
+    expect(msg).toContain("últimos 7 días +$563 (+0,5 %)");
     // Inicio: (102168−101800)+(10445−10100)=713 over start 111900 → +0.64%
-    expect(msg).toContain("P&L desde el inicio +$713.00 (+0.64%)");
-    expect(msg).not.toContain("P&L desde el inicio +$563.00");
+    expect(msg).toContain("· +$713 desde el");
+    expect(msg).not.toContain("· +$563 desde el");
   });
 });
 
 describe("composeDailyDigest — trade/position counts (active summaries only)", () => {
   test("no trades closed today, 9 real closes in 7D (reconcile + inactive-sleeve rows excluded), 6 open positions", () => {
     const msg = reporter.composeDailyDigest();
-    expect(msg).toContain("0 trades hoy · 9 en 7D · 6 posiciones abiertas");
+    expect(msg).toContain("Cerradas hoy: 0 operaciones");
+    expect(msg).toContain("Siguen abiertas: 6 posiciones");
+    expect(msg).toContain("5 ganadas, 1 perdida");
   });
 
   test("singular Spanish/English forms render correctly", () => {
     const solo = new TelegramReporter();
     const soloTime = Date.now(); // today, not just "in the 7D window"
-    insertClosedTrade({ id: "solo_trade", accountId: "solo_acct", pnl: 5, exitTime: soloTime });
-    solo.getAccountSummaries = () => [{ id: "solo_acct", equity: 1_000, positions: 1, paused: false }];
+    insertClosedTrade({ id: "solo_trade", accountId: "momentum_crypto_usdc", pnl: 5, exitTime: soloTime });
+    solo.getAccountSummaries = () => [{ id: "momentum_crypto_usdc", equity: 1_000, positions: 1, paused: false }];
     const msg = solo.composeDailyDigest();
-    expect(msg).toContain("1 trade hoy · 1 en 7D · 1 posición abierta");
+    expect(msg).toContain("Cerradas hoy: 1 operación, +$5 en total");
+    expect(msg).toContain("Siguen abiertas: 1 posición");
   });
 });
 
@@ -160,11 +163,12 @@ describe("Rendimiento 7D — active sleeves, ≥1 weekly close, best→worst, no
   test("sorted by 7D marked equity, with realization and W/L reported separately", () => {
     const msg = reporter.composeDailyDigest();
     const lines = msg.split("\n");
-    const idx = lines.indexOf("<b>Rendimiento 7D a mercado</b>");
+    const idx = lines.indexOf("<b>Ganancia de los últimos 7 días</b>");
     expect(idx).toBeGreaterThan(-1);
-    expect(lines[idx + 1]).toBe("Momentum Stocks MtM +$50.00 · realizado por fills −$32.86 · 1W/1L");
-    expect(lines[idx + 2]).toBe("Momentum Cripto MtM +$10.00 · realizado por fills −$3.91 · 0W/1L");
-    expect(lines[idx + 3]).toBe("Reversión Stocks MtM −$100.00 · realizado por fills +$296.03 · 5W/1L");
+    expect(lines[idx + 1]).toBe("Momentum Acciones +$50 · 1 ganada, 1 perdida");
+    expect(lines[idx + 2]).toBe("Momentum Cripto +$10 · 0 ganadas, 1 perdida");
+    expect(lines[idx + 3]).toBe("Reversión Acciones −$100 · 5 ganadas, 1 perdida");
+    expect(msg).not.toMatch(/MtM|fills|\dW\//);
   });
 
   test("the reconcile close never inflates meanrev_stocks' 7D pnl or W count", () => {
@@ -190,8 +194,8 @@ describe("realized vs. mark-to-market — the numbers cannot be misread", () => 
     saveEquitySnapshot("binance_main", 10_945, 5_100, 1, now);
     try {
       const msg = reporter.composeDailyDigest();
-      expect(msg).toContain("Sin cierres hoy");
-      expect(msg).toContain("P&L hoy +$1000.00");
+      expect(msg).toContain("Cerradas hoy: 0 operaciones");
+      expect(msg).toContain("Hoy +$1,000");
       expect(msg).not.toContain("Cobrado hoy +$1000.00");
     } finally {
       getDB().prepare("DELETE FROM equity_snapshots WHERE snapshot_time >= ?").run(now - 1);
@@ -207,9 +211,9 @@ describe("realized vs. mark-to-market — the numbers cannot be misread", () => 
     });
     try {
       const msg = reporter.composeDailyDigest();
-      expect(msg).toContain("Realizado por fills (neto, desde entrada) +$43 en 1 cierre");
-      expect(msg).toContain("Cierres +$43 · posiciones ");
-      expect(msg).toContain(" en el día");
+      expect(msg).toContain("Cerradas hoy: 1 operación, +$43 en total (desde que se abrieron)");
+      expect(msg).not.toContain("Cierres +$43 · posiciones ");
+      expect(msg).not.toContain("fills");
       expect(msg).not.toContain("$10,041.50");
       expect(msg).not.toContain("$10,042");
     } finally {
@@ -231,7 +235,12 @@ describe("Binance decomposition — FAPI + DAPI reconcile exactly, no double cou
     const summaries = reporter.getAccountSummaries!;
     reporter.getAccountSummaries = () => [...summaries().filter(a => a.id !== "momentum_crypto"),
       { id: "momentum_crypto", equity: 4731 }, { id: "momentum_crypto_usdc", equity: 5000 }];
-    try { expect(reporter.composeDailyDigest()).toContain("Binance $10,445 · USDT $4,731 · USDC $5,000 · BTC $714"); }
+    try {
+      const msg = reporter.composeDailyDigest();
+      expect(msg).toContain("Alpaca $102,168 · Binance $10,445");
+      expect(msg).toContain("Fuera de las estrategias: $782 (efectivo inicial de Alpaca y garantía en BTC)");
+      expect(msg).not.toContain("USDT $");
+    }
     finally { reporter.getAccountSummaries = summaries; }
     // 4,731 + 5,000 + 714 = 10,445 — reconciles exactly (whole-dollar fixture).
   });
@@ -239,7 +248,7 @@ describe("Binance decomposition — FAPI + DAPI reconcile exactly, no double cou
   test("Alpaca and Patrimonio lines", () => {
     const msg = reporter.composeDailyDigest();
     expect(msg).toContain("Alpaca $102,168");
-    expect(msg).toContain("Patrimonio $112,613 · P&L desde el inicio +$713.00 (+0.64%)");
+    expect(msg).toContain("Patrimonio $112,613 · +$713 desde el");
   });
 
   test("stale FAPI asset rows omit the USDT/USDC/BTC parts but keep the Binance total", () => {
@@ -264,8 +273,8 @@ describe("composeDailyDigest — incomplete broker truth fails closed, never par
     db.prepare(`UPDATE equity_snapshots SET profile_id = 'binance_main_HIDDEN_FOR_TEST' WHERE profile_id = 'binance_main'`).run();
     try {
       const msg = reporter.composeDailyDigest();
-      expect(msg).toContain("P&L hoy — · P&L 7D —");
-      expect(msg).toContain("Patrimonio — · P&L desde el inicio —");
+      expect(msg).toContain("Hoy — · últimos 7 días —");
+      expect(msg).toContain("Patrimonio — · desde el inicio —");
       expect(msg).not.toContain("Binance $");
       expect(msg).toContain("Alpaca $102,168"); // the healthy leg still renders on its own line
     } finally {
@@ -289,8 +298,8 @@ describe("Inicio null-pct — a configured rebase keeps the dollar delta, omits 
     ).run("binance_main", 9_500, 9_500, 0, earliest.snapshot_time - 5 * 60_000, 4);
 
     const msg = reporter.composeDailyDigest();
-    expect(msg).toMatch(/P&L desde el inicio [+\u2212]\$[\d,]+\.\d{2}/); // dollar delta remains available
-    expect(msg).not.toMatch(/P&L desde el inicio [+\u2212]\$[\d,]+\.\d{2} \(/); // synthetic-basis percent stays hidden
+    expect(msg).toMatch(/Patrimonio \$[\d,]+ · [+\u2212]\$[\d,]+ desde el/); // dollar delta remains available
+    expect(msg).not.toMatch(/Patrimonio \$[\d,]+ · [+\u2212]\$[\d,]+ \(/); // synthetic-basis percent stays hidden
   });
 });
 
@@ -331,16 +340,8 @@ describe("realized today vs P&L today — a gain earned before today (2026-09-28
       const msg = reporter.composeDailyDigest();
       // closes = 4767.74 − (736.6 − 607.516501)·40 = −$395.60 inside today; positions = P&L hoy − closes when the
       // headline exists (an earlier case of this file leaves a COIN-M leg unreadable, so it may read "—" here).
-      const pnlMatch = msg.match(/P&L hoy ([+−]\$[\d,]+\.\d{2})/);
-      if (pnlMatch) {
-        const pnlHoy = Number(pnlMatch[1].replace("−", "-").replace(/[$,]/g, ""));
-        const positions = Math.round(pnlHoy) + 396;
-        const fmt = (v: number) => `${v > 0 ? "+" : v < 0 ? "−" : ""}$${Math.abs(v).toLocaleString("en-US")}`;
-        expect(msg).toContain(`Cierres −$396 · posiciones ${fmt(positions)} en el día`);
-      } else {
-        expect(msg).toContain("Cierres −$396 en el día");
-      }
-      expect(msg).toContain("Realizado por fills (neto, desde entrada) +$4,768 en 1 cierre");
+      expect(msg).not.toContain("Cierres −$396"); // in-period attribution is modal-only
+      expect(msg).toContain("Cerradas hoy: 1 operación, +$4,768 en total (desde que se abrieron)");
       expect(msg).not.toContain("ya estaba ganado");
       expect(msg).not.toContain("no realizado");
     } finally {

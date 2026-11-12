@@ -102,7 +102,7 @@ export function riskDetailHtml(a, exposure, unrealized, risk) {
   if (risk) {
     parts.push(`<span>${t("Realized", "Realizado")} <b style="color:${risk.realizedPnl == null ? "var(--muted)" : pnlColor(risk.realizedPnl)}">${risk.realizedPnl == null ? "—" : pnlWhole(risk.realizedPnl)}</b></span>`);
   }
-  if (Number.isFinite(unrealized)) parts.push(`<span>${t("Unrealized", "No realizado")} <b style="color:${pnlColor(unrealized)}">${pnlWhole(unrealized)}</b></span>`);
+  if (Number.isFinite(unrealized)) parts.push(`<span>${t("Open, since entry", "Sin cerrar (desde la entrada)")} <b style="color:${pnlColor(unrealized)}">${pnlWhole(unrealized)}</b></span>`);
   if (risk) {
     const dd = risk.drawdown?.currentPct;
     parts.push(`<span title="${esc(t("Distance below the sleeve's highest equity. A measure, not a limit.", "Distancia bajo el máximo de patrimonio del sleeve. Una medida, no un límite."))}">${t("Below peak", "Bajo máximo")} <b>${Number.isFinite(dd) ? pct(dd * 100, 1) : "—"}</b></span>`);

@@ -1,4 +1,5 @@
 import { t } from "./store.js";
+import { signedWholeMoney } from "./money-values.js";
 // ── fmt.js — the ONE source of formatting. v3's bugs came from many divergent
 // copies of "today" / money / pct / date helpers. Everything formats here.
 
@@ -22,15 +23,16 @@ export function money(v, d = 2) {
 
 /** -3.6 -> "−$3.60" (unicode minus, always signed). Use for P&L. */
 export function moneySigned(v, d = 2) {
+  if (d === 0) return signedWholeMoney(n(v));
   const x = n(v);
   return (x < 0 ? "−" : "+") + "$" + num(Math.abs(x), d);
 }
 
-/** Table money: whole dollars from $10 (owner: no decimals in tables); under
- *  $10 up to 3 significant digits, so a $0.0123 coin never reads $0. */
+/** Whole-dollar tables. A positive sub-dollar price reads '<$1', never a
+ * fabricated zero or a string of decimal places. Escape when used in HTML. */
 export function moneyCompact(v) {
   const x = Math.abs(n(v));
-  return "$" + (x >= 10 ? num(x, 0) : x.toLocaleString("en-US", { maximumSignificantDigits: 3 }));
+  return x > 0 && x < 1 ? "<$1" : "$" + num(x, 0);
 }
 
 export function moneySignedCompact(v) {
@@ -39,8 +41,7 @@ export function moneySignedCompact(v) {
 
 /** P&L in a table: whole dollars always (owner, 2026-10-25: "no necesito decimales"). */
 export function pnlWhole(v) {
-  const x = Math.round(n(v));
-  return (x < 0 ? "−" : "+") + "$" + num(Math.abs(x), 0);
+  return signedWholeMoney(n(v));
 }
 
 /** Table units: whole from 1 (the exact quantity rides in the cell's title);

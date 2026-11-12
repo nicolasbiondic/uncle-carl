@@ -319,10 +319,10 @@ describe("Telegram alerts — specific & actionable (not generic)", () => {
       entryTime: 1000, exitTime: 1000 + 38 * 60_000, closeReason: "STOP_LOSS" };
     const msg = fmtCloseAlert(t, 120.5);
     expect(msg).toContain("BTC/USD");
-    expect(msg).toContain("+$42.18");
-    expect(msg).toContain("stop-loss");      // clear word, not "SL"
-    expect(msg).toContain("abierta 38m");    // hold time
-    expect(msg).toContain("cobrado hoy +$120.50"); // the sleeve's realized today — NOT the day's P&L
+    expect(msg).toContain("+$42");
+    expect(msg).toContain("cierre por límite de pérdida");
+    expect(msg).toContain("duró 38m");
+    expect(msg).not.toContain("cobrado hoy");
     expect(msg).not.toContain("día +$");
   });
 
@@ -330,7 +330,7 @@ describe("Telegram alerts — specific & actionable (not generic)", () => {
     const msg = fmtCloseAlert({ symbol: "META", pnl: 4767.74, pnlPct: 19.6, accountId: "momentum_stocks",
       entryTime: Date.UTC(2026, 8, 4, 13, 48), exitTime: Date.UTC(2026, 8, 28, 13, 35), closeReason: "MODEL_CUTOVER" }, 5482.9);
     expect(msg).toContain("cambio de modelo");
-    expect(msg).toContain("abierta 23d");
+    expect(msg).toContain("duró 23 días");
     expect(msg).not.toContain("model_cutover");
   });
 
@@ -348,12 +348,12 @@ describe("Telegram alerts — specific & actionable (not generic)", () => {
 
   test("fmtPnlPair: the percent sign always follows the dollar (centralized guard)", () => {
     // The realized dollar is truth; the percent must never contradict it.
-    expect(fmtPnlPair(-34.4, 1.1)).toBe("−$34.40 (-1.1%)");   // loss: pct forced negative
-    expect(fmtPnlPair(12.5, -0.8)).toBe("+$12.50 (+0.8%)");   // win: pct forced positive
-    expect(fmtPnlPair(-10, -2)).toBe("−$10.00 (-2.0%)");      // already-consistent loss unchanged
-    expect(fmtPnlPair(5, 1.07)).toBe("+$5.00 (+1.1%)");       // already-consistent win unchanged
-    expect(fmtPnlPair(0, 0)).toBe("+$0.00 (0.0%)");           // flat
-    expect(fmtPnlPair(-7, NaN)).toBe("−$7.00 (0.0%)");        // NaN pct → 0, no crash
+    expect(fmtPnlPair(-34.4, 1.1)).toBe("−$34 (−1,1 % de lo invertido)");
+    expect(fmtPnlPair(12.5, -0.8)).toBe("+$13 (+0,8 % de lo invertido)");
+    expect(fmtPnlPair(-10, -2)).toBe("−$10 (−2,0 % de lo invertido)");
+    expect(fmtPnlPair(5, 1.07)).toBe("+$5 (+1,1 % de lo invertido)");
+    expect(fmtPnlPair(0, 0)).toBe("+$0 (+0,0 % de lo invertido)");
+    expect(fmtPnlPair(-7, NaN)).toBe("−$7 (+0,0 % de lo invertido)");
   });
 
   test("close alert: pnl and pct can never disagree in sign (the −$34.40 (+1.1%) bug)", () => {
@@ -363,16 +363,16 @@ describe("Telegram alerts — specific & actionable (not generic)", () => {
     const loss = fmtCloseAlert(
       { symbol: "ETH/USD", pnl: -34.4, pnlPct: 1.1, accountId: "binance_high",
         entryTime: 1000, exitTime: 1000 + 160 * 60_000, closeReason: "STOP_LOSS" }, 5.34);
-    expect(loss).toContain("−$34.40");         // signMoney uses U+2212 minus
-    expect(loss).toContain("-1.1%");           // aligned to the dollar sign
-    expect(loss).not.toContain("+1.1%");       // the contradictory line must never ship
+    expect(loss).toContain("−$34");
+    expect(loss).toContain("−1,1 %");
+    expect(loss).not.toContain("+1,1 %");
     expect(loss).toContain("📉");              // loss emoji
     // Mirror case: a win paired with a negative pct gets aligned positive.
     const win = fmtCloseAlert(
       { symbol: "SOL/USD", pnl: 12.5, pnlPct: -0.8, accountId: "binance_low" }, 0);
-    expect(win).toContain("+$12.50");
-    expect(win).toContain("+0.8%");
-    expect(win).not.toContain("-0.8%");
+    expect(win).toContain("+$13");
+    expect(win).toContain("+0,8 %");
+    expect(win).not.toContain("−0,8 %");
   });
 
 });

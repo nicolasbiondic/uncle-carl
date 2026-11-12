@@ -28,15 +28,15 @@ import { config } from "../config";
 import { createLogger } from "../utils/logger";
 import { eventBus, EVENTS } from "../utils/events";
 import { getTradingStats, getRecentTrades, getDB, RECONCILE_CLOSE_SQL, getETWindowStart, getETDayBounds, getETDateKey,
-  getEquityPnlDisplay, getEquityWindowDisplay, getRecognizedRealizedPnl, insertActivity, getSyncState, setSyncState } from "../db/database";
+  getEquityPnlDisplay, getEquityWindowDisplay, getRecognizedRealizedPnl, closedEpisodePct, insertActivity, getSyncState, setSyncState } from "../db/database";
 import { ALL_PROFILE_IDS } from "../config/riskProfiles";
 import {
-  computeScorecard, openHistoricalReadonly, formatScorecardDigestLines,
+  computeScorecard, openHistoricalReadonly,
   bandEpisodeTransitions,
   type Scorecard, type BandStatus, type BandEpisodeState,
 } from "../portfolio/scorecard";
 import {
-  getPortfolioEquityNow, getSleevePct,
+  getPortfolioEquityNow,
   combineEquityPnlLegs, isMainSeriesApplicable, portfolioMainLegs, readDisplayMoneyWindow,
 } from "../portfolio/truth";
 import { getMarketStatus } from "../utils/marketHours";
@@ -45,8 +45,12 @@ import { TelegramOutbox, type SendOutcome } from "./outbox";
 import type { PortfolioState } from "../utils/types";
 import type { Database } from "bun:sqlite";
 import { type BreakdownPosition, type PnlBreakdown } from "../portfolio/pnlBreakdown";
-import { readMoneyWindow, readSleeveMoney, readBinanceMarginBreakdown, MONEY_LABELS, moneyReportDate } from "../portfolio/money";
+import { readMoneyWindow, readSleeveMoney, readOpenMoney, readBinanceMarginBreakdown, moneyReportDate } from "../portfolio/money";
 import { computeKpiSnapshot } from "../portfolio/kpis";
+// @ts-ignore shared bilingual presentation vocabulary.
+import { closeReasonWord } from "../dashboard/public/v4/js/close-reasons.js";
+// @ts-ignore shared whole-dollar formatter (the dashboard uses it verbatim).
+import { signedWholeMoney as signMoney } from "../dashboard/public/v4/js/money-values.js";
 
 const log = createLogger("Telegram");
 const API = "https://api.telegram.org/bot";
@@ -75,11 +79,11 @@ const SHORT: Record<string, string> = {
 
 // Single-event alerts (open/close/pause/resume) and the daily digest speak to
 // the END CLIENT — full Spanish names, no trader codes. Dense operator
-// commands (/status, /trades, /profits) keep the short tags.
+// commands use the same names and money vocabulary.
 const FULL_NAME: Record<string, string> = {
-  momentum_stocks: "Momentum Stocks",
+  momentum_stocks: "Momentum Acciones",
   momentum_crypto: "Momentum Cripto",
-  meanrev_stocks: "Reversión Stocks",
+  meanrev_stocks: "Reversión Acciones",
   momentum_crypto_usdc: "Momentum Cripto USDC",
   momentum_btc: "Momentum BTC",
 };
@@ -459,9 +463,9 @@ export class TelegramReporter {
   private async cmdHelp(chatId: string) {
     await this.send(
       `<b>Comandos</b>\n` +
-        `/status — equity actual de cada cuenta\n` +
-        `/trades — últimos 10 trades\n` +
-        `/profits — PnL detallado all-time\n` +
+        `/status — patrimonio y posiciones actuales\n` +
+        `/trades — últimas 10 operaciones\n` +
+        `/profits — resultados por estrategia desde el inicio\n` +
         `/report — reporte diario ahora\n` +
         `/quiet on|off — silencia OPEN/CLOSE (PAUSE/ERROR siguen)\n\n` +
         `<i>Reporte automático: ~00:01 ET, con el día completo</i>`,
@@ -490,33 +494,23 @@ export class TelegramReporter {
   private async cmdStatus(chatId: string) {
     const accounts = this.getAccountSummaries?.() || [];
     const market = getMarketStatus();
-    const mEmoji = market.status === "open" ? "🟢" : market.status === "pre_market" ? "🟡" : "🔴";
-
-    const lines: string[] = [];
-    lines.push(`📊 <b>STATUS</b> · stocks ${mEmoji} · ${market.untilStr}`);
-
-    let totalPos = 0;
     const daily = this.dailyPnlBreakdown();
-    for (const a of accounts) {
-      const money = readSleeveMoney(a.id);
-      const pct = a.totalPnlPct ?? getSleevePct(a.id) ?? 0; // ledger-based, same as digest + dashboard cards
-      const pause = a.paused ? " ⏸" : "";
-      lines.push(
-        `${shortTag(a.id)} $${fmtMoney(a.equity)} ${signPct(pct)} vs asignación` +
-          ` · realizado por fills hoy ${signMoney(money.realizedToday.realized)} · ${money.realizedToday.closesCount} cierres · ${a.positions}pos${pause}`
-      );
-      totalPos += a.positions;
-    }
-
-    // Total = broker truth (portfolio/truth, latest *_main snapshots), same
-    // source as the digest header + dashboard KPI. Never substitute sleeve
-    // ledgers for an incomplete broker total.
     const now = getPortfolioEquityNow();
-    const totalEq = now.total == null ? "—" : `$${fmtMoney(now.total)}`;
-    lines.push(
-      `<b>Total ${totalEq} · ${fmtPeriodLeg("P&L hoy", daily.pnl)} · realizado por fills hoy ${signMoney(daily.breakdown.realized)} · ${totalPos}pos</b>`
-    );
+    const lines = [`📊 Ahora · ${market.status === "open" ? "bolsa abierta" : "bolsa cerrada"}`,
+      `Patrimonio ${now.total == null ? "—" : `$${fmtMoney(now.total)}`}`,
+      fmtPeriodLeg("Hoy", daily.pnl), ...fmtClosesToday(daily.breakdown), this.openMoneyLine(accounts)];
+    for (const a of accounts) {
+      lines.push(`${profileName(a.id)} $${fmtMoney(a.equity)}${initialMoney(a)} · ${a.positions} abiertas`);
+    }
     await this.send(lines.join("\n"), chatId);
+  }
+
+  private openMoneyLine(accounts: any[]): string {
+    const positions = this.getConsolidatedState?.()?.positions;
+    const open = readOpenMoney(positions);
+    const count = positions?.length ?? accounts.reduce((s, a) => s + (a.positions || 0), 0);
+    const value = open.unpriced || (!positions && count) ? "—" : signMoney(open.total);
+    return `Siguen abiertas: ${count} ${pluralize(count, "posición", "posiciones")}, ${value} desde que se abrieron`;
   }
 
   private async cmdTrades(chatId: string) {
@@ -544,18 +538,16 @@ export class TelegramReporter {
     // instead of closed-only; a sleeve that no longer runs appears in a dated
     // history line, never as a current balance. The footer says what it sums.
     const accounts = this.getAccountSummaries?.() || [];
-    const lines = ["<b>Resultados por sleeve activo</b>"];
+    const lines = ["<b>Resultados por estrategia</b>"];
 
     for (const acc of accounts) {
       const id = acc.id;
       const stats = getTradingStats(id);
       const money = readSleeveMoney(id);
-      const pct = acc.totalPnlPct ?? getSleevePct(id);
-
       lines.push(
-        `${shortTag(id)} $${fmtMoney(acc.equity)}${pct == null ? "" : ` ${signPct(pct)} vs asignación`} · ` +
-          `${stats.totalTrades}tr WR${fmtNum(stats.winRate, 0)}% · ` +
-          `realizado reconocido ${signMoney(money.recognizedRealized)} · realizado por fills hoy ${signMoney(money.realizedToday.realized)}`
+        `${profileName(id)} $${fmtMoney(acc.equity)}${initialMoney(acc)} · ` +
+          `${stats.closedTrades} ${pluralize(stats.closedTrades, "operación cerrada", "operaciones cerradas")}, ${fmtNum(stats.winRate, 0)} % ganadoras · ` +
+          `resultado de lo cerrado ${signMoney(money.recognizedRealized)}`
       );
     }
 
@@ -567,21 +559,22 @@ export class TelegramReporter {
       const last = getEquityWindowDisplay(id, 0);
       if (stats.closedTrades === 0 && !last) continue;
       history.push(
-        `${shortTag(id)} inactivo · realizado reconocido ${signMoney(getRecognizedRealizedPnl(id))} · ${stats.totalTrades}tr` +
+        `${profileName(id)} ya no opera · resultado de lo cerrado ${signMoney(getRecognizedRealizedPnl(id))} · ${stats.closedTrades} ${pluralize(stats.closedTrades, "operación cerrada", "operaciones cerradas")}` +
           `${last ? ` · último saldo $${fmtMoney(last.equity)} al ${getETDateKey(last.endAt)}` : ""}`
       );
     }
     if (history.length) {
-      lines.push("<b>Histórico (sleeves inactivos, sin saldo actual)</b>");
+      lines.push("<b>Estrategias anteriores (sin saldo actual)</b>");
       lines.push(...history);
     }
 
     const all = getTradingStats();
     lines.push(
-      `<b>${MONEY_LABELS.recognizedRealized}, todos los sleeves: ${signMoney(getRecognizedRealizedPnl())} · ${all.totalTrades}tr WR${fmtNum(all.winRate, 0)}%</b>`
+      `<b>Total de lo cerrado ${signMoney(getRecognizedRealizedPnl())} · ${all.closedTrades} ${pluralize(all.closedTrades, "operación cerrada", "operaciones cerradas")}, ${fmtNum(all.winRate, 0)} % ganadoras</b>`
     );
+    lines.push(this.openMoneyLine(accounts));
     const inicio = readDisplayMoneyWindow(this.mainLegs(), 0);
-    lines.push(`${fmtPeriodLeg("P&L desde el inicio display (variación del patrimonio)", inicio)}`);
+    lines.push(`${fmtPeriodLeg("Ganancia desde el inicio", inicio)}`);
     lines.push(...fmtDisplayStart(inicio?.start));
     await this.send(lines.join("\n"), chatId);
   }
@@ -626,39 +619,21 @@ export class TelegramReporter {
     const accounts = this.getAccountSummaries?.() || []; // ACTIVE sleeves only (AccountManager.getAccountSummaries)
     const dateLabel = new Date(asOf).toLocaleDateString("es-ES", {
       timeZone: "America/New_York",
+      weekday: "long",
       day: "numeric",
       month: "short",
     });
 
     const db = getDB();
-    const dayStart = getETWindowStart(1, asOf);
     // Rolling 7d window, re-anchored to ET midnight (a plain −6d offset from
     // dayStart drifts an hour across DST transitions).
     const weekStart = getETWindowStart(7, asOf);
     const RECONCILE = `AND ${RECONCILE_CLOSE_SQL}`; // shared with getTradingStats (db/database.ts) so dashboard + digest never drift
-    const activeIds = accounts.map((a: any) => a.id as string);
 
-    const countClosedTrades = (sinceMs: number): number => {
-      if (activeIds.length === 0) return 0;
-      const placeholders = activeIds.map(() => "?").join(",");
-      const row = db
-        .prepare(
-          `SELECT COUNT(*) n FROM trades
-           WHERE status='closed' AND exit_time >= ? AND exit_time <= ? AND account_id IN (${placeholders}) ${RECONCILE}`
-        )
-        .get(sinceMs, asOf, ...activeIds) as { n: number } | undefined;
-      return row?.n ?? 0;
-    };
-    const dayTrades = countClosedTrades(dayStart);
-    const weekTrades = countClosedTrades(weekStart);
-    const totalPos = accounts.reduce((s: number, a: any) => s + (a.positions || 0), 0);
-
-    // Rendimiento 7D: active sleeves with ≥1 closed trade in the window,
-    // best→worst by 7D marked equity, not cutover realization dates. No all-time clutter — that's /status
-    // and /profits' job; this is the weekly scoreboard only. "realizado por
-    // fills" is the fill-dated reader (A-2), the same one /status uses.
+    // Every active strategy, best→worst by its existing 7-day equity reader.
+    // Closed-operation counts describe outcomes, not the period's gain.
     const sleeveRows: string[] = [];
-    const sleevePnls: Array<{ id: string; pnl: number; mtm: number | null; w: number; l: number; paused: boolean }> = [];
+    const sleevePnls: Array<{ id: string; mtm: number | null; w: number; l: number }> = [];
     for (const a of accounts) {
       const wkQ = db
         .prepare(
@@ -669,12 +644,11 @@ export class TelegramReporter {
         )
         .get(a.id, weekStart, asOf) as { w: number; l: number } | undefined;
       const w = wkQ?.w ?? 0, l = wkQ?.l ?? 0;
-      if (w + l < 1) continue; // "≥1 weekly close" — silent sleeves don't clutter the scoreboard
-      sleevePnls.push({ id: a.id, pnl: readSleeveMoney(a.id, asOf).realized7d.realized, mtm: getEquityPnlDisplay(a.id, 7, asOf)?.pnl ?? null, w, l, paused: !!a.paused });
+      sleevePnls.push({ id: a.id, mtm: getEquityPnlDisplay(a.id, 7, asOf)?.pnl ?? null, w, l });
     }
     sleevePnls.sort((x, y) => (y.mtm ?? -Infinity) - (x.mtm ?? -Infinity) || x.id.localeCompare(y.id));
     for (const r of sleevePnls) {
-      sleeveRows.push(`${profileName(r.id)} MtM ${r.mtm == null ? "—" : signMoney(r.mtm)} · realizado por fills ${signMoney(r.pnl)} · ${r.w}W/${r.l}L${r.paused ? " ⏸" : ""}`);
+      sleeveRows.push(`${profileName(r.id)} ${r.mtm == null ? "—" : signMoney(r.mtm)} · ${r.w} ${pluralize(r.w, "ganada", "ganadas")}, ${r.l} ${pluralize(r.l, "perdida", "perdidas")}`);
     }
 
     // Header truth: alpaca_main + binance_main (+ binance_coinm_main once
@@ -693,13 +667,11 @@ export class TelegramReporter {
       : this.getBinanceDecomposition(portfolioNow);
 
     const lines: string[] = [];
-    lines.push(`📊 <b>Uncle Carl</b> · ${dateLabel} · cierre ET${reportDate ? " definitivo" : ""}`);
-    lines.push(`${fmtPeriodLeg(reportDate ? "P&L del día" : "P&L hoy", daily.pnl)} · ${fmtPeriodLeg("P&L 7D", weekLeg)}`);
+    lines.push(`📊 <b>Uncle Carl</b> · ${dateLabel.replace(",", "").replace(/\./g, "")}`);
+    lines.push(`${fmtPeriodLeg("Hoy", daily.pnl)} · ${fmtPeriodLeg("últimos 7 días", weekLeg)}`);
+    lines.push(fmtPatrimonio(portfolioNow.total, inicio));
     lines.push(...fmtClosesToday(daily.breakdown));
-    lines.push(
-      `${dayTrades} ${pluralize(dayTrades, "trade", "trades")} ${reportDate ? "en el día" : "hoy"} · ${weekTrades} en 7D · ` +
-        `${totalPos} ${pluralize(totalPos, "posición abierta", "posiciones abiertas")}`
-    );
+    lines.push(this.openMoneyLine(accounts));
 
     // P0 (2026-10-09): owner KPIs vs goals — volume (executed orders),
     // 30-day return, drawdown vs budget. Fail-soft: a broken KPI read never
@@ -708,34 +680,25 @@ export class TelegramReporter {
 
     if (sleeveRows.length > 0) {
       lines.push("");
-      lines.push("<b>Rendimiento 7D a mercado</b>");
+      lines.push("<b>Ganancia de los últimos 7 días</b>");
       for (const r of sleeveRows) lines.push(r);
     }
 
-    // Scorecard vs backtest validado (W5): una línea por sleeve vivo, ventana
-    // desde el inicio del modelo vigente + chip de banda OOS. Fail-soft: un
-    // scorecard roto (historical.db ausente, artefacto movido) NUNCA tumba el
-    // digest — simplemente no aparece la sección.
+    // One plain verdict and the 20-session return. Detailed percentile bands
+    // stay in the operator scorecard. Unavailable data never breaks the digest.
     const scorecardLines = this.scorecardDigestLines();
     if (scorecardLines.length > 0) {
       lines.push("");
-      lines.push("<b>Scorecard vs backtest validado</b>");
+      lines.push("<b>Comparación con lo esperado</b>");
       for (const l of scorecardLines) lines.push(l);
     }
 
     lines.push("");
-    if (bin.total != null) {
-      const parts = bin.usdt != null && bin.usdc != null && bin.btc != null
-        ? ` · USDT $${fmtMoneyGrouped(bin.usdt)} · USDC $${fmtMoneyGrouped(bin.usdc)} · BTC $${fmtMoneyGrouped(bin.btc)}`
-        : ""; // stale/missing/nonfinite margin readings → total only, never invented parts
-      lines.push(`Binance $${fmtMoneyGrouped(bin.total)}${parts}`);
+    lines.push(...fmtBrokerBalances(portfolioNow.alpaca, bin.total));
+    if (portfolioNow.total != null && accounts.length > 0 && accounts.every(a => Number.isFinite(a.equity))) {
+      const outside = portfolioNow.total - accounts.reduce((s, a) => s + a.equity, 0);
+      if (outside > 50) lines.push(`Fuera de las estrategias: $${fmtMoney(outside)} (efectivo inicial de Alpaca y garantía en BTC)`);
     }
-    if (portfolioNow.alpaca != null) lines.push(`Alpaca $${fmtMoneyGrouped(portfolioNow.alpaca)}`);
-    lines.push(
-      `${portfolioNow.total == null ? "Patrimonio —" : `Patrimonio $${fmtMoneyGrouped(portfolioNow.total)}`} · ` +
-      `${fmtPeriodLeg("P&L desde el inicio", inicio)}`
-    );
-    lines.push(...fmtDisplayStart(inicio?.start));
 
     return lines.join("\n");
   }
@@ -753,11 +716,13 @@ export class TelegramReporter {
       const daily = readMoneyWindow({ days: 1, now, hist, requireFresh: false });
       const week = readDisplayMoneyWindow(this.mainLegs(), 7, now, false);
       const start = readDisplayMoneyWindow(this.mainLegs(), 0, now, false);
-      const lines = [`📊 <b>Uncle Carl</b> · ${date} · cierre ET definitivo`,
-        `${fmtPeriodLeg("P&L del día", daily.window)} · ${fmtPeriodLeg("P&L 7D", week)}`,
+      const lines = [`📊 <b>Uncle Carl</b> · ${digestDate(now)}`,
+        `${fmtPeriodLeg("Hoy", daily.window)} · ${fmtPeriodLeg("últimos 7 días", week)}`,
+        fmtPatrimonio(start?.equity ?? null, start),
         ...fmtClosesToday(daily.breakdown),
-        `${start == null ? "Patrimonio —" : `Patrimonio $${fmtMoneyGrouped(start.equity)}`} · ${fmtPeriodLeg("P&L desde el inicio", start)}`,
-        ...fmtDisplayStart(start?.start)];
+        "Posiciones al cierre: sin datos suficientes"];
+      const balances = this.portfolioEquityAsOf(now);
+      lines.push(...fmtBrokerBalances(balances.alpaca, balances.binance == null ? null : balances.binance + (balances.coinm ?? 0)));
       return lines.join("\n");
     } finally {
       try { hist?.close(); } catch {}
@@ -787,21 +752,21 @@ export class TelegramReporter {
       const k = computeKpiSnapshot(now);
       const t = k.targets;
       const lines: string[] = [];
-      const vol7 = fmtNum(k.volume.avg7d, 1);
+      const vol7 = fmtNum(k.volume.avg7d, 0);
       lines.push(t.tradesPerDay
-        ? `🎯 Volumen ${k.volume.today}/${t.tradesPerDay} ${pluralize(k.volume.today, "orden", "órdenes")} hoy (${Math.round((k.volume.today / t.tradesPerDay) * 100)}%) · media 7D ${vol7} (${Math.round((k.volume.avg7d / t.tradesPerDay) * 100)}%)`
-        : `🎯 Volumen ${k.volume.today} ${pluralize(k.volume.today, "orden", "órdenes")} hoy · media 7D ${vol7}`);
+        ? `Órdenes hoy ${k.volume.today} de ${t.tradesPerDay} · media de 7 días ${vol7}`
+        : `Órdenes hoy ${k.volume.today} · media de 7 días ${vol7}`);
       if (k.ret.dailyAvgPct30d != null) {
         const r = k.ret.dailyAvgPct30d;
         lines.push(t.dailyReturnPct
-          ? `📈 Rentabilidad 30D ${fmtPct2(r)}/día vs meta ${fmtPct2(t.dailyReturnPct)} (${r > 0 ? Math.round((r / t.dailyReturnPct) * 100) : 0}%)`
-          : `📈 Rentabilidad 30D ${fmtPct2(r)}/día`);
+          ? `Rentabilidad media de 30 días ${fmtPct2(r)} al día (meta ${fmtPct2(t.dailyReturnPct)})`
+          : `Rentabilidad media de 30 días ${fmtPct2(r)} al día`);
       }
       if (k.risk.drawdownPct != null) {
         const dd = k.risk.drawdownPct;
         lines.push(t.riskBudgetDdPct
-          ? `🛡 Drawdown ${fmtNum(dd, 1)}% desde el pico · presupuesto ${fmtNum(t.riskBudgetDdPct, 0)}% (${Math.round((dd / t.riskBudgetDdPct) * 100)}% usado)`
-          : `🛡 Drawdown ${fmtNum(dd, 1)}% desde el pico`);
+          ? `Caída desde el máximo ${fmtNum(dd, 1).replace(".", ",")} % (límite ${fmtNum(t.riskBudgetDdPct, 0)} %)`
+          : `Caída desde el máximo ${fmtNum(dd, 1).replace(".", ",")} %`);
         const alert = riskAlertLine(dd, t.riskBudgetDdPct);
         if (alert) lines.push(alert);
       }
@@ -860,7 +825,8 @@ export class TelegramReporter {
         accountId: p.profileId, symbol: p.symbol, market: p.market, side: p.side, quantity: p.quantity,
         entryPrice: p.avgEntryPrice, entryTime: p.openedAt, currentPrice: p.currentPrice,
       }));
-      const money = readMoneyWindow({ days: 1, now, profiles: mainLegs, hist, positions: openPositions });
+      const money = readMoneyWindow({ days: 1, now, profiles: mainLegs, hist, positions: openPositions,
+        accounts: this.getAccountSummaries?.().map(a => a.id) });
       return { pnl: money.window, breakdown: money.breakdown };
     } finally {
       try { hist?.close(); } catch {}
@@ -909,7 +875,14 @@ export class TelegramReporter {
 
   private scorecardDigestLines(): string[] {
     const sc = this.computeScorecardNow();
-    return sc ? formatScorecardDigestLines(sc) : [];
+    return sc ? sc.entities.filter(e => e.kind === "sleeve").map(e => {
+      const b = e.rollingBand;
+      const below = b?.status === "below" || e.band?.status === "below";
+      const alarm = b?.status === "below" && b.liveCumReturnPct != null && b.cumReturnPct?.p1 != null && b.liveCumReturnPct < b.cumReturnPct.p1;
+      const words = alarm ? "muy por debajo: alarma" : below ? "peor de lo normal: revisar"
+        : b && ["within", "above"].includes(b.status) ? "dentro de lo esperado" : "aún sin datos suficientes";
+      return `${profileName(e.id)} · ${words} · últimas 20 sesiones ${b?.liveCumReturnPct == null ? "—" : signPct(b.liveCumReturnPct)}`;
+    }) : [];
   }
 
   /** sync_state key holding the JSON map sleeve → "below"|"ok". */
@@ -987,19 +960,15 @@ export class TelegramReporter {
       if (this.quiet) return;
       const pid = String(o?.accountId ?? "?");
       if (pid.startsWith("shadow_")) return;
-      const px = o?.filledPrice ?? o?.price ?? 0;
       this.send(
-        `🟢 <b>${(o?.side ?? "?").toUpperCase()}</b> ${o?.quantity} ${o?.symbol} @ $${Number(px).toFixed(4)}\n` +
-        `📁 ${pid}`
+        `🟢 ${o?.side === "sell" ? "Venta" : "Compra"} de <b>${escapeHtml(o?.symbol || "?")}</b> · ${profileName(pid)}`
       );
     });
     eventBus.on(EVENTS.POSITION_CLOSED, (trade: any) => {
       if (this.quiet) return;
       const pid = trade.accountId || trade.profileId || "?";
       if (String(pid).startsWith("shadow_")) return;
-      let dayPnl = NaN;
-      try { dayPnl = readSleeveMoney(pid).realizedToday.realized; } catch {}
-      this.send(fmtCloseAlert(trade, dayPnl));
+      this.send(fmtCloseAlert(trade));
     });
 
     // Circuit breaker — always fires regardless of quiet mode. Now actionable:
@@ -1061,21 +1030,25 @@ function shortTag(id: string): string {
 
 function fmtMoney(n: number): string {
   if (typeof n !== "number" || isNaN(n)) return "0";
-  // < $10k drop the thousand separator (5-char numbers are fine), else use comma.
-  if (Math.abs(n) >= 10_000) {
-    return n.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  }
-  return n.toFixed(0);
+  return Math.round(n).toLocaleString("en-US");
 }
 
-/** Always thousand-grouped whole-dollar figure — for the digest's broker-truth
- *  lines (Binance/USDT/USDC/BTC/Alpaca/Patrimonio) where a 4-digit amount
- *  ($4,731) still reads as currency. Distinct from fmtMoney (used by every
- *  other command), which drops the separator under $10k to save width on a
- *  dense /status line — that tradeoff doesn't apply to the once-a-day digest. */
-function fmtMoneyGrouped(n: number): string {
-  if (typeof n !== "number" || isNaN(n)) return "0";
-  return Math.round(n).toLocaleString("en-US");
+function initialMoney(account: any): string {
+  return Number.isFinite(account.initialEquity) ? ` (empezó con $${fmtMoney(account.initialEquity)})` : "";
+}
+
+function digestDate(at: number): string {
+  return new Date(at).toLocaleDateString("es-ES", { timeZone: "America/New_York", weekday: "long", day: "numeric", month: "short" }).replace(",", "").replace(/\./g, "");
+}
+
+function fmtPatrimonio(equity: number | null, start: ReturnType<typeof readDisplayMoneyWindow>): string {
+  const since = start ? `${signMoney(start.pnl)} desde el ${new Date(start.start.date + "T12:00:00Z").toLocaleDateString("es-ES", { day: "numeric", month: "short", timeZone: "UTC" }).replace(/\./g, "")}` : "desde el inicio —";
+  return `Patrimonio ${equity == null ? "—" : `$${fmtMoney(equity)}`} · ${since}`;
+}
+
+function fmtBrokerBalances(alpaca: number | null, binance: number | null): string[] {
+  const parts = [alpaca == null ? "" : `Alpaca $${fmtMoney(alpaca)}`, binance == null ? "" : `Binance $${fmtMoney(binance)}`].filter(Boolean);
+  return parts.length ? [parts.join(" · ")] : [];
 }
 
 function fmtNum(n: number, decimals = 2): string {
@@ -1092,19 +1065,7 @@ export function riskAlertLine(drawdownPct: number | null, budgetPct: number | nu
   if (drawdownPct == null || !budgetPct) return null;
   const alertAt = budgetPct * RISK_ALERT_SHARE_OF_BUDGET;
   if (drawdownPct < alertAt) return null;
-  return `⚠️ Alerta: drawdown ${fmtNum(drawdownPct, 1)}% ≥ ${fmtNum(alertAt, 0)}% (alerta temprana del presupuesto de ${fmtNum(budgetPct, 0)}%): revisar la exposición`;
-}
-
-function signNum(n: number, decimals = 2): string {
-  if (typeof n !== "number" || isNaN(n)) return "0";
-  const sign = n > 0 ? "+" : "";
-  return sign + n.toFixed(decimals);
-}
-
-function signMoney(n: number): string {
-  if (typeof n !== "number" || isNaN(n)) return "$0";
-  const sign = n >= 0 ? "+" : "−";
-  return `${sign}$${Math.abs(n).toFixed(2)}`;
+  return `⚠️ La caída desde el máximo es ${fmtNum(drawdownPct, 1).replace(".", ",")} % (límite ${fmtNum(budgetPct, 0)} %). Conviene revisar la exposición.`;
 }
 
 /**
@@ -1120,69 +1081,40 @@ export function fmtPnlPair(pnl: number, pnlPct: number): string {
   const p = typeof pnl === "number" && !isNaN(pnl) ? pnl : 0;
   let pct = typeof pnlPct === "number" && !isNaN(pnlPct) ? pnlPct : 0;
   if ((p < 0 && pct > 0) || (p > 0 && pct < 0)) pct = -pct;
-  return `${signMoney(p)} (${signNum(pct, 1)}%)`;
+  return `${signMoney(p)} (${signPct(pct)} de lo invertido)`;
 }
 
 function signPct(n: number): string {
   if (typeof n !== "number" || isNaN(n)) return "0%";
   const sign = n >= 0 ? "+" : "−";
-  return `${sign}${Math.abs(n).toFixed(1)}%`;
+  return `${sign}${Math.abs(n).toFixed(1).replace(".", ",")} %`;
 }
 
-/** 2-decimal percent for the digest header. Zero is a VALID reading (shows
- *  "0.00%", no sign) — distinct from null (rebased/unavailable → omitted by
- *  the caller). Only used where the spec calls for 2 decimals (Hoy/7D/Inicio);
- *  every other pct display in this file stays at 1 decimal (signPct). */
+/** Daily-average percentages retain two decimals so the small daily goal is
+ * meaningful. Money and period returns use whole dollars and one decimal. */
 function fmtPct2(pct: number | null): string {
   if (pct == null || isNaN(pct)) return "";
   const sign = pct > 0 ? "+" : pct < 0 ? "−" : "";
-  return `${sign}${Math.abs(pct).toFixed(2)}%`;
+  return `${sign}${Math.abs(pct).toFixed(2).replace(".", ",")} %`;
 }
 
-/** "Hoy +$123.21 (+0.11%)" — dollar always shown when the leg exists; percent
- *  parens omitted when pnlPct is null (rebased basis); the whole leg renders
- *  "Hoy —" when combineEquityPnlLegs itself failed closed (stale/missing
- *  truth) — never a partial number substituted in its place. */
-/** The tile's words: "Cierres +$173 · posiciones +$194 en el día" (both inside
- *  today, they add up to the P&L hoy line above) and "Cobrado desde la
- *  entrada −$1,150 en 10 cierres y 8 recortes". When the closes can't be
- *  measured inside the day (a start price missing) only the counts show. */
+/** Since-entry result of reducing legs, never the gain of today's window.
+ * Partials are named explicitly rather than hidden inside the close count. */
 export function fmtClosesToday(b: Pick<PnlBreakdown, "realized" | "closesCount" | "trimsCount" | "closedInWindow" | "positions">): string[] {
-  const legs = legsWord(b.closesCount, b.trimsCount);
-  if (!legs) return ["Sin cierres hoy"];
-  const lines: string[] = [];
-  if (b.closedInWindow != null) {
-    const closes = Math.round(b.closedInWindow);
-    const positions = b.positions == null ? "" : ` · posiciones ${signMoneyWhole(Math.round(b.closedInWindow + b.positions) - closes)}`;
-    lines.push(`Cierres ${signMoneyWhole(closes)}${positions} en el día`);
-  }
-  lines.push(`Realizado por fills (neto, desde entrada) ${signMoneyWhole(b.realized)} en ${legs}`);
-  return lines;
-}
-
-function legsWord(closes: number, trims: number): string {
-  const parts: string[] = [];
-  if (closes > 0) parts.push(`${closes} ${pluralize(closes, "cierre", "cierres")}`);
-  if (trims > 0) parts.push(`${trims} ${pluralize(trims, "recorte", "recortes")}`);
-  return parts.join(" y ");
-}
-
-/** "+$1,150" / "−$912": whole dollars with thousands separators, like the tile. */
-function signMoneyWhole(v: number): string {
-  const sign = v > 0 ? "+" : v < 0 ? "−" : "";
-  return `${sign}$${Math.round(Math.abs(v)).toLocaleString("en-US")}`;
+  const partial = b.trimsCount ? ` y ${b.trimsCount} ${pluralize(b.trimsCount, "cierre parcial", "cierres parciales")}` : "";
+  return [`Cerradas hoy: ${b.closesCount} ${pluralize(b.closesCount, "operación", "operaciones")}${partial}, ${signMoney(b.realized)} en total (desde que se abrieron)`];
 }
 
 /** The ONE display-start line (A-1): date of the anchor every "since start"
  *  figure is measured from, and why no percentage accompanies a rebased one. */
 export function fmtDisplayStart(start: { date: string; rebased: boolean } | null | undefined): string[] {
   if (!start) return [];
-  return [`Inicio display ${start.date}${start.rebased ? " · base rebajada, sin porcentaje" : ""}`];
+  return [`Desde el ${start.date}`];
 }
 
 function fmtPeriodLeg(label: string, leg: { pnl: number; pnlPct: number | null } | null): string {
   if (!leg) return `${label} —`;
-  const pctStr = fmtPct2(leg.pnlPct);
+  const pctStr = leg.pnlPct == null ? "" : signPct(leg.pnlPct);
   return `${label} ${signMoney(leg.pnl)}${pctStr ? ` (${pctStr})` : ""}`;
 }
 
@@ -1334,8 +1266,9 @@ const RECONCILE_CLOSE_REASONS = new Set([
   "BROKER_GONE_404", "MANUAL_CLOSE_UNRECONCILED", "BACKFILLED_SYNC", "SYNC_DETECTED",
 ]);
 
-/** 💰/📉 Position closed — pnl, reason (clear word), hold time, profile day P&L. */
-export function fmtCloseAlert(trade: any, dayPnl?: number): string {
+/** One closed operation: its since-entry result, side, reason and duration.
+ * The deprecated second argument is ignored, never labelled "cobrado hoy". */
+export function fmtCloseAlert(trade: any, _dayPnl?: number): string {
   const reason = trade?.closeReason || trade?.close_reason || "";
   const pid = trade?.accountId || trade?.profileId || "?";
   // Externally-reconciled closes (broker 404 / manual / sync) carry no real
@@ -1345,45 +1278,27 @@ export function fmtCloseAlert(trade: any, dayPnl?: number): string {
   if (RECONCILE_CLOSE_REASONS.has(reason)) {
     return (
       `♻️ <b>${escapeHtml(trade?.symbol || "?")}</b> cerrado directamente en el broker · ${profileName(pid)}` +
-      ` · el resultado ya está reflejado en el equity`
+      ` · el resultado ya está reflejado en el patrimonio`
     );
   }
   const pnl = trade?.pnl ?? 0;
-  const pnlPct = trade?.pnlPct ?? trade?.pnl_pct ?? 0;
+  const pnlPct = closedEpisodePct({ ...trade, status: "closed", pnl,
+    pnl_pct: trade?.pnlPct ?? trade?.pnl_pct, entry_price: trade?.entryPrice ?? trade?.entry_price }) ?? 0;
   const emoji = pnl >= 0 ? "💰" : "📉";
   const entryT = trade?.entryTime || trade?.entry_time;
   const exitT = trade?.exitTime || trade?.exit_time;
-  const dur = entryT && exitT ? fmtDur(exitT - entryT) : "—";
-  const reasonTxt = REASON_WORD[reason] || (reason ? String(reason).toLowerCase() : "");
-  // The sleeve's realized total for today — NOT the day's P&L (a close whose
-  // gain was earned over weeks can realize +$4,767 on a losing day). Was
-  // "día +$X", which read as the day's P&L.
-  const day = typeof dayPnl === "number" && !isNaN(dayPnl) ? ` · cobrado hoy ${signMoney(dayPnl)}` : "";
+  const elapsed = entryT && exitT ? exitT - entryT : null;
+  const dur = elapsed == null ? "—" : elapsed >= 48 * 3600000 ? `${Math.floor(elapsed / 86400000)} días` : fmtDur(elapsed);
+  const basis = trade?.episode_basis ?? trade?.episodeBasis;
+  // A legacy partial-close row has no full cost to display. Do not substitute
+  // the final remnant's cost beside the reader's full-episode percentage.
+  const invested = Number.isFinite(basis) && basis > 0 ? basis
+    : trade?.partial_closed_contracts > 0 || trade?.quote_asset === "BTC" ? NaN
+    : (trade?.entryPrice ?? trade?.entry_price) * (trade?.quantity ?? NaN);
+  const pair = fmtPnlPair(pnl, pnlPct).replace(" de lo invertido)", ` de lo invertido${Number.isFinite(invested) && invested > 0 ? `, $${fmtMoney(invested)}` : ""})`);
+  const side = ["sell", "short"].includes(trade?.side) ? "corto" : ["buy", "long"].includes(trade?.side) ? "largo" : "";
   return (
-    `${emoji} <b>${escapeHtml(trade?.symbol || "?")}</b> cerrado ${fmtPnlPair(pnl, pnlPct)}` +
-    ` · ${profileName(pid)}${reasonTxt ? ` · ${reasonTxt}` : ""} · abierta ${dur}${day}`
+    `${emoji} <b>${escapeHtml(trade?.symbol || "?")}</b> cerrada · ${pair}` +
+    ` · ${profileName(pid)}${side ? ` · ${side}` : ""} · ${closeReasonWord(reason, "es")} · duró ${dur}`
   );
 }
-
-/** Close reasons → clear Spanish words for the CLOSE alert (was terse codes). */
-const REASON_WORD: Record<string, string> = {
-  TRAILING_SL: "trailing stop",
-  STOP_LOSS: "stop-loss",
-  TAKE_PROFIT: "objetivo",
-  MAX_HOLD: "tiempo máx",
-  REVERSE_SIGNAL: "señal inversa",
-  MANUAL_CLOSE: "cierre manual",
-  MANUAL_CLOSE_UNRECONCILED: "cierre manual",
-  BROKER_GONE_404: "cerrado en broker",
-  BACKFILLED_SYNC: "sync",
-  SYNC_DETECTED: "sync",
-  // Engine close labels (ENGINE_CLOSE_REASONS / MeanRevEngine) — were
-  // rendered as lowercase codes ("model_cutover").
-  BROKER_STOP_LOSS: "stop-loss",
-  TRAIL_STOP: "trailing stop",
-  TIME_STOP: "tiempo máx",
-  SLOT_DISPLACED: "reemplazada por una señal mejor",
-  MODEL_CUTOVER: "cambio de modelo",
-  MOMENTUM_REBALANCE: "rebalanceo",
-  MEANREV_EXIT: "salida de reversión",
-};

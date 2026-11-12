@@ -11,32 +11,7 @@ function kpi(label, valueHtml, cls = "", subHtml = "", key = "") {
 /** A P&L figure that opens its breakdown (pnl-breakdown.js) when clicked: a
  *  real button, so it takes focus and Enter/Space like any control. */
 function figure(html, days) {
-  return `<button type="button" class="kfig" data-act="pnl-why" data-days="${days}" title="${esc(t("Both within this period — click for the breakdown", "Ambos dentro de este período — clic para ver el desglose"))}">${html}</button>`;
-}
-
-/** Line under a P&L KPI (2026-11-06, owner: "+$367 · realized −$912" read as
- *  a contradiction). Both figures share the tile's window: `closes` is what
- *  the closes and trims of the period made INSIDE it, `positions` is the
- *  rest of the headline (pnl − closes), so they add up to it exactly. The
- *  since-entry figure is not shown on any tile — the modal has it. When the
- *  closes can't be measured (a start price missing) only the counts show. */
-export function closesSub(b, pnl) {
-  if (!b) return "";
-  // The headline the tile shows (G-1: fresh, never the 30 s closes cache); a
-  // payload without one carries closes + positions, which IS that headline.
-  if (pnl == null) pnl = b.pnl ?? b.rounded?.pnl ?? (b.closedInWindow != null && b.positions != null ? b.closedInWindow + b.positions : null);
-  const closes = n(b.closesCount), trims = n(b.trimsCount);
-  if (closes === 0 && trims === 0) return t("no closes", "sin cierres");
-  const word = (c, one, many) => `${num(c, 0)} ${c === 1 ? one : many}`;
-  const counts = [
-    closes > 0 ? word(closes, t("close", "cierre"), t("closes", "cierres")) : "",
-    trims > 0 ? word(trims, t("trim", "recorte"), t("trims", "recortes")) : "",
-  ].filter(Boolean).join(", ");
-  if (b.closedInWindow == null || pnl == null) return counts;
-  const fig = (v) => `<b style="color:${pnlColor(v)}">${moneySigned(v, 0)}</b>`;
-  const roundedCloses = Math.round(b.closedInWindow);
-  const roundedPositions = Math.round(pnl) - roundedCloses;
-  return `${t("closes", "cierres")} ${fig(roundedCloses)} · ${t("positions", "posiciones")} ${fig(roundedPositions)}`;
+  return `<button type="button" class="kfig" data-act="pnl-why" data-days="${days}" title="${esc(t("Change in account value — click for details", "Cambio del valor de la cuenta — clic para ver el detalle"))}">${html}</button>`;
 }
 
 /** Consolidated "today"/period figures derived from the v2 profiles payload so
@@ -115,7 +90,7 @@ export function sinceStartSub(ss) {
 export function renderKpis() {
   const s = store.state;
   const k = consolidated(s);
-  const pnlL = s.period === 1 ? t("Today P&L", "P&L Hoy") : t(`${periodLabel(s.period)} P&L`, `P&L ${periodLabel(s.period)}`);
+  const pnlL = s.period === 1 ? t("Gain today", "Ganancia hoy") : t(`Gain ${periodLabel(s.period)}`, `Ganancia ${periodLabel(s.period)}`);
   // The server's null is intentional (rebased/unavailable). Never divide by
   // another base to manufacture a percentage beside that same money figure.
   const periodPct = k.periodPnlPct;
@@ -133,11 +108,11 @@ export function renderKpis() {
   return (
     kpi(t("Total equity", "Patrimonio"), k.equity == null ? "—" : money(k.equity, 0), "", sinceStartSub(sinceStart(s)), "equity") +
     renderProfiles() +
-    kpi(pnlL, pnlValue(k.periodPnl, periodPct, k.periodBreakdown, s.period), "", closesSub(k.periodBreakdown, k.periodPnl), "today") +
-    (s.period === 7 ? "" : kpi(t("7D P&L", "P&L 7D"), pnlValue(k.pnl7d, pnl7dPct, k.breakdown7d, 7), "sm", closesSub(k.breakdown7d, k.pnl7d))) +
+    kpi(pnlL, pnlValue(k.periodPnl, periodPct, k.periodBreakdown, s.period), "", "", "today") +
+    (s.period === 7 ? "" : kpi(t("Gain over 7 days", "Ganancia de 7 días"), pnlValue(k.pnl7d, pnl7dPct, k.breakdown7d, 7), "sm")) +
     returnKpi(s.kpis) +
     volumeKpi(k, s.kpis) +
-    kpi(t("Win rate", "% Ganadas"), k.winRate == null ? "—" : pct(k.winRate, 0), "sm", t("all-time closes", "cierres históricos"), "win")
+    kpi(t("Win rate", "% Ganadas"), k.winRate == null ? "—" : pct(k.winRate, 0), "sm", t("of closed operations", "de las operaciones cerradas"), "win")
   );
 }
 

@@ -9,14 +9,16 @@ import { ALL_PROFILE_IDS } from "../config/riskProfiles";
 import { portfolioMainLegs, readDisplayMoneyWindow, getBrokerSnapshotNow } from "./truth";
 import { computePnlBreakdown, computeRealizedAttribution, type BreakdownPosition, type RealizedAttribution } from "./pnlBreakdown";
 import type { Database } from "bun:sqlite";
+// @ts-ignore shared presentation reader, also used by the dashboard.
+export { positionsTotals as readOpenMoney } from "../dashboard/public/v4/js/money-values.js";
 
 export const MONEY_LABELS = {
-  displayStart: "Desde el inicio display",
-  windowPnl: "P&L del período",
-  realized: "Realizado por fecha de fill (neto)",
-  closedEpisode: "Resultado de episodios cerrados (neto, con parciales)",
-  recognizedRealized: "Realizado reconocido (episodios cerrados + parciales de filas abiertas, neto)",
-  unrealized: "Sin realizar desde la entrada",
+  displayStart: "Desde el inicio",
+  windowPnl: "Ganancia del período",
+  realized: "Resultado de lo cerrado (desde la entrada)",
+  closedEpisode: "Resultado de las operaciones cerradas",
+  recognizedRealized: "Resultado de lo cerrado (incluye cierres parciales)",
+  unrealized: "Sin cerrar (desde la entrada)",
 } as const;
 
 // DailyReporter's existing zero-argument callback is wired by index.ts. Keep

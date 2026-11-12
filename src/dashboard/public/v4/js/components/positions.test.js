@@ -383,7 +383,7 @@ describe("renderPositions (partial data)", () => {
     const html = renderPositions(state, []);
     expect(html.match(/class="pgroup"/g)?.length).toBe(2);
     // invested at cost and the P&L on the left; the exposure (at market, over the base) on the right; the count in the title
-    expect(html).toContain('<span class="pg-name">Momentum Crypto</span><span class="pg-sum">$2,000 <span class="muted">·</span> <span class="pg-pnl" style="color:var(--up)">+$100</span></span><span class="pg-exp"><span class="muted">exposure</span><span class="pg-x">0.42×</span></span>');
+    expect(html).toContain('<span class="pg-name">Momentum Crypto</span><span class="pg-sum">$2,100 <span class="muted">·</span> <span class="pg-pnl" style="color:var(--up)">open +$100</span></span><span class="pg-exp"><span class="muted">exposure</span><span class="pg-x">0.42×</span></span>');
     expect(html).toContain('<span class="pg-name">Momentum Crypto USDC</span>');
     expect(html).toMatch(/title="1 position\. Holds \$2,100 at market/);
     expect(html).not.toContain("sbadge");
@@ -403,7 +403,7 @@ describe("renderPositions (partial data)", () => {
     };
     const html = renderPositions(state, []);
     const head = html.slice(html.indexOf('class="pgroup"'), html.indexOf("</button>"));
-    expect(head).toContain('<span class="pg-sum"><span class="pg-pnl" style="color:var(--up)">+$30</span></span>');
+    expect(head).toContain('<span class="pg-sum"><span class="pg-pnl" style="color:var(--up)">open +$30</span></span>');
     expect(head).not.toContain("$0");
     expect(head).not.toContain("×");
     expect(head).not.toContain("pg-exp");
@@ -490,7 +490,8 @@ describe("renderPositions (partial data)", () => {
       },
     };
     const html = renderPositions(state, []);
-    expect(html).toContain("$25,415"); // notional = 130 * 195.5, shown as whole dollars
+    expect(html).toContain("$25,480"); // current market value = 130 * 196
+    expect(html).not.toContain("$25,415");
   });
 });
 
@@ -629,14 +630,14 @@ describe("renderPositions — side column only when a short exists", () => {
     const html = renderPositions({ view: "consolidated", dashboard: { accounts, portfolio: { positions: [row("AAPL", "buy"), row("MSFT", "buy")] } } }, []);
     expect(html).not.toContain("<th>S</th>");
     expect(html).not.toContain('class="badge l"');
-    expect(html).toContain('<td colspan="1"');
+    expect(html).toContain('<td colspan="6"');
   });
 
   test("a short position brings the column back, with its badge", () => {
     const html = renderPositions({ view: "consolidated", dashboard: { accounts, portfolio: { positions: [row("AAPL", "buy"), row("QQQ", "sell")] } } }, []);
     expect(html).toContain("<th>S</th>");
     expect(html).toContain('class="badge s"');
-    expect(html).toContain('<td colspan="2"');
+    expect(html).toContain('<td colspan="7"');
   });
 });
 
@@ -648,7 +649,7 @@ describe("renderPositions — compact numbers", () => {
       { symbol: "SPY", side: "buy", quantity: 5.59, avgEntryPrice: 540.1, currentPrice: 525.25, stopLoss: 478.4, unrealizedPnl: -85.04, unrealizedPnlPct: -0.3 },
       { symbol: "QQQ", side: "buy", quantity: 10, avgEntryPrice: 540.1, unrealizedPnl: -1709.38 },
     ]), []);
-    for (const value of ['title="Qty 6 · Entry $540 · Now $525"', "$540<", "$525<", "$3,019<", "−$85 ", "−$1,794<", "0%"])
+    for (const value of ['title="Qty 6 · Entry $540 · Now $525"', "$540<", "$525<", "$2,936<", "−$85 ", "−$1,794</span>", "0%"])
       expect(html).toContain(value);
     expect(html).not.toContain("$478");
     expect(html).not.toContain("$540.10");
@@ -660,7 +661,8 @@ describe("renderPositions — compact numbers", () => {
       { symbol: "DOGE/USD", side: "buy", quantity: 115.7, avgEntryPrice: 0.0777, currentPrice: 0.0789, stopLoss: 0.07, unrealizedPnl: 0.139, unrealizedPnlPct: 1.5 },
       { symbol: "BTC/USD", side: "buy", quantity: 0.0123, avgEntryPrice: 68000, currentPrice: 68100, unrealizedPnl: 1.23 },
     ]), []);
-    for (const value of ["Qty 116 ·", "Qty 0.0123 ·", "$0.0777<", "$0.0789<", "$8.99<", "+$0 "])
+    for (const value of ["Qty 116 ·", "Qty 0.0123 ·", "&lt;$1<", "$9<", "+$0 "])
       expect(html).toContain(value);
+    expect(html).not.toMatch(/\$[\d,]+\.\d/);
   });
 });

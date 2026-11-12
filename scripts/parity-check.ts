@@ -644,6 +644,35 @@ export interface SleeveParityResult {
  *  calendar days is reported as STALE (frozen backfill, delisting, rename). */
 export const STALE_SYMBOL_DAYS = 7;
 
+/** Freshest bar common to every universe symbol of a crypto manifest (the OLDEST
+ *  symbol's last bar). null = no bars at all; ts 0 = some symbol has none. Used only
+ *  by checkMomentumCryptoSleeve — the stock sleeves' replay has its own calendar
+ *  (lastCompletedStockSession). Deleted by mistake with the stock incumbents on
+ *  2026-11-07 (115797e) and restored 2026-11-10; test "crypto parity reads the
+ *  freshest common bar". */
+export function lastCompleteSession(
+  hist: Database,
+  m: ExperimentManifest,
+): { key: string; ts: number; stale: Array<{ symbol: string; lastBar: string }> } | null {
+  const placeholders = m.data.universe.map(() => "?").join(",");
+  const rows = hist.prepare(
+    `SELECT symbol, MAX(timestamp) AS mx FROM historical_bars
+     WHERE source = ? AND timeframe = ? AND symbol IN (${placeholders})
+     GROUP BY symbol`,
+  ).all(m.data.source, m.data.timeframe, ...m.data.universe) as Array<{ symbol: string; mx: number }>;
+  if (rows.length === 0) return null;
+  const missing = m.data.universe.filter(s => !rows.some(r => r.symbol === s));
+  if (missing.length > 0) {
+    return { key: "0000-00-00", ts: 0, stale: missing.map(symbol => ({ symbol, lastBar: "(no bars)" })) };
+  }
+  const minTs = Math.min(...rows.map(r => r.mx));
+  const maxTs = Math.max(...rows.map(r => r.mx));
+  const stale = rows
+    .filter(r => maxTs - r.mx > STALE_SYMBOL_DAYS * 86_400_000)
+    .map(r => ({ symbol: r.symbol, lastBar: getETDateKey(r.mx) }));
+  return { key: getETDateKey(minTs), ts: minTs, stale };
+}
+
 export interface ExplainedBreakoutStop {
   liveOnly?: boolean;
   symbol: string;

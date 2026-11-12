@@ -12,6 +12,7 @@ import { t, isEs, sleeveLabel } from "../store.js";
 import { api } from "../api.js";
 import { money, pnlWhole, n, num } from "../fmt.js";
 import { esc } from "../ui.js";
+import { CLOSE_REASON_WORDS, closeReasonWord } from "../close-reasons.js";
 
 const NY = "America/New_York";
 const locale = () => (isEs() ? "es" : "en-GB"); // en-GB: "Fri 23 Oct", 24h clock
@@ -27,40 +28,13 @@ const DAY = 86400000;
  *  the engine's id is never shown to the owner. */
 export function reasonWord(code, cadence) {
   if (!code) return "";
-  const stop = t("stop-loss", "stop de pérdida");
-  const limit5 = t("5-day limit", "límite de 5 días");
+  if (CLOSE_REASON_WORDS[String(code).toUpperCase()] && !["MOMENTUM_REBALANCE", "PORTFOLIO_REBALANCE", "REBALANCE"].includes(String(code).toUpperCase())) return closeReasonWord(code, isEs() ? "es" : "en");
   const matched = t("matched to the broker", "ajuste con el broker");
   const dd = t("drawdown control", "control de caída");
-  const exit = t("exit signal", "señal de salida");
-  const room = t("made room for a stronger breakout", "dio paso a una ruptura más fuerte");
   const reb = cadence === "hourly" ? t("hourly rebalance", "rebalanceo horario")
     : cadence === "daily" ? t("daily rebalance", "rebalanceo diario") : t("rebalance", "rebalanceo");
   const R = {
-    trail_stop: t("trailing stop", "stop dinámico"),
-    trailing_stop: t("trailing stop", "stop dinámico"),
-    stop_loss: stop,
-    stop,
-    broker_stop_loss: t("stop-loss at the broker", "stop de pérdida en el broker"),
-    max_hold: limit5,
-    time_stop: limit5,
-    breakout_short_time_stop: limit5,
-    breakout_long_time_stop: limit5,
-    breakout_short_stop: t("breakout stop-loss", "stop de la ruptura"),
-    breakout_long_stop: t("breakout stop-loss", "stop de la ruptura"),
-    breakout_catastrophe_stop: t("emergency stop at the broker", "stop de emergencia en el broker"),
-    breakout_short_exit: t("breakout ended", "fin de la ruptura"),
-    breakout_long_exit: t("breakout ended", "fin de la ruptura"),
-    breakout_short_priority: room,
-    breakout_long_priority: room,
-    breakout_short_drawdown: dd,
-    breakout_long_drawdown: dd,
-    trend_exit: t("trend ended", "terminó la tendencia"),
-    sma_exit: exit,
-    meanrev_exit: exit,
-    idle_overlay_exit: t("idle-cash position closed", "posición de efectivo ocioso cerrada"),
     regime: t("market conditions", "condiciones del mercado"),
-    slot_displaced: t("a stronger pick took its slot", "otro valor más fuerte ocupó su plaza"),
-    signal_exit: t("signal faded", "la señal se apagó"),
     signal_entry: t("new signal", "señal nueva"),
     entry: t("new signal", "señal nueva"),
     rebalance: reb,
@@ -77,17 +51,8 @@ export function reasonWord(code, cadence) {
     regime_on: t("market back above its 200-day average", "mercado de nuevo sobre su media de 200 días"),
     market_closed: t("market closed", "mercado cerrado"),
     maintenance: t("maintenance", "mantenimiento"),
-    model_cutover: t("new model version", "nueva versión del modelo"),
     cutover: t("new model version", "nueva versión del modelo"),
     broker_sync: matched,
-    momentum_reconciled: matched,
-    portfolio_reconciled: matched,
-    sync_detected: matched,
-    sync_dup_reconciled: matched,
-    backfilled_sync: matched,
-    broker_gone_404: matched,
-    manual_close_unreconciled: matched,
-    manual_close: t("closed by hand", "cierre manual"),
     manual: t("manual", "manual"),
     treasury_sweep: t("idle cash moved to treasury", "efectivo ocioso a tesorería"),
     treasury_cover: t("cash taken out of treasury", "efectivo sacado de tesorería"),

@@ -19,9 +19,9 @@ let release = null;
 const MAX_CLOSES = 8;
 
 function periodName(days) {
-  if (days === 0) return t("All-time P&L", "P&L total");
-  if (days === 1) return t("Today's P&L", "P&L de hoy");
-  return t(`${days}D P&L`, `P&L ${days}D`);
+  if (days === 0) return t("Gain since start", "Ganancia desde el inicio");
+  if (days === 1) return t("Gain today", "Ganancia de hoy");
+  return t(`Gain over ${days} days`, `Ganancia de ${days} días`);
 }
 
 const amount = (v) => v == null ? "—" : `<span style="color:${pnlColor(v)}">${pnlWhole(v)}</span>`;
@@ -49,13 +49,13 @@ export function renderBreakdown(b) {
   const trims = n(b.trimsCount);
   const trimsWord = trims === 1 ? t("trim", "recorte") : t("trims", "recortes");
   const legs = trims > 0 ? `${count} ${closesWord} ${t("and", "y")} ${trims} ${trimsWord}` : `${count} ${closesWord}`;
-  const rows = [bridgeRow(`${t("Realized since entry in", "Cobrado desde la entrada en")} ${legs}`, b.realized)];
+  const rows = [bridgeRow(`${t("Result since entry of", "Resultado desde la entrada de")} ${legs}`, b.realized)];
   if (!allTime && b.earnedBefore == null) {
     rows.push(`<tr><td colspan="2" class="muted">${t("A position reduced in the period has no price at its start, so the part counted before can't be separated.", "A una posición reducida en el período le falta el precio al inicio: no se puede separar lo contado antes.")}</td></tr>`);
   } else if (!allTime) {
     rows.push(bridgeRow(`− ${t("already counted before", "ya contado antes del")} ${startDay}`, -n(b.earnedBefore), "", t("(counted in earlier days' P&L)", "(contado en el P&L de días anteriores)")));
   }
-  rows.push(bridgeRow(`= ${t("closes", "cierres")}`, b.closedInWindow, "sum", t("(the tile figure)", "(la cifra de la tarjeta)")));
+  rows.push(bridgeRow(`= ${t("what closed operations earned in this period", "lo que las operaciones cerradas ganaron en este período")}`, b.closedInWindow, "sum"));
   rows.push(bridgeRow(
     allTime ? `${t("open positions, not yet realized", "posiciones abiertas, sin cobrar")}` : `${t("open positions, price change in the period", "posiciones abiertas, cambio de precio en el período")}`,
     b.openChange, "", `(${n(b.openCount)})`,
@@ -64,8 +64,8 @@ export function renderBreakdown(b) {
     `+ ${t("holding costs and other", "costes de mantener y otros")}`,
     b.holding, "", t("(funding, margin interest, fees, BTC collateral)", "(funding, interés del margen, comisiones, colateral BTC)"),
   ));
-  rows.push(bridgeRow(`= ${t("positions", "posiciones")}`, b.positions, "sum", t("(the tile figure)", "(la cifra de la tarjeta)")));
-  rows.push(bridgeRow(`= ${periodName(days)}`, b.pnl, "total", t("(closes + positions)", "(cierres + posiciones)")));
+  rows.push(bridgeRow(`= ${t("the rest of the account's change", "el resto del cambio de la cuenta")}`, b.positions, "sum"));
+  rows.push(bridgeRow(`= ${periodName(days)}`, b.pnl, "total"));
   const approx = !allTime && b.startPrices === "bars"
     ? `<p class="muted pb-note">${t("Start prices from closing bars — approximate.", "Precios de inicio de barras de cierre — aproximado.")}</p>`
     : "";

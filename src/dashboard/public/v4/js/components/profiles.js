@@ -83,7 +83,7 @@ function brokerCell(key, group, bt, stats) {
     <div class="kpi bk sm${on ? " on" : ""}" data-broker="${esc(key)}" role="button" tabindex="0" title="${esc(title)}">
       <div class="bk-text">
         <span class="kl"><span class="pdot" style="background:${dotColor(key)}"></span><b>${esc(name)}</b>${status}</span>
-        <span class="kv">${equity == null ? "—" : money(equity, 0)} ${allPct == null ? "" : `<span class="kv sub" title="${esc(t("Return since the display start", "Rentabilidad desde el inicio display"))}"><span style="color:${pnlColor(allPct)}">${pctSigned(allPct)}</span> ${t("total", "total")}</span>`}</span>
+        <span class="kv">${equity == null ? "—" : money(equity, 0)} ${allPct == null ? "" : `<span class="kv sub" title="${esc(t("Return since the start", "Rentabilidad desde el inicio"))}"><span style="color:${pnlColor(allPct)}">${pctSigned(allPct)}</span> ${t("total", "total")}</span>`}</span>
         <span class="ks">${esc(periodLabel(store.state.period))} <b style="color:${pnlColor(periodPnl)}">${periodPnl == null ? "—" : moneySigned(periodPnl, 0)}</b>${periodPct == null ? "" : ` ${pctSigned(periodPct)}`}</span>
       </div>
       <div class="pspark" data-spark="${key === "binance" ? "binance_total" : `${esc(key)}_main`}" aria-hidden="true"></div>

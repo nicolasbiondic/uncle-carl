@@ -7,25 +7,32 @@ import {
 } from "../db/database";
 import { makeTestDb, seedOpenTrade } from "../test-support/db";
 import { setBrokerTruthAvailable, readDisplayMoneyWindow, publishInvariantEpisodes } from "./truth";
-import { readMoneyWindow, readSleeveMoney, tileMoney, readBinanceMarginBreakdown, moneyReportDate } from "./money";
+import { readMoneyWindow, readSleeveMoney, readOpenMoney, tileMoney, readBinanceMarginBreakdown, moneyReportDate } from "./money";
 import { computeRealizedAttribution } from "./pnlBreakdown";
 import { applyBuyFill, applySellFill, reconcileRowToBroker } from "../portfolio-engine/live/rows";
 import { registerProfileRoutes } from "../dashboard/routes/profiles";
 import { registerStrategyRoutes } from "../dashboard/routes/strategies";
 import { clearApiCache } from "../dashboard/cache";
-import { TelegramReporter } from "../telegram/telegram-reporter";
+import { TelegramReporter, fmtCloseAlert } from "../telegram/telegram-reporter";
 import { DailyReporter } from "../reports/DailyReporter";
 import { eventBus, EVENTS } from "../utils/events";
 // @ts-ignore frontend ES module; exercise the real renderers, not a copy.
 import { store } from "../dashboard/public/v4/js/store.js";
 // @ts-ignore frontend ES module
-import { kpiValues, closesSub, renderKpis } from "../dashboard/public/v4/js/components/kpis.js";
+import { kpiValues, renderKpis } from "../dashboard/public/v4/js/components/kpis.js";
+// @ts-ignore frontend ES module
+import { renderBreakdown } from "../dashboard/public/v4/js/components/pnl-breakdown.js";
 // @ts-ignore frontend ES module
 import { sinceStart, renderProfiles } from "../dashboard/public/v4/js/components/profiles.js";
+// @ts-ignore frontend ES module
+import { renderPositions, positionsTotals } from "../dashboard/public/v4/js/components/positions.js";
+// @ts-ignore frontend ES module
+import { renderTrades } from "../dashboard/public/v4/js/components/trades.js";
 
 const NOW = Date.parse("2026-11-07T17:00:00Z");
+const originalState = { ...store.state };
 const clock = () => spyOn(Date, "now").mockReturnValue(NOW);
-afterEach(() => { spyOn(Date, "now").mockRestore(); delete process.env.DISPLAY_HISTORY_START; clearApiCache(); });
+afterEach(() => { Object.assign(store.state, originalState); spyOn(Date, "now").mockRestore(); delete process.env.DISPLAY_HISTORY_START; clearApiCache(); });
 
 test("one fixture: tiles 1/7/30/All, cards, since start, curve, bridge, digest, status and profits agree", async () => {
   clock(); makeTestDb(); clearApiCache();
@@ -46,7 +53,7 @@ test("one fixture: tiles 1/7/30/All, cards, since start, curve, bridge, digest, 
   applyBuyFill(cfg, "SPY", 10, 104, time + 4000);
   applySellFill(cfg, "SPY", 1, 105.6, { nowMs: time + 5000 }); // open partial +1.6
   const positions = [{ profileId: "momentum_stocks", symbol: "SPY", market: "stock", side: "buy", quantity: 9,
-    avgEntryPrice: 104, currentPrice: 105, openedAt: time + 4000 }];
+    avgEntryPrice: 104, currentPrice: 105, openedAt: time + 4000, unrealizedPnl: 9 }];
   const accounts = [{ id: "momentum_stocks", broker: "alpaca", equity: 50045.4, initialEquity: 50000, positions: 1, label: "Momentum Stocks" },
     { id: "meanrev_stocks", broker: "alpaca", equity: 50000, initialEquity: 50000, positions: 0, label: "MeanRev Stocks" },
     { id: "momentum_crypto", broker: "binance", equity: 5000, initialEquity: 5000, positions: 0, label: "Momentum Crypto" }];
@@ -80,39 +87,58 @@ test("one fixture: tiles 1/7/30/All, cards, since start, curve, bridge, digest, 
       expect(kpiValues(state).periodPnl).toBe(w.pnl);
       expect(sinceStart(state).pnl).toBe(agg.sinceStart.pnl);
       expect(sinceStart(state).displayStart).toEqual(agg.displayStart);
-      expect(closesSub(agg.periodBreakdown, w.pnl)).toContain(`$${Math.abs(rounded.positions).toLocaleString("en-US")}`);
+      expect(renderBreakdown(modal)).toContain(`$${Math.abs(rounded.positions).toLocaleString("en-US")}`);
       const daily = readMoneyWindow({ days: 1 });
       expect(daily.breakdown.realized).toBeCloseTo(36.4, 8);
     }
     const digest = reporter.composeDailyDigest();
     await (reporter as any).cmdStatus("test"); await (reporter as any).cmdProfits("test");
     const today = readMoneyWindow({ days: 1 }).window!;
-    const fmt = (n: number) => `${n >= 0 ? "+" : "−"}$${Math.abs(n).toFixed(2)}`;
-    expect(digest).toContain(`P&L hoy ${fmt(today.pnl)}`);
-    expect(sent[0]).toContain(`P&L hoy ${fmt(today.pnl)}`);
-    expect(sent[0].match(/realizado por fills hoy \+\$36\.40/g)?.length).toBe(2); // sleeve and total
-    // The digest's closes/positions line carries the Today tile's rounded pair.
+    const fmt = (n: number) => `${n >= 0 ? "+" : "−"}$${Math.round(Math.abs(n)).toLocaleString("en-US")}`;
+    expect(digest).toContain(`Hoy ${fmt(today.pnl)}`);
+    expect(sent[0]).toContain(`Hoy ${fmt(today.pnl)}`);
+    const realized = readMoneyWindow({ days: 1 }).breakdown.realized;
+    const open = readOpenMoney(positions);
+    expect(positionsTotals).toBe(readOpenMoney); // one reader, not two lookalike sums
+    expect(open.total).toBe(9);
+    const closedLine = `Cerradas hoy: 1 operación y 2 cierres parciales, ${fmt(realized)} en total (desde que se abrieron)`;
+    const openLine = `Siguen abiertas: 1 posición, ${fmt(open.total)} desde que se abrieron`;
+    for (const surface of [digest, sent[0]]) {
+      expect(surface).toContain(closedLine); expect(surface).toContain(openLine);
+      expect(surface).not.toMatch(/fills|MtM|display|base rebajada|vs asignación|Cierres .*posiciones/);
+    }
+    Object.assign(store.state, { lang: "es" });
+    const footer = renderPositions({ dashboard: { accounts, portfolio: { positions } }, view: "consolidated" });
+    expect(footer).toContain("Sin cerrar (desde la entrada)"); expect(footer).toContain(fmt(open.total));
+    expect(footer).toContain("1 posición");
+    const closed = getDB().query("SELECT * FROM trades WHERE status='closed' AND symbol='SPY'").get() as any;
+    const alert = fmtCloseAlert(closed);
+    const trades = renderTrades([{ ...closed, status: "closed", pnlPct: closed.pnl_pct }]);
+    expect(alert).toContain(fmt(closed.pnl)); expect(trades).toContain(fmt(closed.pnl));
+    expect(alert).not.toContain("hoy");
+    // Attribution remains available in the detail reader, never on tiles/digest.
     const [tileToday] = await get("/api/v2/profiles?days=1");
     const whole = (n: number) => `${n > 0 ? "+" : n < 0 ? "−" : ""}$${Math.abs(n).toLocaleString("en-US")}`;
     const r1 = tileToday.pnlAggregate.periodBreakdown.rounded;
-    expect(digest).toContain(`Cierres ${whole(r1.closes)} · posiciones ${whole(r1.positions)} en el día`);
-    expect(digest).toContain(`Realizado por fills (neto, desde entrada) ${whole(Math.round(36.4))}`);
-    expect(digest).toContain(`Inicio display ${readDisplayMoneyWindow(["alpaca_main", "binance_main"], 0)!.start.date}`);
-    expect(digest).toContain(`P&L desde el inicio ${fmt(readDisplayMoneyWindow(["alpaca_main", "binance_main"], 0)!.pnl)}`);
+    expect(digest).not.toContain(`Cierres ${whole(r1.closes)} · posiciones ${whole(r1.positions)} en el día`);
+    expect(renderKpis()).not.toContain("cierres <b");
+    expect(digest).toContain(`${fmt(readDisplayMoneyWindow(["alpaca_main", "binance_main"], 0)!.pnl)} desde el`);
     // /profits: recognized realized = closed episodes (+34.80) + the open
     // row's partial (+1.60); the footer names what it sums and the display
     // start is the tiles' All anchor.
-    expect(sent[1]).toContain("realizado reconocido +$36.40");
-    expect(sent[1]).toContain("todos los sleeves: +$36.40");
-    expect(sent[1]).toContain("P&L desde el inicio display (variación del patrimonio) +$374.44");
-    expect(sent[1]).toContain(`Inicio display ${readDisplayMoneyWindow(["alpaca_main", "binance_main"], 0)!.start.date}`);
+    expect(sent[1]).toContain(`resultado de lo cerrado ${fmt(realized)}`);
+    expect(sent[1]).toContain(`Total de lo cerrado ${fmt(realized)}`);
+    expect(sent[1]).toContain("1 operación cerrada"); // not two trades (one is still open)
+    expect(sent[1]).toContain(openLine);
+    expect(sent[1]).toContain("Ganancia desde el inicio +$374");
+    expect(sent[1]).toContain(`Desde el ${readDisplayMoneyWindow(["alpaca_main", "binance_main"], 0)!.start.date}`);
     expect(sent[1]).not.toContain("M-B"); // inactive momentum_btc has no history here: no line at all
     const risk = await get("/api/v2/sleeves/risk");
     const stocksRisk = risk.sleeves.find((s: any) => s.id === "momentum_stocks");
     expect(stocksRisk.closedEpisodeResult).toBeCloseTo(34.8, 8);
     // Broker modal "Realized" = the recognized realized (A-2), labelled.
     expect(stocksRisk.realizedPnl).toBeCloseTo(36.4, 8);
-    expect(stocksRisk.realizedLabel).toBe("Realizado reconocido (episodios cerrados + parciales de filas abiertas, neto)");
+    expect(stocksRisk.realizedLabel).toBe("Resultado de lo cerrado (incluye cierres parciales)");
     // G-2: a portfolio-engine sleeve reports a measure (its own equity history —
     // none seeded here ⇒ null), never a fossil state file or a pause threshold.
     expect(stocksRisk.riskMode).toBe("portfolio");
@@ -204,8 +230,9 @@ test("calendar yesterday, final report, and catch-up digest all use the requeste
   let digest = ""; const telegram = new TelegramReporter();
   report.sendTelegramDigest = async () => { expect(moneyReportDate()).toBe("2026-11-01"); digest = telegram.composeDailyDigest(); return true; };
   await (report as any).checkReportTime();
-  expect(digest).toContain("2026-11-01 · cierre ET definitivo");
-  expect(digest).toContain("P&L del día +$200.00");
+  expect(digest).toContain("domingo 1 nov");
+  expect(digest).toContain("Hoy +$200");
+  expect(digest).toContain("Posiciones al cierre: sin datos suficientes");
   expect(digest).not.toContain("9999");
   const row = getDB().query("SELECT * FROM daily_reports WHERE report_date='2026-11-01'").get() as any;
   expect(row.starting_equity).toBe(50000); expect(row.ending_equity).toBe(50100); expect(row.telegram_sent).toBe(1);
@@ -240,7 +267,7 @@ test("Binance components are independent margin equities, not wallet USDC plus r
   clock(); makeTestDb();
   const b = readBinanceMarginBreakdown([{ id: "momentum_crypto", equity: 4900 }, { id: "momentum_crypto_usdc", equity: 4800 }]);
   expect(b.usdtFutures).toBe(4900); expect(b.usdcFutures).toBe(4800);
-  expect(readSleeveMoney("momentum_crypto").labels.unrealized).toBe("Sin realizar desde la entrada");
+  expect(readSleeveMoney("momentum_crypto").labels.unrealized).toBe("Sin cerrar (desde la entrada)");
   const rounded = tileMoney(0.6, { closedInWindow: 0.4, closesCount: 1, trimsCount: 0, startPrices: "marks" }).rounded!;
   expect(rounded).toEqual({ pnl: 1, closes: 0, positions: 1 });
 });

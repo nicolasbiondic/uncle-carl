@@ -6,7 +6,7 @@
 // since entry" to those two figures.
 import { afterEach, describe, expect, test } from "bun:test";
 import { store } from "../store.js";
-import { renderKpis, closesSub } from "./kpis.js";
+import { renderKpis } from "./kpis.js";
 import { renderBreakdown } from "./pnl-breakdown.js";
 import { renderTrades } from "./trades.js";
 
@@ -27,33 +27,34 @@ const today = {
 };
 const breakdown = { closedInWindow: 173.08, positions: 193.92, closesCount: 10, trimsCount: 8, startPrices: "marks" };
 
-describe("closes · positions line under the P&L KPIs", () => {
-  test("both figures of the SAME window, whole dollars, no since-entry figure, no breakdown text or link on the line", () => {
+describe("period attribution is available only in the detail modal", () => {
+  test("both figures of the SAME window, whole dollars, with plain words in the modal", () => {
     Object.assign(store.state, { lang: "en" });
-    const html = closesSub(breakdown);
-    expect(html).toContain("closes <b");
+    const html = renderBreakdown(today);
+    expect(html).toContain("what closed operations earned in this period");
     expect(html).toContain("+$173");
-    expect(html).toContain("positions <b");
+    expect(html).toContain("the rest of the account's change");
     expect(html).toContain("+$194");
-    expect(html).not.toContain("1,150");
-    expect(html).not.toMatch(/breakdown|data-act|<button|realized|since entry/);
+    expect(html).toContain("1,150");
+    expect(html).not.toMatch(/data-act|<button/);
   });
 
   test("Spanish wording; no legs reads 'sin cierres'; a missing payload renders nothing", () => {
     Object.assign(store.state, { lang: "es" });
-    expect(closesSub(breakdown)).toContain("cierres");
-    expect(closesSub(breakdown)).toContain("posiciones");
-    expect(closesSub(breakdown)).not.toContain("desglose");
-    expect(closesSub({ closedInWindow: 0, positions: 0, closesCount: 0, trimsCount: 0 })).toBe("sin cierres");
-    expect(closesSub(null)).toBe("");
+    expect(renderBreakdown(today)).toContain("lo que las operaciones cerradas ganaron en este período");
+    expect(renderBreakdown(today)).toContain("el resto del cambio de la cuenta");
+    expect(renderBreakdown({ ...today, count: 0, trimsCount: 0, closes: [] })).toContain("0 cierres");
+    expect(renderBreakdown(null)).toContain("El desglose no está disponible ahora.");
   });
 
   test("a start price missing: only the counts, never a guessed dollar figure", () => {
     Object.assign(store.state, { lang: "en" });
-    const html = closesSub({ ...breakdown, closedInWindow: null, positions: null });
-    expect(html).toBe("10 closes, 8 trims");
+    const html = renderBreakdown({ ...today, earnedBefore: null, closedInWindow: null, positions: null });
+    expect(html).toContain("10 closes and 8 trims");
+    expect(html).toContain("can't be separated");
+    expect(html).not.toContain("+$173");
     Object.assign(store.state, { lang: "es" });
-    expect(closesSub({ ...breakdown, closedInWindow: null, positions: null, trimsCount: 1 })).toBe("10 cierres, 1 recorte");
+    expect(renderBreakdown({ ...today, earnedBefore: null, closedInWindow: null, positions: null, trimsCount: 1 })).toContain("10 cierres y 1 recorte");
   });
 
   // Owner 2026-10-25: the breakdown is a behaviour of the figure, not one more button.
@@ -69,19 +70,19 @@ describe("closes · positions line under the P&L KPIs", () => {
     const html = renderKpis();
     const buttons = [...html.matchAll(/<button type="button" class="kfig" data-act="pnl-why" data-days="(\d+)" title="([^"]+)">(.*?)<\/button>/g)];
     expect(buttons.map((m) => m[1])).toEqual(["1", "7"]);
-    expect(buttons[0][2]).toBe("Both within this period — click for the breakdown");
+    expect(buttons[0][2]).toBe("Change in account value — click for details");
     expect(buttons[0][3]).toContain("+$367");
     expect(buttons[1][3]).toContain("−$1,364");
     expect(html).not.toMatch(/breakdown<|>breakdown|class="lnk"/);
-    expect(html).toContain("+$173");
-    expect(html).toContain("+$194");
-    expect(html).toContain("−$900");
-    expect(html).toContain("−$464");
+    expect(html).not.toContain("+$173");
+    expect(html).not.toContain("+$194");
+    expect(html).not.toContain("−$900");
+    expect(html).not.toContain("−$464");
     // closes + positions is the headline, exactly, on both tiles
     expect(173 + 194).toBe(367);
     expect(-900 - 464).toBe(-1364);
     Object.assign(store.state, { lang: "es" });
-    expect(renderKpis()).toContain('title="Ambos dentro de este período — clic para ver el desglose"');
+    expect(renderKpis()).toContain('title="Cambio del valor de la cuenta — clic para ver el detalle"');
   });
 
   test("a P&L without its bridge (old server) stays a plain, non-clickable figure", () => {
@@ -102,9 +103,11 @@ describe("closes · positions line under the P&L KPIs", () => {
       } }],
     });
     const html = renderKpis();
-    expect(html).toContain("+$9,304");
+    expect(html).toContain("+$9,568");
+    expect(html).not.toContain("+$9,304");
     expect(html).toContain('data-days="0"');
-    expect(html).toContain("−$1,360");
+    expect(html).toContain("−$1,878");
+    expect(html).not.toContain("−$1,360");
     expect(html).toContain('data-days="7"');
   });
 });
@@ -113,7 +116,7 @@ describe("renderBreakdown — the bridge from realized to the tile's two figures
   test("lists realized since entry, counted before, = closes, open positions, holding and other, = positions, = the P&L — in that order, with the tile figures", () => {
     Object.assign(store.state, { lang: "es" });
     const html = renderBreakdown(today);
-    const order = ["Cobrado desde la entrada en 10 cierres y 8 recortes", "ya contado antes del", "= cierres", "posiciones abiertas, cambio de precio en el período", "costes de mantener y otros", "= posiciones", "= P&L de hoy"]
+    const order = ["Resultado desde la entrada de 10 cierres y 8 recortes", "ya contado antes del", "= lo que las operaciones cerradas ganaron en este período", "posiciones abiertas, cambio de precio en el período", "costes de mantener y otros", "= el resto del cambio de la cuenta", "= Ganancia de hoy"]
       .map((s) => html.indexOf(s));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
@@ -172,8 +175,9 @@ describe("Trades tab — holding time", () => {
       { status: "closed", symbol: "SPY", side: "buy", entryPrice: 540.24, exitPrice: 525.49, pnl: -1794.42, pnlPct: -0.3 },
       { status: "closed", symbol: "DOGE/USD", side: "buy", entryPrice: 0.0777, exitPrice: 8.99, pnl: 85.04, pnlPct: 0.3 },
     ]);
-    for (const value of ["$540<", "$525<", "−$1,794 ", "$0.0777<", "$8.99<", "+$85 ", "0%"])
+    for (const value of ["$540<", "$525<", "−$1,794 ", "&lt;$1<", "$9<", "+$85 ", "0%"])
       expect(html).toContain(value);
+    expect(html).not.toMatch(/\$[\d,]+\.\d/);
     expect(html).not.toContain("$1,794.42");
   });
 

@@ -216,8 +216,8 @@ describe("recent actions", () => {
     for (const code of ["MAX_HOLD", "TIME_STOP", "BREAKOUT_SHORT_TIME_STOP"]) expect(reasonWord(code)).toBe("5-day limit");
     store.state.lang = "es";
     expect(reasonWord("daily_rebalance")).toBe("rebalanceo diario");
-    expect(reasonWord("MAX_HOLD")).toBe("límite de 5 días");
-    expect(reasonWord("BREAKOUT_SHORT_TIME_STOP")).toBe("límite de 5 días");
+    expect(reasonWord("MAX_HOLD")).toBe("cierre por tiempo máximo (5 días)");
+    expect(reasonWord("BREAKOUT_SHORT_TIME_STOP")).toBe("cierre por tiempo máximo (5 días)");
   });
 });
 

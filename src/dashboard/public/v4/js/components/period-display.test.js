@@ -39,15 +39,15 @@ describe("renderKpis — no Since Start, server-computed period pct", () => {
     const html = renderKpis();
     // plain labels, then the two portfolio cells (their label line holds the name + status)
     expect([...html.matchAll(/class="kl">([^<]+)</g)].map((m) => m[1])).toEqual([
-      "Total equity", "Today P&amp;L", "7D P&amp;L", "Return 30D", "Orders today", "Win rate",
+      "Total equity", "Gain today", "Gain over 7 days", "Return 30D", "Orders today", "Win rate",
     ]);
     expect([...html.matchAll(/data-broker="(\w+)"/g)].map((m) => m[1])).toEqual(["alpaca", "binance"]);
     // Alpaca and Binance sit between Total equity and Today P&L
     const at = (s) => html.indexOf(s);
     expect(at("Total equity")).toBeLessThan(at('data-broker="alpaca"'));
-    expect(at('data-broker="binance"')).toBeLessThan(at("Today P&amp;L"));
+    expect(at('data-broker="binance"')).toBeLessThan(at("Gain today"));
     expect(html).not.toMatch(/Risk|Running|Fear|Greed|>Open<|lo2|DD/);
-    expect(html).toContain("all-time closes");
+    expect(html).toContain("of closed operations");
   });
 
   test("sub-lines are plain sentences, not 'A · B · C' strings", () => {
@@ -69,8 +69,9 @@ describe("renderKpis — no Since Start, server-computed period pct", () => {
         breakdown7d: { closedInWindow: 7963.43, positions: -9757.85, closesCount: 19, trimsCount: 0, startPrices: "marks" } } }],
     });
     const html = renderKpis();
-    for (const value of ["$106,827", "−$85", "−$1,794", "+$9", "+$7,963", "−0.3%"])
+    for (const value of ["$106,827", "−$85", "−$1,794", "−0.3%"])
       expect(html).toContain(value);
+    expect(html).not.toContain("+$9"); expect(html).not.toContain("+$7,963");
     expect(html).not.toMatch(/\$[\d,]+\./);
   });
 
@@ -83,7 +84,7 @@ describe("renderKpis — no Since Start, server-computed period pct", () => {
     Object.assign(store.state, { period: 1, view: "consolidated", profiles: withAggregate(1234, null), dashboard: { portfolio: {} } });
     const html = renderKpis();
     expect(html).toContain("+$1,234");
-    const pnlCell = html.slice(html.indexOf("Today P&L"), html.indexOf("Today P&L") + 200);
+    const pnlCell = html.slice(html.indexOf("Gain today"), html.indexOf("Gain today") + 200);
     expect(pnlCell).not.toContain("%");
   });
 

@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { money, moneyCompact, moneySignedCompact, pctSigned, quantity } from "./fmt.js";
+import { money, moneySigned, moneyCompact, moneySignedCompact, pctSigned, quantity } from "./fmt.js";
 
 describe("compact table money", () => {
   test.each([
     [540.24, "$540"], [525.49, "$525"], [3019.4, "$3,019"],
     [100, "$100"], [-100.5, "$101"], [99.9, "$100"],
-    [85.4, "$85"], [10, "$10"], [8.99, "$8.99"], [0.0777, "$0.0777"],
-    [0.00001234, "$0.0000123"], [0, "$0"],
+    [85.4, "$85"], [10, "$10"], [8.99, "$9"], [0.0777, "<$1"],
+    [0.00001234, "<$1"], [0, "$0"],
   ])("%s → %s", (value, expected) => {
     expect(moneyCompact(value)).toBe(expected);
   });
@@ -15,8 +15,8 @@ describe("compact table money", () => {
     expect(moneySignedCompact(-1794.42)).toBe("−$1,794");
     expect(moneySignedCompact(-85.04)).toBe("−$85");
     expect(moneySignedCompact(-12.6)).toBe("−$13");
-    expect(moneySignedCompact(8.99)).toBe("+$8.99");
-    expect(moneySignedCompact(-0.0777)).toBe("−$0.0777");
+    expect(moneySignedCompact(8.99)).toBe("+$9");
+    expect(moneySignedCompact(-0.0777)).toBe("−<$1");
     expect(moneySignedCompact(0)).toBe("+$0");
   });
 
@@ -55,6 +55,8 @@ test("table P&L is whole dollars", () => {
   expect(pnlWhole(-85.48)).toBe("−$85");
   expect(pnlWhole(38.69)).toBe("+$39");
   expect(pnlWhole(-1794.33)).toBe("−$1,794");
+  expect(pnlWhole(-340.5)).toBe(moneySigned(-340.5, 0));
+  expect(pnlWhole(-0.2)).toBe("−$0");
 });
 
 import { etTime, etDate, etDateTime, etStamp, etDayKey } from "./fmt.js";

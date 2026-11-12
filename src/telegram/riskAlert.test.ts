@@ -7,9 +7,10 @@ describe("daily digest early drawdown alert (plan V §9, line E quorum condition
     expect(riskAlertLine(14.9, 25)).toBeNull();
     const line = riskAlertLine(15, 25);
     expect(line).not.toBeNull();
-    expect(line!).toContain("15.0%");
-    expect(line!).toContain("presupuesto de 25%");
-    expect(riskAlertLine(22.4, 25)!).toContain("22.4%");
+    expect(line!).toContain("caída desde el máximo es 15,0 %");
+    expect(line!).toContain("límite 25 %");
+    expect(riskAlertLine(22.4, 25)!).toContain("22,4 %");
+    expect(line!).not.toContain("drawdown");
   });
 
   test("no budget configured (fresh install) or no drawdown reading → no alert", () => {

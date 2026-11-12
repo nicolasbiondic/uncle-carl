@@ -18,6 +18,9 @@ import {
   compareCryptoReplay,
   checkPortfolioSleeve,
   lastCompletedStockSession,
+  lastCompleteSession,
+  checkMomentumCryptoSleeve,
+  STALE_SYMBOL_DAYS,
   PORTFOLIO_FLOAT_TOLERANCE,
   extractLiveDecisions,
   extractSeedPositions,
@@ -997,5 +1000,64 @@ describe("portfolio-engine exact decision replay", () => {
       f.db.exec("UPDATE portfolio_decisions SET strategy_version = 'unknown' WHERE id = 3");
       expect(() => f.run()).toThrow("unknown portfolio version");
     } finally { f.close(); }
+  });
+});
+
+// 2026-11-10: commit 115797e deleted `lastCompleteSession` together with the stock
+// incumbents' replay, but `checkMomentumCryptoSleeve` still called it. `tsconfig.json`
+// only includes `src/`, so no typecheck saw it: the cron's first run after the deploy
+// (11-10 04:45) failed both crypto sleeves with "lastCompleteSession is not defined".
+describe("crypto parity reads the freshest common bar (regression 2026-11-10)", () => {
+  const D = 86_400_000;
+  function histFile(rows: Array<{ symbol: string; lastBar: number }>, timeframe: string) {
+    const dir = mkdtempSync(join(tmpdir(), "parity-crypto-"));
+    const path = join(dir, "historical.db");
+    const hist = new Database(path);
+    hist.exec("CREATE TABLE historical_bars(symbol TEXT, timeframe TEXT, source TEXT, timestamp INTEGER, open REAL, high REAL, low REAL, close REAL, volume REAL)");
+    const q = hist.query("INSERT INTO historical_bars VALUES (?, ?, 'binance_futures', ?, 1, 1, 1, 1, 1)");
+    for (const r of rows) q.run(r.symbol, timeframe, r.lastBar);
+    hist.close();
+    return { dir, path };
+  }
+  const manifestOf = (sleeve: "momentum_crypto" | "momentum_crypto_usdc"): ExperimentManifest =>
+    JSON.parse(readFileSync(join(import.meta.dir, "..", liveSleeveConfig(sleeve).manifestPath), "utf8"));
+
+  test.each(["momentum_crypto", "momentum_crypto_usdc"] as const)("%s: bars at or before the epoch → nothing_yet, not a crash", async sleeve => {
+    const m = manifestOf(sleeve);
+    const lastBar = Date.parse("2026-11-01T00:00:00Z");
+    const { dir, path } = histFile(m.data.universe.map(symbol => ({ symbol, lastBar })), m.data.timeframe);
+    try {
+      const r = await checkMomentumCryptoSleeve(join(dir, "absent-trading.db"), path, join(import.meta.dir, ".."), "2026-11-03T03:00:00Z", sleeve);
+      expect(r.status).toBe("nothing_yet");
+      expect(r.lastSession).toBe(new Date(lastBar).toISOString());
+      expect(r.staleSymbols).toEqual([]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("lastCompleteSession: no bars → null; a missing symbol → ts 0; a lagging symbol → stale; ts = the OLDEST symbol's last bar", () => {
+    const m = manifestOf("momentum_crypto");
+    const [first, second, ...rest] = m.data.universe;
+    const end = Date.parse("2026-11-09T12:00:00Z");
+    const open = (rows: Array<{ symbol: string; lastBar: number }>) => {
+      const f = histFile(rows, m.data.timeframe);
+      return { ...f, db: new Database(f.path, { readonly: true }) };
+    };
+    let f = open([]);
+    try { expect(lastCompleteSession(f.db, m)).toBeNull(); } finally { f.db.close(); rmSync(f.dir, { recursive: true, force: true }); }
+
+    f = open([{ symbol: first, lastBar: end }]);
+    try {
+      const r = lastCompleteSession(f.db, m)!;
+      expect(r.ts).toBe(0);
+      expect(r.stale.map(s => s.symbol).sort()).toEqual(m.data.universe.slice(1).sort());
+    } finally { f.db.close(); rmSync(f.dir, { recursive: true, force: true }); }
+
+    const lagging = end - (STALE_SYMBOL_DAYS + 3) * D;
+    f = open([{ symbol: first, lastBar: end }, { symbol: second, lastBar: lagging }, ...rest.map(symbol => ({ symbol, lastBar: end }))]);
+    try {
+      const r = lastCompleteSession(f.db, m)!;
+      expect(r.ts).toBe(lagging);
+      expect(r.stale.map(s => s.symbol)).toEqual([second]);
+    } finally { f.db.close(); rmSync(f.dir, { recursive: true, force: true }); }
   });
 });

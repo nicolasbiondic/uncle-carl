@@ -2,6 +2,8 @@ import { store, t, sleeveLabel } from "../store.js";
 import { money, moneyCompact, pnlWhole, quantity, pctWhole, pnlColor, dur, num } from "../fmt.js";
 import { esc } from "../ui.js";
 import { renderTrades } from "./trades.js";
+import { positionsTotals } from "../money-values.js";
+export { positionsTotals } from "../money-values.js";
 
 /** A value is "priced" only if it is a real number. null/undefined/"" coerce
  *  to 0 through Number(), so an unavailable price would render as $0.00 and
@@ -82,7 +84,7 @@ export function sleeveExposure(positions, accounts) {
 
 /** Market value — what the engines' gross-cap check sums (the broker's
  *  current notional) — falling back to the entry price while no current
- *  price is known. The Notional column stays at cost (positionNotional). */
+ *  price is known. Shared by the group header and the Notional column. */
 function marketNotional(p, account) {
   if (isInverseContractSleeve(account) || !priced(p?.quantity)) return null;
   const px = priced(p?.currentPrice) && Number(p.currentPrice) > 0 ? Number(p.currentPrice)
@@ -132,7 +134,7 @@ export function togglePositionGroup(id, collapsedNow) {
 }
 
 /** Pure: the portfolio groups of a book, biggest invested first. Each group
- *  carries its rows, the $ invested at cost (null while any row is
+ *  carries its rows, the $ invested at market (null while any row is
  *  unpriceable — COIN-M), its unrealized total and its exposure row
  *  (sleeveExposure). Rows without a profileId land in one trailing group
  *  with no account (id ""). */
@@ -145,7 +147,7 @@ export function positionGroups(positions, accounts) {
     if (!byId.has(id)) byId.set(id, { id, account: accById.get(id), rows: [], invested: 0, unknown: 0 });
     const g = byId.get(id);
     g.rows.push(p);
-    const cost = positionNotional(p, g.account);
+    const cost = marketNotional(p, g.account);
     if (cost == null) g.unknown++; else g.invested += cost;
   }
   const groups = [...byId.values()].map((g) => ({
@@ -198,7 +200,7 @@ function renderGroupHeader(g, collapsed, cols) {
   // count and the long sentence ride in the title (the owner reads numbers).
   const bits = [];
   if (g.invested != null) bits.push(esc(money(g.invested, 0)));
-  if (g.pnl.counted) bits.push(`<span class="pg-pnl" style="color:${pnlColor(g.pnl.total)}">${pnlWhole(g.pnl.total)}</span>`);
+   if (g.pnl.counted) bits.push(`<span class="pg-pnl" style="color:${pnlColor(g.pnl.total)}">${t("open", "sin cerrar")} ${pnlWhole(g.pnl.total)}</span>`);
   const xp = exposurePhrase(g.exposure);
   const exp = xp
     ? `<span class="pg-exp"><span class="muted">${t("exposure", "exposición")}</span>${renderExposureBar(xp)}<span class="pg-x"${xp.color ? ` style="color:${xp.color}"` : ""}>${esc(xp.text)}</span></span>`
@@ -351,7 +353,7 @@ export function renderPositions(state, trades) {
   const row = (p, maxAbsPct) => {
     const isL = isLong(p);
     const acc = accById.get(p.profileId);
-    const notional = positionNotional(p, acc);
+    const notional = marketNotional(p, acc);
     const symTitle = [
       `${t("Qty", "Cant.")} ${quantity(p.quantity)}`,
       `${t("Entry", "Entrada")} ${priced(p.avgEntryPrice) ? moneyCompact(p.avgEntryPrice) : "—"}`,
@@ -361,15 +363,15 @@ export function renderPositions(state, trades) {
       <td><span class="symlink" data-sym="${esc(p.symbol)}" role="button" tabindex="0" title="${esc(symTitle)}">${esc(p.symbol)}</span></td>
       ${anyShort ? `<td><span class="badge ${isL ? "l" : "s"}">${isL ? "L" : "S"}</span></td>` : ""}
       <td>${notional != null
-        ? moneyCompact(notional)
+        ? esc(moneyCompact(notional))
         : `<span class="muted" title="${esc(t("COIN-M quantity is a contract count, not units — notional needs the contract size, not carried in this payload", "En COIN-M la cantidad son contratos, no unidades — el nocional necesita el tamaño de contrato, que este dato no trae"))}">—</span>`}</td>
-      <td class="opt3">${priced(p.avgEntryPrice) ? moneyCompact(p.avgEntryPrice) : "—"}</td>
-      <td class="opt3">${priced(p.currentPrice) ? moneyCompact(p.currentPrice) : "—"}</td>
+      <td class="opt3">${priced(p.avgEntryPrice) ? esc(moneyCompact(p.avgEntryPrice)) : "—"}</td>
+      <td class="opt3">${priced(p.currentPrice) ? esc(moneyCompact(p.currentPrice)) : "—"}</td>
       <td>${priced(p.unrealizedPnl)
         ? `${renderPnlBar(p, maxAbsPct)}<span style="color:${pnlColor(p.unrealizedPnl)}">${pnlWhole(p.unrealizedPnl)} <span class="muted">${priced(p.unrealizedPnlPct) ? pctWhole(p.unrealizedPnlPct) : "—"}</span></span>`
         : `<span class="muted" title="${esc(t("No price available — not counted in the total", "Sin precio disponible — no cuenta en el total"))}">—</span>`}</td>
       <td>${renderHold(holdProgress(p, acc, now))}</td>
-      ${anyTp ? `<td class="opt1">${p.takeProfit ? moneyCompact(p.takeProfit) : "—"}</td>` : ""}
+      ${anyTp ? `<td class="opt1">${p.takeProfit ? esc(moneyCompact(p.takeProfit)) : "—"}</td>` : ""}
     </tr>`;
   };
   const groups = positionGroups(pos, accounts);
@@ -381,9 +383,9 @@ export function renderPositions(state, trades) {
   const body = open.map(({ g, collapsed }) => renderGroupHeader(g, collapsed, cols) + (collapsed ? "" : g.rows.map((p) => row(p, maxAbsPct)).join(""))).join("");
   return `<div class="scroll"><table class="postbl">
     <thead><tr><th title="${esc(t("Quantity, entry and current price in each symbol's tooltip", "Cantidad, entrada y precio actual en el tooltip de cada símbolo"))}">${t("Sym", "Sím")}</th>${anyShort ? "<th>S</th>" : ""}
-      <th title="${esc(t("Quantity \u00d7 entry price — the $ actually deployed. \u2014 for COIN-M (contracts, not units)", "Cantidad \u00d7 precio de entrada — el $ realmente invertido. \u2014 en COIN-M (contratos, no unidades)"))}">${t("Notional", "Nocional")}</th>
+      <th title="${esc(t("Current market value", "Valor actual a mercado"))}">${t("Notional", "Valor")}</th>
       <th class="opt3">${t("Entry", "Entrada")}</th><th class="opt3">${t("Now", "Ahora")}</th>
-      <th title="${esc(t("Unrealized P&L since entry (not this period's); the bar is the % move against the largest on screen", "P&L sin realizar desde la entrada (no el del período); la barra es el % frente al mayor en pantalla"))}">P&L</th>
+      <th title="${esc(t("Open, since entry; percentage of the invested amount", "Sin cerrar, desde la entrada; porcentaje de lo invertido"))}">${t("Open", "Sin cerrar")}</th>
       <th title="${esc(t("Your 5-day rule: no position stays open longer — 5 market sessions for stocks, 120 h for crypto — though the bot may close it earlier. The dots fill with the position's age.", "Tu regla de 5 días: ninguna posición sigue abierta más tiempo — 5 sesiones de mercado en acciones, 120 h en cripto — aunque el bot puede cerrarla antes. Los puntos se llenan con la antigüedad."))}">${t("Time", "Tiempo")}</th>
       ${anyTp ? `<th class="opt1">TP</th>` : ""}</tr></thead>
     <tbody>${body}</tbody>
@@ -402,21 +404,6 @@ export function renderPositions(state, trades) {
  *  reported, never coerced to 0: outside market hours (or on a thin tape) a
  *  price can legitimately be unavailable, and silently counting those as
  *  break-even would understate a loss. */
-export function positionsTotals(positions) {
-  let total = 0;
-  let counted = 0;
-  let unpriced = 0;
-  for (const p of positions) {
-    // `priced` rejects null/undefined/"" BEFORE Number(): all three coerce to
-    // 0, which is finite, so a missing price would sail through as
-    // break-even — the exact fabricated zero this function exists to avoid.
-    // (Caught by the test on first write; naive Number()+isFinite was wrong.)
-    if (priced(p?.unrealizedPnl)) { total += Number(p.unrealizedPnl); counted++; }
-    else { unpriced++; }
-  }
-  return { total, counted, unpriced };
-}
-
 function renderTotalsRow(positions, anyTp, anyShort = true) {
   const { total, counted, unpriced } = positionsTotals(positions);
   if (!counted) return "";
@@ -432,9 +419,6 @@ function renderTotalsRow(positions, anyTp, anyShort = true) {
   // sideways scroll (2026-10-12).
   const what = `${counted} ${counted === 1 ? t("position", "posición") : t("positions", "posiciones")}`;
   return `<tfoot><tr class="totals">
-    <td colspan="${anyShort ? 2 : 1}" title="${esc(t("Total unrealized P&L since entry — not this period's figure", "P&L sin realizar total desde la entrada — no es la cifra del período"))} · ${esc(what)}">${t("Unrealized since entry", "Sin realizar desde la entrada")} <span class="muted">· ${counted}${note}</span></td>
-    <td></td><td class="opt3"></td><td class="opt3"></td>
-    <td style="color:${pnlColor(total)}">${pnlWhole(total)}</td>
-    <td></td>${anyTp ? `<td class="opt1"></td>` : ""}
+    <td colspan="${6 + (anyShort ? 1 : 0) + (anyTp ? 1 : 0)}"><div class="pgroup-btn" style="flex-wrap:wrap;white-space:normal">${t("Open, since entry", "Sin cerrar (desde la entrada)")} <span style="color:${pnlColor(total)}">${pnlWhole(total)}</span> <span class="muted">· ${esc(what)}${note}</span></div></td>
   </tr></tfoot>`;
 }

@@ -1,6 +1,7 @@
-import { t } from "../store.js";
+import { t, isEs } from "../store.js";
 import { moneyCompact, pnlWhole, pctWhole, pnlColor, etDateTime, dur } from "../fmt.js";
 import { esc } from "../ui.js";
+import { closeReasonWord } from "../close-reasons.js";
 
 // Uses /api/trades (camelCase). Excludes reconcile/sync phantoms so the list
 // reflects real strategy activity (same spirit as the fixed stats).
@@ -39,10 +40,10 @@ export function renderTrades(trades) {
     const isL = isLong(x);
     return `<tr>
       <td>${esc(etDateTime(x.exitTime || x.entryTime))}</td>
-      <td><span class="symlink" data-sym="${esc(x.symbol)}" role="button" tabindex="0">${esc(x.symbol)}</span></td>
+      <td><span class="symlink" data-sym="${esc(x.symbol)}" role="button" tabindex="0" title="${esc(closeReasonWord(x.closeReason, isEs() ? "es" : "en"))}">${esc(x.symbol)}</span></td>
       ${anyShort ? `<td><span class="badge ${isL ? "l" : "s"}">${isL ? "L" : "S"}</span></td>` : ""}
-      <td class="opt3">${moneyCompact(x.entryPrice)}</td>
-      <td class="opt3">${x.exitPrice != null ? moneyCompact(x.exitPrice) : "—"}</td>
+      <td class="opt3">${esc(moneyCompact(x.entryPrice))}</td>
+      <td class="opt3">${x.exitPrice != null ? esc(moneyCompact(x.exitPrice)) : "—"}</td>
       <td style="color:${pnlColor(x.pnl)}">${pnlWhole(x.pnl)} <span class="muted">${pctWhole(x.pnlPct)}</span></td>
       <td class="muted" title="${esc(t("How long the position was open — a gain built over weeks was already in the P&L before it closed", "Cuánto estuvo abierta — una ganancia acumulada en semanas ya estaba en el P&L antes del cierre"))}">${x.exitTime && x.entryTime ? dur(x.exitTime - x.entryTime) : "—"}</td>
       <td class="muted opt4">${esc(strategyWord(x.strategy))}</td>
