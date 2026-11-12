@@ -52,20 +52,45 @@ function syntheticFixtures(dir: string) {
     ["momentum_crypto_usdc", "Momentum Crypto USDC", "binance", 4],
   ] as const;
   const accounts = defs.map(([id, label, broker, count]) => ({
-    id, label, broker, equity: 25_000, initialEquity: 24_000, totalPnl: 1000,
+    id, label, broker, equity: id === "momentum_stocks" ? 100_000 : 25_000, initialEquity: id === "momentum_stocks" ? 96_000 : 24_000, totalPnl: 1000,
     cash: 8000, openPositions: count, paused: false, mode: "live",
     grossCapMult: id === "momentum_stocks" ? 2.5 : 1.15,
     grossCapBase: id === "meanrev_stocks" ? "allocation" : "equity",
   }));
-  const positions = defs.flatMap(([profileId, , , count]) => Array.from({ length: count }, (_, i) => ({
-    id: `synthetic-${profileId}-${i}`, profileId,
-    symbol: profileId === "momentum_crypto_usdc" ? ["NEAR/USDC", "1000PEPE/USDC", "ETH/USDC", "BTC/USDC"][i] : `DEMO${String(i + 1).padStart(3, "0")}`,
-    side: "long", quantity: 1.2345 + i, avgEntryPrice: 12_345.67 + i * 17,
-    currentPrice: 12_456.78 + i * 19, unrealizedPnl: (i % 2 ? -1 : 1) * (123.45 + i),
-    unrealizedPnlPct: (i % 2 ? -1 : 1) * 1.23,
-    stopLoss: i % 3 ? 11_234.56 + i * 17 : null, openedAt: now - 5 * 864e5,
-    durationSeconds: 432000,
-  })));
+  // The first group (biggest book) reads as the live momentum_stocks sleeve: its
+  // real universe, gains and losses, every ticker a human cannot read bare (USD,
+  // UGL, SSO, QLD, IWM). The meanrev group keeps the long DEMO### stress list.
+  const real = (symbol: string, qty: number, entry: number, last: number, ageDays: number) => ({
+    symbol, side: "long", quantity: qty, avgEntryPrice: entry, currentPrice: last,
+    unrealizedPnl: qty * (last - entry), unrealizedPnlPct: (last / entry - 1) * 100, ageDays,
+  });
+  const momentumRows = [
+    real("SSO", 190, 78.4, 81.9, 4), real("QLD", 160, 92.3, 88.1, 3), real("UGL", 300, 55.6, 58.2, 1),
+    real("USD", 270, 61.2, 57.9, 2), real("AAPL", 70, 231, 238.4, 0), real("MSFT", 38, 441, 433.2, 5),
+    real("NVDA", 85, 188, 203.5, 3), real("IWM", 72, 241, 236.4, 1), real("META", 28, 598, 612.9, 2),
+    real("GOOGL", 95, 172, 179.6, 4), real("AMZN", 80, 206, 201.3, 0),
+  ];
+  const nowReal = Date.now();
+  const positions = defs.flatMap(([profileId, , , count]) => Array.from({ length: count }, (_, i) => {
+    const base = { id: `synthetic-${profileId}-${i}`, profileId, side: "long", stopLoss: i % 3 ? 11_234.56 + i * 17 : null };
+    if (profileId === "momentum_stocks") {
+      const { ageDays, ...r } = momentumRows[i];
+      return { ...base, ...r, market: "stock", openedAt: nowReal - ageDays * 864e5, durationSeconds: ageDays * 86_400 };
+    }
+    const sign = i % 2 ? -1 : 1;
+    if (profileId === "momentum_crypto_usdc") { // one crypto SHORT: it gains because the price fell
+      const short = i === 3, entry = 12_345.67 + i * 17, qty = 0.3 + 0.1 * i;
+      const pct = short ? 2.1 : sign * (1.23 + i * 0.4); // the result, as a % of what was invested
+      return { ...base, symbol: ["NEAR/USDC", "1000PEPE/USDC", "ETH/USDC", "BTC/USDC"][i], market: "crypto",
+        side: short ? "sell" : "long", quantity: short ? -qty : qty, avgEntryPrice: entry,
+        currentPrice: entry * (1 + (short ? -pct : pct) / 100), unrealizedPnl: qty * entry * pct / 100, unrealizedPnlPct: pct,
+        openedAt: nowReal - (i * 41 + 7) * 36e5, durationSeconds: (i * 41 + 7) * 3600 };
+    }
+    const qty = 3 + (i % 3), entry = 120.5 + i * 3, pct = sign * (0.4 + (i % 7) * 0.45);
+    return { ...base, symbol: `DEMO${String(i + 1).padStart(3, "0")}`, market: "stock", quantity: qty, avgEntryPrice: entry,
+      currentPrice: entry * (1 + pct / 100), unrealizedPnl: qty * entry * pct / 100, unrealizedPnlPct: pct,
+      openedAt: nowReal - (i % 6) * 864e5, durationSeconds: (i % 6) * 86_400 };
+  }));
   save("dashboard", { accounts, daysRunning: 123, portfolio: {
     positions, openPositions: positions.length, equity: 100_000, cash: 32_000, winRate: 57,
   } });
@@ -80,13 +105,16 @@ function syntheticFixtures(dir: string) {
     nextDecisionAt: a.broker === "alpaca" ? Date.UTC(2026, 9, 26, 13, 35) : now + (i === 2 ? 3600e3 : 8 * 3600e3) + 15_000,
     blocked: i === 2 ? { reason: "no_signal", detail: "Sin señal larga en 8 activos", until: null }
       : i === 3 ? { reason: "soft_drawdown", detail: "soft drawdown 16.9% — paused 24h", until: now + 864e5 } : null,
-    regime: a.id === "momentum_stocks" ? { riskOn: true, ref: "SPY", distancePct: 5 } : null,
+    // Both sentences: rising (momentum) and the longest one, falling + defensive mode (the flat crypto card).
+    regime: a.id === "momentum_stocks" ? { riskOn: true, ref: "SPY", distancePct: 4.3 }
+      : a.id === "momentum_crypto" ? { riskOn: false, ref: "BTC/USD", distancePct: -12.4 } : null,
     exposureScale: i === 3 ? 0.794 : null, drawdownPct: a.broker === "alpaca" ? null : i === 3 ? 16.9 : 0,
   })), events: [{ at: now - 3600e3, portfolioId: "momentum_stocks", kind: "rebalance", symbol: null,
     qty: null, usd: 12_345, pnlUsd: null, reason: "REBALANCE", detail: "2 compras, 1 venta; 0 rechazadas" }] });
+  const tradeSymbols = ["SSO", "UGL", "AAPL", "XRP/USDC", "USD", "NVDA", "IWM", "BTC/USDC", "DEMO001", "QLD", "DEMO017", "ETH/USDC"];
   const trades = Array.from({ length: 24 }, (_, i) => ({
-    id: `synthetic-trade-${i}`, accountId: accounts[i % 4].id, symbol: positions[i].symbol,
-    status: "closed", side: "buy", strategy: "synthetic", closeReason: "TRAIL_STOP",
+    id: `synthetic-trade-${i}`, accountId: accounts[i % 4].id, symbol: tradeSymbols[i % tradeSymbols.length],
+    status: "closed", side: i === 7 ? "sell" : "buy", strategy: "synthetic", closeReason: "TRAIL_STOP",
     entryPrice: 12_345.67, exitPrice: 12_456.78, quantity: 1.2345,
     pnl: (i % 2 ? -1 : 1) * 123.45, pnlPct: (i % 2 ? -1 : 1) * 1.23,
     entryTime: now - (i + 5) * 864e5, exitTime: now - i * 3600e3,

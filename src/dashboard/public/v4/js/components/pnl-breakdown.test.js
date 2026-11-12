@@ -181,6 +181,22 @@ describe("Trades tab — holding time", () => {
     expect(html).not.toContain("$1,794.42");
   });
 
+  test("symbols carry their plain name and a short is a word, not an S column", () => {
+    Object.assign(store.state, { lang: "en" });
+    const html = renderTrades([
+      { status: "closed", symbol: "USD", side: "buy", entryPrice: 61, exitPrice: 58, pnl: -300, pnlPct: -5, closeReason: "TRAIL_STOP" },
+      { status: "closed", symbol: "BTC/USDC", side: "sell", entryPrice: 68000, exitPrice: 66000, pnl: 190, pnlPct: 3, closeReason: "TIME_STOP" },
+    ]);
+    expect(html).toContain('>USD</span><span class="symname" title="Semiconductors ×2">Semiconductors ×2</span>');
+    expect(html).toContain('>BTC/USDC</span><span class="symname" title="Bitcoin">Bitcoin</span><span class="shorttag"');
+    expect(html).not.toContain("<th>S</th>");
+    expect(html).not.toContain("badge");
+    expect(html).toContain("<th>Position</th>");
+    Object.assign(store.state, { lang: "es" });
+    expect(renderTrades([{ status: "closed", symbol: "UGL", side: "buy", entryPrice: 55, exitPrice: 56, pnl: 10, pnlPct: 1 }])).toContain('title="Oro ×2">Oro ×2</span>');
+    Object.assign(store.state, { lang: "en" });
+  });
+
   test("each close shows how long it was open", () => {
     Object.assign(store.state, { lang: "en" });
     const html = renderTrades([{ id: "m", status: "closed", symbol: "META", side: "buy", entryPrice: 607.52, exitPrice: 726.71, pnl: 4767.74, pnlPct: 19.6, entryTime: Date.UTC(2026, 8, 4, 13, 48), exitTime: Date.UTC(2026, 8, 28, 13, 35), strategy: "MOMENTUM", closeReason: "MODEL_CUTOVER" }]);

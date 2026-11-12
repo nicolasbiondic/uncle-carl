@@ -20,7 +20,7 @@ afterAll(() => { store.state.lang = langBefore; });
 describe("one compact card per portfolio", () => {
   test("momentum stocks: chips with the facts, a time line with both ends, no sentence when nothing is blocked", () => {
     const p = by("momentum_stocks");
-    expect(chipsOf(p)).toEqual(["Invested $51,767", "Leverage 1× of 2.5×", "S&P 500 +5% vs its 200-day average"]);
+    expect(chipsOf(p)).toEqual(["Invested $51,767 (97 % of its capital, limit 250 %)", "Market rising: S&P 500 is 5 % above its 200-day average"]);
     expect(noteOf(p, O)).toBe("");
     const tl = timeLine(p, O);
     expect(tl).toContain("Last decision</span> yesterday 09:35 New York");
@@ -29,8 +29,8 @@ describe("one compact card per portfolio", () => {
     expect(statusOf(p)).toEqual({ word: "Invested", color: "var(--up)" });
   });
 
-  test("mean reversion: asset count and no leverage chip", () => {
-    expect(chipsOf(by("meanrev_stocks"))).toEqual(["Invested $53,200", "32 stocks"]);
+  test("mean reversion: asset count, and no limit said when the cap is 100 %", () => {
+    expect(chipsOf(by("meanrev_stocks"))).toEqual(["Invested $53,200 (100 % of its capital)", "32 stocks"]);
     expect(timeLine(by("meanrev_stocks"), O)).toContain("Next decision</span> Monday 09:35 New York");
   });
 
@@ -47,7 +47,7 @@ describe("one compact card per portfolio", () => {
 
   test("USDC, trimmed by drawdown: size and peak chips, the one sentence, times on the viewer's clock", () => {
     const p = by("momentum_crypto_usdc");
-    expect(chipsOf(p)).toEqual(["Invested $4,700", "79% of normal size", "16% below its peak"]);
+    expect(chipsOf(p)).toEqual(["Invested $4,700 (58 % of its capital)", "79 % of normal size", "16 % below its peak"]);
     expect(noteOf(p, O)).toBe("No new buys until tomorrow 20:00."); // Sunday 00:00 UTC in the viewer's clock
     const tl = timeLine(p, O);
     expect(tl).toContain("Last decision</span> yesterday 20:00");
@@ -57,13 +57,15 @@ describe("one compact card per portfolio", () => {
 
   test("the same, in Spanish", () => {
     store.state.lang = "es";
-    expect(chipsOf(by("momentum_stocks"))).toEqual(["Invertido $51,767", "Apalancamiento 1× de 2.5×", "S&P 500 +5% frente a su media de 200 días"]);
+    expect(chipsOf(by("momentum_stocks"))).toEqual(["Invertido $51,767 (97 % de su capital, límite 250 %)", "Mercado al alza: S&P 500 está un 5 % por encima de su media de 200 días"]);
     expect(chipsOf(by("momentum_crypto"))).toEqual(["Ninguna de 8 criptomonedas está en tendencia alcista"]);
     expect(noteOf(by("momentum_crypto_usdc"), O)).toBe("Sin compras nuevas hasta mañana a las 20:00.");
     expect(timeLine(by("momentum_stocks"), O)).toContain("Próxima decisión</span> el lunes a las 09:35 Nueva York");
     expect(whenPhrase("2026-10-27T00:00:00Z", O)).toBe("el lunes a las 20:00");
     expect(statusOf(by("momentum_crypto"))).toEqual({ word: "Fuera del mercado", color: "var(--muted)" });
     expect(portfolioName("Momentum Crypto USDC")).toBe("Momentum Cripto USDC");
+    expect(portfolioName("Momentum Stocks")).toBe("Momentum Acciones");
+    expect(portfolioName("MeanRev Stocks")).toBe("Reversión a la media Acciones");
   });
 
   test("the other states: waiting for a first pass, paused, problem, cash because of the regime", () => {
@@ -79,10 +81,27 @@ describe("one compact card per portfolio", () => {
     expect(noteOf({ ...base, state: "error", blocked: { reason: "failed", detail: "Alpaca rejected the key" } }, O)).toBe("Its last decision failed and it is not trading until the next one; see the Activity tab.");
     expect(noteOf({ ...base, state: "error", blocked: { reason: "skipped_stale", detail: "stale bars: SPY" } }, O)).toBe("It skipped its last decision because its price data was out of date.");
     const cash = { ...base, state: "flat", regime: { riskOn: false, ref: "SPY", distancePct: -2.3 } };
-    expect(chipsOf(cash)).toEqual(["S&P 500 −2.3% vs its 200-day average"]);
+    expect(chipsOf(cash)).toEqual(["Market falling: S&P 500 is 2 % below its 200-day average — defensive mode"]);
     expect(chipsOf({ ...base, state: "flat" })).toEqual(["Holds no positions"]);
     expect(timeLine({ ...base, state: "paused" }, O)).toContain("Monday 09:35 New York");
     expect(timeLine({ id: "x" }, O)).toBe("");
+  });
+
+  test("one money chip in words and the market as a sentence (owner, 2026-11-12): whole percentages, no \"×\" anywhere", () => {
+    const base = { id: "momentum_stocks", label: "Momentum Stocks", broker: "alpaca", engine: "portfolio", state: "invested", positions: 8, investedUsd: 43677, equityUsd: 49600, grossX: 0.884, maxGrossX: 2.5 };
+    expect(chipsOf(base)).toEqual(["Invested $43,677 (88 % of its capital, limit 250 %)", "8 stocks and ETFs"]);
+    expect(chipsOf({ ...base, regime: { riskOn: true, ref: "SPY", distancePct: 4.3 } })[1]).toBe("Market rising: S&P 500 is 4 % above its 200-day average");
+    expect(chipsOf({ ...base, regime: { riskOn: false, ref: "SPY", distancePct: -6.8 } })[1]).toBe("Market falling: S&P 500 is 7 % below its 200-day average — defensive mode");
+    // below the average but still inside the sleeve's own band: falling, and no mode claimed
+    expect(chipsOf({ ...base, regime: { riskOn: true, ref: "SPY", distancePct: -0.4 } })[1]).toBe("Market falling: S&P 500 is 0 % below its 200-day average");
+    expect(chipsOf({ ...base, grossX: null, maxGrossX: null })[0]).toBe("Invested $43,677"); // nothing to say about the capital
+    expect(chipsOf({ ...base, maxGrossX: 1.15, grossX: 0.58 })[0]).toBe("Invested $43,677 (58 % of its capital, limit 115 %)");
+    store.state.lang = "es";
+    expect(chipsOf({ ...base, regime: { riskOn: false, ref: "SPY", distancePct: -6.8 } })).toEqual([
+      "Invertido $43,677 (88 % de su capital, límite 250 %)",
+      "Mercado a la baja: S&P 500 está un 7 % por debajo de su media de 200 días — modo defensivo",
+    ]);
+    for (const p of FX.portfolios) for (const c of chipsOf(p)) expect(c).not.toContain("×");
   });
 
   test("each card is shorter than the old paragraph: at most three chips and one sentence", () => {
@@ -94,7 +113,7 @@ describe("one compact card per portfolio", () => {
 
   test("no jargon leaks into the cards", () => {
     const all = FX.portfolios.flatMap((p) => [...chipsOf(p), noteOf(p, O)]).join(" ") + renderBotNow(FX, O);
-    for (const w of ["λ", "gross", "soft", "TSM", "exposureScale", "riskOn", "null", "undefined", "NaN", "MAX_HOLD"]) expect(all).not.toContain(w);
+    for (const w of ["λ", "gross", "soft", "TSM", "exposureScale", "riskOn", "null", "undefined", "NaN", "MAX_HOLD", "×", "Leverage", "Apalancamiento"]) expect(all).not.toContain(w);
   });
 });
 
@@ -127,7 +146,7 @@ describe("recent actions", () => {
     expect(eventSentence({ kind: "warning", portfolioId: "momentum_stocks", reason: "PARTIAL", count: 1 }, names)).toBe('Warning in Momentum Stocks <span class="bn-why">— 1 order partially filled</span>');
     expect(eventSentence({ kind: "warning", portfolioId: "momentum_stocks", reason: "UNFILLED", count: 2 }, names)).toBe('Warning in Momentum Stocks <span class="bn-why">— 2 orders unfilled after timeout</span>');
     store.state.lang = "es";
-    expect(eventSentence({ kind: "warning", portfolioId: "momentum_stocks", reason: "PARTIAL", count: 1 }, names)).toBe('Aviso en Momentum Stocks <span class="bn-why">— 1 orden parcialmente ejecutada</span>');
+    expect(eventSentence({ kind: "warning", portfolioId: "momentum_stocks", reason: "PARTIAL", count: 1 }, names)).toBe('Aviso en Momentum Acciones <span class="bn-why">— 1 orden parcialmente ejecutada</span>');
   });
 
   test("a 5-day close reads \"closed X at the 5-day limit\", never \"sold … max hold\"", () => {
@@ -144,7 +163,7 @@ describe("recent actions", () => {
       expect(s).not.toContain("bn-why");
     }
     store.state.lang = "es";
-    expect(eventSentence(spy, names, { rebought: true })).toBe("Momentum Stocks cerró SPY por el límite de 5 días (−$210) y lo volvió a comprar");
+    expect(eventSentence(spy, names, { rebought: true })).toBe("Momentum Acciones cerró SPY por el límite de 5 días (−$210) y lo volvió a comprar");
   });
 
   test("events of one portfolio less than a minute apart are one pass; other portfolios and kinds are not folded in", () => {
@@ -188,7 +207,7 @@ describe("recent actions", () => {
       { at: at("2026-10-22T13:35:00Z"), portfolioId: "meanrev_stocks", kind: "stop", symbol: "BBB", pnlUsd: -40, reason: "stop_loss" },
     ], names).text).toBe("Mean Reversion Stocks: stopped out of BBB (−$40), bought AAA ($100)");
     store.state.lang = "es";
-    expect(passSummary(events, names).text).toBe("Momentum Stocks: cerró 2 posiciones por el límite de 5 días (−$344) y las volvió a comprar, 1 compra nueva ($6,400)");
+    expect(passSummary(events, names).text).toBe("Momentum Acciones: cerró 2 posiciones por el límite de 5 días (−$344) y las volvió a comprar, 1 compra nueva ($6,400)");
   });
 
   test("the tab shows a pass as one line with the per-symbol lines behind a disclosure", () => {
@@ -242,10 +261,13 @@ describe("time in words", () => {
     expect(untilWord(NOW + 2 * 3600e3, NOW)).toBe("in 2 h");
   });
 
-  test("gross exposure in words", () => {
-    expect(grossPhrase(0.97)).toBe("about 1× its capital");
-    expect(grossPhrase(1.5)).toBe("1.5× its capital");
+  test("gross exposure in words: whole percent of its capital, no \"×\"", () => {
+    expect(grossPhrase(0.97)).toBe("97 % of its capital");
+    expect(grossPhrase(1.5)).toBe("150 % of its capital");
+    expect(grossPhrase(0.884)).toBe("88 % of its capital");
     expect(grossPhrase(null)).toBe("");
+    store.state.lang = "es";
+    expect(grossPhrase(2.5)).toBe("250 % de su capital");
   });
 });
 

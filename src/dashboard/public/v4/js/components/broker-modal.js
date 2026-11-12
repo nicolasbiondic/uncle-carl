@@ -97,7 +97,7 @@ export function riskDetailHtml(a, exposure, unrealized, risk) {
   const parts = [];
   if (exposure) {
     const xp = exposurePhrase(exposure);
-    parts.push(`<span title="${esc(t("Open positions at market value against the sleeve's own cap", "Posiciones abiertas a precio de mercado frente al tope del propio sleeve"))}">${t("Use", "Uso")} <b${xp?.color ? ` style="color:${xp.color}"` : ""}>${xp ? esc(xp.text) : "—"}</b></span>`);
+    parts.push(`<span title="${esc(t("Open positions at market value against the sleeve's own cap", "Posiciones abiertas a precio de mercado frente al tope del propio sleeve"))}">${t("Invested", "Invertido")} <b${xp?.color ? ` style="color:${xp.color}"` : ""}>${xp ? esc(xp.body) : "—"}</b></span>`);
   }
   if (risk) {
     parts.push(`<span>${t("Realized", "Realizado")} <b style="color:${risk.realizedPnl == null ? "var(--muted)" : pnlColor(risk.realizedPnl)}">${risk.realizedPnl == null ? "—" : pnlWhole(risk.realizedPnl)}</b></span>`);

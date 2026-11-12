@@ -53,11 +53,26 @@ export const periodLabel = (p) => p === 0 ? t("All", "Todo") : p === 1 ? t("Toda
 export const isEs = () => store.state.lang === "es";
 export const t = (en, es) => (isEs() ? es : en);
 
+/** A strategy's name as the Overview reads it (the Bot card AND the positions
+ *  group header: one source): the API label with MeanRev, Crypto and Stocks
+ *  in words — "Mean Reversion Stocks" / "Reversión a la media Acciones". */
+export function portfolioName(label) {
+  return String(label || "")
+    .replace(/\bMeanRev\b/i, t("Mean Reversion", "Reversión a la media"))
+    .replace(/\bCrypto\b/i, t("Crypto", "Cripto"))
+    .replace(/\bStocks\b/i, t("Stocks", "Acciones"));
+}
+
+/** The API label of a portfolio (dashboard.accounts is canonical), untranslated. */
+export function portfolioLabel(account) {
+  const canonical = (store.state.dashboard?.accounts || []).find((a) => a.id === account?.id);
+  return canonical?.label || account?.label || account?.id || "";
+}
+
 /** One human sleeve name: dashboard.accounts is canonical, translated at render
  *  time so changing the UI language also changes every portfolio label. */
 export function sleeveLabel(account) {
-  const canonical = (store.state.dashboard?.accounts || []).find(a => a.id === account?.id);
-  const label = canonical?.label || account?.label || account?.id || "";
+  const label = portfolioLabel(account);
   const es = { "Momentum Stocks": "Momentum Acciones", "MeanRev Stocks": "Reversión Acciones", "Momentum Crypto": "Momentum Cripto", "Momentum Crypto USDC": "Momentum Cripto USDC" };
   return t(label, es[label] || label);
 }

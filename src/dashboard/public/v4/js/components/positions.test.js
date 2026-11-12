@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import {
   positionsTotals, positionNotional, isInverseContractSleeve,
   sleeveExposure, renderPositions, exposureColor,
-  positionGroups, isGroupCollapsed, exposurePhrase, renderExposureBar, togglePositionGroup, COLLAPSE_OVER,
+  positionGroups, isGroupCollapsed, exposurePhrase, renderExposureBar, togglePositionGroup, COLLAPSE_OVER, groupOutcome, outcomeWords,
   holdProgress, holdText, weekdaysSince, isCryptoRow, pnlBarWidth, PNL_BAR_FLOOR, MAX_HOLD_SESSIONS, MAX_HOLD_HOURS,
 } from "./positions.js";
 import { store } from "../store.js";
@@ -110,7 +110,7 @@ describe("positionGroups", () => {
     const [g] = positionGroups([{ profileId: "meanrev_stocks", quantity: 100, avgEntryPrice: 540, currentPrice: 530 }], accounts);
     expect(g.exposure.ratio).toBe(1);
     expect(exposureColor(g.exposure)).toBe("var(--text)");
-    expect(exposurePhrase(g.exposure).text).toBe("1.00× of 1×");
+    expect(exposurePhrase(g.exposure).text).toBe("invested 100 % of its capital"); // a cap of 100 % is not repeated
     expect(exposureColor({ ratio: 1.0000746, cap: 1, usage: 1.0000746 })).toBe("var(--text)");
     expect(exposureColor({ ratio: 1.01, cap: 1, usage: 1.01 })).toBe("var(--down)");
   });
@@ -166,6 +166,58 @@ describe("positionGroups", () => {
   });
 });
 
+describe("group header: a sentence, with the Bot panel's strategy names (2026-11-12)", () => {
+  const accounts = [
+    { id: "meanrev_stocks", label: "MeanRev Stocks", broker: "alpaca", initialEquity: 50_000, equity: 54_000, grossCapMult: 1, grossCapBase: "equity" },
+    { id: "momentum_stocks", label: "Momentum Stocks", broker: "alpaca", initialEquity: 50_000, equity: 50_000, grossCapMult: 2.5 },
+  ];
+  // 32 meanrev rows at $1,500 market value: 20 up (+$30 each), 1 flat, 11 down (−$7 each)
+  const mr = Array.from({ length: 32 }, (_, i) => ({ symbol: `MR${i}`, side: "buy", quantity: 15, avgEntryPrice: 100, currentPrice: 100, unrealizedPnl: i < 20 ? 30 : i === 20 ? 0 : -7, unrealizedPnlPct: 1, profileId: "meanrev_stocks" }));
+  const mo = [{ symbol: "SSO", side: "buy", quantity: 100, avgEntryPrice: 80, currentPrice: 80, unrealizedPnl: -50, unrealizedPnlPct: -1, profileId: "momentum_stocks" }];
+  const state = { view: "consolidated", posGroups: { meanrev_stocks: "closed" }, dashboard: { accounts, portfolio: { positions: [...mr, ...mo] } } };
+  const head = (html, id) => html.slice(html.indexOf(`data-pgroup="${id}"`), html.indexOf("</button>", html.indexOf(`data-pgroup="${id}"`)));
+
+  test("English: name · positions · $ · open · up/down on the left, invested % of its capital on the right", () => {
+    const h = head(renderPositions(state, []), "meanrev_stocks");
+    expect(h).toContain('<span class="pg-name">Mean Reversion Stocks</span><span class="pg-sum"><span class="muted">·</span> 32 positions <span class="muted">·</span> $48,000 <span class="muted">·</span> <span class="pg-pnl" style="color:var(--up)">open +$523</span> <span class="muted">·</span> 20 up, 11 down, 1 flat</span>');
+    expect(h).toContain('<span class="pg-x">invested 89 % of its capital</span><span class="xbar" aria-hidden="true">'); // cap 100 %: no limit
+    expect(h).not.toContain("×");
+    expect(h).toMatch(/title="32 positions\. Holds \$48,000 at market against \$54,000 of current equity \(89 %\)\. Limit 100 %\./); // the long explanation stays in the title
+    expect(h).toContain("Click to show or hide its positions.");
+  });
+
+  test("a cap that is not 100 % is said; the other portfolio is named like the Bot card", () => {
+    const h = head(renderPositions(state, []), "momentum_stocks");
+    expect(h).toContain('<span class="pg-name">Momentum Stocks</span>');
+    expect(h).toContain('<span class="pg-x">invested 16 % of its capital · limit 250 %</span>');
+    expect(h).toContain("1 position <span");
+    expect(h).toContain("1 down</span>"); // a lone loser: no "0 up"
+    expect(h).not.toContain("0 up");
+  });
+
+  test("Spanish: sin cerrar, ganan / pierden, invertido el N % de su capital", () => {
+    const lang = store.state.lang;
+    try {
+      store.state.lang = "es";
+      const html = renderPositions(state, []);
+      const h = head(html, "meanrev_stocks");
+      expect(h).toContain('<span class="pg-name">Reversión a la media Acciones</span>');
+      expect(h).toContain("32 posiciones");
+      expect(h).toContain("sin cerrar +$523");
+      expect(h).toContain("20 ganan, 11 pierden, 1 sin cambio");
+      expect(h).toContain("invertido el 89 % de su capital");
+      expect(head(html, "momentum_stocks")).toContain("1 pierde</span>");
+      expect(head(html, "momentum_stocks")).toContain("invertido el 16 % de su capital · límite 250 %");
+    } finally { store.state.lang = lang; }
+  });
+
+  test("groupOutcome counts only priced rows: an unpriced row is in none", () => {
+    expect(groupOutcome([{ unrealizedPnl: 5 }, { unrealizedPnl: -5 }, { unrealizedPnl: 0 }, { unrealizedPnl: null }, {}])).toEqual({ up: 1, down: 1, flat: 1 });
+    expect(outcomeWords({ up: 0, down: 0, flat: 0 })).toBe("");
+    expect(outcomeWords({ up: 1, down: 1, flat: 0 })).toBe("1 up, 1 down");
+  });
+});
+
 describe("isGroupCollapsed", () => {
   test(`default: a group with more than ${COLLAPSE_OVER} positions starts collapsed, smaller ones open`, () => {
     expect(isGroupCollapsed("meanrev_stocks", 32, 3, {})).toBe(true);
@@ -194,28 +246,38 @@ describe("isGroupCollapsed", () => {
   });
 });
 
-describe("exposurePhrase + bar — '1.50× of 2.5×', coloured only near the cap (2026-10-26)", () => {
-  test("far from the cap: ratio and cap, uncoloured; the bar fills the used share in muted", () => {
+describe("exposurePhrase + bar — 'invested 93 % of its capital', coloured only past the cap (2026-11-12)", () => {
+  test("far from the cap: whole percentages and the limit, uncoloured; the bar fills the used share in muted", () => {
     const p = exposurePhrase({ ratio: 0.97, cap: 2.5, usage: 0.97 / 2.5 });
-    expect(p).toEqual({ text: "0.97× of 2.5×", color: null, usage: 0.97 / 2.5 });
+    expect(p).toEqual({ text: "invested 97 % of its capital · limit 250 %", body: "97 % of its capital · limit 250 %", color: null, usage: 0.97 / 2.5 });
     expect(renderExposureBar(p)).toBe('<span class="xbar" aria-hidden="true"><span class="xbar-fill" style="width:38.8%;background:var(--muted)"></span></span>');
   });
   test("at or near the cap: no warning colour (an always-invested book's design size)", () => {
     const p = exposurePhrase({ ratio: 1.1, cap: 1.15, usage: 1.1 / 1.15 });
-    expect(p.text).toBe("1.10× of 1.15×");
+    expect(p.text).toBe("invested 110 % of its capital · limit 115 %");
     expect(p.color).toBeNull();
     expect(renderExposureBar(p)).toContain("width:95.7%;background:var(--muted)");
   });
-  test("over the cap: red, the bar clipped at the track; cap precision without float noise", () => {
+  test("over the cap: red, the bar clipped at the track, and the limit is said even when it is 100 %", () => {
     const p = exposurePhrase({ ratio: 1.0, cap: 0.9659999999, usage: 1.0 / 0.966 });
-    expect(p.text).toBe("1.00× of 0.966×");
+    expect(p.text).toBe("invested 100 % of its capital · limit 97 %"); // whole percentages, no float noise
     expect(p.color).toBe("var(--down)");
     expect(renderExposureBar(p)).toContain("width:100%;background:var(--down)");
+    expect(exposurePhrase({ ratio: 1.05, cap: 1, usage: 1.05 }).text).toBe("invested 105 % of its capital · limit 100 %"); // the red always has a word
   });
-  test("without a cap: the ratio alone, no bar (nothing to fill against)", () => {
+  test("without a cap: the percentage alone, no bar (nothing to fill against)", () => {
     const p = exposurePhrase({ ratio: 1.59, cap: null, usage: null });
-    expect(p.text).toBe("1.59×");
+    expect(p.text).toBe("invested 159 % of its capital");
     expect(renderExposureBar(p)).toBe("");
+  });
+  test("in Spanish, with no '×' anywhere", () => {
+    const lang = store.state.lang;
+    try {
+      store.state.lang = "es";
+      expect(exposurePhrase({ ratio: 0.934, cap: 2.5, usage: 0.37 }).text).toBe("invertido el 93 % de su capital · límite 250 %");
+      expect(exposurePhrase({ ratio: 1, cap: 1, usage: 1 }).text).toBe("invertido el 100 % de su capital");
+    } finally { store.state.lang = lang; }
+    for (const x of [{ ratio: 0.97, cap: 2.5, usage: 0.39 }, { ratio: 1.59, cap: null, usage: null }]) expect(exposurePhrase(x).text).not.toContain("×");
   });
   test("unknown ratio (COIN-M) -> null, the header simply omits it", () => {
     expect(exposurePhrase({ ratio: null, cap: 1.15, usage: null })).toBeNull();
@@ -249,39 +311,51 @@ describe("holdProgress — sessions for stocks, hours for crypto", () => {
     expect(weekdaysSince(Date.UTC(2026, 9, 27, 0, 30), Date.UTC(2026, 9, 27, 14))).toBe(1);
   });
 
-  test("a stock row: dots = sessions elapsed, 'closes within N days' with N the sessions left", () => {
+  test("a stock row: segments filled = days held, 'up to N days left' with N the sessions left", () => {
     const p = { symbol: "SPY", market: "stock", openedAt: mon };
-    expect(holdProgress(p, alpaca, mon)).toMatchObject({ unit: "sessions", elapsed: 0, limit: MAX_HOLD_SESSIONS, remaining: 5, dots: 0, closing: false });
-    expect(holdText(holdProgress(p, alpaca, mon))).toBe("closes within 5 days");
-    expect(holdText(holdProgress(p, alpaca, mon + day))).toBe("closes within 4 days");
-    expect(holdProgress(p, alpaca, mon + 4 * day)).toMatchObject({ dots: 4, remaining: 1 });
-    expect(holdText(holdProgress(p, alpaca, mon + 4 * day))).toBe("closes within 1 day");
-    expect(holdText(holdProgress(p, alpaca, mon + 6 * day))).toBe("closes within 1 day"); // Sunday: Monday's pass closes it
+    expect(holdProgress(p, alpaca, mon)).toMatchObject({ unit: "sessions", elapsed: 0, limit: MAX_HOLD_SESSIONS, remaining: 5, days: 0, closing: false });
+    expect(holdText(holdProgress(p, alpaca, mon))).toBe("up to 5 days left");
+    expect(holdText(holdProgress(p, alpaca, mon + day))).toBe("up to 4 days left");
+    expect(holdProgress(p, alpaca, mon + 4 * day)).toMatchObject({ days: 4, remaining: 1 });
+    expect(holdText(holdProgress(p, alpaca, mon + 4 * day))).toBe("up to 1 day left");
+    expect(holdText(holdProgress(p, alpaca, mon + 6 * day))).toBe("up to 1 day left"); // Sunday: Monday's pass closes it
   });
 
-  test("past the limit the close is pending: five dots and 'closing'", () => {
+  test("past the limit the close is pending: five segments and 'due to close'", () => {
     const h = holdProgress({ market: "stock", openedAt: mon }, alpaca, mon + 7 * day);
-    expect(h).toMatchObject({ dots: 5, remaining: 0, closing: true });
+    expect(h).toMatchObject({ days: 5, remaining: 0, closing: true });
     expect(holdText(h)).toBe("due to close");
-    expect(holdProgress({ market: "stock", openedAt: mon }, alpaca, mon + 20 * day)).toMatchObject({ dots: 5, closing: true });
+    expect(holdProgress({ market: "stock", openedAt: mon }, alpaca, mon + 20 * day)).toMatchObject({ days: 5, closing: true });
   });
 
-  test("a crypto row runs on 120 calendar hours: a dot per day, days rounded up so dots + days = 5, hours under a day", () => {
+  test("a crypto row runs on 120 calendar hours: a segment per day, days rounded up so segments + days left = 5, hours under a day", () => {
     const p = { symbol: "ETH/USDC", openedAt: mon };
-    expect(holdProgress(p, binance, mon)).toMatchObject({ unit: "hours", limit: MAX_HOLD_HOURS, remaining: 120, dots: 0, closing: false });
-    expect(holdText(holdProgress(p, binance, mon + 20 * 36e5))).toBe("closes within 5 days"); // 0 dots + 5
-    expect(holdProgress(p, binance, mon + 50 * 36e5)).toMatchObject({ dots: 2 });
-    expect(holdText(holdProgress(p, binance, mon + 50 * 36e5))).toBe("closes within 3 days"); // 2 dots + 3
-    expect(holdText(holdProgress(p, binance, mon + 100 * 36e5))).toBe("closes within 20 h");
-    expect(holdText(holdProgress(p, binance, mon + 119.5 * 36e5))).toBe("closes within 1 h");
-    expect(holdProgress(p, binance, mon + 120 * 36e5)).toMatchObject({ dots: 5, closing: true });
+    expect(holdProgress(p, binance, mon)).toMatchObject({ unit: "hours", limit: MAX_HOLD_HOURS, remaining: 120, days: 0, closing: false });
+    expect(holdText(holdProgress(p, binance, mon + 20 * 36e5))).toBe("up to 5 days left"); // 0 segments + 5
+    expect(holdProgress(p, binance, mon + 50 * 36e5)).toMatchObject({ days: 2 });
+    expect(holdText(holdProgress(p, binance, mon + 50 * 36e5))).toBe("up to 3 days left"); // 2 segments + 3
+    expect(holdText(holdProgress(p, binance, mon + 100 * 36e5))).toBe("up to 20 h left");
+    expect(holdText(holdProgress(p, binance, mon + 119.5 * 36e5))).toBe("up to 1 h left");
+    expect(holdProgress(p, binance, mon + 120 * 36e5)).toMatchObject({ days: 5, closing: true });
     expect(holdText(holdProgress(p, binance, mon + 130 * 36e5))).toBe("due to close");
   });
 
   test("durationSeconds stands in for a missing openedAt; neither -> null and a dash", () => {
-    expect(holdProgress({ market: "stock", durationSeconds: 2 * 86_400 }, alpaca, mon + 2 * day)).toMatchObject({ dots: 2 });
+    expect(holdProgress({ market: "stock", durationSeconds: 2 * 86_400 }, alpaca, mon + 2 * day)).toMatchObject({ days: 2 });
     expect(holdProgress({ market: "stock" }, alpaca, mon)).toBeNull();
     expect(holdText(null)).toBe("—");
+  });
+
+  test("the same words in Spanish", () => {
+    const lang = store.state.lang;
+    try {
+      store.state.lang = "es";
+      const p = { symbol: "SPY", market: "stock", openedAt: mon };
+      expect(holdText(holdProgress(p, alpaca, mon + 3 * day))).toBe("le quedan hasta 2 días");
+      expect(holdText(holdProgress(p, alpaca, mon + 4 * day))).toBe("le queda hasta 1 día");
+      expect(holdText(holdProgress({ symbol: "ETH/USDC", openedAt: mon }, binance, mon + 100 * 36e5))).toBe("le quedan hasta 20 h");
+      expect(holdText(holdProgress(p, alpaca, mon + 7 * day))).toBe("toca cerrar");
+    } finally { store.state.lang = lang; }
   });
 });
 
@@ -382,9 +456,10 @@ describe("renderPositions (partial data)", () => {
     };
     const html = renderPositions(state, []);
     expect(html.match(/class="pgroup"/g)?.length).toBe(2);
-    // invested at cost and the P&L on the left; the exposure (at market, over the base) on the right; the count in the title
-    expect(html).toContain('<span class="pg-name">Momentum Crypto</span><span class="pg-sum">$2,100 <span class="muted">·</span> <span class="pg-pnl" style="color:var(--up)">open +$100</span></span><span class="pg-exp"><span class="muted">exposure</span><span class="pg-x">0.42×</span></span>');
+    // a sentence on the left: name · count · $ at market · open P&L · up/down; the exposure in words on the right
+    expect(html).toContain('<span class="pg-name">Momentum Crypto</span><span class="pg-sum"><span class="muted">·</span> 1 position <span class="muted">·</span> $2,100 <span class="muted">·</span> <span class="pg-pnl" style="color:var(--up)">open +$100</span> <span class="muted">·</span> 1 up</span><span class="pg-exp"><span class="pg-x">invested 42 % of its capital</span></span>');
     expect(html).toContain('<span class="pg-name">Momentum Crypto USDC</span>');
+    expect(html).not.toContain("×");
     expect(html).toMatch(/title="1 position\. Holds \$2,100 at market/);
     expect(html).not.toContain("sbadge");
     expect(html).not.toContain("MOM-CRY");
@@ -403,12 +478,12 @@ describe("renderPositions (partial data)", () => {
     };
     const html = renderPositions(state, []);
     const head = html.slice(html.indexOf('class="pgroup"'), html.indexOf("</button>"));
-    expect(head).toContain('<span class="pg-sum"><span class="pg-pnl" style="color:var(--up)">open +$30</span></span>');
+    expect(head).toContain('<span class="pg-sum"><span class="muted">·</span> 1 position <span class="muted">·</span> <span class="pg-pnl" style="color:var(--up)">open +$30</span> <span class="muted">·</span> 1 up</span>');
     expect(head).not.toContain("$0");
     expect(head).not.toContain("×");
     expect(head).not.toContain("pg-exp");
     expect(head).toContain("COIN-M"); // the title explains why
-    expect(head).toContain("1 position."); // the count lives in the title
+    expect(head).toContain("1 position."); // the title says it too
   });
 
   test("big groups start collapsed (header only, rows hidden) while the totals still count every position", () => {
@@ -445,12 +520,12 @@ describe("renderPositions (partial data)", () => {
     const state = { ...baseState, posGroups: {}, dashboard: { ...baseState.dashboard, portfolio: { positions: [
       { symbol: "AAPL", side: "buy", quantity: 10, avgEntryPrice: 100, currentPrice: 101, unrealizedPnl: 10, stopLoss: 96, profileId: "momentum_stocks" },
     ] } } };
-    expect(renderPositions(state, [])).toContain('<tr class="pgroup"><td colspan="6">'); // sym notional entry now pnl time — a stop adds no column
+    expect(renderPositions(state, [])).toContain('<tr class="pgroup"><td colspan="4">'); // position value result time — a stop adds no column
     const tp = { ...state, dashboard: { ...state.dashboard, portfolio: { positions: [{ ...state.dashboard.portfolio.positions[0], takeProfit: 120 }] } } };
-    expect(renderPositions(tp, [])).toContain('<tr class="pgroup"><td colspan="7">');
+    expect(renderPositions(tp, [])).toContain('<tr class="pgroup"><td colspan="5">');
   });
 
-  test("the row carries the P&L bar and the 5-day clock; qty/entry/now ride in the symbol's title", () => {
+  test("the row reads as a sentence: name, value, a diverging result bar with its amount, the time left; entry/now ride in the symbol's title", () => {
     const now = Date.now();
     const state = { ...baseState, posGroups: {}, dashboard: { ...baseState.dashboard, portfolio: { positions: [
       { symbol: "SPY", side: "buy", market: "stock", quantity: 130, avgEntryPrice: 195.5, currentPrice: 196, unrealizedPnl: 65, unrealizedPnlPct: 0.5, openedAt: now, profileId: "momentum_stocks" },
@@ -458,15 +533,55 @@ describe("renderPositions (partial data)", () => {
       { symbol: "ETH/USDC", side: "buy", market: "crypto", quantity: 1, avgEntryPrice: 2000, currentPrice: 1990, unrealizedPnl: -10, unrealizedPnlPct: -0.5, openedAt: now - 50 * 36e5, profileId: "momentum_crypto_usdc" },
     ] } } };
     const html = renderPositions(state, []);
-    expect(html).toContain('title="Qty 130 · Entry $196 · Now $196">SPY</span>');
+    // the ticker stays, clickable, its tooltip carries quantity, entry and now; the plain name sits beside it
+    expect(html).toContain('title="Qty 130 · Entry $196 · Now $196">SPY</span><span class="symname" title="S&amp;P 500">S&amp;P 500</span>');
+    expect(html).toContain('>IWM</span><span class="symname" title="Small US companies">Small US companies</span>');
+    expect(html).toContain('>ETH/USDC</span><span class="symname" title="Ethereum">Ethereum</span>');
     expect(html).not.toContain(">Qty<"); expect(html).not.toContain(">SL<"); expect(html).not.toContain('class="opt1"');
-    expect(html).toContain('<span class="pnlbar-fill" style="width:38.5%;background:var(--up)"></span></span><span style="color:var(--up)">+$65 <span class="muted">+1%</span>'); // 0.5 / 1.3 of the track
-    expect(html).toContain('style="width:100%;background:var(--up)"></span></span><span style="color:var(--up)">+$130');
-    expect(html).toContain('style="width:38.5%;background:var(--down)"></span></span><span style="color:var(--down)">−$10');
-    expect(html).toContain('<span class="hdots" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="opt2 hold-txt muted">closes within 5 days</span>');
-    expect(html).toContain('<span class="hdots" aria-hidden="true"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span><span class="opt2 hold-txt muted">closes within 3 days</span>');
+    // no side column, no Entry / Now columns, no badge
+    expect(html).not.toContain('class="badge'); expect(html).not.toContain('class="opt3"'); expect(html).not.toContain("<th>S</th>");
+    expect(html.match(/<th[ >]/g)?.length).toBe(4);
+    // a gain grows right of the zero line (0.5 / 1.3 of the half track), a loss grows left; amount and % in their own cells
+    expect(html).toContain('<span class="dbar" aria-hidden="true"><span class="dbar-l"></span><span class="dbar-r"><i style="width:38.5%;background:var(--up)"></i></span></span><span class="res-amt" style="color:var(--up)"><span class="vh">gain </span>+$65</span><span class="res-pct muted">+1%</span>');
+    expect(html).toContain('<span class="dbar-r"><i style="width:100%;background:var(--up)"></i></span></span><span class="res-amt" style="color:var(--up)"><span class="vh">gain </span>+$130</span>');
+    expect(html).toContain('<span class="dbar-l"><i style="width:38.5%;background:var(--down)"></i></span><span class="dbar-r"></span></span><span class="res-amt" style="color:var(--down)"><span class="vh">loss </span>−$10</span><span class="res-pct muted">0%</span>'); // −0.5 % rounds to a whole 0 %
+    expect(html).not.toContain("pnlbar");
+    // the 5-day clock: five segments, the held days filled, then the words
+    expect(html).toContain('<span class="hseg" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><span class="opt2 hold-txt muted">up to 5 days left</span>');
+    expect(html).toContain('<span class="hseg" aria-hidden="true"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span><span class="opt2 hold-txt muted">up to 3 days left</span>');
     expect(html).toMatch(/class="hold" title="Held 2d · limit 120 h · Your 5-day rule is the latest a position stays open/);
-    expect(html).toMatch(/<th title="[^"]*5 market sessions for stocks, 120 h for crypto[^"]*">Time<\/th>/);
+    // column headers in words, sentence case
+    expect(html).toContain(">Position</th>"); expect(html).toContain(">Value</th>");
+    expect(html).toContain(">Open (since entry)</th>");
+    expect(html).toMatch(/<th class="th-time" title="[^"]*5 market sessions for stocks, 120 h for crypto[^"]*">Time left<\/th>/);
+  });
+
+  test("the same row and headers in Spanish", () => {
+    const lang = store.state.lang;
+    try {
+      store.state.lang = "es";
+      const now = Date.now();
+      const state = { ...baseState, posGroups: {}, dashboard: { ...baseState.dashboard, portfolio: { positions: [
+        { symbol: "UGL", side: "buy", market: "stock", quantity: 300, avgEntryPrice: 55, currentPrice: 54, unrealizedPnl: -300, unrealizedPnlPct: -1.8, openedAt: now - 2 * 864e5, profileId: "momentum_stocks" },
+      ] } } };
+      const html = renderPositions(state, []);
+      expect(html).toContain('<span class="symname" title="Oro ×2">Oro ×2</span>');
+      for (const head of [">Posición</th>", ">Valor</th>", ">Sin cerrar</th>", ">Tiempo</th>"]) expect(html).toContain(head);
+      expect(html).toContain('<span class="vh">pérdida </span>−$300</span><span class="res-pct muted">−2%</span>');
+      expect(html).toMatch(/hold-txt muted">(le quedan hasta \d días|le queda hasta 1 día|toca cerrar)</); // which one depends on the weekday it runs
+      expect(html).toContain("invertido el"); // the group's exposure sentence
+    } finally { store.state.lang = lang; }
+  });
+
+  test("a row's words: no all-caps header, the bar and the segments are decoration only", () => {
+    const state = { ...baseState, posGroups: {}, dashboard: { accounts: [{ id: "momentum_stocks", label: "Momentum Stocks", broker: "alpaca", initialEquity: 50_000, grossCapMult: 2.5 }], portfolio: { positions: [
+      { symbol: "AAPL", side: "buy", quantity: 10, avgEntryPrice: 100, currentPrice: 101, unrealizedPnl: 10, unrealizedPnlPct: 1, profileId: "momentum_stocks" },
+    ] } } };
+    const html = renderPositions(state, []);
+    for (const deco of ['class="dbar" aria-hidden="true"', 'class="hseg" aria-hidden="true"', 'class="xbar" aria-hidden="true"']) expect(html).toContain(deco);
+    const css = require("fs").readFileSync(require("path").join(import.meta.dir, "../../css/app.css"), "utf-8").replace(/\s+/g, " ");
+    expect(css).toContain("#opsBody th { text-transform: none; letter-spacing: 0; }");
+    expect(html).not.toMatch(/>(SYM|NOTIONAL|ENTRY|NOW|OPEN|TIME)</);
   });
 
   test("a pending close reads 'closing' in the text colour; folded groups do not set the bar scale", () => {
@@ -515,6 +630,7 @@ describe("renderPositions — TP column, no SL column", () => {
     };
     const html = renderPositions(state, []);
     expect(html).not.toContain(">TP<");
+    expect(html).not.toContain(">Target<");
   });
 
   test("at least one position carries a takeProfit -> the column reappears", () => {
@@ -525,7 +641,8 @@ describe("renderPositions — TP column, no SL column", () => {
       ] } },
     };
     const html = renderPositions(state, []);
-    expect(html).toContain(">TP<");
+    expect(html).toContain(">Target</th>"); // in words, not "TP"
+    expect(html).not.toContain(">TP<");
     expect(html).toContain("$120<");
   });
 
@@ -541,7 +658,7 @@ describe("renderPositions — TP column, no SL column", () => {
     expect(html).not.toContain(">SL<");
     expect(html).not.toContain("$96");
     expect(html).not.toContain('class="opt1"');
-    expect(html.match(/<th[ >]/g)?.length).toBe(6); // sym notional entry now pnl time
+    expect(html.match(/<th[ >]/g)?.length).toBe(4); // position value result time
   });
 });
 
@@ -590,13 +707,13 @@ describe("sleeveExposure — current equity base and cap usage", () => {
     expect(row.ratio).toBeCloseTo(2_200 / 2_000, 6);
   });
 
-  test("the cap shows its real precision, without float noise, and only when the book is near it", () => {
+  test("the cap reads as a whole percentage, without float noise, and only when the book is near it", () => {
     const html = renderPositions({ view: "consolidated", posGroups: {}, dashboard: { accounts: [acc({ equity: 52_960, grossCapMult: 1.7249999999999999 })], portfolio: { positions: book } } }, []);
-    expect(html).toContain('<span class="pg-x">1.50× of 1.725×</span>'); // 87% of the cap: uncoloured, muted bar
+    expect(html).toContain('<span class="pg-x">invested 150 % of its capital · limit 173 %</span>'); // 87% of the cap: uncoloured, muted bar
     expect(html).toContain("width:87%;background:var(--muted)");
-    expect(html).toMatch(/title="[^"]*Cap 1\.725×\./);
+    expect(html).toMatch(/title="[^"]*Limit 173 %\./);
     const near = renderPositions({ view: "consolidated", posGroups: {}, dashboard: { accounts: [acc({ equity: 50_000, grossCapMult: 1.7249999999999999 })], portfolio: { positions: book } } }, []);
-    expect(near).toContain('<span class="pg-x">1.59× of 1.725×</span>');
+    expect(near).toContain('<span class="pg-x">invested 159 % of its capital · limit 173 %</span>');
     expect(near).toContain("width:92.1%;background:var(--muted)"); // at the cap is not a warning
   });
 
@@ -617,40 +734,60 @@ describe("sleeveExposure — current equity base and cap usage", () => {
   test("the group header says it in words; the $ at market and the base ride in its title", () => {
     const state = { view: "consolidated", posGroups: {}, dashboard: { accounts: [acc({ equity: 52_960, grossCapMult: 1.725 })], portfolio: { positions: book } } };
     const html = renderPositions(state, []);
-    expect(html).toContain('<span class="pg-sum">$79,441</span>'); // no priced P&L on this row: the $ alone
-    expect(html).toMatch(/class="pgroup-btn"[^>]*title="1 position\. Holds \$79,441 at market against \$52,960 of current equity \(1\.50×\)\. Cap 1\.725×\. Allocation \$50,000\. Click to show or hide its positions\."/);
+    expect(html).toContain('<span class="pg-sum"><span class="muted">·</span> 1 position <span class="muted">·</span> $79,441</span>'); // no priced P&L on this row: count and $ only
+    expect(html).toMatch(/class="pgroup-btn"[^>]*title="1 position\. Holds \$79,441 at market against \$52,960 of current equity \(150 %\)\. Limit 173 %\. Allocation \$50,000\. Click to show or hide its positions\."/);
   });
 });
 
-describe("renderPositions — side column only when a short exists", () => {
+describe("renderPositions — no side column: a long says nothing, a short is a word", () => {
   const accounts = [{ id: "momentum_stocks", label: "Momentum Stocks", broker: "alpaca", initialEquity: 50_000 }];
   const row = (symbol, side) => ({ symbol, side, quantity: 1, avgEntryPrice: 100, currentPrice: 101, unrealizedPnl: side === "buy" ? 1 : -1, profileId: "momentum_stocks" });
 
-  test("long-only book (every live strategy today): no S column, totals label spans one column", () => {
+  test("long-only book (every live strategy today): no S column, no L badge, no tag; the totals label spans the four columns", () => {
     const html = renderPositions({ view: "consolidated", dashboard: { accounts, portfolio: { positions: [row("AAPL", "buy"), row("MSFT", "buy")] } } }, []);
     expect(html).not.toContain("<th>S</th>");
-    expect(html).not.toContain('class="badge l"');
-    expect(html).toContain('<td colspan="6"');
+    expect(html).not.toContain("badge");
+    expect(html).not.toContain("shorttag");
+    expect(html).toContain('<td colspan="4"');
   });
 
-  test("a short position brings the column back, with its badge", () => {
-    const html = renderPositions({ view: "consolidated", dashboard: { accounts, portfolio: { positions: [row("AAPL", "buy"), row("QQQ", "sell")] } } }, []);
-    expect(html).toContain("<th>S</th>");
-    expect(html).toContain('class="badge s"');
-    expect(html).toContain('<td colspan="7"');
+  test("a short position carries a small word tag with what it means; the book gets no extra column", () => {
+    const html = renderPositions({ view: "consolidated", dashboard: { accounts, portfolio: { positions: [row("AAPL", "buy"), row("QQQ", "sell"), row("BTC/USDC", "short")] } } }, []);
+    expect(html).not.toContain("<th>S</th>");
+    expect(html).not.toContain('class="badge');
+    expect(html.match(/class="shorttag"/g)).toHaveLength(2);
+    expect(html).toContain('<span class="shorttag" title="Gains if the price falls">short</span>');
+    expect(html).toContain('>QQQ</span><span class="symname" title="Nasdaq 100">Nasdaq 100</span><span class="shorttag"');
+    expect(html).toContain('<td colspan="4"');
+    const aapl = html.slice(html.indexOf(">AAPL<"), html.indexOf(">QQQ<"));
+    expect(aapl).not.toContain("shorttag"); // the long row next to it says nothing
+    const es = store.state.lang;
+    try {
+      store.state.lang = "es";
+      expect(renderPositions({ view: "consolidated", dashboard: { accounts, portfolio: { positions: [row("QQQ", "sell")] } } }, []))
+        .toContain('<span class="shorttag" title="Gana si el precio baja">corto</span>');
+    } finally { store.state.lang = es; }
+  });
+
+  test("a coin that is its own name repeats nothing beside the ticker; an unknown symbol shows the ticker alone", () => {
+    const html = renderPositions({ view: "consolidated", dashboard: { accounts, portfolio: { positions: [row("XRP/USDC", "buy"), row("ZZZZ", "buy")] } } }, []);
+    expect(html).toContain(">XRP/USDC</span></span>"); // no name: "XRP" would only repeat it
+    expect(html).toContain(">ZZZZ</span></span>");
   });
 });
 
 describe("renderPositions — compact numbers", () => {
   const state = (positions) => ({ view: "consolidated", dashboard: { accounts: [], portfolio: { positions } } });
 
-  test("prices, notional and total lose cents; P&L percent keeps a decimal; the quantity rides in the symbol's title", () => {
+  test("prices, notional and total lose cents; P&L percent is whole; entry and now ride in the symbol's title, not in columns", () => {
     const html = renderPositions(state([
       { symbol: "SPY", side: "buy", quantity: 5.59, avgEntryPrice: 540.1, currentPrice: 525.25, stopLoss: 478.4, unrealizedPnl: -85.04, unrealizedPnlPct: -0.3 },
       { symbol: "QQQ", side: "buy", quantity: 10, avgEntryPrice: 540.1, unrealizedPnl: -1709.38 },
     ]), []);
-    for (const value of ['title="Qty 6 · Entry $540 · Now $525"', "$540<", "$525<", "$2,936<", "−$85 ", "−$1,794</span>", "0%"])
+    for (const value of ['title="Qty 6 · Entry $540 · Now $525"', "$2,936<", "−$85</span>", "−$1,794</span>", "0%"])
       expect(html).toContain(value);
+    expect(html).not.toContain("<td>$540<"); // Entry and Now are not columns any more
+    expect(html).not.toContain("<td>$525<");
     expect(html).not.toContain("$478");
     expect(html).not.toContain("$540.10");
     expect(html).not.toContain("$1,794.42");
@@ -661,7 +798,7 @@ describe("renderPositions — compact numbers", () => {
       { symbol: "DOGE/USD", side: "buy", quantity: 115.7, avgEntryPrice: 0.0777, currentPrice: 0.0789, stopLoss: 0.07, unrealizedPnl: 0.139, unrealizedPnlPct: 1.5 },
       { symbol: "BTC/USD", side: "buy", quantity: 0.0123, avgEntryPrice: 68000, currentPrice: 68100, unrealizedPnl: 1.23 },
     ]), []);
-    for (const value of ["Qty 116 ·", "Qty 0.0123 ·", "&lt;$1<", "$9<", "+$0 "])
+    for (const value of ["Qty 116 ·", "Qty 0.0123 ·", "Entry &lt;$1 ·", "Now &lt;$1", "Entry $68,000", "$9<", "+$0</span>"])
       expect(html).toContain(value);
     expect(html).not.toMatch(/\$[\d,]+\.\d/);
   });

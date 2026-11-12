@@ -215,54 +215,95 @@ tfoot tr.totals .muted { font-weight: 500; }
 #funnelPanel .funnel-total { margin-top: var(--s2); color: var(--muted); font-size: var(--t-xs); }
 #funnelPanel .funnel-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); margin-bottom: var(--s2); }
 .ops-wrap { display: flex; flex-direction: column; gap: var(--s4); }
-.badge { display: inline-flex; padding: 1px 6px; border-radius: var(--r1); font-size: 10px; font-weight: 700; }
-.badge.l { background: var(--up-soft); color: var(--up); } .badge.s { background: var(--down-soft); color: var(--down); }
 /* Positions table: one block per portfolio (2026-10-25; the per-row sleeve
    badges and the exposure chips above the table went away with it) + opt-out
    columns for narrow layouts. TP goes first (a defense-in-depth value, still
-   one click away via the symbol), then Entry/Now (in the symbol's title), then
-   the clock's words (its dots stay) so NOTIONAL and P&L — the columns this
-   table exists for — never hide. 2026-10-26: QTY and SL columns are gone. */
+   one click away via the symbol), then the clock's words (its segments stay),
+   then the result bar narrows, so the value and the result — what this table
+   exists for — never hide. 2026-10-26: QTY and SL columns are gone;
+   2026-11-12: Entry, Now and the side column too (they ride in the symbol's
+   tooltip and the candle modal; a short is a word tag), headers in sentence
+   case. */
+#opsBody th { text-transform: none; letter-spacing: 0; }
+#opsBody table:not(.postbl) th:nth-child(2), #opsBody table:not(.postbl) td:nth-child(2) { text-align: left; } /* trades: the Position cell reads left to right */
+/* The Position cell: ticker, its plain name in muted small text, and the
+   "short" tag. The name gives way (ellipsis) before the cell widens. */
+.symrow { display: inline-flex; align-items: baseline; gap: var(--s2); max-width: 100%; vertical-align: baseline; }
+.symname { color: var(--muted); font-size: var(--t-xs); min-width: 0; max-width: 20ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shorttag { flex-shrink: 0; align-self: center; color: var(--text-2); border: 1px solid var(--border-2); border-radius: var(--r1); padding: 0 5px; font-size: 10px; font-weight: 600; line-height: 15px; }
+/* Visually hidden, read by screen readers: the word that backs a colour. */
+.vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .postbl tr.pgroup td { padding: 0; box-shadow: none; }
 #opsBody tr.pgroup td { padding: 0; }
 /* width:0 + min-width:100%: the sentence takes the row's width without ever
    contributing to the column widths (a label in the first cell widened the
    symbol column to ~200px, see renderTotalsRow in positions.js). */
-.pgroup-btn { display: flex; align-items: baseline; gap: var(--s2); width: 0; min-width: 100%; padding: 9px var(--s2) 5px; background: none; border: none; color: var(--text); font: inherit; text-align: left; white-space: nowrap; overflow: hidden; }
+.pgroup-btn { display: flex; flex-wrap: wrap; align-items: baseline; gap: 1px var(--s2); width: 0; min-width: 100%; padding: 9px var(--s2) 5px; background: none; border: none; color: var(--text); font: inherit; text-align: left; white-space: nowrap; overflow: hidden; }
 .pgroup-btn:hover .pg-name { color: var(--accent); }
 .pgroup-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--r1); }
 .pgroup-btn .pg-name { font-weight: 700; flex-shrink: 0; }
 .pgroup-btn .pg-sum { color: var(--text-2); font-size: var(--t-xs); flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .pgroup-btn .pg-pnl { font-weight: 600; }
-/* The header's exposure: "exposure [bar] 1.50× of 2.5×", right-aligned. The
-   bar is the used share of the sleeve's cap over a track; its fill takes the
-   phrase's colour (amber/red only near or over the cap, else muted). */
-.pgroup-btn .pg-exp { margin-left: auto; flex-shrink: 0; display: inline-flex; align-items: center; gap: var(--s2); font-size: var(--t-xs); font-variant-numeric: tabular-nums; }
+/* The header's exposure, in words: "invested 93 % of its capital [bar]",
+   right-aligned. The bar is the used share of the sleeve's cap over a track;
+   its fill takes the phrase's colour (red only past the cap, else muted). */
+.pgroup-btn .pg-exp { margin-left: auto; flex-shrink: 0; display: inline-flex; align-items: center; gap: var(--s2); font-size: var(--t-xs); color: var(--text-2); font-variant-numeric: tabular-nums; }
 .xbar { display: inline-block; width: 64px; height: 5px; border-radius: 2px; background: var(--border); overflow: hidden; }
 .xbar-fill { display: block; height: 100%; border-radius: 2px; }
-/* Row P&L: a bar before the number, its length |P&L %| against the largest on
-   screen (pnlBarWidth in positions.js), in the row's P&L colour. */
-.pnlbar { display: inline-block; width: 36px; height: 6px; margin-right: 6px; border-radius: 2px; background: var(--border); vertical-align: middle; overflow: hidden; }
-.pnlbar-fill { display: block; height: 100%; border-radius: 2px; }
-/* The 5-day clock: five dots fill with the position's age, then its words
-   ("closes in 4 days" / "closing"). */
+/* Row result: a bar that diverges from a zero line (losses grow left in the
+   loss colour, gains right in the gain colour), its length |result %| against
+   the largest on screen (pnlBarWidth in positions.js), then the amount and
+   the percentage in two aligned tabular columns. */
+.res { position: relative; display: inline-flex; align-items: center; gap: var(--s2); }
+.dbar { position: relative; display: inline-flex; flex: 0 0 auto; width: 120px; height: 8px; margin-right: var(--s1); }
+.dbar::after { content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; margin-left: -.5px; background: var(--muted); }
+.dbar-l, .dbar-r { display: flex; flex: 1 1 50%; min-width: 0; height: 100%; background: var(--border); }
+.dbar-l { justify-content: flex-end; border-radius: 3px 0 0 3px; }
+.dbar-r { border-radius: 0 3px 3px 0; }
+.dbar i { display: block; height: 100%; }
+.dbar-l i { border-radius: 3px 0 0 3px; }
+.dbar-r i { border-radius: 0 3px 3px 0; }
+.res-amt { min-width: 52px; text-align: right; font-weight: 600; }
+.res-pct { min-width: 36px; text-align: right; }
+#opsBody .th-time, #opsBody .c-time { text-align: left; }
+/* The 5-day clock: a bar of five segments, one per day already held, then its
+   words ("up to 4 days left" / "due to close"). */
 .hold { display: inline-flex; align-items: center; gap: var(--s2); }
-.hdots { display: inline-flex; gap: 3px; }
-.hdots i { width: 6px; height: 6px; border-radius: 50%; background: var(--border); }
-.hdots i.on { background: var(--muted); }
+.hseg { display: inline-flex; gap: 2px; }
+.hseg i { width: 9px; height: 6px; border-radius: 1px; background: var(--border); }
+.hseg i.on { background: var(--text-2); }
+.hold.closing .hseg i.on { background: var(--warn); }
 .hold-txt { font-size: var(--t-xs); }
 .pg-chev { width: 0; height: 0; border: 4px solid transparent; border-left: 5px solid var(--muted); align-self: center; flex-shrink: 0; transition: transform var(--dur); }
 .pgroup-btn[aria-expanded="true"] .pg-chev { transform: rotate(90deg); }
 @media (max-width: 1500px) { .postbl .opt1 { display: none; } }
 @media (max-width: 640px) { .postbl .opt2 { display: none; } }
-/* Mobile (2026-09-24 audit fix): at 640px TP and the clock's words are already
-   hidden, but SYM/S/ENTRY/NOTIONAL/NOW/P&L still don't fit — P&L (the number
-   that matters most) got clipped off-screen with no way back to it without
-   losing the symbol. ENTRY/NOW (in the symbol's title) go next so SYM,
-   NOTIONAL, P&L and the dots stay; the symbol column itself sticks to the
-   left edge of the horizontal scroller so it's never scrolled away while
-   reaching P&L. */
-@media (max-width: 480px) { .postbl .opt3 { display: none; } }
+/* Phones (2026-11-12): the page scrolls, the table must still fit 390px with
+   no sideways scroll. The clock's words are gone at 640px; below that the name
+   goes under its ticker, the result bar shortens and the percentage next to
+   the amount drops out (the amount carries the sign). The symbol column still
+   sticks to the left edge in case a long name pushes the table wider. */
+@media (max-width: 640px) {
+  .postbl .symrow { flex-direction: column; align-items: flex-start; gap: 0; }
+  .postbl .symname { max-width: 15ch; white-space: normal; font-size: 10px; line-height: 1.25; } /* phones: the name wraps under its ticker */
+  .postbl td, .postbl th { padding-left: var(--s1); padding-right: var(--s1); }
+  .pgroup-btn .pg-sum { white-space: normal; }
+  .postbl th { white-space: normal; vertical-align: bottom; line-height: 1.25; }
+  .dbar { width: 72px; }
+}
+@media (max-width: 480px) {
+  .res-pct { display: none; }
+  .dbar { width: 48px; margin-right: 0; }
+  .res-amt { min-width: 44px; }
+  .postbl .hseg i { width: 6px; }
+  .postbl td, .postbl th { padding-left: 2px; padding-right: 2px; }
+}
+@media (max-width: 380px) {
+  .dbar { width: 36px; }
+  .res-amt { min-width: 40px; }
+  .postbl .hseg i { width: 5px; }
+  .postbl .symlink { overflow-wrap: anywhere; } /* a long pair ("1000PEPE/USDC") wraps instead of widening the table */
+}
 .postbl th:first-child, .postbl td:first-child {
   position: sticky; left: 0; z-index: 1; background: var(--card);
   box-shadow: 1px 0 0 var(--border);
@@ -284,9 +325,8 @@ tfoot tr.totals .muted { font-weight: 500; }
 /* Desktop: one line per row (2026-10-12) — the SL cell ("$498.94 15.4%")
    wrapped, so every row was ~56px and the one-screen Overview showed half the
    rows. Columns give way as the two-column layout narrows, so a row never
-   needs a sideways scroll: TP first, then entry/now and trade prices, then
-   the trade's strategy, last the clock's words. Phones keep wrapping rows
-   (the page scrolls there). */
+   needs a sideways scroll: TP first, then the trades' prices and strategy.
+   Phones keep wrapping rows (the page scrolls there). */
 @media (min-width: 981px) {
   #opsBody td { white-space: nowrap; padding: 6px var(--s2); }
 }
@@ -295,11 +335,15 @@ tfoot tr.totals .muted { font-weight: 500; }
 @media (max-width: 480px) { #opsBody .opt3, #opsBody .opt4 { display: none; } }
 /* fit-N (js/fit.js, 2026-10-24): what the queries above cannot see — a
    vertical scrollbar, a wider font, longer values — takes the next group off
-   while the table still overflows its box, in the same order. */
+   while the table still overflows its box, in the same order. Positions: TP,
+   then the clock's words (its segments stay), then the result bar and the
+   names narrow; trades: strategy, then prices. */
 #opsBody table.fit-1 .opt1 { display: none; }
-#opsBody table.fit-2 .opt4 { display: none; }
+#opsBody table.fit-2 .opt4, #opsBody table.fit-2 .opt2 { display: none; }
 #opsBody table.fit-3 .opt3 { display: none; }
-#opsBody table.fit-4 .opt2 { display: none; }
+#opsBody table.fit-3 .dbar { width: 88px; }
+#opsBody table.fit-4 .dbar { width: 60px; }
+#opsBody table.fit-4 .symname { max-width: 12ch; }
 
 /* tabs */
 .tabs { display: flex; gap: var(--s4); flex-wrap: wrap; border-bottom: 1px solid var(--border); margin-bottom: var(--s3); }

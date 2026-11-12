@@ -31,7 +31,8 @@ describe("unrealizedPnlBySleeve", () => {
 describe("riskDetailHtml — the sleeve detail block", () => {
   test("before the risk fetch lands (risk=null): exposure + unrealized only, whole dollars", () => {
     const html = riskDetailHtml({ id: "momentum_crypto", paused: true }, { ratio: 0.92, cap: 1.15, usage: 0.8 }, 42, null);
-    expect(html).toContain("0.92× of 1.15×");
+    expect(html).toContain("Invested <b>92 % of its capital · limit 115 %</b>");
+    expect(html).not.toContain("×");
     expect(html).toContain("+$42");
     expect(html).not.toContain("$42.00");
     expect(html).not.toContain("Below peak");
@@ -39,7 +40,7 @@ describe("riskDetailHtml — the sleeve detail block", () => {
 
   test("a levered sleeve at its design size is not an alarm: red only past its own cap", () => {
     const atDesign = riskDetailHtml({ id: "momentum_stocks" }, { ratio: 1.5, cap: 2.5, usage: 0.6 }, null, null);
-    expect(atDesign).toContain("1.50× of 2.5×");
+    expect(atDesign).toContain("150 % of its capital · limit 250 %");
     expect(atDesign).not.toContain("var(--down)");
     const past = riskDetailHtml({ id: "momentum_stocks" }, { ratio: 2.7, cap: 2.5, usage: 1.08 }, null, null);
     expect(past).toContain("var(--down)");

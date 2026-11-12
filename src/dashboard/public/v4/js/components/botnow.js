@@ -8,9 +8,9 @@
 // next to a stock-market time); the list of recent actions is grouped by New
 // York day and clocked in New York time, like the P&L tiles. The engine's own
 // sentences and ids are never printed: every cause is a word from reasonWord.
-import { t, isEs, sleeveLabel } from "../store.js";
+import { t, isEs, sleeveLabel, portfolioName } from "../store.js";
 import { api } from "../api.js";
-import { money, pnlWhole, n, num } from "../fmt.js";
+import { money, pnlWhole, n } from "../fmt.js";
 import { esc } from "../ui.js";
 import { CLOSE_REASON_WORDS, closeReasonWord } from "../close-reasons.js";
 
@@ -66,12 +66,9 @@ export function reasonWord(code, cadence) {
   return R[String(code).toLowerCase()] || "";
 }
 
-/** The portfolio's name as the reader knows it (API label; two words localized). */
-export function portfolioName(label) {
-  return String(label || "")
-    .replace(/MeanRev/i, t("Mean Reversion", "Reversión a la media"))
-    .replace(/Crypto/i, t("Crypto", "Cripto"));
-}
+// The portfolio's name as the reader knows it lives in store.js: the positions
+// table's group headers read the very same one.
+export { portfolioName };
 
 const isCrypto = (p) => /binance/i.test(p.broker || "") || /crypto/i.test(p.id || "");
 
@@ -88,16 +85,15 @@ function refName(ref) {
   return names[ref] || String(ref || t("the market", "el mercado"));
 }
 
-/** 0.97 → "about 1× its capital"; 1.5 → "1.5× its capital". */
+/** Whole percent with the space the sentences use: 88.4 → "88 %". */
+const pc = (x) => `${Math.round(Math.abs(n(x)))} %`;
+
+/** 0.97 → "97 % of its capital"; 2.5 → "250 % of its capital" (no "×" anywhere). */
 export function grossPhrase(x) {
   const v = n(x, NaN);
   if (!Number.isFinite(v)) return "";
-  const whole = Math.abs(v - Math.round(v)) < 0.1;
-  const times = whole ? `${t("about", "aproximadamente")} ${Math.round(v)}×` : `${num(v, 1)}×`;
-  return t(`${times} its capital`, `${times} de su capital`);
+  return t(`${pc(v * 100)} of its capital`, `${pc(v * 100)} de su capital`);
 }
-
-const pctWord = (x) => { const v = Math.abs(n(x)); return num(v, Math.abs(v - Math.round(v)) < 0.05 ? 0 : 1) + "%"; };
 
 // ── time in words ───────────────────────────────────────────────────────────
 
@@ -158,8 +154,6 @@ function onDay(ms, opts) {
 
 const WARN_BLOCKS = ["soft_drawdown", "hard_drawdown", "loss_streak", "maintenance"];
 const trimmed = (p) => p.exposureScale != null && n(p.exposureScale, 1) < 0.995;
-/** 1.5 → "1.5×", 1.0 → "1×". */
-const times = (x) => `${num(n(x), Math.abs(n(x) - Math.round(n(x))) < 0.05 ? 0 : 1)}×`;
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 /** The status word and its dot colour. */
@@ -194,13 +188,27 @@ function blockedSentence(p, o) {
   }
 }
 
-/** "S&P 500 +5% vs its 200-day average". */
+/** "Market rising: S&P 500 is 4 % above its 200-day average" or, below it,
+ *  "Market falling: … 4 % below … — defensive mode" (the mode only once the
+ *  sleeve's own switch has gone defensive: a dip inside its band is not one). */
 function regimeChip(p) {
   const r = p.regime;
   if (!r || r.distancePct == null) return "";
-  const sign = n(r.distancePct) < 0 ? "−" : "+";
-  const d = `${sign}${pctWord(r.distancePct)}`;
-  return t(`${refName(r.ref)} ${d} vs its 200-day average`, `${refName(r.ref)} ${d} frente a su media de 200 días`);
+  const ref = refName(r.ref), d = pc(r.distancePct);
+  if (n(r.distancePct) >= 0) return t(`Market rising: ${ref} is ${d} above its 200-day average`, `Mercado al alza: ${ref} está un ${d} por encima de su media de 200 días`);
+  const defensive = r.riskOn === false ? t(" — defensive mode", " — modo defensivo") : "";
+  return t(`Market falling: ${ref} is ${d} below its 200-day average${defensive}`, `Mercado a la baja: ${ref} está un ${d} por debajo de su media de 200 días${defensive}`);
+}
+
+/** "Invested $43,677 (88 % of its capital, limit 250 %)": the money, how much
+ *  of the sleeve's capital it is and, when the sleeve may go past 100 %, its
+ *  limit. One chip where "Invested" and "Leverage 0.9× of 2.5×" were two. */
+function investedChip(p, eq, count) {
+  if (!eq) return `${count} ${assetWord(p, count)}`;
+  const parts = [];
+  if (p.grossX != null && Number.isFinite(n(p.grossX, NaN))) parts.push(grossPhrase(p.grossX));
+  if (parts.length && p.maxGrossX != null && Math.round(n(p.maxGrossX) * 100) !== 100) parts.push(t(`limit ${pc(n(p.maxGrossX) * 100)}`, `límite ${pc(n(p.maxGrossX) * 100)}`));
+  return t(`Invested ${eq}`, `Invertido ${eq}`) + (parts.length ? ` (${parts.join(", ")})` : "");
 }
 
 /** The 2–3 key facts of a portfolio as plain strings (the reason, for paused and
@@ -234,15 +242,11 @@ export function chipsOf(p) {
       return out.length ? out : [t("Holds no positions", "Sin posiciones")];
     }
     default: { // invested / partly_invested
-      const chips = [eq ? t(`Invested ${eq}`, `Invertido ${eq}`) : `${count} ${assetWord(p, count)}`];
-      if (p.maxGrossX != null && n(p.maxGrossX) > 1.05 && p.grossX != null) {
-        chips.push(t(`Leverage ${times(p.grossX)} of ${times(p.maxGrossX)}`, `Apalancamiento ${times(p.grossX)} de ${times(p.maxGrossX)}`));
-      }
+      const chips = [investedChip(p, eq, count)];
       chips.push(regime);
       if (trimmed(p)) {
-        const scale = Math.round(n(p.exposureScale) * 100);
-        chips.push(t(`${scale}% of normal size`, `${scale}% del tamaño normal`));
-        if (p.drawdownPct != null) chips.push(t(`${pctWord(p.drawdownPct)} below its peak`, `${pctWord(p.drawdownPct)} bajo su máximo`));
+        chips.push(t(`${pc(n(p.exposureScale) * 100)} of normal size`, `${pc(n(p.exposureScale) * 100)} del tamaño normal`));
+        if (p.drawdownPct != null) chips.push(t(`${pc(p.drawdownPct)} below its peak`, `${pc(p.drawdownPct)} bajo su máximo`));
       }
       const out = chips.filter(Boolean).slice(0, 3);
       if (out.length < 2 && eq && count > 0) out.push(`${count} ${assetWord(p, count)}`);

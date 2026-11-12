@@ -98,14 +98,14 @@ describe("scorecard — plain-language rows", () => {
     expect(dd).not.toContain("+0.0%");
   });
 
-  test("positions, performance and monthly picker use the same name in both UI languages", () => {
+  test("performance and monthly picker use the same name in both UI languages; the positions group reads like the Bot card", () => {
     const prev = { lang: store.state.lang, dashboard: store.state.dashboard };
     try {
       store.state.dashboard = { accounts: ACCOUNTS };
-      for (const [lang, label] of [["en", "MeanRev Stocks"], ["es", "Reversión Acciones"]]) {
+      for (const [lang, label, groupLabel] of [["en", "MeanRev Stocks", "Mean Reversion Stocks"], ["es", "Reversión Acciones", "Reversión a la media Acciones"]]) {
         store.state.lang = lang;
         const [group] = positionGroups([{ profileId: "meanrev_stocks", quantity: 1, avgEntryPrice: 10, currentPrice: 10 }], ACCOUNTS);
-        expect(group.label).toBe(label);
+        expect(group.label).toBe(groupLabel); // one source with the Bot panel: store.js portfolioName
         expect(monthlyReturnsOptions(ACCOUNTS).find(o => o.id === "meanrev_stocks").label).toBe(label);
         expect(scorecard({ entities: [{ id: "meanrev_stocks", kind: "sleeve", label: "Reversión Stocks", windows: [{ window: "model", totalReturnPct: 0, benchmark: {} }] }] })).toContain(`<span class="sc-name">${label} `);
       }

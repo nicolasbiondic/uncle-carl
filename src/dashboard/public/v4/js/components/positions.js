@@ -1,6 +1,7 @@
-import { store, t, sleeveLabel } from "../store.js";
-import { money, moneyCompact, pnlWhole, quantity, pctWhole, pnlColor, dur, num } from "../fmt.js";
+import { store, t, sleeveLabel, portfolioName, portfolioLabel } from "../store.js";
+import { money, moneyCompact, pnlWhole, quantity, pctWhole, pnlColor, dur } from "../fmt.js";
 import { esc } from "../ui.js";
+import { symbolCell } from "../symbol-cell.js";
 import { renderTrades } from "./trades.js";
 import { positionsTotals } from "../money-values.js";
 export { positionsTotals } from "../money-values.js";
@@ -109,10 +110,11 @@ export function exposureColor(row) {
 // ── Groups: the table is one block per portfolio (owner, 2026-10-25) ───────
 // Until then a row of exposure chips ("● MOM-CRY-USD 0.67× /1.15×") sat above
 // the table and every row carried a sleeve badge; the owner could not read
-// either. Now each portfolio is a block with a header row — "Momentum Stocks
-// $57,021 · −$1,234 ……… exposure [bar] 0.97× of 2.5×" (since 2026-10-26; the
-// sentence "11 positions, $57,021 invested, 0.97× of its capital" became the
-// title) — and the rows beneath carry nothing but their own numbers.
+// either. Each portfolio is a block with a header row, and since 2026-11-12
+// ("que lo pueda entender un humano, no una máquina") the header is a sentence:
+// "Mean Reversion Stocks · 32 positions · $50,592 · open +$537 · 21 up, 11 down
+// ……… invested 93 % of its capital [bar]". The rows beneath read the same way:
+// a name, a value, one diverging bar with its amount, the time left.
 
 /** Groups with more than this many positions start collapsed (only when the
  *  table has more than one group — a lone group collapsed is an empty table). */
@@ -152,7 +154,7 @@ export function positionGroups(positions, accounts) {
   }
   const groups = [...byId.values()].map((g) => ({
     ...g,
-    label: sleeveLabel(g.account || { id: g.id }) || t("Other", "Otros"),
+    label: portfolioName(portfolioLabel(g.account || { id: g.id })) || t("Other", "Otros"),
     invested: g.unknown ? null : g.invested,
     pnl: positionsTotals(g.rows),
     exposure: exposure.get(g.id) || null,
@@ -160,15 +162,23 @@ export function positionGroups(positions, accounts) {
   return groups.sort((a, b) => (b.invested ?? -1) - (a.invested ?? -1) || (a.id === "" ? 1 : 0) - (b.id === "" ? 1 : 0));
 }
 
-/** The exposure of a group header as "1.50× of 2.5×" (ratio over the
- *  engine's base, then the sleeve's cap) with the share of the cap for the
- *  bar; coloured only past the cap (exposureColor). Without a cap the
- *  ratio stands alone; null when the ratio is unknown (COIN-M). */
+/** Whole percent with the space the sentences use: 0.934 → "93 %". */
+const wholePct = (ratio) => `${Math.round(+(ratio * 100).toFixed(6))} %`; // toFixed: 1.725 × 100 is 172.49999999999997
+
+/** The exposure of a group header in words: "invested 93 % of its capital",
+ *  plus " · limit 250 %" when the sleeve's cap is not 100 % — or when it is
+ *  past it, so the red always has a word beside it. `body` is the same
+ *  without the leading "invested" (the broker modal puts its own label in
+ *  front); `usage` is the share of the cap for the bar, coloured only past
+ *  the cap (exposureColor). Without a cap the percentage stands alone; null
+ *  when the ratio is unknown (COIN-M). */
 export function exposurePhrase(x) {
   if (!x || x.ratio == null) return null;
-  const text = x.cap == null ? `${num(x.ratio, 2)}×` : `${num(x.ratio, 2)}× ${t("of", "de")} ${+x.cap.toFixed(3)}×`;
-  const color = exposureColor(x);
-  return { text, color: color === "var(--down)" ? color : null, usage: x.usage };
+  const color = exposureColor(x) === "var(--down)" ? "var(--down)" : null;
+  const showLimit = x.cap != null && (Math.round(x.cap * 100) !== 100 || color != null);
+  const body = t(`${wholePct(x.ratio)} of its capital`, `el ${wholePct(x.ratio)} de su capital`)
+    + (showLimit ? ` · ${t("limit", "límite")} ${wholePct(x.cap)}` : "");
+  return { text: `${t("invested", "invertido")} ${body}`, body, color, usage: x.usage };
 }
 
 /** The header's exposure bar: used share of the cap over a track, filled in
@@ -185,8 +195,8 @@ function groupTitle(g) {
   const parts = [`${count} ${count === 1 ? t("position", "posición") : t("positions", "posiciones")}.`];
   if (x && x.ratio != null) {
     const baseLabel = x.baseKind === "equity" ? t("current equity", "patrimonio actual") : t("allocation", "asignación");
-    parts.push(`${t("Holds", "Tiene")} ${money(x.notional, 0)} ${t("at market against", "a mercado sobre")} ${money(x.base, 0)} ${t("of", "de")} ${baseLabel} (${num(x.ratio, 2)}×).`);
-    if (x.cap != null) parts.push(`${t("Cap", "Tope")} ${+x.cap.toFixed(3)}×.`);
+    parts.push(`${t("Holds", "Tiene")} ${money(x.notional, 0)} ${t("at market against", "a mercado sobre")} ${money(x.base, 0)} ${t("of", "de")} ${baseLabel} (${wholePct(x.ratio)}).`);
+    if (x.cap != null) parts.push(`${t("Limit", "Límite")} ${wholePct(x.cap)}.`);
     if (x.allocation) parts.push(`${t("Allocation", "Asignación")} ${money(x.allocation, 0)}.`);
   } else if (x) {
     parts.push(t("Notional unknown: COIN-M quantities are contracts, not units.", "Nocional desconocido: en COIN-M las cantidades son contratos, no unidades."));
@@ -195,21 +205,48 @@ function groupTitle(g) {
   return parts.join(" ");
 }
 
+/** How many rows of a group are up / down / flat since entry (unpriced rows
+ *  are in none: like the totals, never counted as break-even). */
+export function groupOutcome(rows) {
+  let up = 0, down = 0, flat = 0;
+  for (const p of rows || []) {
+    if (!priced(p?.unrealizedPnl)) continue;
+    const v = Number(p.unrealizedPnl);
+    if (v > 0) up++; else if (v < 0) down++; else flat++;
+  }
+  return { up, down, flat };
+}
+
+/** "21 up, 11 down" / "21 ganan, 11 pierden" — a zero is left out, 1 agrees. */
+export function outcomeWords({ up, down, flat }) {
+  const es = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const parts = [];
+  if (up) parts.push(t(`${up} up`, es(up, "gana", "ganan")));
+  if (down) parts.push(t(`${down} down`, es(down, "pierde", "pierden")));
+  if (flat) parts.push(t(`${flat} flat`, `${flat} sin cambio`));
+  return parts.join(", ");
+}
+
 function renderGroupHeader(g, collapsed, cols) {
-  // Name · $ invested · P&L on the left; the exposure bar on the right. The
-  // count and the long sentence ride in the title (the owner reads numbers).
-  const bits = [];
+  // A sentence on the left — name · positions · $ invested · open P&L · how
+  // many are up and down — and, on the right, how much of its capital the
+  // portfolio has in the market, with its bar. The long explanation (market
+  // value against the base, the limit, the allocation) rides in the title.
+  const count = g.rows.length;
+  const bits = [`${count} ${count === 1 ? t("position", "posición") : t("positions", "posiciones")}`];
   if (g.invested != null) bits.push(esc(money(g.invested, 0)));
-   if (g.pnl.counted) bits.push(`<span class="pg-pnl" style="color:${pnlColor(g.pnl.total)}">${t("open", "sin cerrar")} ${pnlWhole(g.pnl.total)}</span>`);
+  if (g.pnl.counted) bits.push(`<span class="pg-pnl" style="color:${pnlColor(g.pnl.total)}">${t("open", "sin cerrar")} ${pnlWhole(g.pnl.total)}</span>`);
+  const words = outcomeWords(groupOutcome(g.rows));
+  if (words) bits.push(esc(words));
   const xp = exposurePhrase(g.exposure);
   const exp = xp
-    ? `<span class="pg-exp"><span class="muted">${t("exposure", "exposición")}</span>${renderExposureBar(xp)}<span class="pg-x"${xp.color ? ` style="color:${xp.color}"` : ""}>${esc(xp.text)}</span></span>`
+    ? `<span class="pg-exp"><span class="pg-x"${xp.color ? ` style="color:${xp.color}"` : ""}>${esc(xp.text)}</span>${renderExposureBar(xp)}</span>`
     : "";
   // One cell across the row. Its content is sized width:0/min-width:100%
   // (app.css .pgroup-btn) so the sentence never widens the symbol column
   // the way a label in the first cell would (see renderTotalsRow).
   return `<tr class="pgroup"><td colspan="${cols}"><button type="button" class="pgroup-btn" data-pgroup="${esc(g.id)}" aria-expanded="${!collapsed}" title="${esc(groupTitle(g))}">
-      <span class="pg-chev" aria-hidden="true"></span><span class="pg-name">${esc(g.label)}</span><span class="pg-sum">${bits.join(' <span class="muted">·</span> ')}</span>${exp}
+      <span class="pg-chev" aria-hidden="true"></span><span class="pg-name">${esc(g.label)}</span><span class="pg-sum"><span class="muted">·</span> ${bits.join(' <span class="muted">·</span> ')}</span>${exp}
     </button></td></tr>`;
 }
 
@@ -218,13 +255,14 @@ function renderGroupHeader(g, collapsed, cols) {
 // (maxHoldSessions, src/portfolio-engine/decide.ts maxHoldExpired: sessions
 // strictly AFTER the entry date, closed at the pass of the 5th), the momentum
 // engines (crypto) after 120 calendar hours (timeStop.maxHoldHours). The Time
-// column shows that clock: five dots filling with the position's age and
-// "closes in N days". Weekdays stand in for sessions (holidays ignored — the
-// owner accepted "good enough"); a row past its limit is a pending close.
+// column shows that clock: a bar of five segments filling with the days the
+// position has been held, and "up to N days left". Weekdays stand in for sessions
+// (holidays ignored — the owner accepted "good enough"); a row past its limit
+// is a pending close.
 
 export const MAX_HOLD_SESSIONS = 5;
 export const MAX_HOLD_HOURS = 120;
-export const HOLD_DOTS = 5;
+export const HOLD_SEGMENTS = 5;
 
 /** Crypto rows run on hours, stock rows on sessions. Position.market when the
  *  payload carries it; else the sleeve's broker (binance* = crypto). */
@@ -253,8 +291,9 @@ export function weekdaysSince(openedMs, nowMs) {
 }
 
 /** Pure: where a position stands on the owner's 5-day clock, or null when its
- *  age is unknown. `dots` (0..5) fill with the age; `remaining` is in the
- *  row's unit; `closing` once the limit is reached (the close is pending). */
+ *  age is unknown. `days` (0..5) are the days already held — the segments
+ *  filled; `remaining` is in the row's unit; `closing` once the limit is
+ *  reached (the close is pending). */
 export function holdProgress(p, account, nowMs = Date.now()) {
   const opened = priced(p?.openedAt) && Number(p.openedAt) > 0 ? Number(p.openedAt)
     : priced(p?.durationSeconds) ? nowMs - Number(p.durationSeconds) * 1000 : null;
@@ -262,26 +301,27 @@ export function holdProgress(p, account, nowMs = Date.now()) {
   const heldMs = Math.max(0, nowMs - opened);
   if (isCryptoRow(p, account)) {
     const hours = heldMs / 36e5;
-    return { unit: "hours", elapsed: hours, limit: MAX_HOLD_HOURS, remaining: Math.max(0, MAX_HOLD_HOURS - hours), dots: Math.min(HOLD_DOTS, Math.floor(hours / 24)), closing: hours >= MAX_HOLD_HOURS, heldMs };
+    return { unit: "hours", elapsed: hours, limit: MAX_HOLD_HOURS, remaining: Math.max(0, MAX_HOLD_HOURS - hours), days: Math.min(HOLD_SEGMENTS, Math.floor(hours / 24)), closing: hours >= MAX_HOLD_HOURS, heldMs };
   }
   const sessions = weekdaysSince(opened, nowMs);
-  return { unit: "sessions", elapsed: sessions, limit: MAX_HOLD_SESSIONS, remaining: Math.max(0, MAX_HOLD_SESSIONS - sessions), dots: Math.min(HOLD_DOTS, sessions), closing: sessions >= MAX_HOLD_SESSIONS, heldMs };
+  return { unit: "sessions", elapsed: sessions, limit: MAX_HOLD_SESSIONS, remaining: Math.max(0, MAX_HOLD_SESSIONS - sessions), days: Math.min(HOLD_SEGMENTS, sessions), closing: sessions >= MAX_HOLD_SESSIONS, heldMs };
 }
 
-/** "closes within 4 days" / "closes within 20 h" (crypto under a day) / "due to
+/** "up to 4 days left" / "up to 20 h left" (crypto under a day) / "due to
  *  close". The 5-day rule is a ceiling, not an appointment: the portfolio
  *  engines also rotate their oldest lots earlier (maxHoldStagger), a stop can
- *  close a position sooner, and weekdays stand in for NYSE sessions. Crypto
- *  days are rounded UP so dots + days always make 5. */
+ *  close a position sooner, and weekdays stand in for NYSE sessions — hence
+ *  "up to". Crypto days are rounded UP so segments filled + days left always
+ *  make 5. */
 export function holdText(h) {
   if (!h) return "—";
   if (h.closing) return t("due to close", "toca cerrar");
   if (h.unit === "hours" && h.remaining < 24) {
     const hrs = Math.max(1, Math.ceil(h.remaining));
-    return t(`closes within ${hrs} h`, `cierra en ${hrs} h como máximo`);
+    return t(`up to ${hrs} h left`, `le quedan hasta ${hrs} h`);
   }
   const days = h.unit === "hours" ? Math.ceil(h.remaining / 24) : h.remaining;
-  return days === 1 ? t("closes within 1 day", "cierra en 1 día como máximo") : t(`closes within ${days} days`, `cierra en ${days} días como máximo`);
+  return days === 1 ? t("up to 1 day left", "le queda hasta 1 día") : t(`up to ${days} days left`, `le quedan hasta ${days} días`);
 }
 
 function holdTitle(h) {
@@ -291,14 +331,14 @@ function holdTitle(h) {
 }
 
 function renderHold(h) {
-  const dots = Array.from({ length: HOLD_DOTS }, (_, i) => `<i${h && i < h.dots ? ' class="on"' : ""}></i>`).join("");
-  return `<span class="hold" title="${esc(holdTitle(h))}"><span class="hdots" aria-hidden="true">${dots}</span><span class="opt2 hold-txt${h?.closing ? "" : " muted"}">${esc(holdText(h))}</span></span>`;
+  const segs = Array.from({ length: HOLD_SEGMENTS }, (_, i) => `<i${h && i < h.days ? ' class="on"' : ""}></i>`).join("");
+  return `<span class="hold${h?.closing ? " closing" : ""}" title="${esc(holdTitle(h))}"><span class="hseg" aria-hidden="true">${segs}</span><span class="opt2 hold-txt${h?.closing ? "" : " muted"}">${esc(holdText(h))}</span></span>`;
 }
 
-// ── Row P&L bar ─────────────────────────────────────────────────────────────
-/** Fill of a row's P&L bar as a % of its track: |pct| over the largest |pct|
- *  among the rows shown, floored so a tiny move is still a sliver. 0 for an
- *  unknown pct, a flat row or an all-flat table. */
+// ── Row result: a bar that diverges from a zero line ────────────────────────
+/** Fill of a row's result bar as a % of its HALF of the track: |pct| over the
+ *  largest |pct| among the rows shown, floored so a tiny move is still a
+ *  sliver. 0 for an unknown pct, a flat row or an all-flat table. */
 export const PNL_BAR_FLOOR = 8;
 export function pnlBarWidth(pct, maxAbsPct) {
   if (!priced(pct) || !(maxAbsPct > 0)) return 0;
@@ -307,9 +347,26 @@ export function pnlBarWidth(pct, maxAbsPct) {
   return Math.max(PNL_BAR_FLOOR, Math.min(100, (a / maxAbsPct) * 100));
 }
 
-function renderPnlBar(p, maxAbsPct) {
-  const width = pnlBarWidth(p.unrealizedPnlPct, maxAbsPct);
-  return `<span class="pnlbar" aria-hidden="true"><span class="pnlbar-fill" style="width:${+width.toFixed(1)}%;background:${pnlColor(p.unrealizedPnl)}"></span></span>`;
+/** Losses grow to the left of the zero line in the loss colour, gains to the
+ *  right in the gain colour. Decoration only (aria-hidden): the sign, the
+ *  amount and the word carry the meaning. */
+function renderDivergingBar(p, maxAbsPct) {
+  const width = +pnlBarWidth(p.unrealizedPnlPct, maxAbsPct).toFixed(1);
+  const loss = Number(p.unrealizedPnl) < 0;
+  const fill = width ? `<i style="width:${width}%;background:${pnlColor(p.unrealizedPnl)}"></i>` : "";
+  return `<span class="dbar" aria-hidden="true"><span class="dbar-l">${loss ? fill : ""}</span><span class="dbar-r">${loss ? "" : fill}</span></span>`;
+}
+
+/** "gain" / "loss" / "flat" for a screen reader: colour is never the only signal. */
+function resultWord(pnl) {
+  const v = Number(pnl);
+  return v > 0 ? t("gain", "ganancia") : v < 0 ? t("loss", "pérdida") : t("flat", "sin cambio");
+}
+
+function renderResult(p, maxAbsPct) {
+  if (!priced(p.unrealizedPnl)) return `<span class="muted" title="${esc(t("No price available — not counted in the total", "Sin precio disponible — no cuenta en el total"))}">—</span>`;
+  const color = pnlColor(p.unrealizedPnl);
+  return `<span class="res">${renderDivergingBar(p, maxAbsPct)}<span class="res-amt" style="color:${color}"><span class="vh">${resultWord(p.unrealizedPnl)} </span>${pnlWhole(p.unrealizedPnl)}</span><span class="res-pct muted">${priced(p.unrealizedPnlPct) ? pctWhole(p.unrealizedPnlPct) : "—"}</span></span>`;
 }
 
 export function renderPositions(state, trades) {
@@ -340,18 +397,15 @@ export function renderPositions(state, trades) {
   // OPEN row actually carries one, so it reappears on its own if that ever
   // changes instead of needing another UI change.
   const anyTp = pos.some((p) => priced(p.takeProfit) && Number(p.takeProfit) > 0);
-  // Same rule for the side column (2026-10-12): every live strategy is long
-  // only, so "L" on every row was dead width that pushed the SL cell onto two
-  // lines. It reappears on its own when a short position exists.
+  // No side column (2026-11-12): long is the normal case and says nothing; a
+  // short carries a small word tag beside its name (symbolCell).
   const isLong = (p) => p.side === "buy" || p.side === "long";
-  const anyShort = pos.some((p) => !isLong(p));
-  // Sym, Notional, Entry, Now, P&L, Time (2026-10-26: the QTY column moved
-  // into the symbol's title and the SL column went away — the owner reads
-  // size, P&L and the 5-day clock; the stop is one click away via the symbol).
-  const cols = 6 + (anyShort ? 1 : 0) + (anyTp ? 1 : 0);
+  // Position, Value, Open, Time left (2026-11-12: Entry and Now left the
+  // table for the symbol's tooltip and the candle modal; 2026-10-26: QTY and SL
+  // went before — the stop is one click away via the symbol).
+  const cols = 4 + (anyTp ? 1 : 0);
   const now = Date.now();
   const row = (p, maxAbsPct) => {
-    const isL = isLong(p);
     const acc = accById.get(p.profileId);
     const notional = marketNotional(p, acc);
     const symTitle = [
@@ -360,17 +414,12 @@ export function renderPositions(state, trades) {
       `${t("Now", "Ahora")} ${priced(p.currentPrice) ? moneyCompact(p.currentPrice) : "—"}`,
     ].join(" · ");
     return `<tr class="pos">
-      <td><span class="symlink" data-sym="${esc(p.symbol)}" role="button" tabindex="0" title="${esc(symTitle)}">${esc(p.symbol)}</span></td>
-      ${anyShort ? `<td><span class="badge ${isL ? "l" : "s"}">${isL ? "L" : "S"}</span></td>` : ""}
+      <td>${symbolCell(p.symbol, { title: symTitle, short: !isLong(p) })}</td>
       <td>${notional != null
         ? esc(moneyCompact(notional))
         : `<span class="muted" title="${esc(t("COIN-M quantity is a contract count, not units — notional needs the contract size, not carried in this payload", "En COIN-M la cantidad son contratos, no unidades — el nocional necesita el tamaño de contrato, que este dato no trae"))}">—</span>`}</td>
-      <td class="opt3">${priced(p.avgEntryPrice) ? esc(moneyCompact(p.avgEntryPrice)) : "—"}</td>
-      <td class="opt3">${priced(p.currentPrice) ? esc(moneyCompact(p.currentPrice)) : "—"}</td>
-      <td>${priced(p.unrealizedPnl)
-        ? `${renderPnlBar(p, maxAbsPct)}<span style="color:${pnlColor(p.unrealizedPnl)}">${pnlWhole(p.unrealizedPnl)} <span class="muted">${priced(p.unrealizedPnlPct) ? pctWhole(p.unrealizedPnlPct) : "—"}</span></span>`
-        : `<span class="muted" title="${esc(t("No price available — not counted in the total", "Sin precio disponible — no cuenta en el total"))}">—</span>`}</td>
-      <td>${renderHold(holdProgress(p, acc, now))}</td>
+      <td class="c-res">${renderResult(p, maxAbsPct)}</td>
+      <td class="c-time">${renderHold(holdProgress(p, acc, now))}</td>
       ${anyTp ? `<td class="opt1">${p.takeProfit ? esc(moneyCompact(p.takeProfit)) : "—"}</td>` : ""}
     </tr>`;
   };
@@ -382,14 +431,13 @@ export function renderPositions(state, trades) {
     .reduce((m, p) => (priced(p.unrealizedPnlPct) ? Math.max(m, Math.abs(Number(p.unrealizedPnlPct))) : m), 0);
   const body = open.map(({ g, collapsed }) => renderGroupHeader(g, collapsed, cols) + (collapsed ? "" : g.rows.map((p) => row(p, maxAbsPct)).join(""))).join("");
   return `<div class="scroll"><table class="postbl">
-    <thead><tr><th title="${esc(t("Quantity, entry and current price in each symbol's tooltip", "Cantidad, entrada y precio actual en el tooltip de cada símbolo"))}">${t("Sym", "Sím")}</th>${anyShort ? "<th>S</th>" : ""}
-      <th title="${esc(t("Current market value", "Valor actual a mercado"))}">${t("Notional", "Valor")}</th>
-      <th class="opt3">${t("Entry", "Entrada")}</th><th class="opt3">${t("Now", "Ahora")}</th>
-      <th title="${esc(t("Open, since entry; percentage of the invested amount", "Sin cerrar, desde la entrada; porcentaje de lo invertido"))}">${t("Open", "Sin cerrar")}</th>
-      <th title="${esc(t("Your 5-day rule: no position stays open longer — 5 market sessions for stocks, 120 h for crypto — though the bot may close it earlier. The dots fill with the position's age.", "Tu regla de 5 días: ninguna posición sigue abierta más tiempo — 5 sesiones de mercado en acciones, 120 h en cripto — aunque el bot puede cerrarla antes. Los puntos se llenan con la antigüedad."))}">${t("Time", "Tiempo")}</th>
-      ${anyTp ? `<th class="opt1">TP</th>` : ""}</tr></thead>
+    <thead><tr><th title="${esc(t("Quantity, entry price and current price in each symbol's tooltip", "Cantidad, precio de entrada y precio actual en el tooltip de cada símbolo"))}">${t("Position", "Posición")}</th>
+      <th title="${esc(t("Current market value", "Valor actual a mercado"))}">${t("Value", "Valor")}</th>
+      <th class="th-res" title="${esc(t("Open, since entry: the gain or loss so far, in dollars and as a percentage of the invested amount. The bar grows left for a loss and right for a gain.", "Sin cerrar, desde la entrada: la ganancia o pérdida hasta ahora, en dólares y como porcentaje de lo invertido. La barra crece a la izquierda si pierde y a la derecha si gana."))}">${t("Open (since entry)", "Sin cerrar")}</th>
+      <th class="th-time" title="${esc(t("Your 5-day rule: no position stays open longer — 5 market sessions for stocks, 120 h for crypto — though the bot may close it earlier. The segments fill with the days already held.", "Tu regla de 5 días: ninguna posición sigue abierta más tiempo — 5 sesiones de mercado en acciones, 120 h en cripto — aunque el bot puede cerrarla antes. Los segmentos se llenan con los días que lleva abierta."))}">${t("Time left", "Tiempo")}</th>
+      ${anyTp ? `<th class="opt1" title="${esc(t("Price at which the position closes with a gain", "Precio al que la posición se cierra con ganancia"))}">${t("Target", "Objetivo")}</th>` : ""}</tr></thead>
     <tbody>${body}</tbody>
-    ${renderTotalsRow(pos, anyTp, anyShort)}</table></div>`;
+    ${renderTotalsRow(pos, anyTp)}</table></div>`;
 }
 
 /** Sum of unrealized P&L across the open positions shown above.
@@ -404,21 +452,18 @@ export function renderPositions(state, trades) {
  *  reported, never coerced to 0: outside market hours (or on a thin tape) a
  *  price can legitimately be unavailable, and silently counting those as
  *  break-even would understate a loss. */
-function renderTotalsRow(positions, anyTp, anyShort = true) {
+function renderTotalsRow(positions, anyTp) {
   const { total, counted, unpriced } = positionsTotals(positions);
   if (!counted) return "";
   const note = unpriced > 0
     ? ` <span class="muted">· ${unpriced} ${t("unpriced", "sin precio")}</span>`
     : "";
-  // One cell per column (not a colspan over the Entry/Now columns): on
-  // narrow screens those columns are display:none, and a colspan="6" then
-  // spilled past the visible columns and pushed the total off-screen.
-  // Short label (the long form rides in the title): with the side column
-  // hidden it sits in the symbol column alone, and "Total unrealized · 21
-  // positions" forced that column to ~200px — the table then needed a
-  // sideways scroll (2026-10-12).
+  // One cell across the row, sized like the group headers (width:0 /
+  // min-width:100%, app.css .pgroup-btn): a long label in the first cell once
+  // forced that column to ~200px and the table needed a sideways scroll
+  // (2026-10-12).
   const what = `${counted} ${counted === 1 ? t("position", "posición") : t("positions", "posiciones")}`;
   return `<tfoot><tr class="totals">
-    <td colspan="${6 + (anyShort ? 1 : 0) + (anyTp ? 1 : 0)}"><div class="pgroup-btn" style="flex-wrap:wrap;white-space:normal">${t("Open, since entry", "Sin cerrar (desde la entrada)")} <span style="color:${pnlColor(total)}">${pnlWhole(total)}</span> <span class="muted">· ${esc(what)}${note}</span></div></td>
+    <td colspan="${4 + (anyTp ? 1 : 0)}"><div class="pgroup-btn" style="flex-wrap:wrap;white-space:normal">${t("Open, since entry", "Sin cerrar (desde la entrada)")} <span style="color:${pnlColor(total)}">${pnlWhole(total)}</span> <span class="muted">· ${esc(what)}${note}</span></div></td>
   </tr></tfoot>`;
 }
