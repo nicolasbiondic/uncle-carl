@@ -126,6 +126,17 @@ them. Enforced: `src/strategies/momentum/volStopEntry.test.ts`,
 `getETDayBounds` in `src/db/database.ts` — never `setHours(0,0,0,0)`.
 Enforced: `src/db/database-time.test.ts`.
 
+**Owner-facing text.** Whatever the owner reads (dashboard, Telegram,
+`/status`, `/profits`, digest) is written for a person, not a machine: plain
+words, whole dollars, a plain name on every ticker, one reader per money
+figure. Load the project skill before touching any of it:
+`.opencode/skills/texto-para-personas/SKILL.md`. Enforced:
+`src/telegram/plain-money.test.ts`,
+`src/dashboard/public/v4/js/symbol-names.test.js`,
+`src/dashboard/public/v4/js/fmt.test.js`,
+`src/portfolio/moneyConsistency.test.ts`, `bun run dashboard:check` and
+`src/config/ownerTextSkill.test.ts`.
+
 **Shared broker wallet.** Multiple stock sleeves can share one Alpaca
 wallet; closing a position liquidates the AGGREGATE broker position while
 only the requesting sleeve closes its own DB row. Universes that share a
