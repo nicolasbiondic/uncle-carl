@@ -79,12 +79,16 @@ function returnKpi(kp) {
   return kpi(t("Return 30D", "Rentab. 30D"), val, "sm", sub);
 }
 
-/** "+$1,234 +1.1% since start" under the total equity (start date in the title). */
+/** "+$5,875 (+5.2%) since start" under the total equity, amount and percentage
+ *  in the result colour; the title names the start date and the value the
+ *  percentage is over ("it started with $112,238"). */
 export function sinceStartSub(ss) {
   if (!ss) return "";
   const when = ss.startedAt ? new Date(ss.startedAt).toLocaleDateString(store.state.lang === "es" ? "es" : "en-GB", { day: "numeric", month: "short", year: "numeric" }) : "";
-  const title = when ? t(`Since the system started, ${when}`, `Desde que empezó el sistema, ${when}`) : "";
-  return `<span title="${esc(title)}"><b style="color:${pnlColor(ss.pnl)}">${moneySigned(ss.pnl, 0)}</b> ${ss.pct == null ? "" : pctSigned(ss.pct)} ${t("since start", "desde el inicio")}</span>`;
+  const base = ss.startEquity > 0 ? t(`: it started with ${money(ss.startEquity, 0)}`, `: empezó con ${money(ss.startEquity, 0)}`) : "";
+  const title = when ? t(`Since the system started, ${when}${base}`, `Desde que empezó el sistema, ${when}${base}`) : "";
+  const pctHtml = ss.pct == null ? "" : ` <span style="color:${pnlColor(ss.pnl)}">(${pctSigned(ss.pct)})</span>`;
+  return `<span title="${esc(title)}"><b style="color:${pnlColor(ss.pnl)}">${moneySigned(ss.pnl, 0)}</b>${pctHtml} ${t("since start", "desde el inicio")}</span>`;
 }
 
 export function renderKpis() {

@@ -238,31 +238,59 @@ tfoot tr.totals .muted { font-weight: 500; }
 /* width:0 + min-width:100%: the sentence takes the row's width without ever
    contributing to the column widths (a label in the first cell widened the
    symbol column to ~200px, see renderTotalsRow in positions.js). */
-.pgroup-btn { display: flex; flex-wrap: wrap; align-items: baseline; gap: 1px var(--s2); width: 0; min-width: 100%; padding: 9px var(--s2) 5px; background: none; border: none; color: var(--text); font: inherit; text-align: left; white-space: nowrap; overflow: hidden; }
+.pgroup-btn { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s4); width: 0; min-width: 100%; padding: 8px var(--s2); background: none; border: none; color: var(--text); font: inherit; text-align: left; white-space: nowrap; overflow: hidden; }
 .pgroup-btn:hover .pg-name { color: var(--accent); }
 .pgroup-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--r1); }
+/* The group header is a small summary band: on the left the name, its size and
+   the result (the main figure, a step heavier than the muted text); on the
+   right the win/loss split and the capital gauge. Too narrow, the right part
+   drops to a second line, still right-aligned. */
+.pg-l { display: inline-flex; align-items: baseline; gap: var(--s2); flex: 1 1 auto; min-width: 0; }
+.pg-r { display: inline-flex; align-items: center; gap: var(--s4); margin-left: auto; flex: 0 0 auto; }
 .pgroup-btn .pg-name { font-weight: 700; flex-shrink: 0; }
-.pgroup-btn .pg-sum { color: var(--text-2); font-size: var(--t-xs); flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
-.pgroup-btn .pg-pnl { font-weight: 600; }
-/* The header's exposure, in words: "invested 93 % of its capital [bar]",
-   right-aligned. The bar is the used share of the sleeve's cap over a track;
-   its fill takes the phrase's colour (red only past the cap, else muted). */
-.pgroup-btn .pg-exp { margin-left: auto; flex-shrink: 0; display: inline-flex; align-items: center; gap: var(--s2); font-size: var(--t-xs); color: var(--text-2); font-variant-numeric: tabular-nums; }
-.xbar { display: inline-block; width: 64px; height: 5px; border-radius: 2px; background: var(--border); overflow: hidden; }
-.xbar-fill { display: block; height: 100%; border-radius: 2px; }
+.pgroup-btn .pg-sum { color: var(--text-2); font-size: var(--t-xs); min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.pgroup-btn .pg-pnl { font-weight: 700; font-size: var(--t-sm); flex-shrink: 0; margin-left: var(--s2); font-variant-numeric: tabular-nums; }
+.pgroup-btn .pg-pct { font-weight: 600; }
+/* The win/loss split: green for the share of positions that are up, red for
+   those that are down, muted for flat ones; the words beside it say the same. */
+.pg-split { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; font-size: var(--t-xs); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.splitbar { display: inline-flex; gap: 1px; width: 72px; height: 8px; border-radius: 2px; overflow: hidden; background: var(--border); flex: 0 0 auto; }
+.splitbar i { display: block; flex: 1 1 0; min-width: 3px; height: 100%; }
+.splitbar .sb-up { background: var(--up); }
+.splitbar .sb-down { background: var(--down); }
+.splitbar .sb-flat { background: var(--muted); }
+/* The header's exposure in words, then the capital gauge. */
+.pgroup-btn .pg-exp { display: inline-flex; align-items: center; gap: var(--s2); flex: 0 0 auto; font-size: var(--t-xs); color: var(--text-2); font-variant-numeric: tabular-nums; }
+/* The totals row is the same band without the right-hand part. */
+.pgroup-btn.pg-foot { padding: 6px var(--s2); }
+.pg-foot-l { white-space: normal; min-width: 0; }
+.pg-foot-l .pg-pnl { margin-left: 0; }
+.pg-nw { white-space: nowrap; } /* the bar and its words wrap together, after the separator */
+.pg-foot-l .pg-split { vertical-align: middle; }
+/* The capital gauge (js/capital-gauge.js), one for every surface: a track to
+   the larger of the limit and 100 %, a fill to the current share, a tick at
+   100 % when the track goes past it. Fill = the accent, red only past the limit. */
+.cgauge { display: inline-flex; align-items: center; gap: var(--s2); flex: 0 0 auto; }
+.cg-track { position: relative; display: inline-block; width: 140px; height: 8px; border-radius: 2px; background: var(--border); flex: 0 0 auto; }
+.cg-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; }
+.cg-tick { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--text); }
+.cg-end { color: var(--text-2); font-size: var(--t-xs); white-space: nowrap; font-variant-numeric: tabular-nums; }
+@media (max-width: 980px) { .cg-track { width: 110px; } }
+@media (max-width: 640px) { .cg-track { width: 88px; } .splitbar { width: 56px; } }
 /* Row result: a bar that diverges from a zero line (losses grow left in the
    loss colour, gains right in the gain colour), its length |result %| against
    the largest on screen (pnlBarWidth in positions.js), then the amount and
    the percentage in two aligned tabular columns. */
 .res { position: relative; display: inline-flex; align-items: center; gap: var(--s2); }
-.dbar { position: relative; display: inline-flex; flex: 0 0 auto; width: 120px; height: 8px; margin-right: var(--s1); }
-.dbar::after { content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; margin-left: -.5px; background: var(--muted); }
+.dbar { position: relative; display: inline-flex; flex: 0 0 auto; width: 120px; height: 11px; margin-right: var(--s1); }
+.dbar::after { content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--text-2); }
 .dbar-l, .dbar-r { display: flex; flex: 1 1 50%; min-width: 0; height: 100%; background: var(--border); }
-.dbar-l { justify-content: flex-end; border-radius: 3px 0 0 3px; }
-.dbar-r { border-radius: 0 3px 3px 0; }
+.dbar-l { justify-content: flex-end; border-radius: 2px 0 0 2px; }
+.dbar-r { border-radius: 0 2px 2px 0; }
 .dbar i { display: block; height: 100%; }
-.dbar-l i { border-radius: 3px 0 0 3px; }
-.dbar-r i { border-radius: 0 3px 3px 0; }
+.dbar-l i { border-radius: 2px 0 0 2px; }
+.dbar-r i { border-radius: 0 2px 2px 0; }
+@media (min-width: 1440px) { .dbar { width: 150px; } }
 .res-amt { min-width: 52px; text-align: right; font-weight: 600; }
 .res-pct { min-width: 36px; text-align: right; }
 #opsBody .th-time, #opsBody .c-time { text-align: left; }
@@ -274,6 +302,7 @@ tfoot tr.totals .muted { font-weight: 500; }
 .hseg i.on { background: var(--text-2); }
 .hold.closing .hseg i.on { background: var(--warn); }
 .hold-txt { font-size: var(--t-xs); }
+@media (min-width: 641px) { .hseg { gap: 3px; } .hseg i { width: 12px; height: 8px; border-radius: 2px; } }
 .pg-chev { width: 0; height: 0; border: 4px solid transparent; border-left: 5px solid var(--muted); align-self: center; flex-shrink: 0; transition: transform var(--dur); }
 .pgroup-btn[aria-expanded="true"] .pg-chev { transform: rotate(90deg); }
 @media (max-width: 1500px) { .postbl .opt1 { display: none; } }
@@ -288,6 +317,10 @@ tfoot tr.totals .muted { font-weight: 500; }
   .postbl .symname { max-width: 15ch; white-space: normal; font-size: 10px; line-height: 1.25; } /* phones: the name wraps under its ticker */
   .postbl td, .postbl th { padding-left: var(--s1); padding-right: var(--s1); }
   .pgroup-btn .pg-sum { white-space: normal; }
+  .pg-l, .pg-r, .pgroup-btn .pg-exp { flex-wrap: wrap; white-space: normal; }
+  .pg-r { margin-left: 0; gap: var(--s1) var(--s3); min-width: 0; flex: 1 1 100%; }
+  .pgroup-btn .pg-pnl { margin-left: 0; }
+  .pgroup-btn .pg-exp { flex: 0 1 auto; min-width: 0; }
   .postbl th { white-space: normal; vertical-align: bottom; line-height: 1.25; }
   .dbar { width: 72px; }
 }
@@ -417,13 +450,30 @@ tfoot tr.totals .muted { font-weight: 500; }
 .bn-name { font-weight: 600; }
 .bn-word { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: var(--t-xs); white-space: nowrap; }
 .bn-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.bn-chips { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s2); margin-top: var(--s1); }
+.bn-chips { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s2); margin-top: var(--s2); }
+/* The money and its capital: one line, the gauge under it (capital-gauge.js). */
+.bn-inv { margin-top: var(--s2); }
+.bn-inv-line { font-size: var(--t-sm); font-variant-numeric: tabular-nums; }
+.bn-inv .cgauge { margin-top: 6px; }
+.bn-gauge .cg-track { width: 160px; height: 10px; }
+@media (max-width: 640px) { .bn-gauge .cg-track { width: 110px; } }
+/* The market chip: an arrow and a colour on its first words, the rest plain. */
+.bn-rg { font-weight: 600; }
+.bn-rg.up { color: var(--up); }
+.bn-rg.down { color: var(--down); }
+.bn-arrow { font-size: 9px; vertical-align: 1px; }
 .bn-chip { color: var(--text-2); font-size: var(--t-xs); background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r1); padding: 1px var(--s2); font-variant-numeric: tabular-nums; }
 .bn-tl { margin-top: var(--s2); max-width: 560px; }
 .bn-tl-track { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--t-xs); }
 .bn-tl-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
 .bn-tl-hollow { background: none; border: 1.5px solid var(--muted); box-sizing: border-box; }
 .bn-tl-bar { height: 1px; background: var(--border-2); flex-basis: 0; min-width: 12px; }
+/* What has elapsed since the last decision is a solid, brighter line; what is
+   still to come is dim; "now" is a filled dot with its word. */
+.bn-tl-bar.bn-tl-done { height: 2px; border-radius: 1px; background: var(--text-2); }
+.bn-tl-past { background: var(--text-2); }
+.bn-tl-nowdot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); flex-shrink: 0; margin-right: -2px; }
+.bn-tl-now { color: var(--text); font-weight: 600; }
 .bn-tl-labels { display: flex; justify-content: space-between; gap: var(--s3); margin-top: 3px; color: var(--text-2); font-size: var(--t-xs); }
 .bn-tl-labels > span:last-child { text-align: right; }
 .bn-tl-k { color: var(--muted); }

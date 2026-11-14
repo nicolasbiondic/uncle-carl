@@ -71,7 +71,9 @@ test("one fixture: tiles 1/7/30/All, cards, since start, curve, bridge, digest, 
       const [profile] = await get(`/api/v2/profiles?days=${days}`);
       const agg = profile.pnlAggregate;
       const w = readDisplayMoneyWindow(["alpaca_main", "binance_main"], days)!;
-      expect(agg.periodPnl).toBe(w.pnl); expect(agg.periodPnlPct).toBe(w.pnlPct);
+      expect(agg.periodPnl).toBe(w.pnl);
+      // The All tile is the since-start figure: it carries the same percentage as the sub-line.
+      expect(agg.periodPnlPct).toBe(days === 0 ? w.pnlPct ?? w.pnlPctOnStart ?? null : w.pnlPct);
       expect(profile.brokerAccounts.reduce((s: number, b: any) => s + b.stats.periodEquityPnl, 0)).toBeCloseTo(w.pnl, 8);
       const rows = await get(`/api/equity/history?account=consolidated&days=${days}`);
       expect(rows.at(-1).moneyWindow.pnl).toBe(w.pnl);
@@ -87,6 +89,9 @@ test("one fixture: tiles 1/7/30/All, cards, since start, curve, bridge, digest, 
       expect(kpiValues(state).periodPnl).toBe(w.pnl);
       expect(sinceStart(state).pnl).toBe(agg.sinceStart.pnl);
       expect(sinceStart(state).displayStart).toEqual(agg.displayStart);
+      const all = readDisplayMoneyWindow(["alpaca_main", "binance_main"], 0)!;
+      expect(sinceStart(state).pct).toBe(all.pnlPct ?? all.pnlPctOnStart ?? null);
+      expect(all.pnlPctOnStart).toBeCloseTo(all.pnl / all.start.equity * 100, 9);
       expect(renderBreakdown(modal)).toContain(`$${Math.abs(rounded.positions).toLocaleString("en-US")}`);
       const daily = readMoneyWindow({ days: 1 });
       expect(daily.breakdown.realized).toBeCloseTo(36.4, 8);
@@ -292,4 +297,7 @@ test("three legs anchored seconds apart before the same boundary keep their %; a
   expect(late.pnl).toBeCloseTo(111, 8);
   expect(late.start.rebased).toBe(true);
   expect(late.pnlPct).toBeNull();
+  // The gain over the starting value stays available beside the strict null;
+  // only the since-start figure shows it (a 1-day tile keeps the null above).
+  expect(late.pnlPctOnStart).toBeCloseTo(111 / 110800 * 100, 8);
 });

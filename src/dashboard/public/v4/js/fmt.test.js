@@ -78,3 +78,18 @@ describe("ET time formatters", () => {
     expect(etDayKey(Date.UTC(2026, 10, 7, 3, 0))).toBe("2026-11-06"); // 10 PM ET on the 6th
   });
 });
+
+import { pctSentence } from "./fmt.js";
+describe("pctSentence — a result inside a sentence", () => {
+  test.each([
+    [-0.2, false, "−0.2 %"], [0.24, false, "+0.2 %"], [-0.96, false, "−1.0 %"], [0.03, false, "0.0 %"],
+    [-1.4, false, "−1 %"], [12.6, false, "+13 %"], [-857.9 / 71_000 * 100, false, "−1 %"],
+    [-1.4, true, "−1.4 %"], [0, true, "0.0 %"], [0, false, "0.0 %"],
+  ])("%s (fine %s) → %s", (value, fine, expected) => {
+    expect(pctSentence(value, fine)).toBe(expected);
+  });
+  test("one decimal mark, the dot every number here uses, in both languages; invalid input stays finite", () => {
+    expect(pctSentence(-0.2, true)).not.toContain(",");
+    expect(pctSentence(null)).toBe("0.0 %");
+  });
+});

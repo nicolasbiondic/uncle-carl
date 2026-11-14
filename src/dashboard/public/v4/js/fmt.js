@@ -72,6 +72,17 @@ export function pctWhole(v) {
   return (x < 0 ? "−" : "+") + num(Math.abs(x), 0) + "%";
 }
 
+/** A result inside a sentence, with the space the sentences use: "−1 %" /
+ *  "+0.2 %". Whole percent, but one decimal below 1 % (a whole "−0 %" beside
+ *  "−$249" reads wrong) or always when `fine`. Zero carries no sign. The
+ *  decimal mark is the dot every number here uses (`num`), in both languages. */
+export function pctSentence(v, fine = false) {
+  const x = n(v);
+  const d = fine || Math.abs(x) < 1 ? 1 : 0;
+  const r = Number(Math.abs(x).toFixed(d));
+  return `${r === 0 ? "" : x < 0 ? "−" : "+"}${num(r, d)} %`;
+}
+
 /** A 0..1 fraction -> "42%" (some analytics endpoints return fractions). */
 export function pctFrac(v, d = 0) {
   return num(n(v) * 100, d) + "%";

@@ -52,9 +52,11 @@ function syntheticFixtures(dir: string) {
     ["momentum_crypto_usdc", "Momentum Crypto USDC", "binance", 4],
   ] as const;
   const accounts = defs.map(([id, label, broker, count]) => ({
-    id, label, broker, equity: id === "momentum_stocks" ? 100_000 : 25_000, initialEquity: id === "momentum_stocks" ? 96_000 : 24_000, totalPnl: 1000,
+    // Capital gauge states: momentum_stocks holds ~146 % of its capital (limit 250 %), the
+    // USDC sleeve is past its 115 % limit (red), meanrev's limit is 100 % (track ends at 100 %).
+    id, label, broker, equity: id === "momentum_stocks" ? 123_700 : id === "momentum_crypto_usdc" ? 18_000 : 25_000, initialEquity: id === "momentum_stocks" ? 96_000 : 24_000, totalPnl: 1000,
     cash: 8000, openPositions: count, paused: false, mode: "live",
-    grossCapMult: id === "momentum_stocks" ? 2.5 : 1.15,
+    grossCapMult: id === "momentum_stocks" ? 2.5 : id === "meanrev_stocks" ? 1 : 1.15,
     grossCapBase: id === "meanrev_stocks" ? "allocation" : "equity",
   }));
   // The first group (biggest book) reads as the live momentum_stocks sleeve: its
@@ -78,9 +80,9 @@ function syntheticFixtures(dir: string) {
       return { ...base, ...r, market: "stock", openedAt: nowReal - ageDays * 864e5, durationSeconds: ageDays * 86_400 };
     }
     const sign = i % 2 ? -1 : 1;
-    if (profileId === "momentum_crypto_usdc") { // one crypto SHORT: it gains because the price fell
+    if (profileId === "momentum_crypto_usdc") { // every position down (a one-colour split bar); one is a SHORT that loses because the price rose
       const short = i === 3, entry = 12_345.67 + i * 17, qty = 0.3 + 0.1 * i;
-      const pct = short ? 2.1 : sign * (1.23 + i * 0.4); // the result, as a % of what was invested
+      const pct = short ? -2.1 : -(1.23 + i * 0.4); // the result, as a % of what was invested
       return { ...base, symbol: ["NEAR/USDC", "1000PEPE/USDC", "ETH/USDC", "BTC/USDC"][i], market: "crypto",
         side: short ? "sell" : "long", quantity: short ? -qty : qty, avgEntryPrice: entry,
         currentPrice: entry * (1 + (short ? -pct : pct) / 100), unrealizedPnl: qty * entry * pct / 100, unrealizedPnlPct: pct,
@@ -96,8 +98,8 @@ function syntheticFixtures(dir: string) {
   } });
   save("api-bot-now", { asOf: now, portfolios: accounts.map((a, i) => ({
     id: a.id, label: a.label, broker: a.broker, engine: a.broker === "alpaca" ? "portfolio" : "momentum",
-    version: `${a.id}@synthetic`, state: i === 2 ? "flat" : i === 3 ? "paused" : "invested",
-    positions: defs[i][3], investedUsd: i === 2 ? 0 : 24_250, equityUsd: 25_000, grossX: i === 2 ? 0 : 0.97,
+    version: `${a.id}@synthetic`, state: i === 2 ? "flat" : "invested",
+    positions: defs[i][3], investedUsd: i === 2 ? 0 : 24_250, equityUsd: 25_000, grossX: [0.93, 1.46, 0, 1.22][i],
     maxGrossX: a.grossCapMult, cadence: { kind: i === 2 ? "hourly" : "daily",
       at: a.broker === "alpaca" ? "09:35 America/New_York" : i === 2 ? ":00 each hour" : "00:00 UTC" },
     lastDecision: { at: now - 3600e3, entries: i === 2 ? 0 : 2, exits: 0, resizes: 0, orders: i === 2 ? 0 : 2,

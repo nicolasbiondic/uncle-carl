@@ -62,7 +62,7 @@ function brokerCell(key, group, bt, stats) {
   // start is the server's display-start window (A-1), the same anchor as the
   // All tile and the "since start" sub-line.
   const equity = bt?.equity ?? null;
-  const allPct = bt?.sinceStart?.pnlPct ?? null;
+  const allPct = bt?.sinceStart?.pnlPct ?? bt?.sinceStart?.pnlPctOnStart ?? null;
   const periodPnl = bt?.stats?.periodEquityPnl ?? null;
   const periodPct = bt?.stats?.periodEquityPnlPct ?? null;
   const pausedCount = group.filter((a) => a.paused).length;
@@ -92,10 +92,12 @@ function brokerCell(key, group, bt, stats) {
 
 /** The whole account since the system started: Σ broker-truth equity minus Σ
  *  their first equity (the same anchors as each broker cell's "total %", so the
- *  three figures agree). Null while any broker lacks its first anchor. */
+ *  three figures agree). Null while any broker lacks its first anchor. The
+ *  percentage is the server's: its strict one, else its gain over the starting
+ *  value (`pnlPctOnStart`, sent when the start was spliced); never computed here. */
 export function sinceStart(state) {
   const w = state.profiles?.[0]?.pnlAggregate?.sinceStart;
-  return w == null ? null : { pnl: w.pnl, pct: w.pnlPct, startedAt: w.start.at, displayStart: w.start };
+  return w == null ? null : { pnl: w.pnl, pct: w.pnlPct ?? w.pnlPctOnStart ?? null, startedAt: w.start.at, startEquity: w.start.equity ?? null, displayStart: w.start };
 }
 
 export function renderProfiles() {

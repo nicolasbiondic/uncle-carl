@@ -229,7 +229,15 @@ export function readDisplayMoneyWindow(profileIds: string[], periodDays: number,
   const windowStart = periodDays === 0 ? at : getETWindowStart(periodDays, now);
   const coinmLeg = profileIds.indexOf(MAIN_SERIES.coinm) >= 0 ? legs[profileIds.indexOf(MAIN_SERIES.coinm)] : null;
   const rebased = legs.some(r => r.start.rebased) || (coinmLeg != null && coinmLeg.start.at > windowStart);
-  return { pnl, pnlPct: invalid || rebased ? null : (pnl / startSum) * 100,
+  // Since start with a percentage (owner, 2026-11-14: "en el since start añade
+  // un delta de %"). On prod `pnlPct` is null for the All window forever: the
+  // Binance start is spliced across two methodology changes and the COIN-M leg
+  // was born ten days in. The spliced start is the starting value in TODAY's
+  // accounting (prod: $7 away from the recorded $112,238), so the gain over it
+  // is a fair "how much it grew". Kept apart from `pnlPct` so no other window
+  // or consumer changes; whoever shows it names the base it divides by.
+  const pnlPctOnStart = startSum > 0 ? (pnl / startSum) * 100 : null;
+  return { pnl, pnlPct: invalid || rebased ? null : (pnl / startSum) * 100, pnlPctOnStart,
     equity: legs.reduce((s, r) => s + r.equity, 0), endAt: Math.max(...legs.map(r => r.endAt)),
     start: { at, date: getETDateKey(at), equity: startSum,
       rebased } };

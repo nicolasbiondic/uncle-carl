@@ -6,10 +6,11 @@ import {
   positionsTotals, positionNotional, isInverseContractSleeve,
   sleeveExposure, renderPositions, exposureColor,
   positionGroups, isGroupCollapsed, exposurePhrase, renderExposureBar, togglePositionGroup, COLLAPSE_OVER, groupOutcome, outcomeWords,
-  holdProgress, holdText, weekdaysSince, isCryptoRow, pnlBarWidth, PNL_BAR_FLOOR, MAX_HOLD_SESSIONS, MAX_HOLD_HOURS,
+  holdProgress, holdText, weekdaysSince, isCryptoRow, pnlBarWidth, PNL_BAR_FLOOR, MAX_HOLD_SESSIONS, MAX_HOLD_HOURS, renderSplitBar,
 } from "./positions.js";
 import { store } from "../store.js";
 import { dur } from "../fmt.js";
+import { capitalGauge, isOverLimit } from "../capital-gauge.js";
 
 describe("positionsTotals", () => {
   test("sums the unrealized P&L of every priced position", () => {
@@ -47,7 +48,7 @@ describe("positionsTotals", () => {
   });
 
   test("no positions → zeros, no crash", () => {
-    expect(positionsTotals([])).toEqual({ total: 0, counted: 0, unpriced: 0 });
+    expect(positionsTotals([])).toEqual({ total: 0, counted: 0, unpriced: 0, pct: null });
   });
 
   test("a numeric string still counts (the payload is JSON from the API)", () => {
@@ -60,6 +61,54 @@ describe("positionsTotals", () => {
     const r = positionsTotals([{ unrealizedPnl: 500 }, { unrealizedPnl: -500 }]);
     expect(r.total).toBe(0);
     expect(r.counted).toBe(2);
+  });
+});
+
+// The weighted % of the open book (2026-11-14): Σ result ÷ Σ entry amount, the
+// same denominator each row's own % uses — never an average of percentages.
+describe("positionsTotals — pct", () => {
+  const row = (quantity, avgEntryPrice, unrealizedPnl) => ({ quantity, avgEntryPrice, unrealizedPnl });
+
+  test("is the weighted result: Σ unrealizedPnl ÷ Σ |qty| × entry × 100, not the mean of the rows' %", () => {
+    // +10 % on $1,000 and −1 % on $9,000: the book is (100 − 90) / 10,000 = +0.1 %, the mean of the rows' % would say +4.5 %
+    const r = positionsTotals([row(10, 100, 100), row(90, 100, -90)]);
+    expect(r.pct).toBeCloseTo(0.1, 10);
+    expect(r.total).toBe(10);
+  });
+
+  test("a short counts its size, not its sign (|quantity|)", () => {
+    expect(positionsTotals([row(-50, 100, -250)]).pct).toBeCloseTo(-5, 10);
+  });
+
+  test("only the counted rows are in the denominator: an unpriced row is in neither part", () => {
+    const r = positionsTotals([row(10, 100, 50), { quantity: 1_000, avgEntryPrice: 100, unrealizedPnl: null }]);
+    expect(r).toMatchObject({ total: 50, counted: 1, unpriced: 1 });
+    expect(r.pct).toBeCloseTo(5, 10);
+  });
+
+  test("null — never 0, never a partial denominator — when any counted row has no usable entry amount", () => {
+    expect(positionsTotals([row(10, 100, 50), { unrealizedPnl: 10 }]).pct).toBeNull();           // no quantity / entry at all
+    expect(positionsTotals([row(10, 100, 50), row(null, 100, 10)]).pct).toBeNull();               // null quantity must not coerce to 0
+    expect(positionsTotals([row(10, 100, 50), row(5, "", 10)]).pct).toBeNull();                   // "" entry price
+    expect(positionsTotals([row(0, 100, 0)]).pct).toBeNull();                                      // a zero entry amount cannot be a denominator
+    expect(positionsTotals([]).pct).toBeNull();
+    expect(positionsTotals([{ unrealizedPnl: NaN }]).pct).toBeNull();                             // nothing counted
+  });
+
+  test("the caller can say what an entry amount is: COIN-M quantities are contracts, so the book has no %", () => {
+    const rows = [row(37, 65_000, 30), row(10, 100, 5)];
+    expect(positionsTotals(rows).pct).not.toBeNull(); // from the row alone it cannot tell
+    const accounts = { a: { broker: "binance_coinm" }, b: { broker: "alpaca" } };
+    const entryAmount = (p) => positionNotional(p, accounts[p === rows[0] ? "a" : "b"]);
+    expect(positionsTotals(rows, { entryAmount }).pct).toBeNull();
+    expect(positionsTotals([rows[1]], { entryAmount }).pct).toBeCloseTo(0.5, 10);
+  });
+
+  test("additive: total, counted and unpriced are what they were, and the group / footer figures use the sleeve-aware amount", () => {
+    expect(positionsTotals([{ unrealizedPnl: 6057.91 }, { unrealizedPnl: -74.09 }])).toMatchObject({ total: 5983.82, counted: 2, unpriced: 0, pct: null });
+    const coinm = [{ id: "momentum_btc", label: "Momentum BTC (COIN-M)", broker: "binance_coinm", initialEquity: 1_000 }];
+    const [g] = positionGroups([{ symbol: "BTC/COIN-M", side: "buy", quantity: 37, avgEntryPrice: 65_000, unrealizedPnl: 30, profileId: "momentum_btc" }], coinm);
+    expect(g.pnl).toMatchObject({ total: 30, counted: 1, pct: null });
   });
 });
 
@@ -177,22 +226,46 @@ describe("group header: a sentence, with the Bot panel's strategy names (2026-11
   const state = { view: "consolidated", posGroups: { meanrev_stocks: "closed" }, dashboard: { accounts, portfolio: { positions: [...mr, ...mo] } } };
   const head = (html, id) => html.slice(html.indexOf(`data-pgroup="${id}"`), html.indexOf("</button>", html.indexOf(`data-pgroup="${id}"`)));
 
-  test("English: name · positions · $ · open · up/down on the left, invested % of its capital on the right", () => {
+  test("English: name · size on the left with the result as the main figure, the split and the capital gauge on the right", () => {
     const h = head(renderPositions(state, []), "meanrev_stocks");
-    expect(h).toContain('<span class="pg-name">Mean Reversion Stocks</span><span class="pg-sum"><span class="muted">·</span> 32 positions <span class="muted">·</span> $48,000 <span class="muted">·</span> <span class="pg-pnl" style="color:var(--up)">open +$523</span> <span class="muted">·</span> 20 up, 11 down, 1 flat</span>');
-    expect(h).toContain('<span class="pg-x">invested 89 % of its capital</span><span class="xbar" aria-hidden="true">'); // cap 100 %: no limit
+    // name, then the muted "· 32 positions · $48,000", then the result in its colour with the weighted % (+$523 on $47,477 = +1.1 %; one decimal only below 1 %)
+    expect(h).toContain('<span class="pg-name">Mean Reversion Stocks</span><span class="pg-sum"><span class="muted">·</span> 32 positions <span class="muted">·</span> $48,000</span> <span class="pg-pnl" style="color:var(--up)">open +$523 <span class="pg-pct">(+1 %)</span></span></span>');
+    // the split bar (20 up, 1 flat, 11 down: proportional segments, aria-hidden) with its words, then the exposure sentence and the gauge
+    expect(h).toContain('<span class="pg-split"><span class="splitbar" aria-hidden="true"><i class="sb-up" style="flex-grow:20"></i><i class="sb-flat" style="flex-grow:1"></i><i class="sb-down" style="flex-grow:11"></i></span><span class="pg-split-txt">20 up, 11 down, 1 flat</span></span>');
+    expect(h).toContain('<span class="pg-x">invested 89 % of its capital</span><span class="cgauge" aria-hidden="true">'); // cap 100 %: no limit, a track that ends at 100 %
+    expect(h).toContain('<span class="cg-fill" style="width:88.9%;background:var(--accent)"></span></span>');
+    expect(h).not.toContain("cg-tick"); // nothing past 100 %, no mark
     expect(h).not.toContain("×");
-    expect(h).toMatch(/title="32 positions\. Holds \$48,000 at market against \$54,000 of current equity \(89 %\)\. Limit 100 %\./); // the long explanation stays in the title
+    // the whole sentence leads the title, then the long explanation
+    expect(h).toMatch(/title="Mean Reversion Stocks · 32 positions · \$48,000 · open \+\$523 \(\+1 %\) · 20 up, 11 down, 1 flat · invested 89 % of its capital\. Holds \$48,000 at market against \$54,000 of current equity \(89 %\)\. Limit 100 %\./);
     expect(h).toContain("Click to show or hide its positions.");
+    expect(h).toContain('aria-expanded="false"'); // still the one clickable row that folds the group
   });
 
-  test("a cap that is not 100 % is said; the other portfolio is named like the Bot card", () => {
+  test("a cap that is not 100 % is said, with the 100 % tick on its gauge; the other portfolio is named like the Bot card", () => {
     const h = head(renderPositions(state, []), "momentum_stocks");
     expect(h).toContain('<span class="pg-name">Momentum Stocks</span>');
     expect(h).toContain('<span class="pg-x">invested 16 % of its capital · limit 250 %</span>');
+    expect(h).toContain('<span class="cg-tick" style="left:40%"></span>'); // 100 % of a 250 % track
+    expect(h).toContain("The mark is 100 %: all of its own capital.");
     expect(h).toContain("1 position <span");
     expect(h).toContain("1 down</span>"); // a lone loser: no "0 up"
     expect(h).not.toContain("0 up");
+    expect(h).toContain('<i class="sb-down" style="flex-grow:1"></i></span>'); // every position down: a one-colour bar
+    expect(h).not.toContain("sb-up");
+    expect(h).toContain('style="color:var(--down)">open −$50 <span class="pg-pct">(−0.6 %)</span>'); // −50 on 100 × $80
+  });
+
+  test("the group's % is the weighted one, one decimal below 1 % and whole above; absent when an entry amount is unknown", () => {
+    const rows = (pnl, id = "momentum_stocks") => [{ symbol: "A", side: "buy", quantity: 100, avgEntryPrice: 80, currentPrice: 80, unrealizedPnl: pnl, profileId: id }];
+    const hdr = (pnl) => head(renderPositions({ ...state, dashboard: { accounts, portfolio: { positions: rows(pnl) } } }, []), "momentum_stocks");
+    expect(hdr(-50)).toContain("open −$50 <span class=\"pg-pct\">(−0.6 %)</span>");   // −50 / 8,000
+    expect(hdr(-400)).toContain("open −$400 <span class=\"pg-pct\">(−5 %)</span>");
+    expect(hdr(80)).toContain("open +$80 <span class=\"pg-pct\">(+1 %)</span>");
+    const noEntry = [{ symbol: "A", side: "buy", currentPrice: 80, unrealizedPnl: -50, profileId: "momentum_stocks" }];
+    const h = head(renderPositions({ ...state, dashboard: { accounts, portfolio: { positions: noEntry } } }, []), "momentum_stocks");
+    expect(h).toContain("open −$50</span>");
+    expect(h).not.toContain("pg-pct");
   });
 
   test("Spanish: sin cerrar, ganan / pierden, invertido el N % de su capital", () => {
@@ -208,7 +281,14 @@ describe("group header: a sentence, with the Bot panel's strategy names (2026-11
       expect(h).toContain("invertido el 89 % de su capital");
       expect(head(html, "momentum_stocks")).toContain("1 pierde</span>");
       expect(head(html, "momentum_stocks")).toContain("invertido el 16 % de su capital · límite 250 %");
+      expect(head(html, "momentum_stocks")).toContain("La marca es el 100 %: todo su propio capital.");
     } finally { store.state.lang = lang; }
+  });
+
+  test("the split bar is proportional, in the gain / flat / loss colours, nothing without a priced row", () => {
+    expect(renderSplitBar({ up: 2, down: 9, flat: 0 })).toBe('<span class="splitbar" aria-hidden="true"><i class="sb-up" style="flex-grow:2"></i><i class="sb-down" style="flex-grow:9"></i></span>');
+    expect(renderSplitBar({ up: 0, down: 0, flat: 3 })).toBe('<span class="splitbar" aria-hidden="true"><i class="sb-flat" style="flex-grow:3"></i></span>');
+    expect(renderSplitBar({ up: 0, down: 0, flat: 0 })).toBe("");
   });
 
   test("groupOutcome counts only priced rows: an unpriced row is in none", () => {
@@ -246,29 +326,55 @@ describe("isGroupCollapsed", () => {
   });
 });
 
-describe("exposurePhrase + bar — 'invested 93 % of its capital', coloured only past the cap (2026-11-12)", () => {
-  test("far from the cap: whole percentages and the limit, uncoloured; the bar fills the used share in muted", () => {
+describe("exposurePhrase + capital gauge — 'invested 93 % of its capital', red only past the limit (2026-11-14)", () => {
+  test("far from the cap: whole percentages and the limit, uncoloured; the gauge runs to the limit, the fill in the accent, a tick at 100 %", () => {
     const p = exposurePhrase({ ratio: 0.97, cap: 2.5, usage: 0.97 / 2.5 });
-    expect(p).toEqual({ text: "invested 97 % of its capital · limit 250 %", body: "97 % of its capital · limit 250 %", color: null, usage: 0.97 / 2.5 });
-    expect(renderExposureBar(p)).toBe('<span class="xbar" aria-hidden="true"><span class="xbar-fill" style="width:38.8%;background:var(--muted)"></span></span>');
+    expect(p).toEqual({ text: "invested 97 % of its capital · limit 250 %", body: "97 % of its capital · limit 250 %", color: null, usage: 0.97 / 2.5, ratio: 0.97, cap: 2.5 });
+    expect(renderExposureBar(p)).toBe('<span class="cgauge" aria-hidden="true"><span class="cg-track"><span class="cg-fill" style="width:38.8%;background:var(--accent)"></span><span class="cg-tick" style="left:40%"></span></span></span>');
+  });
+  test("146 % of its capital with a 250 % limit: the fill passes the 100 % tick and stops well inside the track", () => {
+    const g = capitalGauge({ ratio: 1.46, cap: 2.5 });
+    expect(g).toContain('style="width:58.4%;background:var(--accent)"');
+    expect(g).toContain('<span class="cg-tick" style="left:40%">');
   });
   test("at or near the cap: no warning colour (an always-invested book's design size)", () => {
     const p = exposurePhrase({ ratio: 1.1, cap: 1.15, usage: 1.1 / 1.15 });
     expect(p.text).toBe("invested 110 % of its capital · limit 115 %");
     expect(p.color).toBeNull();
-    expect(renderExposureBar(p)).toContain("width:95.7%;background:var(--muted)");
+    expect(renderExposureBar(p)).toContain("width:95.7%;background:var(--accent)");
+    expect(renderExposureBar(exposurePhrase({ ratio: 1.15, cap: 1.15, usage: 1 }))).toContain("width:100%;background:var(--accent)"); // AT the limit is the design size
   });
-  test("over the cap: red, the bar clipped at the track, and the limit is said even when it is 100 %", () => {
+  test("over the cap: red, the fill clipped at the track, and the limit is said even when it is 100 %", () => {
     const p = exposurePhrase({ ratio: 1.0, cap: 0.9659999999, usage: 1.0 / 0.966 });
     expect(p.text).toBe("invested 100 % of its capital · limit 97 %"); // whole percentages, no float noise
     expect(p.color).toBe("var(--down)");
     expect(renderExposureBar(p)).toContain("width:100%;background:var(--down)");
     expect(exposurePhrase({ ratio: 1.05, cap: 1, usage: 1.05 }).text).toBe("invested 105 % of its capital · limit 100 %"); // the red always has a word
+    expect(renderExposureBar(exposurePhrase({ ratio: 1.05, cap: 1, usage: 1.05 }))).not.toContain("cg-tick"); // a 100 % track ends at 100 %: no mark
   });
-  test("without a cap: the percentage alone, no bar (nothing to fill against)", () => {
+  test("a limit of 100 % (or less): the track is 0–100 %, no tick, nothing said about a limit", () => {
+    const g = capitalGauge({ ratio: 0.93, cap: 1 });
+    expect(g).toBe('<span class="cgauge" aria-hidden="true"><span class="cg-track"><span class="cg-fill" style="width:93%;background:var(--accent)"></span></span></span>');
+    expect(capitalGauge({ ratio: 0.5, cap: 0.9659999999 })).not.toContain("cg-tick");
+  });
+  test("without a cap: the percentage alone in words; the gauge still shows it against 100 %, red from 100 % like exposureColor", () => {
     const p = exposurePhrase({ ratio: 1.59, cap: null, usage: null });
     expect(p.text).toBe("invested 159 % of its capital");
-    expect(renderExposureBar(p)).toBe("");
+    const g = renderExposureBar(p);
+    expect(g).toContain("width:100%;background:var(--down)");
+    expect(g).toContain('<span class="cg-tick" style="left:62.9%">');
+    expect(renderExposureBar(exposurePhrase({ ratio: 0.4, cap: null, usage: null }))).toContain("width:40%;background:var(--accent)");
+  });
+  test("the one rule for 'past the limit' is exposureColor's", () => {
+    expect(isOverLimit(1.0000746, 1)).toBe(false);
+    expect(isOverLimit(1.01, 1)).toBe(true);
+    expect(isOverLimit(1.725, 1.725)).toBe(false);
+    expect(isOverLimit(0.99, null)).toBe(false);
+    expect(isOverLimit(1, null)).toBe(true);
+    expect(isOverLimit(null, 1)).toBe(false);
+    for (const [ratio, cap] of [[1.1, 1.15], [1.2, 1.15], [1.0000746, 1], [1.01, 1], [0.5, 2.5]]) {
+      expect(isOverLimit(ratio, cap)).toBe(exposureColor({ ratio, cap, usage: ratio / cap }) === "var(--down)");
+    }
   });
   test("in Spanish, with no '×' anywhere", () => {
     const lang = store.state.lang;
@@ -279,10 +385,15 @@ describe("exposurePhrase + bar — 'invested 93 % of its capital', coloured only
     } finally { store.state.lang = lang; }
     for (const x of [{ ratio: 0.97, cap: 2.5, usage: 0.39 }, { ratio: 1.59, cap: null, usage: null }]) expect(exposurePhrase(x).text).not.toContain("×");
   });
-  test("unknown ratio (COIN-M) -> null, the header simply omits it", () => {
+  test("unknown ratio (COIN-M) -> null, the header simply omits it, and no gauge is drawn from nothing", () => {
     expect(exposurePhrase({ ratio: null, cap: 1.15, usage: null })).toBeNull();
     expect(exposurePhrase(null)).toBeNull();
     expect(renderExposureBar(null)).toBe("");
+    for (const ratio of [null, undefined, "", NaN, -1]) expect(capitalGauge({ ratio, cap: 1 })).toBe("");
+  });
+  test("an end label is escaped and sits after the track", () => {
+    expect(capitalGauge({ ratio: 1.46, cap: 2.5, endLabel: "limit 250 %" })).toContain('</span><span class="cg-end">limit 250 %</span></span>');
+    expect(capitalGauge({ ratio: 1, endLabel: "<b>" })).toContain("&lt;b&gt;");
   });
 });
 
@@ -456,11 +567,11 @@ describe("renderPositions (partial data)", () => {
     };
     const html = renderPositions(state, []);
     expect(html.match(/class="pgroup"/g)?.length).toBe(2);
-    // a sentence on the left: name · count · $ at market · open P&L · up/down; the exposure in words on the right
-    expect(html).toContain('<span class="pg-name">Momentum Crypto</span><span class="pg-sum"><span class="muted">·</span> 1 position <span class="muted">·</span> $2,100 <span class="muted">·</span> <span class="pg-pnl" style="color:var(--up)">open +$100</span> <span class="muted">·</span> 1 up</span><span class="pg-exp"><span class="pg-x">invested 42 % of its capital</span></span>');
+    // the band: name · count · $ at market, then the result; on the right the split and the exposure in words with its gauge
+    expect(html).toContain('<span class="pg-name">Momentum Crypto</span><span class="pg-sum"><span class="muted">·</span> 1 position <span class="muted">·</span> $2,100</span> <span class="pg-pnl" style="color:var(--up)">open +$100 <span class="pg-pct">(+5 %)</span></span></span><span class="pg-r"><span class="pg-split"><span class="splitbar" aria-hidden="true"><i class="sb-up" style="flex-grow:1"></i></span><span class="pg-split-txt">1 up</span></span><span class="pg-exp"><span class="pg-x">invested 42 % of its capital</span><span class="cgauge" aria-hidden="true">');
     expect(html).toContain('<span class="pg-name">Momentum Crypto USDC</span>');
     expect(html).not.toContain("×");
-    expect(html).toMatch(/title="1 position\. Holds \$2,100 at market/);
+    expect(html).toMatch(/title="Momentum Crypto · 1 position · \$2,100 · open \+\$100 \(\+5 %\) · 1 up · invested 42 % of its capital\. Holds \$2,100 at market/);
     expect(html).not.toContain("sbadge");
     expect(html).not.toContain("MOM-CRY");
     expect(html).not.toContain("xchip");
@@ -478,12 +589,15 @@ describe("renderPositions (partial data)", () => {
     };
     const html = renderPositions(state, []);
     const head = html.slice(html.indexOf('class="pgroup"'), html.indexOf("</button>"));
-    expect(head).toContain('<span class="pg-sum"><span class="muted">·</span> 1 position <span class="muted">·</span> <span class="pg-pnl" style="color:var(--up)">open +$30</span> <span class="muted">·</span> 1 up</span>');
+    expect(head).toContain('<span class="pg-sum"><span class="muted">·</span> 1 position</span> <span class="pg-pnl" style="color:var(--up)">open +$30</span></span>'); // no % either: a contract count is not an entry amount
+    expect(head).toContain('<span class="pg-split-txt">1 up</span>');
+    expect(head).not.toContain("pg-pct");
+    expect(head).not.toContain("cgauge");
     expect(head).not.toContain("$0");
     expect(head).not.toContain("×");
     expect(head).not.toContain("pg-exp");
     expect(head).toContain("COIN-M"); // the title explains why
-    expect(head).toContain("1 position."); // the title says it too
+    expect(head).toContain("1 position ·"); // the title says it too
   });
 
   test("big groups start collapsed (header only, rows hidden) while the totals still count every position", () => {
@@ -500,7 +614,7 @@ describe("renderPositions (partial data)", () => {
     expect(html.match(/<tr class="pos">/g)?.length).toBe(11);
     expect(html).toContain('data-pgroup="meanrev_stocks" aria-expanded="false"');
     expect(html).toContain('data-pgroup="momentum_stocks" aria-expanded="true"');
-    expect(html).toContain("32 positions."); // in the header's title
+    expect(html).toContain("· 32 positions ·"); // in the header's title, the whole sentence
     expect(html).toContain("· 43"); // totals row still counts the folded rows
     // the reader opened it
     html = renderPositions({ ...state, posGroups: { meanrev_stocks: "open" } }, []);
@@ -578,7 +692,7 @@ describe("renderPositions (partial data)", () => {
       { symbol: "AAPL", side: "buy", quantity: 10, avgEntryPrice: 100, currentPrice: 101, unrealizedPnl: 10, unrealizedPnlPct: 1, profileId: "momentum_stocks" },
     ] } } };
     const html = renderPositions(state, []);
-    for (const deco of ['class="dbar" aria-hidden="true"', 'class="hseg" aria-hidden="true"', 'class="xbar" aria-hidden="true"']) expect(html).toContain(deco);
+    for (const deco of ['class="dbar" aria-hidden="true"', 'class="hseg" aria-hidden="true"', 'class="cgauge" aria-hidden="true"', 'class="splitbar" aria-hidden="true"']) expect(html).toContain(deco);
     const css = require("fs").readFileSync(require("path").join(import.meta.dir, "../../css/app.css"), "utf-8").replace(/\s+/g, " ");
     expect(css).toContain("#opsBody th { text-transform: none; letter-spacing: 0; }");
     expect(html).not.toMatch(/>(SYM|NOTIONAL|ENTRY|NOW|OPEN|TIME)</);
@@ -710,11 +824,11 @@ describe("sleeveExposure — current equity base and cap usage", () => {
   test("the cap reads as a whole percentage, without float noise, and only when the book is near it", () => {
     const html = renderPositions({ view: "consolidated", posGroups: {}, dashboard: { accounts: [acc({ equity: 52_960, grossCapMult: 1.7249999999999999 })], portfolio: { positions: book } } }, []);
     expect(html).toContain('<span class="pg-x">invested 150 % of its capital · limit 173 %</span>'); // 87% of the cap: uncoloured, muted bar
-    expect(html).toContain("width:87%;background:var(--muted)");
+    expect(html).toContain("width:87%;background:var(--accent)");
     expect(html).toMatch(/title="[^"]*Limit 173 %\./);
     const near = renderPositions({ view: "consolidated", posGroups: {}, dashboard: { accounts: [acc({ equity: 50_000, grossCapMult: 1.7249999999999999 })], portfolio: { positions: book } } }, []);
     expect(near).toContain('<span class="pg-x">invested 159 % of its capital · limit 173 %</span>');
-    expect(near).toContain("width:92.1%;background:var(--muted)"); // at the cap is not a warning
+    expect(near).toContain("width:92.1%;background:var(--accent)"); // at the cap is not a warning
   });
 
   test("colour by share of the cap: normal below 90%, amber from 90%, red past the cap", () => {
@@ -734,8 +848,8 @@ describe("sleeveExposure — current equity base and cap usage", () => {
   test("the group header says it in words; the $ at market and the base ride in its title", () => {
     const state = { view: "consolidated", posGroups: {}, dashboard: { accounts: [acc({ equity: 52_960, grossCapMult: 1.725 })], portfolio: { positions: book } } };
     const html = renderPositions(state, []);
-    expect(html).toContain('<span class="pg-sum"><span class="muted">·</span> 1 position <span class="muted">·</span> $79,441</span>'); // no priced P&L on this row: count and $ only
-    expect(html).toMatch(/class="pgroup-btn"[^>]*title="1 position\. Holds \$79,441 at market against \$52,960 of current equity \(150 %\)\. Limit 173 %\. Allocation \$50,000\. Click to show or hide its positions\."/);
+    expect(html).toContain('<span class="pg-sum"><span class="muted">·</span> 1 position <span class="muted">·</span> $79,441</span></span>'); // no priced P&L on this row: count and $ only, no result
+    expect(html).toMatch(/class="pgroup-btn"[^>]*title="Momentum Stocks · 1 position · \$79,441 · invested 150 % of its capital · limit 173 %\. Holds \$79,441 at market against \$52,960 of current equity \(150 %\)\. Limit 173 %\. Allocation \$50,000\. The mark is 100 %: all of its own capital\. Click to show or hide its positions\."/);
   });
 });
 
@@ -784,7 +898,7 @@ describe("renderPositions — compact numbers", () => {
       { symbol: "SPY", side: "buy", quantity: 5.59, avgEntryPrice: 540.1, currentPrice: 525.25, stopLoss: 478.4, unrealizedPnl: -85.04, unrealizedPnlPct: -0.3 },
       { symbol: "QQQ", side: "buy", quantity: 10, avgEntryPrice: 540.1, unrealizedPnl: -1709.38 },
     ]), []);
-    for (const value of ['title="Qty 6 · Entry $540 · Now $525"', "$2,936<", "−$85</span>", "−$1,794</span>", "0%"])
+    for (const value of ['title="Qty 6 · Entry $540 · Now $525"', "$2,936<", "−$85</span>", "−$1,794 (−21.3 %)</span>", "0%"])
       expect(html).toContain(value);
     expect(html).not.toContain("<td>$540<"); // Entry and Now are not columns any more
     expect(html).not.toContain("<td>$525<");
@@ -801,5 +915,71 @@ describe("renderPositions — compact numbers", () => {
     for (const value of ["Qty 116 ·", "Qty 0.0123 ·", "Entry &lt;$1 ·", "Now &lt;$1", "Entry $68,000", "$9<", "+$0</span>"])
       expect(html).toContain(value);
     expect(html).not.toMatch(/\$[\d,]+\.\d/);
+  });
+});
+
+// ── The footer: the whole book in one sentence, with its weighted % and the split ──
+describe("the totals row reads as a sentence (2026-11-14)", () => {
+  const accounts = [{ id: "momentum_stocks", label: "Momentum Stocks", broker: "alpaca", initialEquity: 50_000 }];
+  const row = (i, pnl) => ({ symbol: `T${i}`, side: "buy", quantity: 10, avgEntryPrice: 100, currentPrice: 100, unrealizedPnl: pnl, profileId: "momentum_stocks" });
+  // 19 up (+$10), 33 down (−$13) and one −$10: 53 positions, −$249 on $53,000 invested
+  const book = [...Array.from({ length: 19 }, (_, i) => row(i, 10)), ...Array.from({ length: 33 }, (_, i) => row(100 + i, -13)), row(200, -10)];
+  const foot = (html) => html.slice(html.indexOf("<tfoot>"), html.indexOf("</tfoot>")).replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+  const state = (positions) => ({ view: "consolidated", posGroups: {}, dashboard: { accounts, portfolio: { positions } } });
+
+  test("English: Open, since entry −$249 (−0.5 %) · 53 positions · 19 up, 34 down, with the same split bar", () => {
+    const html = renderPositions(state(book), []);
+    expect(foot(html)).toBe("Open, since entry −$249 (−0.5 %) · 53 positions · 19 up, 34 down");
+    const tfoot = html.slice(html.indexOf("<tfoot>"));
+    expect(tfoot).toContain('<span class="splitbar" aria-hidden="true"><i class="sb-up" style="flex-grow:19"></i><i class="sb-down" style="flex-grow:34"></i></span>');
+    expect(tfoot).toContain('<span class="pg-pnl" style="color:var(--down)">−$249 (−0.5 %)</span>');
+    expect(tfoot).toContain("pgroup-btn pg-foot"); // the width:0 / min-width:100% trick that keeps it out of the column widths
+  });
+
+  test("Spanish: Sin cerrar (desde la entrada) … · 53 posiciones · 19 ganan, 34 pierden — the dashboard's one decimal mark", () => {
+    const lang = store.state.lang;
+    try {
+      store.state.lang = "es";
+      expect(foot(renderPositions(state(book), []))).toBe("Sin cerrar (desde la entrada) −$249 (−0.5 %) · 53 posiciones · 19 ganan, 34 pierden");
+    } finally { store.state.lang = lang; }
+  });
+
+  test("one decimal on this total even above 1 %; a gain carries its plus", () => {
+    expect(foot(renderPositions(state([row(1, 130), row(2, 20)]), []))).toBe("Open, since entry +$150 (+7.5 %) · 2 positions · 2 up");
+  });
+
+  test("an unpriced row stays out of the sum, the % and the split, and is said", () => {
+    const html = renderPositions(state([row(1, 100), { ...row(2, 0), unrealizedPnl: null }]), []);
+    expect(foot(html)).toBe("Open, since entry +$100 (+10.0 %) · 1 position · 1 unpriced · 1 up");
+  });
+
+  test("no % when a row's entry amount is unknown (never a partial denominator); COIN-M rows cannot be sized from the payload", () => {
+    expect(foot(renderPositions(state([row(1, 100), { symbol: "X", side: "buy", currentPrice: 5, unrealizedPnl: 5, profileId: "momentum_stocks" }]), []))).toBe("Open, since entry +$105 · 2 positions · 2 up");
+    const coinm = { view: "consolidated", posGroups: {}, dashboard: { accounts: [...accounts, { id: "momentum_btc", label: "Momentum BTC (COIN-M)", broker: "binance_coinm", initialEquity: 1_000 }],
+      portfolio: { positions: [row(1, 100), { symbol: "BTC/COIN-M", side: "buy", quantity: 37, avgEntryPrice: 65_000, currentPrice: 66_000, unrealizedPnl: 30, profileId: "momentum_btc" }] } } };
+    expect(foot(renderPositions(coinm, []))).toBe("Open, since entry +$130 · 2 positions · 2 up");
+  });
+});
+
+// ── The bar scale (2026-11-14) ──────────────────────────────────────────────
+describe("the result bars share ONE scale, gains and losses alike", () => {
+  const accounts = [{ id: "momentum_stocks", label: "Momentum Stocks", broker: "alpaca", initialEquity: 50_000 }];
+  const row = (symbol, pct) => ({ symbol, side: "buy", quantity: 10, avgEntryPrice: 100, currentPrice: 100 * (1 + pct / 100), unrealizedPnl: 10 * pct, unrealizedPnlPct: pct, profileId: "momentum_stocks" });
+  const widths = (html) => [...html.matchAll(/<i style="width:([\d.]+)%;background:var\(--(up|down)\)">/g)].map((m) => [Number(m[1]), m[2]]);
+
+  test("the row with the largest |%| fills its half; a loss next to a bigger gain fills only its share of it (−5 % beside +7 % is ~71 %)", () => {
+    const html = renderPositions({ view: "consolidated", posGroups: {}, dashboard: { accounts, portfolio: { positions: [row("A", 7), row("B", -5), row("C", -2)] } } }, []);
+    expect(widths(html)).toEqual([[100, "up"], [71.4, "down"], [28.6, "down"]]);
+  });
+
+  test("the largest loss fills its half completely when it is the largest |%| on screen", () => {
+    const html = renderPositions({ view: "consolidated", posGroups: {}, dashboard: { accounts, portfolio: { positions: [row("A", 3), row("B", -5)] } } }, []);
+    expect(widths(html)).toEqual([[60, "up"], [100, "down"]]);
+  });
+
+  test("the scale uses the unrounded %, not the whole percent the row prints", () => {
+    const html = renderPositions({ view: "consolidated", posGroups: {}, dashboard: { accounts, portfolio: { positions: [row("A", -4.6), row("B", 2.3)] } } }, []);
+    expect(html).toContain("−5%"); // printed whole
+    expect(widths(html)).toEqual([[100, "down"], [50, "up"]]);
   });
 });

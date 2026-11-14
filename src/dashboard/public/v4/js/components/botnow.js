@@ -13,6 +13,7 @@ import { api } from "../api.js";
 import { money, pnlWhole, n } from "../fmt.js";
 import { esc } from "../ui.js";
 import { CLOSE_REASON_WORDS, closeReasonWord } from "../close-reasons.js";
+import { capitalGauge, isOverLimit, gaugeTickWord } from "../capital-gauge.js";
 
 const NY = "America/New_York";
 const locale = () => (isEs() ? "es" : "en-GB"); // en-GB: "Fri 23 Oct", 24h clock
@@ -188,72 +189,95 @@ function blockedSentence(p, o) {
   }
 }
 
-/** "Market rising: S&P 500 is 4 % above its 200-day average" or, below it,
- *  "Market falling: … 4 % below … — defensive mode" (the mode only once the
- *  sleeve's own switch has gone defensive: a dip inside its band is not one). */
-function regimeChip(p) {
+/** The market sentence in two parts: `head` ("Market rising" / "Market
+ *  falling", what the arrow and the colour stand for) and `tail` (": S&P 500
+ *  is 4 % above its 200-day average", or, below it, "… 4 % below … — defensive
+ *  mode": the mode only once the sleeve's own switch has gone defensive, a dip
+ *  inside its band is not one). null without a reading. */
+function regimeParts(p) {
   const r = p.regime;
-  if (!r || r.distancePct == null) return "";
+  if (!r || r.distancePct == null) return null;
   const ref = refName(r.ref), d = pc(r.distancePct);
-  if (n(r.distancePct) >= 0) return t(`Market rising: ${ref} is ${d} above its 200-day average`, `Mercado al alza: ${ref} está un ${d} por encima de su media de 200 días`);
+  if (n(r.distancePct) >= 0) {
+    return { up: true, head: t("Market rising", "Mercado al alza"), tail: t(`: ${ref} is ${d} above its 200-day average`, `: ${ref} está un ${d} por encima de su media de 200 días`) };
+  }
   const defensive = r.riskOn === false ? t(" — defensive mode", " — modo defensivo") : "";
-  return t(`Market falling: ${ref} is ${d} below its 200-day average${defensive}`, `Mercado a la baja: ${ref} está un ${d} por debajo de su media de 200 días${defensive}`);
+  return { up: false, head: t("Market falling", "Mercado a la baja"), tail: t(`: ${ref} is ${d} below its 200-day average${defensive}`, `: ${ref} está un ${d} por debajo de su media de 200 días${defensive}`) };
 }
 
-/** "Invested $43,677 (88 % of its capital, limit 250 %)": the money, how much
- *  of the sleeve's capital it is and, when the sleeve may go past 100 %, its
- *  limit. One chip where "Invested" and "Leverage 0.9× of 2.5×" were two. */
-function investedChip(p, eq, count) {
-  if (!eq) return `${count} ${assetWord(p, count)}`;
-  const parts = [];
-  if (p.grossX != null && Number.isFinite(n(p.grossX, NaN))) parts.push(grossPhrase(p.grossX));
-  if (parts.length && p.maxGrossX != null && Math.round(n(p.maxGrossX) * 100) !== 100) parts.push(t(`limit ${pc(n(p.maxGrossX) * 100)}`, `límite ${pc(n(p.maxGrossX) * 100)}`));
-  return t(`Invested ${eq}`, `Invertido ${eq}`) + (parts.length ? ` (${parts.join(", ")})` : "");
+/** The money and the capital of an invested portfolio: "Invested $43,677 ·
+ *  88 % of its capital" over a gauge (capital-gauge.js) with "limit 250 %" at
+ *  its end. A limit of 100 % is not said (the track just ends at 100 %) unless
+ *  the book is past it, so a red gauge always has a word. Without a share of
+ *  the capital there is no gauge: "Invested $43,677" stays a pill. */
+function investedItem(p, eq, count) {
+  if (!eq) return { kind: "text", text: `${count} ${assetWord(p, count)}` };
+  const gross = p.grossX != null && Number.isFinite(n(p.grossX, NaN)) ? n(p.grossX) : null;
+  const head = t(`Invested ${eq}`, `Invertido ${eq}`);
+  if (gross == null) return { kind: "text", text: head };
+  const cap = p.maxGrossX != null && n(p.maxGrossX) > 0 ? n(p.maxGrossX) : null;
+  const over = cap != null && isOverLimit(gross, cap); // no known limit, no red: it would be a claim with no word beside it
+  const limitWord = cap != null && (Math.round(cap * 100) !== 100 || over) ? t(`limit ${pc(cap * 100)}`, `límite ${pc(cap * 100)}`) : "";
+  const share = grossPhrase(gross);
+  return {
+    kind: "invested", gross, cap, over, limitWord,
+    line: `${head} · ${share}`,
+    text: `${head} (${share}${limitWord ? `, ${limitWord}` : ""})`,
+  };
 }
 
-/** The 2–3 key facts of a portfolio as plain strings (the reason, for paused and
- *  flat states). Pure. */
-export function chipsOf(p) {
+const tx = (text) => (text ? { kind: "text", text } : null);
+
+/** The 2–3 key facts of a portfolio as items (the reason, for paused and flat
+ *  states): { kind: "text", text } for a pill; { kind: "regime", up, head,
+ *  tail, text } for the market (an arrow and a colour on its first words);
+ *  { kind: "invested", gross, cap, over, limitWord, line, text } for the money
+ *  and its capital gauge. `text` is always the whole fact as one plain
+ *  sentence, what chipsOf returns and what a screen reader hears. Pure. */
+export function chipItemsOf(p) {
   const count = n(p.positions);
   const eq = p.investedUsd != null ? money(p.investedUsd, 0) : p.equityUsd != null ? money(p.equityUsd, 0) : "";
   const held = count > 0
     ? t(`Holds ${count} ${assetWord(p, count)}${eq ? ` (${eq})` : ""}`, `Mantiene ${count} ${assetWord(p, count)}${eq ? ` (${eq})` : ""}`)
     : "";
-  const regime = regimeChip(p);
+  const rg = regimeParts(p);
+  const regime = rg ? { kind: "regime", ...rg, text: rg.head + rg.tail } : null;
   switch (p.state) {
     case "error":
       return [];
     case "paused":
-      return [p.blocked?.reason ? cap(reasonWord(p.blocked.reason, p.cadence?.kind)) : "", held].filter(Boolean);
+      return [p.blocked?.reason ? tx(cap(reasonWord(p.blocked.reason, p.cadence?.kind))) : null, tx(held)].filter(Boolean);
     case "waiting_first_pass":
-      return [held, regime].filter(Boolean);
+      return [tx(held), regime].filter(Boolean);
     case "flat": {
       const uni = p.lastDecision?.universe;
       const uniW = uni ? `${uni} ${assetWord(p, uni)}` : null;
       const noSignal = p.blocked?.reason === "no_signal" || (p.lastDecision && n(p.lastDecision.signalsLong, -1) === 0);
       const chips = [regime];
       if (!(p.regime && !p.regime.riskOn)) {
-        if (noSignal) chips.push(p.engine === "meanrev"
+        if (noSignal) chips.push(tx(p.engine === "meanrev"
           ? (uniW ? t(`None of ${uniW} dropped enough to buy`, `Ninguna de ${uniW} cayó lo suficiente para comprar`) : t("Nothing dropped enough to buy", "Nada cayó lo suficiente para comprar"))
-          : (uniW ? t(`None of ${uniW} is trending up`, `Ninguna de ${uniW} está en tendencia alcista`) : t("Nothing is trending up", "Nada está en tendencia alcista")));
-        else if (p.blocked && p.blocked.reason !== "market_closed") chips.push(cap(reasonWord(p.blocked.reason, p.cadence?.kind)));
+          : (uniW ? t(`None of ${uniW} is trending up`, `Ninguna de ${uniW} está en tendencia alcista`) : t("Nothing is trending up", "Nada está en tendencia alcista"))));
+        else if (p.blocked && p.blocked.reason !== "market_closed") chips.push(tx(cap(reasonWord(p.blocked.reason, p.cadence?.kind))));
       }
       const out = chips.filter(Boolean);
-      return out.length ? out : [t("Holds no positions", "Sin posiciones")];
+      return out.length ? out : [tx(t("Holds no positions", "Sin posiciones"))];
     }
     default: { // invested / partly_invested
-      const chips = [investedChip(p, eq, count)];
-      chips.push(regime);
+      const chips = [investedItem(p, eq, count), regime];
       if (trimmed(p)) {
-        chips.push(t(`${pc(n(p.exposureScale) * 100)} of normal size`, `${pc(n(p.exposureScale) * 100)} del tamaño normal`));
-        if (p.drawdownPct != null) chips.push(t(`${pc(p.drawdownPct)} below its peak`, `${pc(p.drawdownPct)} bajo su máximo`));
+        chips.push(tx(t(`${pc(n(p.exposureScale) * 100)} of normal size`, `${pc(n(p.exposureScale) * 100)} del tamaño normal`)));
+        if (p.drawdownPct != null) chips.push(tx(t(`${pc(p.drawdownPct)} below its peak`, `${pc(p.drawdownPct)} bajo su máximo`)));
       }
       const out = chips.filter(Boolean).slice(0, 3);
-      if (out.length < 2 && eq && count > 0) out.push(`${count} ${assetWord(p, count)}`);
+      if (out.length < 2 && eq && count > 0) out.push(tx(`${count} ${assetWord(p, count)}`));
       return out;
     }
   }
 }
+
+/** The same facts as plain strings, one sentence each. Pure. */
+export const chipsOf = (p) => chipItemsOf(p).map((c) => c.text);
 
 /** The ONE short sentence under the time line: only for blocked / waiting /
  *  failed states ("" otherwise). Pure. */
@@ -293,8 +317,10 @@ function stamp(ms, p, o, past) {
   return whenPhrase(at, { ...o, market: isCrypto(p) ? null : NY });
 }
 
-/** `last decision ●──── now ────○ next decision`, each end labelled with its
- *  time. "now" sits where it falls between the two. Pure. */
+/** `last decision ●━━━━ ● now ┄┄┄┄○ next decision`, each end labelled with its
+ *  time. "now" is a filled dot with its word, where it falls between the two:
+ *  the part already elapsed is a solid, brighter line, the part still to come
+ *  is dim. Pure. */
 export function timeLine(p, o = {}) {
   const now = o.now ?? Date.now();
   const last = ts(p.lastDecision?.at), next = ts(p.nextDecisionAt);
@@ -307,17 +333,37 @@ export function timeLine(p, o = {}) {
   }
   const f = next > last ? Math.min(0.92, Math.max(0.08, (now - last) / (next - last))) : 0.5;
   return `<div class="bn-tl">
-    <div class="bn-tl-track" aria-hidden="true"><i class="bn-tl-dot"></i><i class="bn-tl-bar" style="flex-grow:${f.toFixed(3)}"></i><span class="bn-tl-now">${t("now", "ahora")}</span><i class="bn-tl-bar" style="flex-grow:${(1 - f).toFixed(3)}"></i><i class="bn-tl-dot bn-tl-hollow"></i></div>
+    <div class="bn-tl-track" aria-hidden="true"><i class="bn-tl-dot bn-tl-past"></i><i class="bn-tl-bar bn-tl-done" style="flex-grow:${f.toFixed(3)}"></i><i class="bn-tl-nowdot"></i><span class="bn-tl-now">${t("now", "ahora")}</span><i class="bn-tl-bar bn-tl-todo" style="flex-grow:${(1 - f).toFixed(3)}"></i><i class="bn-tl-dot bn-tl-hollow"></i></div>
     <div class="bn-tl-labels">${label(kl, stamp(last, p, { ...o, now }, true))}${label(kn, stamp(next, p, { ...o, now }, false))}</div>
   </div>`;
 }
 
+/** One chip as markup: the market sentence gets an arrow and a colour on its
+ *  first words ("▲ Market rising"), never colour alone: the arrow and the word
+ *  say it too. */
+function chipHtml(c) {
+  if (c.kind === "regime") {
+    return `<span class="bn-chip"><span class="bn-rg ${c.up ? "up" : "down"}"><span class="bn-arrow" aria-hidden="true">${c.up ? "▲" : "▼"}</span> ${esc(c.head)}</span>${esc(c.tail)}</span>`;
+  }
+  return `<span class="bn-chip">${esc(c.text)}</span>`;
+}
+
+/** The invested line with its capital gauge underneath; the limit is the
+ *  gauge's end label. */
+function investedHtml(c) {
+  const tick = Math.max(c.cap ?? Math.max(1, c.gross), 1) > 1;
+  return `<div class="bn-inv"${tick ? ` title="${esc(gaugeTickWord())}"` : ""}><div class="bn-inv-line">${esc(c.line)}</div>${capitalGauge({ ratio: c.gross, cap: c.cap, over: c.over, endLabel: c.limitWord, className: "bn-gauge" })}</div>`;
+}
+
 function portfolioBlock(p, o) {
   const st = statusOf(p);
-  const chips = chipsOf(p).map((c) => `<span class="bn-chip">${esc(c)}</span>`).join("");
+  const items = chipItemsOf(p);
+  const inv = items.filter((c) => c.kind === "invested").map(investedHtml).join("");
+  const chips = items.filter((c) => c.kind !== "invested").map(chipHtml).join("");
   const note = noteOf(p, o);
   return `<div class="bn-row">
     <div class="bn-head"><span class="bn-name">${esc(portfolioName(p.label || p.id))}</span><span class="bn-word" style="color:${st.color}"><span class="bn-dot" style="background:${st.color}"></span>${esc(st.word)}</span></div>
+    ${inv}
     ${chips ? `<div class="bn-chips">${chips}</div>` : ""}
     ${timeLine(p, o)}
     ${note ? `<p class="bn-text">${esc(note)}</p>` : ""}

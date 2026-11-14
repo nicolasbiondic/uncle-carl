@@ -574,7 +574,7 @@ export class TelegramReporter {
     );
     lines.push(this.openMoneyLine(accounts));
     const inicio = readDisplayMoneyWindow(this.mainLegs(), 0);
-    lines.push(`${fmtPeriodLeg("Ganancia desde el inicio", inicio)}`);
+    lines.push(`${fmtPeriodLeg("Ganancia desde el inicio", inicio && { pnl: inicio.pnl, pnlPct: sinceStartPct(inicio) })}`);
     lines.push(...fmtDisplayStart(inicio?.start));
     await this.send(lines.join("\n"), chatId);
   }
@@ -1041,8 +1041,17 @@ function digestDate(at: number): string {
   return new Date(at).toLocaleDateString("es-ES", { timeZone: "America/New_York", weekday: "long", day: "numeric", month: "short" }).replace(",", "").replace(/\./g, "");
 }
 
+/** Since start only: the strict percentage, else the gain over the starting
+ *  value (`pnlPctOnStart`, when the start was spliced). Same rule as the
+ *  dashboard's since-start line (profiles.js `sinceStart`). */
+function sinceStartPct(w: NonNullable<ReturnType<typeof readDisplayMoneyWindow>>): number | null {
+  return w.pnlPct ?? w.pnlPctOnStart ?? null;
+}
+
 function fmtPatrimonio(equity: number | null, start: ReturnType<typeof readDisplayMoneyWindow>): string {
-  const since = start ? `${signMoney(start.pnl)} desde el ${new Date(start.start.date + "T12:00:00Z").toLocaleDateString("es-ES", { day: "numeric", month: "short", timeZone: "UTC" }).replace(/\./g, "")}` : "desde el inicio —";
+  // The percentage is the since-start one the dashboard shows (same reader).
+  const pct = start ? sinceStartPct(start) : null;
+  const since = start ? `${signMoney(start.pnl)} desde el ${new Date(start.start.date + "T12:00:00Z").toLocaleDateString("es-ES", { day: "numeric", month: "short", timeZone: "UTC" }).replace(/\./g, "")}${pct == null ? "" : ` (${signPct(pct)})`}` : "desde el inicio —";
   return `Patrimonio ${equity == null ? "—" : `$${fmtMoney(equity)}`} · ${since}`;
 }
 

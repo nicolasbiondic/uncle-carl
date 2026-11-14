@@ -2487,6 +2487,11 @@ export interface EquityWindow {
   equity: number;
   pnl: number;
   pnlPct: number | null;
+  /** `pnl` as a share of `start.equity`, ALSO when that start was spliced
+   *  (rebased): the gain over the starting value in today's accounting. Set
+   *  by the composite reader (`readDisplayMoneyWindow`); only the since-start
+   *  figure shows it (owner, 2026-11-14), and it always names its base. */
+  pnlPctOnStart?: number | null;
 }
 
 /** One boundary/anchor policy for tiles, cards, curves, reports and Telegram.

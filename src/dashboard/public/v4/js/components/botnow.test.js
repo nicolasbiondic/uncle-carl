@@ -3,7 +3,7 @@
 // the viewer is pinned to New York so the clock words are deterministic.
 import { describe, expect, test, beforeEach, afterAll } from "bun:test";
 import {
-  renderBotNow, chipsOf, noteOf, timeLine, statusOf, eventSentence, groupEventsByDay,
+  renderBotNow, chipsOf, chipItemsOf, noteOf, timeLine, statusOf, eventSentence, groupEventsByDay,
   clusterPasses, passSummary, untilWord, whenPhrase, reasonWord, grossPhrase, sinceWord, portfolioName,
 } from "./botnow.js";
 import { BOT_NOW_FIXTURE as FX, FIXTURE_NOW as NOW } from "./botnow.fixture.js";
@@ -279,7 +279,8 @@ describe("the tab", () => {
     expect(html).toContain('<span class="bn-dot" style="background:var(--up)"></span>Invested</span>');
     expect(html).toContain('<span class="bn-dot" style="background:var(--warn)"></span>Invested, trading smaller</span>');
     expect(html.match(/class="bn-tl"/g)).toHaveLength(4);   // each card carries its time line
-    expect(html.match(/class="bn-chip"/g).length).toBeGreaterThanOrEqual(8);
+    expect(html.match(/class="bn-chip"/g).length).toBeGreaterThanOrEqual(5); // the money is a gauge now, not a chip
+    expect(html.match(/class="bn-inv"/g)).toHaveLength(3); // the three portfolios that are invested; the flat one has nothing to gauge
     expect(html).toContain(">Recent actions <");
     expect(html).toContain("(New York time)");
     expect(html).toContain('<div class="bn-day">Today</div>');
@@ -309,5 +310,99 @@ describe("the tab", () => {
     expect(html).toContain('class="tab on" data-atab="bot">Bot<');
     store.state.tab = saved;
     expect(typeof api.botNow).toBe("function");
+  });
+});
+
+// ── The money as a picture, the market with an arrow, the time line with weight (2026-11-14) ──
+describe("visual Bot card", () => {
+  const base = { id: "momentum_stocks", label: "Momentum Stocks", broker: "alpaca", engine: "portfolio", state: "invested", positions: 11, investedUsd: 71526, equityUsd: 49000, grossX: 1.46, maxGrossX: 2.5, regime: { riskOn: true, ref: "SPY", distancePct: 4.3 } };
+  const card = (p) => renderBotNow({ portfolios: [p], events: [] }, O);
+
+  test("chipItemsOf keeps every fact as structure and its plain sentence; chipsOf is those sentences", () => {
+    const items = chipItemsOf(base);
+    expect(items.map((c) => c.kind)).toEqual(["invested", "regime"]);
+    expect(items[0]).toMatchObject({ gross: 1.46, cap: 2.5, over: false, limitWord: "limit 250 %", line: "Invested $71,526 · 146 % of its capital" });
+    expect(items[0].text).toBe("Invested $71,526 (146 % of its capital, limit 250 %)");
+    expect(items[1]).toMatchObject({ up: true, head: "Market rising", tail: ": S&P 500 is 4 % above its 200-day average" });
+    expect(chipsOf(base)).toEqual(items.map((c) => c.text));
+  });
+
+  test("English: the invested line, the gauge under it with 'limit 250 %' at its end, and the 100 % mark", () => {
+    const html = card(base);
+    expect(html).toContain('<div class="bn-inv-line">Invested $71,526 · 146 % of its capital</div>');
+    expect(html).toContain('<span class="cgauge bn-gauge" aria-hidden="true"><span class="cg-track"><span class="cg-fill" style="width:58.4%;background:var(--accent)"></span><span class="cg-tick" style="left:40%"></span></span><span class="cg-end">limit 250 %</span></span>');
+    expect(html).toContain('title="The mark is 100 %: all of its own capital."');
+    expect(html).not.toContain("×");
+  });
+
+  test("Spanish: Invertido $71,526 · 146 % de su capital, límite 250 %", () => {
+    store.state.lang = "es";
+    const html = card(base);
+    expect(html).toContain('<div class="bn-inv-line">Invertido $71,526 · 146 % de su capital</div>');
+    expect(html).toContain('<span class="cg-end">límite 250 %</span>');
+    expect(html).toContain('title="La marca es el 100 %: todo su propio capital."');
+  });
+
+  test("a limit of 100 %: the gauge runs 0–100 % and says nothing about a limit, no tick", () => {
+    const html = card({ ...base, grossX: 0.93, maxGrossX: 1 });
+    expect(html).toContain('<div class="bn-inv-line">Invested $71,526 · 93 % of its capital</div>');
+    expect(html).toContain('<span class="cg-fill" style="width:93%;background:var(--accent)"></span></span></span>');
+    expect(html).not.toContain("cg-tick");
+    expect(html).not.toContain("cg-end");
+    expect(chipsOf({ ...base, grossX: 0.93, maxGrossX: 1 })[0]).toBe("Invested $71,526 (93 % of its capital)");
+  });
+
+  test("past its limit: red, and the limit is said even at 100 %; AT the limit is not red", () => {
+    const over = card({ ...base, grossX: 1.22, maxGrossX: 1.15 });
+    expect(over).toContain('<span class="cg-fill" style="width:100%;background:var(--down)"></span>');
+    expect(over).toContain('<span class="cg-end">limit 115 %</span>');
+    const over100 = card({ ...base, grossX: 1.05, maxGrossX: 1 });
+    expect(over100).toContain("background:var(--down)");
+    expect(over100).toContain('<span class="cg-end">limit 100 %</span>');
+    expect(chipsOf({ ...base, grossX: 1.05, maxGrossX: 1 })[0]).toBe("Invested $71,526 (105 % of its capital, limit 100 %)");
+    expect(card({ ...base, grossX: 1.15, maxGrossX: 1.15 })).toContain("background:var(--accent)");
+  });
+
+  test("no known limit: never red from a guess; no share of the capital: the money stays a pill and there is no gauge", () => {
+    expect(card({ ...base, grossX: 1, maxGrossX: null })).toContain("background:var(--accent)");
+    const none = card({ ...base, grossX: null, maxGrossX: null });
+    expect(none).toContain('<span class="bn-chip">Invested $71,526</span>');
+    expect(none).not.toContain("cgauge");
+  });
+
+  test("the market chip: an arrow and a colour on its first words, the rest of the sentence plain; the words carry it", () => {
+    const up = card(base);
+    expect(up).toContain('<span class="bn-chip"><span class="bn-rg up"><span class="bn-arrow" aria-hidden="true">▲</span> Market rising</span>: S&amp;P 500 is 4 % above its 200-day average</span>');
+    const down = card({ ...base, regime: { riskOn: false, ref: "SPY", distancePct: -6.8 } });
+    expect(down).toContain('<span class="bn-rg down"><span class="bn-arrow" aria-hidden="true">▼</span> Market falling</span>: S&amp;P 500 is 7 % below its 200-day average — defensive mode</span>');
+    store.state.lang = "es";
+    expect(card(base)).toContain('<span class="bn-rg up"><span class="bn-arrow" aria-hidden="true">▲</span> Mercado al alza</span>: S&amp;P 500 está un 4 % por encima de su media de 200 días</span>');
+    expect(card({ ...base, regime: { riskOn: false, ref: "SPY", distancePct: -6.8 } })).toContain("Mercado a la baja</span>");
+  });
+
+  test("the other pills stay pills (at most three facts: the money, the market or the size, the peak)", () => {
+    const trimmed = { ...base, regime: null, exposureScale: 0.97, drawdownPct: 7 };
+    expect(chipItemsOf(trimmed).map((c) => c.kind)).toEqual(["invested", "text", "text"]);
+    const html = card(trimmed);
+    expect(html).toContain('<span class="bn-chip">97 % of normal size</span>');
+    expect(html).toContain('<span class="bn-chip">7 % below its peak</span>');
+    expect(card({ ...base, regime: null })).toContain('<span class="bn-chip">11 stocks and ETFs</span>');
+  });
+
+  test("the time line: the elapsed part is solid, the part to come is dim, now is a filled dot with its word; the labels are unchanged", () => {
+    const tl = timeLine(by("momentum_stocks"), O);
+    expect(tl).toMatch(/<i class="bn-tl-dot bn-tl-past"><\/i><i class="bn-tl-bar bn-tl-done" style="flex-grow:[\d.]+"><\/i><i class="bn-tl-nowdot"><\/i><span class="bn-tl-now">now<\/span><i class="bn-tl-bar bn-tl-todo" style="flex-grow:[\d.]+"><\/i><i class="bn-tl-dot bn-tl-hollow"><\/i>/);
+    const [done, todo] = [...tl.matchAll(/flex-grow:([\d.]+)/g)].map((m) => Number(m[1]));
+    expect(done + todo).toBeCloseTo(1, 3); // what elapsed and what remains make the whole span
+    expect(tl).toContain("Last decision</span> yesterday 09:35 New York");
+    expect(tl).toContain("Next decision</span> Monday 09:35 New York");
+    expect(tl).toContain('aria-hidden="true"');
+  });
+
+  test("the elapsed share follows now between the two decisions", () => {
+    const p = { ...by("momentum_crypto"), lastDecision: { at: NOW - 3 * 3600e3 }, nextDecisionAt: NOW + 1 * 3600e3 };
+    const [done, todo] = [...timeLine(p, O).matchAll(/flex-grow:([\d.]+)/g)].map((m) => Number(m[1]));
+    expect(done).toBeCloseTo(0.75, 3);
+    expect(todo).toBeCloseTo(0.25, 3);
   });
 });

@@ -16,11 +16,30 @@ test("since start reads the server's display-start window verbatim (date, equity
   expect(r.displayStart).toEqual(start);
 });
 
-test("a rebased start keeps the server's null percent — the frontend never invents one", () => {
+test("no percent from the server, none on screen — the frontend never invents one", () => {
   const r = sinceStart(st({ pnl: 10, pnlPct: null, equity: 100, endAt: 1, start: { at: 1, date: "2026-01-01", equity: 90, rebased: true } }));
   expect(r.pnl).toBe(10);
   expect(r.pct).toBeNull();
   expect(sinceStartSub(r)).not.toContain("%");
+});
+
+// Owner, 2026-11-14: "en el since start añade un delta de %". Prod's start is
+// spliced (rebased), so the strict percent is null forever; the server sends the
+// gain over the starting value and the line shows it, naming that value.
+test("a spliced start shows the server's gain over the starting value, and the title names it", () => {
+  const start = { at: Date.UTC(2026, 6, 10), date: "2026-07-10", equity: 112238, rebased: true };
+  const r = sinceStart(st({ pnl: 5875, pnlPct: null, pnlPctOnStart: 5875 / 112238 * 100, equity: 118113, endAt: Date.UTC(2026, 10, 14), start }));
+  expect(r.pct).toBeCloseTo(5.234, 3);
+  expect(r.startEquity).toBe(112238);
+  const html = sinceStartSub(r);
+  expect(html).toContain("+$5,875");
+  expect(html).toContain("(+5.2%)");
+  expect(html).toContain("it started with $112,238");
+});
+
+test("the strict percent wins when the server has both", () => {
+  const start = { at: 1, date: "2026-07-10", equity: 100, rebased: false };
+  expect(sinceStart(st({ pnl: 4, pnlPct: 4, pnlPctOnStart: 99, equity: 104, endAt: 2, start })).pct).toBe(4);
 });
 
 test("no figure while the server has no display-start window; the sub line stays empty", () => {

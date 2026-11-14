@@ -299,7 +299,11 @@ describe("Inicio null-pct — a configured rebase keeps the dollar delta, omits 
 
     const msg = reporter.composeDailyDigest();
     expect(msg).toMatch(/Patrimonio \$[\d,]+ · [+\u2212]\$[\d,]+ desde el/); // dollar delta remains available
-    expect(msg).not.toMatch(/Patrimonio \$[\d,]+ · [+\u2212]\$[\d,]+ \(/); // synthetic-basis percent stays hidden
+    // Owner, 2026-11-14: since start carries its percentage also over a spliced
+    // start (the gain over the starting value, the dashboard's same figure).
+    // It follows the date, so the dollar figure still reads first.
+    expect(msg).toMatch(/Patrimonio \$[\d,]+ · [+\u2212]\$[\d,]+ desde el \d+ \p{L}+ \([+\u2212]\d+,\d %\)/u);
+    expect(msg).not.toMatch(/Patrimonio \$[\d,]+ · [+\u2212]\$[\d,]+ \(/);
   });
 });
 

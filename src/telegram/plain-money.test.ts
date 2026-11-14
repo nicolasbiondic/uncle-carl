@@ -103,7 +103,7 @@ test("human-readable example: status, profits, daily digest and XRP close", asyn
   }
   expect(x.profits).toContain("Momentum Acciones $49,903 (empezó con $50,000) · 91 operaciones cerradas, 43 % ganadoras · resultado de lo cerrado −$103");
   expect(x.digest).toContain("Hoy −$39 (−0,0 %) · últimos 7 días −$1,279 (−1,1 %)");
-  expect(x.digest).toContain("Patrimonio $118,417 · +$6,179 desde el 10 jul");
+  expect(x.digest).toContain("Patrimonio $118,417 · +$6,179 desde el 10 jul (+5,5 %)");
   expect(x.digest).toContain("Alpaca $105,855 · Binance $12,562");
   expect(x.digest).toContain("Fuera de las estrategias: $2,882 (efectivo inicial de Alpaca y garantía en BTC)");
   expect(x.close).toBe("💰 <b>XRP/USDC</b> cerrada · +$116 (+10,6 % de lo invertido, $1,094) · Momentum Cripto USDC · corto · cierre por tiempo máximo (5 días) · duró 5 días");

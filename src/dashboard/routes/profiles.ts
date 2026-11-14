@@ -174,7 +174,8 @@ export function registerProfileRoutes(app: express.Application, am: AccountManag
         sinceStart,
         labels: MONEY_LABELS,
         periodPnl: aggPeriod?.pnl ?? null,
-        periodPnlPct: aggPeriod?.pnlPct ?? null,
+        // The All tile IS the since-start figure: same percentage as its sub-line.
+        periodPnlPct: aggPeriod?.pnlPct ?? (periodDays === 0 ? aggPeriod?.pnlPctOnStart ?? null : null),
         pnl7d: aggPnl7d?.pnl ?? null,
         pnl7dPct: aggPnl7d?.pnlPct ?? null,
         periodRealized: periodBreakdown?.realized ?? null,
