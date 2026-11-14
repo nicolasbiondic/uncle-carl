@@ -1,8 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import type { Exec } from "./analyst";
-import { PRIMARIES, SUBSTITUTES, type QuotaReport } from "./models";
+import { isKnownModel, type QuotaReport } from "./models";
 import { review } from "./review";
 import { caseFile, SESSION } from "./testFixtures";
+
+// The mechanics are tested with a panel of this file's own, never the real one: the real panel (models.ts) changes with the weekly
+// adjustment and must be able to change without this file. P: three ids the quota gate knows (their pools). S: three other families
+// outside cuotas-ia (an id the table does not know has its prefix as its family and a quota that is always open). B: a second model of
+// P[0]'s and of P[1]'s family, on the same quota.
+const P = ["anthropic/claude-sonnet-5-5", "codex/gpt-6.1-sol", "antigravity/gemini-3.8-flash-high"];
+const S = ["kimi/one", "qwen/one", "deepseek/one"];
+const B = ["anthropic/claude-opus-5-5", "codex/gpt-6.1-terra"];
+const PRIMARIES = P, SUBSTITUTES = S;
 
 const cf = caseFile();
 const ev = (o: unknown) => JSON.stringify(o);
@@ -89,6 +98,92 @@ describe("the panel", () => {
     const r = await run(w.exec, null);
     expect(w.ran).toEqual([...PRIMARIES]);
     expect(r.notes.join(" ")).toContain("cuotas-ia failed");
+  });
+});
+
+describe("substitutes of a primary's own family (the machine's subscriptions hold only the primaries' three families)", () => {
+  const mine = { substitutes: [...B, S[2]] };   // a second claude, a second gpt, then another family
+
+  test("the ids these tests borrow are in the models table (their family and quota come from it)", () => {
+    for (const m of [...P, ...B]) expect(isKnownModel(m)).toBe(true);
+  });
+  test("a primary that fails as a model is replaced by the backup of ITS family, which takes its seat", async () => {
+    const w = world({ [P[0]]: "fail", [B[0]]: NV, [P[1]]: NV, [P[2]]: NV });
+    const r = await run(w.exec, open, mine);
+    expect(w.ran).toEqual([P[0], B[0], P[1], P[2]]);
+    expect(r.verdicts.map(v => v.family)).toEqual(["claude", "gpt", "gemini"]);
+  });
+  test("a backup never takes the seat of a primary that still has its turn: the gpt backup is passed over in slot 1 and kept for slot 2", async () => {
+    // slot 1: claude and its backup fail → the gpt backup is NOT called (gpt's own primary comes next) → the other family answers
+    const w = world({ [P[0]]: "fail", [B[0]]: "fail", [S[2]]: NV, [P[1]]: "fail", [B[1]]: NV, [P[2]]: NV });
+    const r = await run(w.exec, open, mine);
+    expect(w.ran).toEqual([P[0], B[0], S[2], P[1], B[1], P[2]]);
+    expect(r.verdicts.map(v => v.family)).toEqual(["deepseek", "gpt", "gemini"]);
+    // with gpt's primary healthy its backup is never called at all
+    const healthy = world({ [P[0]]: "fail", [B[0]]: "fail", [S[2]]: NV, [P[1]]: NV, [P[2]]: NV });
+    await run(healthy.exec, open, mine);
+    expect(healthy.ran).toEqual([P[0], B[0], S[2], P[1], P[2]]);
+  });
+  test("a closed quota closes the backup on that quota too: neither is called, another family takes the seat", async () => {
+    const w = world({ [P[0]]: NV, [B[0]]: NV, [S[2]]: NV, [P[1]]: NV, [P[2]]: NV });
+    const r = await run(w.exec, closed("Claude"), mine);
+    expect(w.ran).toEqual([S[2], P[1], P[2]]);
+    expect(r.models.filter(m => m.family === "claude").map(m => [m.model, m.ok, m.error?.includes("quota closed")])).toEqual([[P[0], false, true], [B[0], false, true]]);
+    expect(r.notes.join(" ")).not.toContain("reserve");
+  });
+});
+
+describe("the reserve: a closed quota is spent rather than leaving the day without a review", () => {
+  const backups = { substitutes: [...B] };       // no other family to turn to
+  const two: QuotaReport = { ...closed("Claude"), Codex: closed("Codex").Codex };
+  const three: QuotaReport = { ...two, Google: closed("Google").Google };
+
+  test("two quotas closed and one family answered: the stopped primaries are called anyway, in order, only until two families have answered", async () => {
+    const w = world({ [P[0]]: NV, [P[1]]: NV, [P[2]]: NV, [B[0]]: NV, [B[1]]: NV });
+    const r = await run(w.exec, two, backups);
+    expect(w.ran).toEqual([P[2], P[0]]);                              // gemini in its slot, then claude from the reserve; gpt is not needed
+    expect(r.verdicts.map(v => v.family)).toEqual(["gemini", "claude"]);
+    expect(r.decision?.overrides.map(o => `${o.symbol}:${o.action}`)).toEqual(["NVDA:exit"]);
+    expect(r.notes.join(" ")).toContain(`quota reserve used for ${P[0]}`);
+    expect(r.models.find(m => m.model === P[0])).toMatchObject({ ok: true });                      // one record per model: the answer replaces "quota closed"
+    expect(r.models.filter(m => m.model === P[0])).toHaveLength(1);
+    expect(r.models.find(m => m.model === P[1])).toMatchObject({ ok: false });
+    expect(r.models.find(m => m.model === P[1])!.error).toContain("quota closed");
+  });
+  test("one quota closed and two families answered: the reserve is not touched", async () => {
+    const w = world({ [P[0]]: NV, [P[1]]: NV, [P[2]]: NV, [B[0]]: NV });
+    const r = await run(w.exec, closed("Claude"), backups);
+    expect(w.ran).toEqual([P[1], P[2]]);
+    expect(r.notes.join(" ")).not.toContain("reserve");
+    expect(r.models.find(m => m.model === P[0])!.error).toContain("quota closed");
+  });
+  test("a reserve call that fails (a quota that is truly spent) passes to the next stopped primary", async () => {
+    const w = world({ [P[0]]: "fail", [P[1]]: NV, [P[2]]: NV });
+    const r = await run(w.exec, two, backups);
+    expect(w.ran).toEqual([P[2], P[0], P[1]]);
+    expect(r.verdicts.map(v => v.family)).toEqual(["gemini", "gpt"]);
+    expect(r.models.find(m => m.model === P[0])).toMatchObject({ ok: false });
+  });
+  test("all three quotas closed: the reserve is what gives the day its review (two families, the third is left alone)", async () => {
+    const w = world({ [P[0]]: NV, [P[1]]: NV, [P[2]]: NV });
+    const r = await run(w.exec, three, backups);
+    expect(w.ran).toEqual([P[0], P[1]]);
+    expect(r.decision).not.toBeNull();
+  });
+  test("only the backups are never called from the reserve, and a family that already answered is not asked twice", async () => {
+    // claude is closed; its seat is taken by another family; gpt closed too: one family answered plus the substitute → two, no reserve
+    const w = world({ [S[2]]: NV, [P[0]]: NV, [P[1]]: NV, [P[2]]: NV, [B[0]]: NV, [B[1]]: NV });
+    const r = await run(w.exec, two, { substitutes: [...B, S[2]] });
+    expect(w.ran).toEqual([S[2], P[2]]);
+    expect(r.notes.join(" ")).not.toContain("reserve");
+  });
+  test("past the deadline the reserve is not spent", async () => {
+    let t = now();
+    const w = world({ [P[0]]: NV, [P[1]]: NV, [P[2]]: NV });
+    const slow: Exec = async i => { const r = await w.exec(i); t += 20 * 60_000; return r; };
+    const r = await review({ caseFile: cf, primaries: P, substitutes: [...B], quota: two, exec: slow, now: () => t, deadlineMs: now() + 15 * 60_000, modelTimeoutSec: 720, decidedAtMs: t });
+    expect(w.ran).toEqual([P[2]]);
+    expect(r.decision).toBeNull();
   });
 });
 

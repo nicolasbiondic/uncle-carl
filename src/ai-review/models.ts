@@ -10,10 +10,14 @@ export const PRIMARIES: readonly string[] = [
   "codex/gpt-6.1-sol",
   "antigravity/gemini-3.8-flash-high",
 ];
-/** In this order, for a primary whose quota is closed or that fails. */
+/** In this order, for a primary whose quota is closed or that fails. Since 2026-11-14 (owner: "utiliza otro modelo que no sea
+ *  opencodego, utiliza tus recursos disponibles") they come from the machine's own subscriptions, which hold exactly the three families
+ *  of the primaries: the first two are ANOTHER MODEL OF THE SAME FAMILY and the same quota as a primary, so they cover a model that
+ *  fails, not a quota that is closed (src/ai-review/review.ts keeps each for its own seat and, when no quorum is possible, spends the
+ *  quota's reserve). The free one is a fourth family whenever its free allowance is open; over it, it fails in a second. */
 export const SUBSTITUTES: readonly string[] = [
-  "opencode-go/kimi-k3.1-pro",
-  "opencode-go/qwen3.8-max",
+  "anthropic/claude-opus-5-5",
+  "codex/gpt-6.1-terra",
   "opencode/deepseek-v4.1-flash-free",
 ];
 
@@ -25,15 +29,19 @@ export const CLOSE_GEMINI = 90;
 type Pool = "Claude" | "Codex" | "Google";
 interface ModelInfo { family: string; pool: Pool | null; window?: string; closeAt?: number }
 
-// pool null = not in `cuotas-ia` (OpenCode Go is monthly per model, Zen free has no limit): always open here.
+// pool null = not in `cuotas-ia` (Zen free has its own allowance, which the call itself reports; OpenCode Go is monthly per model):
+// always open here. The two OpenCode Go rows are no longer in the panel (owner, 2026-11-14); they stay so the table still knows them.
 const INFO: Readonly<Record<string, ModelInfo>> = {
   "anthropic/claude-sonnet-5-5": { family: "claude", pool: "Claude" },
+  "anthropic/claude-opus-5-5": { family: "claude", pool: "Claude" },
   "anthropic/claude-haiku-5-5": { family: "claude", pool: "Claude" },
   "codex/gpt-6.1-sol": { family: "gpt", pool: "Codex" },
+  "codex/gpt-6.1-terra": { family: "gpt", pool: "Codex" },
+  "codex/gpt-6-luna": { family: "gpt", pool: "Codex" },
   "antigravity/gemini-3.8-flash-high": { family: "gemini", pool: "Google", window: "Gemini", closeAt: CLOSE_GEMINI },
+  "opencode/deepseek-v4.1-flash-free": { family: "deepseek", pool: null },
   "opencode-go/kimi-k3.1-pro": { family: "kimi", pool: null },
   "opencode-go/qwen3.8-max": { family: "qwen", pool: null },
-  "opencode/deepseek-v4.1-flash-free": { family: "deepseek", pool: null },
 };
 
 /** Is the model in the table above (so its family is known)? The panel test requires it of every model it lists. */

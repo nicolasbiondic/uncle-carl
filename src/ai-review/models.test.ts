@@ -21,7 +21,7 @@ describe("the panel's shape (§3.2)", () => {
     expect(SUBSTITUTES.length).toBeGreaterThanOrEqual(3);
     expect(new Set([...PRIMARIES, ...SUBSTITUTES]).size).toBe(PRIMARIES.length + SUBSTITUTES.length);
     for (const m of [...PRIMARIES, ...SUBSTITUTES]) expect(isKnownModel(m)).toBe(true);
-    // a substitute of an unused family exists for every primary: the three primaries failing at once still leaves three families to try
+    // the three primaries failing at once still leaves three families to try (a substitute may be a second model of a primary's family)
     expect(new Set(SUBSTITUTES.map(familyOf)).size).toBeGreaterThanOrEqual(3);
   });
   test("policy thresholds", () => {
@@ -68,8 +68,9 @@ describe("quota gate", () => {
     expect(g.open).toBe(false);
     expect(g.why).toContain("Claude quota closed");
   });
-  test("models outside cuotas-ia (Go, free) are open; no report = try anyway and say so", () => {
-    expect(gate("opencode-go/kimi-k3.1-pro", report()).open).toBe(true);
+  test("models outside cuotas-ia (the free ones, or an id the table does not know) are open; no report = try anyway and say so", () => {
+    expect(gate("opencode/deepseek-v4.1-flash-free", report()).open).toBe(true);
+    expect(gate("someone/unknown-model", report()).open).toBe(true);
     const none = gate("anthropic/claude-sonnet-5-5", null);
     expect(none.open).toBe(true);
     expect(none.why).toContain("cuotas-ia unavailable");
