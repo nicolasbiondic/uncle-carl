@@ -65,21 +65,32 @@ describe("the Overview board", () => {
   const check = readFileSync(join(import.meta.dir, "../../../../../scripts/dashboard-layout-check.ts"), "utf-8");
   const main = readFileSync(join(import.meta.dir, "main.js"), "utf-8");
 
-  test("locked desktops (≥ 1280 × 540): the board fills the viewport and its columns clip, nothing scrolls", () => {
-    const m = css.match(/@media \(min-width: 1280px\) and \(min-height: 540px\) \{ \.bd-wrap \{ flex: 1 1 auto; min-height: 0;[^}]*\} \.bd \{ flex: 1 1 0; min-height: 0; \} \.bc \{ min-height: 0; overflow: hidden; \} \.bc-p-bars \{ flex: 1 1 0; min-height: 0; overflow: hidden; \}/);
+  test("locked desktops (≥ 1280 × 700): the board fills the viewport and its columns clip, nothing scrolls", () => {
+    const m = css.match(/@media \(min-width: 1280px\) and \(min-height: 700px\) \{ \.bd-wrap \{ flex: 1 1 auto; min-height: 0;[^}]*\} \.bd \{ flex: 1 1 0; min-height: 0; \} \.bc \{ min-height: 0; overflow: hidden; \} \.bc-p-bars \{ flex: 1 1 0; min-height: 0; overflow: hidden; \}/);
     expect(m).not.toBeNull();
     expect(css).not.toMatch(/\.bc[^{]*\{[^}]*overflow(-y)?: (auto|scroll)/);
   });
 
   test("981–1279 wide: two columns a row, the page scrolls — the viewport lock is released for the Overview only, its own rule stays", () => {
     expect(css).toContain("@media (max-width: 1279px) { .bd { grid-template-columns: repeat(2, minmax(0, 1fr)); } }");
-    expect(css).toMatch(/@media \(min-width: 981px\) and \(max-width: 1279px\) \{ html\[data-page="resumen"\], html\[data-page="resumen"\] body \{ height: auto; overflow: visible; \}/);
+    // … and for a window ≥ 1280 wide but under 700 tall, where a locked column has no room left for its bars.
+    expect(css).toMatch(/@media \(min-width: 981px\) and \(max-width: 1279px\), \(min-width: 1280px\) and \(max-height: 699\.98px\) \{ html\[data-page="resumen"\], html\[data-page="resumen"\] body \{ height: auto; overflow: visible; \}/);
     expect(css).toContain("@media (min-width: 981px) and (min-height: 540px) { html, body { height: 100dvh; overflow: hidden; }"); // the lock itself, unchanged
     expect(main).toContain("document.documentElement.dataset.page = page");
   });
 
   test("a phone: one column a row", () => {
     expect(css).toMatch(/@media \(max-width: 640px\) \{ \.bd \{ grid-template-columns: minmax\(0, 1fr\); \}/);
+  });
+
+  test("the board is fitted again when its room changes with no repaint (ResizeObserver), and the JS lock equals the CSS one", () => {
+    const board = readFileSync(join(import.meta.dir, "components/board.js"), "utf-8");
+    expect(board).toContain('export const LOCKED = "(min-width: 1280px) and (min-height: 700px)";');
+    expect(board).toContain("new ResizeObserver(");
+    expect(board).toMatch(/fitBoard\(host\.querySelector\("\.bd"\)\);\s+watchBoard\(host\.querySelector\("\.bd"\)\);/);
+    expect(check).toContain("const locked = viewport.width >= 1280 && viewport.height >= 700;");
+    expect(check).toContain("(36 px less room)"); // dashboard:check takes room away and requires a refit
+    expect(css).toContain(".pc-more { display: block; flex: 0 0 auto;"); // a line that could shrink would hide an overflow
   });
 
   test("short of height the column gives up its last action, then the curve's labels (fit-1, fit-2)", () => {

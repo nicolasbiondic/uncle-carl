@@ -137,6 +137,20 @@ figure. Load the project skill before touching any of it:
 `src/portfolio/moneyConsistency.test.ts`, `bun run dashboard:check` and
 `src/config/ownerTextSkill.test.ts`.
 
+**AI review (optional, report-only).** `src/ai-review/` lets a few AI models of
+different families read each morning's news for the stocks the sleeves hold and
+vote keep/reduce/exit/short. Code applies a fixed quorum (at least 2 families,
+mean confidence ≥ 0.6, the mildest agreeing action) and hard limits (a few names
+per sleeve, a validity of 5 sessions) and writes a decision file for the bot's
+inbox; it changes no order. `scripts/ai-review-casefile.ts` builds the day's
+read-only case file (positions, closes, news from the broker's data API); the
+runner that launches the models (`src/ai-review/app.ts`, entry
+`scripts/ai-review.ts`) is meant for a machine that has an OpenCode agent
+setup, and needs `AI_REVIEW_PROD_SSH` and `AI_REVIEW_PROD_DIR` for the host that
+runs the bot. Enforced: `src/ai-review/quorum.test.ts`,
+`src/ai-review/active.test.ts`, `src/ai-review/contract.test.ts`,
+`src/ai-review/casefile.test.ts`.
+
 **Shared broker wallet.** Multiple stock sleeves can share one Alpaca
 wallet; closing a position liquidates the AGGREGATE broker position while
 only the requesting sleeve closes its own DB row. Universes that share a

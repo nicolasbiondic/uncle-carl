@@ -239,7 +239,7 @@ function scrollContainers(allowlist: string[]) {
   return rows;
 }
 
-/** The Overview board must be ONE view: on a locked desktop (≥ 1280 × 540) nothing inside it scrolls or is clipped, in either
+/** The Overview board must be ONE view: on a locked desktop (≥ 1280 × 700) nothing inside it scrolls or is clipped, in either
  *  direction, and every column shows at least 2 + 2 bars when it has that many. Returns what is wrong and the bars each column shows. */
 function boardProblems(locked: boolean) {
   const out: string[] = [];
@@ -350,13 +350,28 @@ async function main() {
           await page.waitForFunction(() => document.querySelectorAll(".bd .pc-curve").length === 4);
           if (await page.locator(".bd .bc[data-id]").count() !== 4) throw new Error("Synthetic board did not render its four strategy columns");
         }
-        const locked = viewport.width >= 1280 && viewport.height >= 540;
+        const locked = viewport.width >= 1280 && viewport.height >= 700;
         await settle(page);
         const board = await page.evaluate(boardProblems, locked);
         await capture("board", desktop && !locked);
         console.log(`${board.out.length ? "FAIL" : "INFO"}\t${viewport.width}x${viewport.height}\tboard${suffix}\t${board.out.length ? board.out.join("; ") : "nothing scrolls"}\tbars per column: ${board.bars.join(" ")}`);
         if (board.out.length) report[report.length - 1].failures.push(...board.out);
         if (!values.base && locked && board.bars.some((n, i) => n < Math.min(4, [32, 11, 0, 4][i] ?? 4))) report[report.length - 1].failures.push("a column shows fewer than 2 + 2 bars");
+        // The room under the board can change with no repaint and no window resize (the news bar arriving, a
+        // header reflow, a font swap): the bars must be fitted again. Take 36 px away from the board the way a
+        // taller news bar would and require that nothing overflows; then give it back.
+        if (locked) {
+          await page.evaluate(() => { (document.querySelector("#newsBar") as HTMLElement).style.paddingBottom = "36px"; });
+          await settle(page);
+          const squeezed = await page.evaluate(boardProblems, locked);
+          console.log(`${squeezed.out.length ? "FAIL" : "INFO"}\t${viewport.width}x${viewport.height}\tboard${suffix} (36 px less room)\t${squeezed.out.length ? squeezed.out.join("; ") : "refitted, nothing scrolls"}\tbars per column: ${squeezed.bars.join(" ")}`);
+          if (squeezed.out.length) report[report.length - 1].failures.push(...squeezed.out.map((o) => `after losing 36 px: ${o}`));
+          await page.evaluate(() => { (document.querySelector("#newsBar") as HTMLElement).style.paddingBottom = ""; });
+          await settle(page);
+          const restored = await page.evaluate(boardProblems, locked);
+          if (restored.out.length) report[report.length - 1].failures.push(...restored.out.map((o) => `after getting the room back: ${o}`));
+          if (restored.bars.join(" ") !== board.bars.join(" ")) report[report.length - 1].failures.push(`the board did not return to its fit: ${restored.bars.join(" ")} instead of ${board.bars.join(" ")}`);
+        }
 
         // "… 22 more · see all" opens the Detail page on that strategy: its positions tab, the portfolio filter set.
         // (A screen tall enough to show all 32 has no such line, and that is right.)

@@ -78,6 +78,17 @@ export function pickRows(total, capacity, min = MIN_EDGE) {
   return { top, bottom, hidden: total - top - bottom };
 }
 
+/** A column too short even for MIN_EDGE + MIN_EDGE lines (a laptop window with the browser's bars, the news
+ *  bar taking its room): as many lines as fit, split between gains and losses, one of them the "… N more"
+ *  line; with room for one line, that line alone; with none, nothing (`none`). Never an overflow. Pure. */
+export function pickTight(total, capacity) {
+  if (capacity <= 0) return { top: 0, bottom: 0, hidden: total, none: true };
+  if (total <= capacity) return { top: total, bottom: 0, hidden: 0 };
+  const slots = capacity - 1;
+  const top = Math.ceil(slots / 2), bottom = Math.floor(slots / 2);
+  return { top, bottom, hidden: total - top - bottom };
+}
+
 /** The lines a column's bars show out of `total` on a page that scrolls: a
  *  phone never more than 5 + 5 (a "… N more" line even for one), a narrow window
  *  (two columns) all up to UNLOCKED_ALL, else the 5 + 5 biggest. */
@@ -253,23 +264,52 @@ export function paintBoard(host, model) {
     if (out && out.__h !== model.out) { out.innerHTML = model.out; out.__h = model.out; }
   }
   fitBoard(host.querySelector(".bd"));
+  watchBoard(host.querySelector(".bd"));
+}
+
+// ── refit when the room changes without a repaint ───────────────────────────
+// The bars are fitted to the height their column has left. That height also
+// changes when nothing here repaints: the news bar under the board arrives a
+// moment later, the header reflows, a font swaps, a sentence above wraps. The
+// first version refitted only on its own repaints and on a window resize, so a
+// late change left a column showing one line more than it had room for
+// (CI, 2026-11-14: ".bc-bars content 171 > box 169" on a run whose only changes
+// were unrelated). Now every bars box is observed: when its height is no longer
+// the one the last fit was made for, the board is fitted again. fitBoard is a
+// pure function of the layout around the bars, so a refit that changes nothing
+// ends the cycle.
+const fittedHeight = new WeakMap();
+let boardObserver = null, refitQueued = false;
+
+export function watchBoard(board) {
+  if (!board || typeof ResizeObserver === "undefined") return;
+  boardObserver?.disconnect();
+  boardObserver = new ResizeObserver(() => {
+    if (refitQueued || !board.isConnected) return;
+    const stale = [...board.querySelectorAll(".bc-bars")].some((b) => fittedHeight.get(b) !== b.clientHeight);
+    if (!stale) return;
+    refitQueued = true;
+    requestAnimationFrame(() => { refitQueued = false; if (board.isConnected) fitBoard(board); });
+  });
+  boardObserver.observe(board);
+  for (const b of board.querySelectorAll(".bc-bars")) boardObserver.observe(b);
 }
 
 // ── fitting the bars to the column's height (the way js/fit.js fits tables) ──
-// Locked layout (≥ 1280 wide, ≥ 540 tall): the board fills the viewport, each
+// Locked layout (≥ 1280 wide, ≥ 700 tall): the board fills the viewport, each
 // column's bars box gets what is left, and we show as many lines as fit. Short
 // of height, give up in this order: the last-action line (fit-1), the curve's
 // two labels (fit-2), then bars down to 2 + 2. A page that scrolls shows all up
 // to 12, else 5 + 5.
 export const BOARD_STEPS = ["fit-1", "fit-2"];
-export const LOCKED = "(min-width: 1280px) and (min-height: 540px)";
+export const LOCKED = "(min-width: 1280px) and (min-height: 700px)";
 export const PHONE = "(max-width: 640px)";
 
 /** Show the first `top` and last `bottom` bar lines of a column, hide the rest, say how many. */
 function applyPick(bars, pick, total) {
   const rows = [...bars.querySelectorAll(".pc-row")], more = bars.querySelector(".bc-more");
   rows.forEach((r, i) => { r.hidden = pick.hidden > 0 && i >= pick.top && i < total - pick.bottom; });
-  if (more) { more.hidden = pick.hidden === 0; if (pick.hidden) more.textContent = moreWords(pick.hidden); }
+  if (more) { more.hidden = pick.hidden === 0 || !!pick.none; if (pick.hidden) more.textContent = moreWords(pick.hidden); }
 }
 
 /** Re-fit one board; returns how many give-up steps it needed. */
@@ -285,13 +325,24 @@ export function fitBoard(board, locked = matchMedia(LOCKED).matches, phone = mat
       const first = bars.querySelector(".pc-row");
       const pitch = first ? first.getBoundingClientRect().height : 0;
       const capacity = locked && pitch > 0 ? Math.floor(bars.clientHeight / pitch) : Infinity;
-      const pick = locked ? pickRows(total, capacity) : pickRowsScrolling(total, phone);
+      let pick = locked ? pickRows(total, capacity) : pickRowsScrolling(total, phone);
       applyPick(bars, pick, total);
+      // The box is never left overflowing. pickRows keeps at least MIN_EDGE + MIN_EDGE lines, and the count
+      // above assumes every line is one pitch tall; when the box cannot hold that (a very short window, a
+      // fractional height), show what does fit (pickTight), down to nothing.
+      if (locked && bars.scrollHeight > bars.clientHeight + 1) {
+        for (let cap = Math.min(capacity, pick.top + pick.bottom + (pick.hidden ? 1 : 0)) - 1; cap >= 0; cap--) {
+          pick = pickTight(total, cap);
+          applyPick(bars, pick, total);
+          if (bars.scrollHeight <= bars.clientHeight + 1) break;
+        }
+      }
       if (locked && pick.top + pick.bottom + (pick.hidden ? 1 : 0) < Math.min(total, WANT_LINES)) short = true;
     }
     return short;
   };
   let steps = 0;
   while (settle() && steps < BOARD_STEPS.length) board.classList.add(BOARD_STEPS[steps++]);
+  for (const bars of boxes) fittedHeight.set(bars, bars.clientHeight); // what this fit was made for (watchBoard)
   return steps;
 }

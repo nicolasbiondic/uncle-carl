@@ -1,7 +1,7 @@
 // ── The Overview board (owner, 2026-11-14): a column per strategy ───────────
 import { describe, expect, test, beforeEach, afterAll } from "bun:test";
 import {
-  boardColumns, boardModel, renderBoard, pickRows, pickRowsScrolling, countLine, hasLeverage, moreWords,
+  boardColumns, boardModel, renderBoard, pickRows, pickRowsScrolling, pickTight, countLine, hasLeverage, moreWords,
   MIN_EDGE, WANT_LINES, LEVERAGE_OVER,
 } from "./board.js";
 import { BOT_NOW_FIXTURE as FX, FIXTURE_NOW as NOW } from "./botnow.fixture.js";
@@ -40,6 +40,23 @@ describe("how many bar lines a column shows", () => {
     expect(pickRows(11, 10)).toEqual({ top: 5, bottom: 4, hidden: 2 });
     expect(pickRows(4, 0)).toEqual({ top: 4, bottom: 0, hidden: 0 });
   });
+  test("a column too short for 2 + 2: as many lines as fit, one of them '… N more'; one line = that line alone; no room = nothing", () => {
+    expect(pickTight(32, 4)).toEqual({ top: 2, bottom: 1, hidden: 29 });   // 3 bars + the more line = 4 lines
+    expect(pickTight(32, 3)).toEqual({ top: 1, bottom: 1, hidden: 30 });
+    expect(pickTight(32, 2)).toEqual({ top: 1, bottom: 0, hidden: 31 });
+    expect(pickTight(32, 1)).toEqual({ top: 0, bottom: 0, hidden: 32 });   // only "… 32 more · see all"
+    expect(pickTight(32, 0)).toEqual({ top: 0, bottom: 0, hidden: 32, none: true });
+    expect(pickTight(4, 4)).toEqual({ top: 4, bottom: 0, hidden: 0 });     // all of them when they fit
+    expect(pickTight(4, 3)).toEqual({ top: 1, bottom: 1, hidden: 2 });
+    // never more lines than the room: bars + the more line ≤ capacity
+    for (let total = 1; total <= 40; total++) for (let cap = 0; cap <= 12; cap++) {
+      const p = pickTight(total, cap);
+      const lines = p.none ? 0 : p.top + p.bottom + (p.hidden ? 1 : 0);
+      expect(lines).toBeLessThanOrEqual(cap);
+      expect(p.top + p.bottom + p.hidden).toBe(total);
+    }
+  });
+
   test("a page that scrolls (phone, narrow window): all up to 12, else 5 + 5", () => {
     expect(pickRowsScrolling(11)).toEqual({ top: 11, bottom: 0, hidden: 0 });
     expect(pickRowsScrolling(12)).toEqual({ top: 12, bottom: 0, hidden: 0 });
