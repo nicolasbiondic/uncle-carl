@@ -76,8 +76,8 @@ export function computeOverrides(universe: Record<SleeveId, string[]>, verdicts:
 }
 
 /** null = no decision (fewer than MIN_AGREE valid verdicts from distinct families): nothing is shipped. */
-export function buildDecision(input: { caseFile: CaseFile; verdicts: FamilyVerdict[]; models: ModelRecord[]; decidedAt: string }): Decision | null {
+export function buildDecision(input: { caseFile: CaseFile; verdicts: FamilyVerdict[]; models: ModelRecord[]; decidedAt: string; stage?: Decision["stage"] }): Decision | null {
   if (new Set(input.verdicts.map(v => v.family)).size < MIN_AGREE) return null;
   const { overrides, dropped } = computeOverrides(universeOf(input.caseFile), input.verdicts);
-  return sealDecision({ session: input.caseFile.session, decidedAt: input.decidedAt, stage: "inform", models: input.models, overrides, dropped, reviewed: countSymbols(input.caseFile) });
+  return sealDecision({ session: input.caseFile.session, decidedAt: input.decidedAt, stage: input.stage ?? "inform", models: input.models, overrides, dropped, reviewed: countSymbols(input.caseFile) });
 }

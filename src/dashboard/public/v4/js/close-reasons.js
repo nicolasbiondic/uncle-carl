@@ -23,6 +23,7 @@ export const CLOSE_REASON_WORDS = {
   IDLE_OVERLAY_EXIT: ["idle-cash position closed", "cierre de la inversión temporal del efectivo"],
   SLOT_DISPLACED: ["a stronger pick took its slot", "reemplazada por una señal más fuerte"],
   MODEL_CUTOVER: ["new model version", "cambio de modelo"],
+  AI_REVIEW_EXIT: ["taken out by the AI review", "la revisión de IA la sacó"],
   MOMENTUM_REBALANCE: rebalance, PORTFOLIO_REBALANCE: rebalance, REBALANCE: rebalance,
   TAKE_PROFIT: ["profit target reached", "objetivo de ganancia alcanzado"], REVERSE_SIGNAL: exit,
   MANUAL_CLOSE: ["closed by hand", "cierre manual"],

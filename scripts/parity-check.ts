@@ -124,6 +124,7 @@ import { contingencyHistoryBars, overlaySymbols } from "../src/portfolio-engine/
 import { getPreviousTradingDay, getSessionClose, isTradingDay } from "../src/utils/marketHours";
 import type { PortfolioStrategyConfig, Position } from "../src/portfolio-engine/types";
 import { IndexMembershipView } from "./lib/portfolioData";
+import { modelWeightsOfJournal, readJournaledReview } from "../src/ai-review/apply";
 
 // ── epochs ────────────────────────────────────────────────────────────────
 // The monitor's sleeve list IS this map's keys (see main()) — adding a
@@ -472,6 +473,9 @@ export interface PortfolioParityDecision {
   changedSymbols: string[];
   differences: string[];
   maxNumericDelta: number;
+  /** AI review (stage B): live-only differences the replay of the model cannot see, EXPLAINED by the journaled decision.
+   *  `applied` false = the review only informed (the plan equals the model's). Listed, never paged. */
+  aiReview?: Array<{ decisionId: string; symbol: string; action: string; modelWeight: number; appliedWeight: number; applied: boolean }>;
   /** Filled quantities marked at the original reference prices/equity, NOT later market prices. */
   executionDrift: Array<{ symbol: string; side: string; status: string; filled: number; requested: number; offTargetWeight: number }>;
 }
@@ -571,10 +575,15 @@ export function checkPortfolioSleeve(sleeve: LiveSleeveId, tradingDbPath: string
         continue;
       }
       const target = decide({ view, membership, book: { equity: r.equity, positions: book, memory }, config, executionSession: r.session });
-      // Live enriches diagnostics with venue-only fields; those are not kernel outputs.
-      const { freshness: _freshness, prices, drift: _drift, rules: _rules, ...kernelDiagnostics } = stored;
+      // Live enriches diagnostics with venue-only fields; those are not kernel outputs. `aiReview` is one of them: the
+      // journal's `weights` are what the bot aimed at (the AI review's, when applied), but the replay is the MODEL's, so it
+      // is compared with the model's weights (diagnostics.aiReview.modelWeights over the applied ones) and the AI action is
+      // listed as an explained live-only difference, exactly as the Turtle books' native stop is.
+      const { freshness: _freshness, prices, drift: _drift, rules: _rules, aiReview: _aiReview, ...kernelDiagnostics } = stored;
+      const modelWeights = modelWeightsOfJournal(weights, stored);
+      const aiJournal = readJournaledReview(stored);
       const diagnosticsDiff = portfolioDiff(target.diagnostics, kernelDiagnostics);
-      const weightsDiff = portfolioDiff(target.weights, weights);
+      const weightsDiff = portfolioDiff(target.weights, modelWeights);
       // maxHold itself was not journaled separately: its close intents preserve the selected set.
       // A terminal remainder retry repeats the same symbol, not a second selection.
       const liveMaxHold = [...new Set(orders.filter(o => o.intent.maxHold === "close").map(o => o.intent.symbol))].sort();
@@ -599,7 +608,7 @@ export function checkPortfolioSleeve(sleeve: LiveSleeveId, tradingDbPath: string
       if (regimeDiff.length && config.kind === "volManaged" && config.regimeOverlay)
         for (const s of overlaySymbols(config.regimeOverlay)) changed.add(s);
       const revised = inputPaths.length > 0;
-      const targetSetFlipped = portfolioDiff(Object.keys(target.weights).sort(), Object.keys(weights).sort()).paths.length > 0;
+      const targetSetFlipped = portfolioDiff(Object.keys(target.weights).sort(), Object.keys(modelWeights).sort()).paths.length > 0;
       const regimeFlipped = (target.diagnostics.regimeOverlay as any)?.riskOff !== stored.regimeOverlay?.riskOff;
       const differences = [...invariants, ...weightsDiff.paths.map(p => `weights.${p}`), ...diagnosticsDiff.paths.map(p => `diagnostics.${p}`),
         ...maxHoldDiff.map(p => `maxHold.${p}`)];
@@ -610,6 +619,8 @@ export function checkPortfolioSleeve(sleeve: LiveSleeveId, tradingDbPath: string
       portfolio.push({ session: r.session, version: r.strategy_version,
         classification: revised ? "DATA REVISED" : logicDiverged || invariants.length || maxHoldDiff.length ? "DIVERGENCE" : "PARITY",
         changedSymbols: [...changed].sort(), differences, maxNumericDelta: Math.max(diagnosticsDiff.max, weightsDiff.max),
+        ...(aiJournal && aiJournal.effects.length > 0 ? { aiReview: aiJournal.effects.map(e => ({ decisionId: aiJournal.decisionId, symbol: e.symbol,
+          action: e.action, modelWeight: e.modelWeight, appliedWeight: e.appliedWeight, applied: aiJournal.applied })) } : {}),
         executionDrift: portfolioExecutionDrift(book, weights, orders, prices ?? {}, r.equity) });
     }
     return { sleeve, status: "compared", epoch, lastSession: completed, staleSymbols: [], divergences, portfolio };
@@ -934,6 +945,9 @@ export function renderSummary(results: SleeveParityResult[]): string {
       for (const d of r.divergences) lines.push(`  ❌ DIVERGENCE ${d.liveDate}: ${d.symbol}`);
       for (const d of r.portfolio) {
         if (d.classification === "DATA REVISED") lines.push(`  DATA REVISED ${d.session}: inputs moved [${d.changedSymbols.join(", ") || "unattributed"}]; ${d.differences.length} differences; max delta=${d.maxNumericDelta}`);
+        for (const a of d.aiReview ?? []) lines.push(a.applied
+          ? `  ☑️  explained (AI review applied, live-only): ${d.session} ${a.symbol} ${a.action} ${(a.modelWeight * 100).toFixed(1)}% → ${(a.appliedWeight * 100).toFixed(1)}% (decision ${a.decisionId})`
+          : `  ·  AI review only informed (no order changed): ${d.session} ${a.symbol} ${a.action} would have gone ${(a.modelWeight * 100).toFixed(1)}% → ${(a.appliedWeight * 100).toFixed(1)}% (decision ${a.decisionId})`);
         if (d.executionDrift.length) lines.push(`  execution drift (report only) ${d.session}: ${d.executionDrift.map(o => `${o.symbol} ${o.side} ${o.status} ${o.filled}/${o.requested} off-target=${o.offTargetWeight}`).join("; ")}`);
       }
       lines.push(r.divergences.length ? `  ❌ ${r.divergences.length} divergence(s)` : "  ✅ PARITY — no divergences (DATA REVISED / execution drift, if any, reported above)");

@@ -7,7 +7,8 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { buildCaseFile } from "../src/ai-review/casefile";
-import { isDateKey, parseCaseFile } from "../src/ai-review/contract";
+import { reviewApplies } from "../src/ai-review/apply";
+import { SLEEVE_IDS, isDateKey, parseCaseFile, type SleeveId } from "../src/ai-review/contract";
 import { builtinPortfolio, STOCK_SLEEVE_BUILTIN_DEFINITION } from "../src/portfolios/builtin";
 
 function arg(name: string): string | undefined {
@@ -40,6 +41,9 @@ async function main() {
       universes: { momentum_stocks: universeOf("momentum_stocks"), meanrev_stocks: universeOf("meanrev_stocks") },
       fetchFn: fetch, keyId, secretKey, feed: process.env.ALPACA_DATA_FEED || "iex",
     });
+    // What THIS host's bot will do with the decision (its deployed switch, its environment's kill switch): the
+    // runner words the owner's message by it, so the message can never promise an action the bot will not take.
+    cf.applies = Object.fromEntries(SLEEVE_IDS.map(id => [id, reviewApplies(id)])) as Record<SleeveId, boolean>;
     const check = parseCaseFile(cf);
     if (!check.ok) throw new Error(`built an invalid case file: ${check.error}`);
     process.stdout.write(JSON.stringify(cf) + "\n");

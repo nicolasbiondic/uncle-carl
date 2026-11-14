@@ -194,6 +194,34 @@ describe("G9 — two completed sessions, absolute AND relative position drift", 
       expect(findings(await f.run(), "G9")).toEqual([]);
     } finally { f.close(); }
   });
+  // AI review, stage B: the journal's weights are the APPLIED ones, so a position the review took out is ON target.
+  test("an AI exit does not page G9: the journaled target is the applied 0, and the sell filled; the model's 10% would have paged", async () => {
+    const f = fixture();
+    try {
+      sessions(f, 0.1, 0); // 10 shares at the start of each session, journaled target 0 (applied), no fills yet → off target
+      expect(findings(await f.run(), "G9")).toHaveLength(1);
+      const aiSell = { intent: { symbol: "ABBV", side: "sell", qty: 10 }, clientOrderId: "ai", label: "ai_review_sell",
+        result: { ok: true, filledQty: 10, status: "filled" }, applied: true };
+      const review = JSON.stringify({ aiReview: { decisionId: "abc123def456", decisionSession: "2026-10-29", applied: true,
+        effects: [{ symbol: "ABBV", action: "exit", factor: 0, modelWeight: 0.1, appliedWeight: 0 }], modelWeights: { ABBV: 0.1 } } });
+      f.db.exec("ALTER TABLE portfolio_decisions ADD COLUMN diagnostics_json TEXT DEFAULT '{}'");
+      f.db.query("UPDATE portfolio_decisions SET orders_json=?, diagnostics_json=? WHERE account_id='meanrev_stocks' AND session IN ('2026-10-29','2026-10-30')")
+        .run(JSON.stringify([aiSell]), review);
+      expect(findings(await f.run(), "G9")).toEqual([]);
+      // Had the journal kept the MODEL's weight (10%) while the bot sold the name, the same book would page for two sessions.
+      f.db.query("UPDATE portfolio_decisions SET weights_json='{\"ABBV\":0.1}' WHERE account_id='meanrev_stocks' AND session IN ('2026-10-29','2026-10-30')").run();
+      expect(findings(await f.run(), "G9")).toHaveLength(1);
+    } finally { f.close(); }
+  });
+  test("an AI reduce is on target at half the model's weight", async () => {
+    const f = fixture();
+    try {
+      sessions(f, 0.1, 0.05);
+      const trim = { intent: { symbol: "ABBV", side: "sell", qty: 5 }, clientOrderId: "ai", label: "ai_review_sell", result: { ok: true, filledQty: 5, status: "filled" }, applied: true };
+      f.db.query("UPDATE portfolio_decisions SET orders_json=? WHERE account_id='meanrev_stocks' AND session IN ('2026-10-29','2026-10-30')").run(JSON.stringify([trim]));
+      expect(findings(await f.run(), "G9")).toEqual([]);
+    } finally { f.close(); }
+  });
   test("today counts only after the NYSE close, including early closes; no second session from repeated hourly checks", async () => {
     const f = fixture();
     try {

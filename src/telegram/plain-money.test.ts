@@ -48,6 +48,14 @@ test("every persisted close code has words in both languages; unknown codes neve
   expect(fmtCloseAlert({ symbol: "X", closeReason: "NEW_SECRET_CODE" })).not.toContain("NEW_SECRET_CODE");
 });
 
+test("AI review (stage B): the close an AI exit leaves has plain words in both languages, in the table and in the Telegram close alert", () => {
+  expect(closeReasonWord("AI_REVIEW_EXIT", "en")).toBe("taken out by the AI review");
+  expect(closeReasonWord("AI_REVIEW_EXIT", "es")).toBe("la revisión de IA la sacó");
+  const alert = fmtCloseAlert({ symbol: "NVDA", closeReason: "AI_REVIEW_EXIT", accountId: "momentum_stocks", pnl: -193, entryPrice: 169, entryTime: 0, exitTime: 3_600_000 });
+  expect(alert).toContain("la revisión de IA la sacó");
+  expect(alert).not.toContain("AI_REVIEW_EXIT");
+});
+
 export async function renderPlainMoneyFixture() {
   const now = Date.parse("2026-11-11T17:00:00Z");
   spyOn(Date, "now").mockReturnValue(now); makeTestDb();

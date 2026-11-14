@@ -194,6 +194,8 @@ function sessionPositionDrift(db: Database, hist: Database, sleeve: string, sess
       qty.set(o.intent.symbol, (qty.get(o.intent.symbol) ?? 0) + (o.intent.side === "buy" ? 1 : -1) * o.result!.filledQty);
     }
   }
+  // The journal's weights are what the bot AIMED at: with the AI review applied they are the review's (an exit is 0),
+  // so a position the review took out is on target here (scripts/guardian.test.ts "an AI exit does not page G9").
   const targets: Record<string, number> = JSON.parse(d.weights_json);
   const start = getETDayStart(Date.parse(`${session}T17:00:00Z`));
   const end = getETDayStart(Date.parse(`${session}T17:00:00Z`) + 86_400_000);

@@ -1,29 +1,35 @@
 // What the owner reads (Telegram, one message per run) and what OPS reads. Owner text follows the project skill
 // texto-para-personas: plain Spanish, the company's name with its ticker, whole percentages, the strategies by
-// their owner-facing names, no jargon ("2 de 3 modelos", never "quórum"). The verbs live in ONE table so stage B
-// can switch the tense from "Sacaría" to "Sacó". Enforced: src/ai-review/texts.test.ts (verbatim).
+// their owner-facing names, no jargon ("2 de 3 modelos", never "quórum"). The verbs live in ONE table: a strategy the bot
+// acts on reads "Hoy saca …", one that only informs reads "Sacaría …". Enforced: src/ai-review/texts.test.ts (verbatim).
 
-import { SLEEVE_NAMES, type Decision, type Override, type OverrideAction } from "./contract";
+import { SLEEVE_NAMES, type Decision, type Override, type OverrideAction, type SleeveId } from "./contract";
 import { PANEL_SIZE } from "./models";
 // @ts-ignore shared owner-facing names, plain JS also used by the dashboard.
 import { symbolName } from "../dashboard/public/v4/js/symbol-names.js";
 
-/** `inform`: stage A, the bot changes no order. `applied`: stage B, the order was changed. */
-export type Tense = "inform" | "applied";
+/** `inform`: the bot changes no order for this strategy. `apply`: stage B, the bot acts today (09:35 New York; the message
+ *  leaves at 08:20, so it speaks in the present). */
+export type Tense = "inform" | "apply";
+
+/** Which strategies the bot acts on, as the dev side reads the same switch (src/ai-review/apply.ts). */
+export type Applies = Readonly<Record<SleeveId, boolean>>;
+export const ALL_INFORM: Applies = { momentum_stocks: false, meanrev_stocks: false };
 
 export const VERBS: Readonly<Record<OverrideAction, Readonly<Record<Tense, { verb: string; prep: string; note?: string }>>>> = {
-  exit: { inform: { verb: "Sacaría", prep: "de" }, applied: { verb: "Sacó", prep: "de" } },
-  reduce: { inform: { verb: "Reduciría a la mitad", prep: "en" }, applied: { verb: "Redujo a la mitad", prep: "en" } },
+  exit: { inform: { verb: "Sacaría", prep: "de" }, apply: { verb: "Hoy saca", prep: "de" } },
+  reduce: { inform: { verb: "Reduciría a la mitad", prep: "en" }, apply: { verb: "Hoy reduce a la mitad", prep: "en" } },
   short: {
     inform: { verb: "Pondría en corto", prep: "en", note: "gana si el precio baja" },
-    applied: { verb: "Puso en corto", prep: "en", note: "gana si el precio baja" },
+    // Stage C (shorts) does not exist yet: the bot takes the name out and says so.
+    apply: { verb: "Hoy saca", prep: "de", note: "pedían ponerla en corto; por ahora solo se saca" },
   },
 };
 
-export const FOOTER: Readonly<Record<Tense, string | null>> = {
-  inform: "Por ahora solo informa: todavía no cambia las órdenes.",
-  applied: null,
-};
+export const FOOTER_INFORM = "Por ahora solo informa: todavía no cambia las órdenes.";
+/** Mixed (one strategy acts, the other only informs): the footer names the one that only informs. */
+export const footerFor = (informing: readonly SleeveId[], mixed: boolean): string | null =>
+  informing.length === 0 ? null : mixed ? `${informing.map(s => SLEEVE_NAMES[s]).join(" y ")} por ahora solo informa: todavía no cambia sus órdenes.` : FOOTER_INFORM;
 
 const WEEKDAYS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 const MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
@@ -60,7 +66,7 @@ function actionBlock(o: Override, tense: Tense): string {
   ].join("\n");
 }
 
-export function ownerMessage(d: Decision, tense: Tense = "inform"): string {
+export function ownerMessage(d: Decision, applies: Applies = ALL_INFORM): string {
   const head = `🧠 Revisión de IA · ${sessionLabel(d.session)}`;
   if (d.overrides.length === 0) {
     const n = answered(d);
@@ -68,11 +74,13 @@ export function ownerMessage(d: Decision, tense: Tense = "inform"): string {
     const panel = n >= PANEL_SIZE ? `${n} de ${PANEL_SIZE} modelos` : `solo respondieron ${n} de ${PANEL_SIZE} modelos`;
     return `${head}: sin cambios en ${stocks} (${panel}).`;
   }
+  const tenseOf = (o: Override): Tense => (applies[o.sleeve] ? "apply" : "inform");
   const others = d.reviewed - d.overrides.length;
-  const lines = [head, d.overrides.map(o => actionBlock(o, tense)).join("\n\n")];
+  const lines = [head, d.overrides.map(o => actionBlock(o, tenseOf(o))).join("\n\n")];
   if (others === 1) lines.push("La otra acción, sin cambios.");
   else if (others > 1) lines.push(`Las otras ${others} acciones, sin cambios.`);
-  const footer = FOOTER[tense];
+  const informing = [...new Set(d.overrides.filter(o => tenseOf(o) === "inform").map(o => o.sleeve))];
+  const footer = footerFor(informing, d.overrides.some(o => tenseOf(o) === "apply"));
   if (footer) lines.push(footer);
   return lines.join("\n");
 }

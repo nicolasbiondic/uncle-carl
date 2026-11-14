@@ -10,6 +10,8 @@
 // registry definition comes from scripts/portfolio-engine-cutover.ts.
 
 import { Database } from "bun:sqlite";
+import { aiReviewHook } from "../../ai-review/apply";
+import { SLEEVE_IDS, type SleeveId } from "../../ai-review/contract";
 import type { AlpacaExecutor } from "../../executor/alpaca-executor";
 import { heartbeats as defaultHeartbeats } from "../../ops/heartbeat";
 import type { PortfolioEnginePlan } from "../../portfolios/types";
@@ -60,8 +62,12 @@ export function buildPortfolioEngine(plan: PortfolioEnginePlan, deps: BuildDeps)
   const profile = venueProfile(p.venue);
   const dataSymbols = p.dataSymbols ?? {};
   const dataSymbol = (s: string) => dataSymbols[s] ?? s;
+  const sleeve = p.sleeve ?? plan.portfolioId;
+  // AI review (stage B): only the two stock sleeves, only live. Observers and crypto get no hook at all.
+  const aiReview = profile.market === "stocks" && p.runMode === "live" && (SLEEVE_IDS as readonly string[]).includes(sleeve)
+    ? aiReviewHook(sleeve as SleeveId) : undefined;
   const engine = new PortfolioEngine({
-    accountId: p.sleeve ?? plan.portfolioId,
+    accountId: sleeve,
     strategyVersion: p.strategyVersion,
     config: p.strategy,
     capital: plan.capital,
@@ -79,6 +85,7 @@ export function buildPortfolioEngine(plan: PortfolioEnginePlan, deps: BuildDeps)
     heartbeatName: plan.heartbeat.name,
     heartbeats: deps.heartbeats ?? defaultHeartbeats,
     now: deps.now,
+    ...(aiReview ? { aiReview } : {}),
     ...deps.engineOverrides,
   });
   return engine;

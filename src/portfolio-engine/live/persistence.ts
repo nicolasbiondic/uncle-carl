@@ -19,8 +19,9 @@ export type DecisionStatus = "decided" | "observed" | "submitted" | "skipped_sta
 
 /** Why an order exists — the EXECUTION's own label, fixed when the order is journaled (Q7 V1, 2026-11-07).
  *  Cost readers classify by it, never by the trade's eventual close_reason. `retry` is the `-r1` remainder
- *  of a MAX_HOLD close (its intent still carries maxHold "close"). */
-export type PortfolioOrderLabel = "max_hold_close" | "max_hold_rebuy" | "stale_close" | "retry" | "rebalance_buy" | "rebalance_sell";
+ *  of a MAX_HOLD close (its intent still carries maxHold "close"). `ai_review_sell` (stage B of the AI review): a sell that
+ *  exists because the review lowered a weight; never on a MAX_HOLD close (it keeps its own label and reason). */
+export type PortfolioOrderLabel = "max_hold_close" | "max_hold_rebuy" | "stale_close" | "retry" | "rebalance_buy" | "rebalance_sell" | "ai_review_sell";
 
 export interface PersistedOrder {
   intent: OrderIntent;

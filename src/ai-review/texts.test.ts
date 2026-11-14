@@ -50,11 +50,55 @@ describe("the owner's Telegram message", () => {
   test("a reason that already ends in a full stop does not get two", () => {
     expect(ownerMessage(sealDecision(baseDecision({ overrides: [{ ...nvda, reason: "Algo pasó..." }] })))).toContain("Algo pasó. 2 de 3");
   });
-  test("stage B can switch the tense from the same table: Sacó, and no 'only informs' footer", () => {
-    expect(VERBS.exit.applied.verb).toBe("Sacó");
-    const m = ownerMessage(sealDecision(baseDecision({ overrides: [nvda] })), "applied");
-    expect(m).toContain("Sacó Nvidia (NVDA) de Momentum Acciones");
-    expect(m).not.toContain("Por ahora solo informa");
+  test("a strategy the bot acts on speaks in the present (the message leaves at 08:20, the bot acts at 09:35) and has no 'only informs' footer", () => {
+    const d = sealDecision(baseDecision({ stage: "apply", overrides: [nvda], reviewed: 43 }));
+    expect(ownerMessage(d, { momentum_stocks: true, meanrev_stocks: false })).toBe([
+      "🧠 Revisión de IA · lunes 16 nov",
+      "Hoy saca Nvidia (NVDA) de Momentum Acciones: El directorio prepara la salida del director ejecutivo tras el escándalo. 2 de 3 modelos, confianza 80 %.",
+      "Fuentes: cnbc.com, reuters.com",
+      "Las otras 42 acciones, sin cambios.",
+    ].join("\n"));
+    expect(VERBS.exit.apply.verb).toBe("Hoy saca");
+    expect(VERBS.reduce.apply.verb).toBe("Hoy reduce a la mitad");
+  });
+  test("reduce and short in the present; a short is only taken out for now, and the message says so", () => {
+    const both = { momentum_stocks: true, meanrev_stocks: true };
+    const red = ownerMessage(sealDecision(baseDecision({ overrides: [{ ...nvda, action: "reduce", factor: 0.5, sleeve: "meanrev_stocks", symbol: "JPM", meanConfidence: 0.65 }] })), both);
+    expect(red).toContain("Hoy reduce a la mitad JPMorgan (JPM) en Reversión Acciones: ");
+    expect(red).not.toContain("solo informa");
+    const sh = ownerMessage(sealDecision(baseDecision({ overrides: [{ ...nvda, action: "short" }] })), both);
+    expect(sh).toContain("Hoy saca Nvidia (NVDA) de Momentum Acciones (pedían ponerla en corto; por ahora solo se saca): ");
+    expect(sh).not.toContain("Pondría");
+  });
+  test("mixed (one strategy acts, the other informs): each block in its own tense, and the footer names the strategy that only informs", () => {
+    const jpm: Override = { ...nvda, sleeve: "meanrev_stocks", symbol: "JPM", action: "reduce", factor: 0.5, reason: "Resultados débiles." };
+    const d = sealDecision(baseDecision({ stage: "apply", overrides: [nvda, jpm], reviewed: 43 }));
+    expect(ownerMessage(d, { momentum_stocks: true, meanrev_stocks: false })).toBe([
+      "🧠 Revisión de IA · lunes 16 nov",
+      "Hoy saca Nvidia (NVDA) de Momentum Acciones: El directorio prepara la salida del director ejecutivo tras el escándalo. 2 de 3 modelos, confianza 80 %.",
+      "Fuentes: cnbc.com, reuters.com",
+      "",
+      "Reduciría a la mitad JPMorgan (JPM) en Reversión Acciones: Resultados débiles. 2 de 3 modelos, confianza 80 %.",
+      "Fuentes: cnbc.com, reuters.com",
+      "Las otras 41 acciones, sin cambios.",
+      "Reversión Acciones por ahora solo informa: todavía no cambia sus órdenes.",
+    ].join("\n"));
+    // the other way round
+    const m = ownerMessage(d, { momentum_stocks: false, meanrev_stocks: true });
+    expect(m).toContain("Sacaría Nvidia (NVDA) de Momentum Acciones");
+    expect(m).toContain("Hoy reduce a la mitad JPMorgan (JPM) en Reversión Acciones");
+    expect(m.endsWith("Momentum Acciones por ahora solo informa: todavía no cambia sus órdenes.")).toBe(true);
+  });
+  test("a strategy that applies but has nothing in the message adds no footer; one that informs alone keeps the stage-A footer verbatim", () => {
+    const onlyMomentum = ownerMessage(sealDecision(baseDecision({ overrides: [nvda] })), { momentum_stocks: true, meanrev_stocks: false });
+    expect(onlyMomentum).not.toContain("solo informa");
+    const informOnly = ownerMessage(sealDecision(baseDecision({ overrides: [nvda] })), { momentum_stocks: false, meanrev_stocks: true });
+    expect(informOnly.endsWith("Por ahora solo informa: todavía no cambia las órdenes.")).toBe(true);
+    expect(informOnly).toContain("Sacaría Nvidia (NVDA)");
+  });
+  test("no actions, no tense: the one-line message is the same whatever applies", () => {
+    const d = sealDecision(baseDecision());
+    expect(ownerMessage(d, { momentum_stocks: true, meanrev_stocks: true })).toBe(ownerMessage(d));
   });
   test("plain words: a name on every ticker, no jargon, no cents, no 'quórum'", () => {
     expect(companyLabel("USD")).toBe("Semiconductores ×2 (USD)");

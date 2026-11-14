@@ -12,6 +12,9 @@ import type { RiskState } from "../strategies/momentum/RiskGuard";
 import type { PersistedOrder } from "../portfolio-engine/live/persistence";
 import { RISK_PROFILES, type RiskProfileId } from "../config/riskProfiles";
 import { notionalUsd } from "../portfolio/notional";
+import { DEFAULT_INBOX_DIR, reviewApplies, reviewForPass } from "../ai-review/apply";
+import { SLEEVE_IDS, type OverrideAction, type SleeveId } from "../ai-review/contract";
+import { builtinPortfolio, STOCK_SLEEVE_BUILTIN_DEFINITION } from "../portfolios/builtin";
 
 export interface BotNowRuntime {
   id: string;
@@ -48,6 +51,12 @@ export interface BotNowDecision {
   at: number; entries: number; exits: number; resizes: number; orders: number; rejected: number; partial: number; unfilled: number; accountGrossCap: number;
   signalsLong: number | null; universe: number | null; note: string | null;
 }
+/** What the AI review's active decision says about this strategy's stocks (read-only; the engine acts on its own reading
+ *  of the same file). `applied` = the bot's switch for this strategy is on, so the line reads "took out", not "would take out". */
+export interface BotNowAiReview {
+  session: string;
+  items: Array<{ symbol: string; action: OverrideAction; reason: string; sources: string[]; applied: boolean }>;
+}
 export interface BotNowPortfolio {
   id: string; label: string; broker: "alpaca" | "binance";
   engine: BotNowRuntime["engine"]; version: string;
@@ -58,6 +67,8 @@ export interface BotNowPortfolio {
   blocked: { reason: string; detail: string; until: number | null } | null;
   regime: { riskOn: boolean; ref: "SPY"; distancePct: number } | null;
   exposureScale: number | null; drawdownPct: number | null;
+  /** The two stock strategies only: null when there is no active decision or it changes nothing for this strategy. */
+  aiReview?: BotNowAiReview | null;
 }
 export interface BotNowDeps {
   db: Database;
@@ -67,6 +78,8 @@ export interface BotNowDeps {
   historical?: Database | null;
   now?: number;
   readState?: (path: string) => any;
+  /** AI review inbox (default data/ai-review/inbox) and the switch (default: the bot's own, apply.ts). */
+  aiReview?: { dir?: string; applies?: (sleeve: SleeveId) => boolean };
 }
 const DAY = 86_400_000;
 /** The UI folds each pass into one line, and one pass can carry dozens of
@@ -166,6 +179,22 @@ function regimeOf(runtime: BotNowRuntime, row: any, historical: Database | null 
   return { riskOn: !regime.riskOff, ref: "SPY", distancePct: (bars.at(-1)!.close / ma - 1) * 100 };
 }
 
+/** The active decision's items for one stock strategy, restricted exactly as the engine restricts them (its own universe, the
+ *  pre-registered number of names). Read-only and never throws: any problem reads as "nothing to say". */
+function aiReviewOf(id: string, runtime: BotNowRuntime | undefined, now: number, o: BotNowDeps["aiReview"]): BotNowAiReview | null {
+  try {
+    if (!(SLEEVE_IDS as readonly string[]).includes(id)) return null;
+    const sleeve = id as SleeveId;
+    const own = runtime?.strategy && "universe" in runtime.strategy ? runtime.strategy.universe
+      : (builtinPortfolio(STOCK_SLEEVE_BUILTIN_DEFINITION[sleeve]).params as { strategy?: { universe?: string[] } }).strategy?.universe;
+    if (!Array.isArray(own)) return null;
+    const found = reviewForPass({ dir: o?.dir ?? DEFAULT_INBOX_DIR, sleeve, session: getETDateKey(now), universe: own });
+    if (!found || found.overrides.length === 0) return null;
+    const applied = (o?.applies ?? ((s: SleeveId) => reviewApplies(s)))(sleeve) === true;
+    return { session: found.decisionSession, items: found.overrides.map(x => ({ symbol: x.symbol, action: x.action, reason: x.reason, sources: x.sources, applied })) };
+  } catch { return null; }
+}
+
 /** Exported so the production JSON dump can be replayed against an isolated
  * local DB. Only SELECT statements and file reads occur in this builder. */
 export function buildBotNow(deps: BotNowDeps): { asOf: number; portfolios: BotNowPortfolio[]; events: BotNowEvent[] } {
@@ -246,7 +275,8 @@ export function buildBotNow(deps: BotNowDeps): { asOf: number; portfolios: BotNo
     return { id: summary.id, label: summary.label, broker: stocks ? "alpaca" : "binance", engine, version, state,
       positions, investedUsd, equityUsd, grossX, maxGrossX: runtime?.maxGrossX ?? null,
       cadence: { kind: cadenceMinutes >= 1440 || stocks ? "daily" : "hourly", at: stocks ? "09:35 America/New_York" : cadenceMinutes >= 1440 ? "00:00 UTC" : ":00 each hour" },
-      lastDecision, nextDecisionAt, blocked, regime: runtime ? regimeOf(runtime, pe, deps.historical, now) : null, exposureScale, drawdownPct };
+      lastDecision, nextDecisionAt, blocked, regime: runtime ? regimeOf(runtime, pe, deps.historical, now) : null, exposureScale, drawdownPct,
+      ...((SLEEVE_IDS as readonly string[]).includes(summary.id) ? { aiReview: aiReviewOf(summary.id, runtime, now, deps.aiReview) } : {}) };
   });
   return { asOf: now, portfolios, events };
 }

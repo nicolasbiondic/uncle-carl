@@ -41,6 +41,7 @@ import type {
   StopLevel, TargetBook, VenueAdapter, VenueRules,
 } from "../types";
 import { computeSleeveLedger } from "../../account/EquityTracker";
+import { applyReview, type AiReviewHook, type JournaledReview } from "../../ai-review/apply";
 import { isTradingEnabled } from "../../config";
 import { getDefaultRiskEngine, type TradingState } from "../../risk/RiskEngine";
 import { getDB, insertActivity, insertDecisionPass, type DecisionPassSnapshot } from "../../db/database";
@@ -55,7 +56,7 @@ import {
   type DecisionMode, type PersistedOrder, type PortfolioDecisionRecord,
 } from "./persistence";
 import {
-  adoptBrokerPosition, adoptSleeveRows, applyBuyFill, applySellFill, loadSleeveRows, positionsFromRows,
+  AI_REVIEW_EXIT_CLOSE_REASON, adoptBrokerPosition, adoptSleeveRows, applyBuyFill, applySellFill, loadSleeveRows, positionsFromRows,
   reconcileRowToBroker, sleeveRealizedPnl, type RowsConfig, type SleeveRow,
 } from "./rows";
 import { runWindow, type Market, type RunWindow } from "./schedule";
@@ -104,6 +105,9 @@ export interface PortfolioEngineOptions {
   alert?: (context: string, message: string) => void;
   /** Submissions per retryable sell (held-quantity rejection) per session before it is terminal (default 5). */
   maxSellAttempts?: number;
+  /** AI review, stage B (docs/reports/IA-revision-de-noticias-2026-11-14.md): wired ONLY for the two stock sleeves in
+   *  LIVE mode (wiring), and ignored again here for observers and non-stock markets. Absent = the pass is what it always was. */
+  aiReview?: AiReviewHook;
   /** Tick cadence of start() (ms). */
   tickMs?: number;
   /** Consecutive failed passes before one page per session. */
@@ -387,7 +391,9 @@ export class PortfolioEngine {
     const book: BookState = { equity: ledger.equity, positions, memory };
 
     // 4. decide + plan
-    const target = this.decideFn({ view, membership: this.opts.membership, book, config: this.opts.config, executionSession: session });
+    const modelTarget = this.decideFn({ view, membership: this.opts.membership, book, config: this.opts.config, executionSession: session });
+    // AI review (stage B): fail-open, never throws. `target` is what the bot aims at: the model's, or with the review applied.
+    const { target, review } = this.reviewTarget(modelTarget, session);
     const rules: VenueRules = await this.opts.venue.rules(venueSymbols);
     const intents: OrderIntent[] = this.planFn(target, book, prices, rules);
 
@@ -402,13 +408,13 @@ export class PortfolioEngine {
       return {
         intent, clientOrderId, result: null, applied: false, ...(live ? {} : { skipped: "observer" }),
         // Execution record (Q7 V1): the label and the price the pass decided on, fixed at journaling.
-        label: inferOrderLabel({ intent, clientOrderId }, key), decisionPrice: prices[intent.symbol] ?? null,
+        label: aiReviewLabel(intent, review) ?? inferOrderLabel({ intent, clientOrderId }, key), decisionPrice: prices[intent.symbol] ?? null,
       };
     })];
     const record: PortfolioDecisionRecord = {
       ...key, asOf, mode: this.opts.mode, status: live ? "decided" : "observed", equity: ledger.equity,
       book: positions, weights: target.weights, stops: target.stops, memory: target.memory,
-      diagnostics: { ...target.diagnostics, freshness: fresh, prices, drift, rules },
+      diagnostics: { ...target.diagnostics, ...(review ? { aiReview: review } : {}), freshness: fresh, prices, drift, rules },
       orders, note: null, decidedAt: staleRecord?.decidedAt ?? this.now(), updatedAt: this.now(),
     };
     savePortfolioDecision(record);
@@ -417,6 +423,38 @@ export class PortfolioEngine {
 
     // 6. submit, 7. stops on the actual book, close-out
     return await this.submitAndSettle(key, asOf, orders, view, target, ledger.equity, "submitted", null);
+  }
+
+  /** AI review, stage B. Computes what the active decision would do to this pass's target and, only when the sleeve's
+   *  switch is on, returns the target with the applied weights; otherwise the target is the model's own, untouched, and
+   *  the effects are only recorded (the hypothetical ledger). FAIL-OPEN: no hook, observer mode, a non-stock market, no
+   *  decision, no effect, any exception, or a result that is not strictly "no weight up, none below zero, same keys" →
+   *  the pass is exactly what it was without the review. It never awaits, never touches the venue, rows or journal. */
+  private reviewTarget(target: TargetBook, session: SessionDate): { target: TargetBook; review: JournaledReview | null } {
+    const none = { target, review: null };
+    const hook = this.opts.aiReview;
+    if (!hook || this.opts.mode !== "live" || this.opts.market !== "stocks") return none;
+    try {
+      const universe = "universe" in this.opts.config ? this.opts.config.universe : [];
+      const found = hook.forPass(session, universe);
+      if (!found || found.overrides.length === 0) return none;
+      const { weights, effects } = applyReview(target.weights, found.overrides);
+      if (effects.length === 0) return none;
+      const applied = hook.applies() === true;
+      if (!applied) return { target, review: { decisionId: found.decisionId, decisionSession: found.decisionSession, applied: false, effects } };
+      const keys = Object.keys(target.weights);
+      const sane = Object.keys(weights).length === keys.length && keys.every(k =>
+        Number.isFinite(weights[k]) && weights[k] >= 0 && weights[k] <= target.weights[k]);
+      if (!sane) { this.log.warn("AI review: the applied weights failed the sanity check — the pass uses the model's own"); return none; }
+      return {
+        target: { ...target, weights },
+        review: { decisionId: found.decisionId, decisionSession: found.decisionSession, applied: true, effects,
+          modelWeights: Object.fromEntries(effects.map(e => [e.symbol, e.modelWeight])) },
+      };
+    } catch (e: any) {
+      this.log.warn(`AI review ignored (${e?.message ?? e}) — the pass uses the model's own target`);
+      return none;
+    }
   }
 
   /** Live book step shared by the normal pass and the stale closes-only pass: adopt the sleeve's rows
@@ -716,8 +754,7 @@ export class PortfolioEngine {
     const txn = getDB().transaction(() => {
       if (result.filledQty > 0 && result.avgPrice !== null && result.avgPrice > 0) {
         if (o.intent.side === "buy") applyBuyFill(this.rows, o.intent.symbol, result.filledQty, result.avgPrice, this.now());
-        else applySellFill(this.rows, o.intent.symbol, result.filledQty, result.avgPrice,
-          { nowMs: this.now(), ...(o.intent.maxHold === "close" ? { closeReason: MAX_HOLD_CLOSE_REASON } : {}) });
+        else applySellFill(this.rows, o.intent.symbol, result.filledQty, result.avgPrice, { nowMs: this.now(), ...closeReasonOf(o) });
         if (result.filledQty < o.intent.qty * (1 - (this.opts.qtyTolerance ?? DEFAULT_QTY_TOLERANCE))) {
           this.log.warn(`${o.intent.side} ${o.intent.symbol}: partial fill ${result.filledQty}/${o.intent.qty} (${result.status})`);
         } else {
@@ -729,8 +766,7 @@ export class PortfolioEngine {
         const px = view.lastClose(o.intent.symbol) ?? 0;
         if (px > 0) {
           if (o.intent.side === "buy") applyBuyFill(this.rows, o.intent.symbol, result.filledQty, px, this.now());
-          else applySellFill(this.rows, o.intent.symbol, result.filledQty, px,
-            { nowMs: this.now(), ...(o.intent.maxHold === "close" ? { closeReason: MAX_HOLD_CLOSE_REASON } : {}) });
+          else applySellFill(this.rows, o.intent.symbol, result.filledQty, px, { nowMs: this.now(), ...closeReasonOf(o) });
           this.log.error(`${o.intent.side} ${o.intent.symbol}: fill ${result.filledQty} without a price — row marked at last close ${px}`);
         }
       }
@@ -819,6 +855,21 @@ export class PortfolioEngine {
     if (missing.length > 0) this.log.warn(`no venue price for ${missing.join(", ")} — using last close`);
     return out;
   }
+}
+
+/** `ai_review_sell` for a plain sell of a symbol the (applied) review lowered; null for everything else. A MAX_HOLD
+ *  close keeps its own label and reason: the lot reached its limit, the review only changes what is bought back. */
+function aiReviewLabel(intent: OrderIntent, review: JournaledReview | null): "ai_review_sell" | null {
+  return review?.applied && intent.side === "sell" && intent.maxHold === undefined && review.effects.some(e => e.symbol === intent.symbol)
+    ? "ai_review_sell" : null;
+}
+
+/** The row's close reason for a fill of this order: MAX_HOLD for a MAX_HOLD close, AI_REVIEW_EXIT for an ai_review_sell
+ *  (used only when the fill consumes the whole row; a partial sell leaves it open), else the writer's default. */
+function closeReasonOf(o: PersistedOrder): { closeReason?: string } {
+  if (o.intent.maxHold === "close") return { closeReason: MAX_HOLD_CLOSE_REASON };
+  if (o.label === "ai_review_sell") return { closeReason: AI_REVIEW_EXIT_CLOSE_REASON };
+  return {};
 }
 
 /** Pure: the funnel snapshot of a completed live portfolio pass (see PortfolioEngine.recordDecisionPass).

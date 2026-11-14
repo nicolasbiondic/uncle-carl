@@ -16,6 +16,8 @@ export interface ReviewInput extends AskOptions {
   /** null = cuotas-ia failed: the primaries are tried anyway and `notes` says so. */
   quota: QuotaReport | null;
   decidedAtMs: number;
+  /** `apply` when any sleeve's switch is on (wording of the shipped decision); default `inform`. */
+  stage?: Decision["stage"];
 }
 
 export interface ReviewResult {
@@ -79,7 +81,7 @@ export async function review(i: ReviewInput): Promise<ReviewResult> {
     }
   }
 
-  const decision = buildDecision({ caseFile: i.caseFile, verdicts, models, decidedAt: new Date(i.decidedAtMs).toISOString() });
+  const decision = buildDecision({ caseFile: i.caseFile, verdicts, models, decidedAt: new Date(i.decidedAtMs).toISOString(), stage: i.stage });
   if (!decision) notes.push(`${verdicts.length} valid verdict(s) from distinct families; ${MIN_AGREE} are needed: no decision`);
   return { models, verdicts, decision, notes, runs };
 }

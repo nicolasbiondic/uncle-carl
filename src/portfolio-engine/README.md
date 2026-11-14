@@ -162,7 +162,8 @@ Enforced: `src/index.portfolioCutover.test.ts`, `live/cutover.test.ts`
   `brokerOrderId`, `filledQty`, `avgPrice`, `filledAt`, `clientOrderId` (with its
   leg) and `diagnostics.prices`; each order now also carries `label`
   (`max_hold_close | max_hold_rebuy | stale_close | retry | rebalance_buy |
-  rebalance_sell`, the execution's own reason, never the trade's later
+  rebalance_sell | ai_review_sell` — the last only when the AI review (stage B,
+  AGENTS.md) lowered the weight and the switch was on; the execution's own reason, never the trade's later
   `close_reason`), `decisionPrice` (the reference price the pass decided on),
   `sessionOpenRaw` (the session's UNADJUSTED open from the venue when it offers it,
   read AFTER the orders went out so it never delays one — `AlpacaVenue.sessionOpens`, the snapshot's daily bar on

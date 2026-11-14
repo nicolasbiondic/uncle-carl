@@ -200,6 +200,22 @@ describe("the columns", () => {
     expect(boardModel(state({ botNow: null }), O).cols.find((c) => c.id === "momentum_stocks").parts.bot).toBe(""); // no bot data: nothing invented
   });
 
+  test("the AI review's ONE line sits in the bot part when the strategy has items, with the reason in its title; absent otherwise", () => {
+    const withAi = (id, ...items) => ({ ...FX, portfolios: FX.portfolios.map((p) => (p.id === id ? { ...p, aiReview: { session: "2026-10-23", items } } : p)) });
+    const item = (symbol, action, applied) => ({ symbol, action, applied, reason: "Hubo un escándalo & más.", sources: ["https://www.cnbc.com/a"] });
+    const bot = (botNow, id = "momentum_stocks") => boardModel(state({ botNow }), O).cols.find((c) => c.id === id).parts.bot;
+    expect(bot(withAi("momentum_stocks", item("NVDA", "exit", true)))).toContain('<div class="bc-ai" title="Nvidia: Hubo un escándalo &amp; más. (cnbc.com)">AI review: decided to take Nvidia out</div>');
+    expect(bot(withAi("meanrev_stocks", item("JPM", "exit", false)), "meanrev_stocks")).toContain('>AI review: would take JPMorgan out</div>');
+    expect(bot(FX)).not.toContain("bc-ai");
+    expect(bot(withAi("momentum_stocks", item("NVDA", "exit", true)), "momentum_crypto")).not.toContain("bc-ai"); // another strategy's line is not here
+    // exactly one line however many names; the sentence comes right after the decision sentence
+    const many = bot(withAi("momentum_stocks", item("NVDA", "exit", true), item("MSFT", "exit", true), item("AAPL", "reduce", true)));
+    expect(many.match(/class="bc-ai"/g)).toHaveLength(1);
+    expect(many.indexOf("bc-dec")).toBeLessThan(many.indexOf("bc-ai"));
+    store.state.lang = "es";
+    expect(bot(withAi("momentum_stocks", item("NVDA", "exit", true)))).toContain(">Revisión de IA: decidió sacar Nvidia</div>");
+  });
+
   test("a blocked / trimmed strategy says so in its own sentence", () => {
     const bot = boardModel(state(), O).cols.find((c) => c.id === "momentum_crypto_usdc").parts.bot;
     expect(bot).toContain('<div class="bc-trim" title="79 % of normal size">Trading smaller: it is 16 % below its peak</div>');

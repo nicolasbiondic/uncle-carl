@@ -450,3 +450,26 @@ describe("Binance venue (momentum_crypto_usdc)", () => {
     expect(rows.map(r => [r.symbol, r.strategy])).toEqual([["BTC/USDC", PORTFOLIO_ENGINE_STRATEGY]]);
   });
 });
+
+describe("AI review wiring (stage B): only the two stock sleeves, only live, switch off as delivered", () => {
+  const hookOf = (e: unknown) => (e as { opts: { aiReview?: { applies(): boolean } } }).opts.aiReview;
+  test.each(["momentum_stocks", "meanrev_stocks"] as const)("%s live gets the hook, and its switch reads OFF", sleeve => {
+    const built = buildPortfolioEngines(resolve([peDefinition(sleeve, { runMode: "live" })]), sources(fakeAlpaca()).src);
+    const hook = hookOf(built.live.get(sleeve));
+    expect(hook).toBeDefined();
+    expect(hook!.applies()).toBe(false);
+  });
+  test.each(["momentum_stocks", "meanrev_stocks"] as const)("%s as an observer gets no hook", sleeve => {
+    const built = buildPortfolioEngines(resolve([peDefinition(sleeve, { runMode: "observer" })]), sources(fakeAlpaca()).src);
+    expect(built.observers).toHaveLength(1);
+    expect(hookOf(built.observers[0])).toBeUndefined();
+  });
+  test("the crypto engines get no hook, live or observer", () => {
+    const fake = fakeBinance();
+    const src = sources(null, { binanceTransports: { binance_usdc: fake.transport }, historicalDb: () => cryptoHist() }).src;
+    const live = buildPortfolioEngines(resolve([peDefinition("momentum_crypto_usdc", { runMode: "live" })]), src);
+    expect(hookOf(live.live.get("momentum_crypto_usdc"))).toBeUndefined();
+    const obs = buildPortfolioEngines(resolve([peDefinition("momentum_crypto_usdc", { runMode: "observer" })]), src);
+    expect(hookOf(obs.observers[0])).toBeUndefined();
+  });
+});

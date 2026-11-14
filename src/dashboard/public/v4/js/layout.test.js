@@ -93,9 +93,10 @@ describe("the Overview board", () => {
     expect(css).toContain(".pc-more { display: block; flex: 0 0 auto;"); // a line that could shrink would hide an overflow
   });
 
-  test("short of height the column gives up its last action, then the curve's labels (fit-1, fit-2)", () => {
+  test("short of height the column gives up its last action, then the curve's labels, then the AI review's line, last (fit-1, fit-2, fit-3)", () => {
     expect(css).toContain(".bd.fit-1 .bc-last { display: none; }");
     expect(css).toContain(".bd.fit-2 .pc-axis { display: none; }");
+    expect(css).toContain(".bd.fit-3 .bc-ai { display: none; }");
     expect(css).toContain(".pc-row[hidden] { display: none; }");
   });
 

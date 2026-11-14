@@ -51,6 +51,10 @@ export interface CaseFile {
   sleeves: CaseSleeve[];
   /** Things the builder could not read (pre-market, part of the news); the runner reports them to OPS. */
   warnings?: string[];
+  /** Whether the BOT acts on the review of each strategy, as the bot's own host sees it (its deployed switch
+   *  and its environment's kill switch; scripts/ai-review-casefile.ts fills it in). Wording only: the morning
+   *  message's tense follows it. Not sent to the models. Absent = the runner's own view of the switch. */
+  applies?: Record<SleeveId, boolean>;
 }
 
 export interface Verdict { action: Action; confidence: number; reason: string; sources: string[] }
@@ -73,7 +77,9 @@ export interface Decision {
   id: string;
   session: string;
   decidedAt: string;
-  stage: "inform";
+  /** What the dev side expected when it shipped (`apply` when any sleeve's switch was on). Wording only: the bot never
+   *  trusts it, it acts on its OWN switch (src/ai-review/apply.ts). */
+  stage: "inform" | "apply";
   models: ModelRecord[];
   overrides: Override[];
   dropped: Dropped[];
@@ -162,6 +168,11 @@ export function parseCaseFile(input: unknown): Parsed<CaseFile> {
     if (!Array.isArray(input.warnings) || input.warnings.length > 50 || !input.warnings.every(isStr)) return bad("case file: warnings must be a list of strings");
     out.warnings = input.warnings as string[];
   }
+  if (input.applies !== undefined) {
+    const a = input.applies as Record<string, unknown> | null;
+    if (!a || typeof a !== "object" || Array.isArray(a) || !SLEEVE_IDS.every(id => typeof a[id] === "boolean")) return bad("case file: applies must say true or false for each strategy");
+    out.applies = Object.fromEntries(SLEEVE_IDS.map(id => [id, a[id] === true])) as Record<SleeveId, boolean>;
+  }
   return good(out);
 }
 
@@ -246,7 +257,7 @@ export function parseDecision(input: unknown): Parsed<Decision> {
   if (!isStr(input.id) || !/^[0-9a-f]{12}$/.test(input.id)) return bad("decision: id must be 12 hex chars");
   if (!isDateKey(input.session)) return bad("decision: session must be YYYY-MM-DD");
   if (!isInstant(input.decidedAt)) return bad("decision: decidedAt must be an ISO instant");
-  if (input.stage !== "inform") return bad("decision: unknown stage");
+  if (input.stage !== "inform" && input.stage !== "apply") return bad("decision: unknown stage");
   if (!Array.isArray(input.models) || input.models.length > 12) return bad("decision: models must be a list (max 12)");
   const models: ModelRecord[] = [];
   for (const m of input.models) {
@@ -279,7 +290,7 @@ export function parseDecision(input: unknown): Parsed<Decision> {
     dropped.push({ sleeve: d.sleeve as SleeveId | null, symbol: d.symbol, why: d.why });
   }
   if (!Number.isInteger(input.reviewed) || (input.reviewed as number) < 0 || (input.reviewed as number) > 1000) return bad("decision: reviewed must be a count");
-  const body: Omit<Decision, "id"> = { session: input.session, decidedAt: input.decidedAt, stage: "inform", models, overrides, dropped, reviewed: input.reviewed as number };
+  const body: Omit<Decision, "id"> = { session: input.session, decidedAt: input.decidedAt, stage: input.stage, models, overrides, dropped, reviewed: input.reviewed as number };
   if (decisionId(body) !== input.id) return bad("decision: id does not match its content");
   return good({ id: input.id, ...body });
 }

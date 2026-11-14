@@ -13,6 +13,7 @@ import { api } from "../api.js";
 import { money, pnlWhole, n } from "../fmt.js";
 import { esc } from "../ui.js";
 import { CLOSE_REASON_WORDS, closeReasonWord } from "../close-reasons.js";
+import { symbolName } from "../symbol-names.js";
 
 const NY = "America/New_York";
 const locale = () => (isEs() ? "es" : "en-GB"); // en-GB: "Fri 23 Oct", 24h clock
@@ -302,6 +303,33 @@ export function decisionSentence(p, o = {}) {
   const l = hasLast ? stamp(last, p, { ...o, now }, true) : "", x = hasNext ? stamp(next, p, { ...o, now }, false) : "";
   if (hasLast && hasNext) return t(`Decided ${l} · decides again ${x}`, `Decidió ${l} · vuelve a decidir ${x}`);
   return hasLast ? t(`Decided ${l}`, `Decidió ${l}`) : t(`Decides ${x}`, `Decide ${x}`);
+}
+
+/** The AI review's line for one stock strategy (owner, 2026-11-14), from /api/bot/now's `aiReview`: ONE sentence naming the
+ *  stocks by their plain names. Applied: "AI review: decided to take Nvidia out" / "decided to halve Nvidia" (ES "Revisión
+ *  de IA: decidió sacar Nvidia" / "decidió reducir Nvidia a la mitad"): the DECISION, not "took out", because `applied` is
+ *  the switch and the line is on screen from 08:20, before the 09:35 pass sells anything, and stays while the decision
+ *  holds; "decided" is true the whole time. Only informing: "would take Nvidia out" (ES "sacaría Nvidia"). Several names
+ *  are joined by commas; a strategy with both kinds says both. A short is taken out too (the bot has no shorts yet). The
+ *  title carries each reason and its source hosts. Pure: { text, title } or null. */
+export function aiReviewLine(p) {
+  const items = Array.isArray(p?.aiReview?.items) ? p.aiReview.items.filter((i) => i && typeof i.symbol === "string") : [];
+  if (!items.length) return null;
+  const name = (s) => symbolName(s, isEs() ? "es" : "en") || s;
+  const clauses = [];
+  for (const applied of [true, false]) for (const half of [false, true]) {
+    const names = items.filter((i) => (i.applied === true) === applied && (i.action === "reduce") === half).map((i) => name(i.symbol)).join(", ");
+    if (!names) continue;
+    clauses.push(applied
+      ? (half ? t(`decided to halve ${names}`, `decidió reducir ${names} a la mitad`) : t(`decided to take ${names} out`, `decidió sacar ${names}`))
+      : (half ? t(`would halve ${names}`, `reduciría ${names} a la mitad`) : t(`would take ${names} out`, `sacaría ${names}`)));
+  }
+  const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return String(u); } };
+  const title = items.map((i) => {
+    const hosts = [...new Set((Array.isArray(i.sources) ? i.sources : []).map(host))].join(", ");
+    return `${name(i.symbol)}: ${String(i.reason || "").trim()}${hosts ? ` (${hosts})` : ""}`;
+  }).join("\n");
+  return { text: `${t("AI review", "Revisión de IA")}: ${clauses.join("; ")}`, title };
 }
 
 /** The market sentence as markup: an arrow and a colour on its first words

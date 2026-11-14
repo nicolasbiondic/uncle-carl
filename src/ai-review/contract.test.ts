@@ -87,9 +87,16 @@ describe("Decision", () => {
     const d = sealDecision(baseDecision({ overrides: [override] }));
     expect(parseDecision(JSON.parse(JSON.stringify(d))).ok).toBe(true);
     expect(parseDecision({ ...d, reviewed: 99 }).ok).toBe(false);
-    expect(parseDecision({ ...d, stage: "apply" }).ok).toBe(false);
+    expect(parseDecision({ ...d, stage: "apply" }).ok).toBe(false); // the stage is part of the sealed content
+    expect(parseDecision({ ...d, stage: "bogus" }).ok).toBe(false);
     expect(parseDecision({ ...d, overrides: [{ ...override, action: "nuke" }] }).ok).toBe(false);
     expect(parseDecision("nope").ok).toBe(false);
+  });
+  test("a decision shipped while a sleeve applies (stage apply) parses; the stage is content, so it is sealed with it", () => {
+    const d = sealDecision(baseDecision({ stage: "apply", overrides: [override] }));
+    const r = parseDecision(JSON.parse(JSON.stringify(d)));
+    expect(r.ok && r.value.stage).toBe("apply");
+    expect(d.id).not.toBe(sealDecision(baseDecision({ overrides: [override] })).id);
   });
   test("an empty decision (no overrides) is valid", () => {
     expect(parseDecision(sealDecision(baseDecision())).ok).toBe(true);

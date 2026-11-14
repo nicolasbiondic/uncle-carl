@@ -150,6 +150,13 @@ setup, and needs `AI_REVIEW_PROD_SSH` and `AI_REVIEW_PROD_DIR` for the host that
 runs the bot. Enforced: `src/ai-review/quorum.test.ts`,
 `src/ai-review/active.test.ts`, `src/ai-review/contract.test.ts`,
 `src/ai-review/casefile.test.ts`.
+Optionally the live stock engine can act on that decision (lower a held weight to
+half or zero, never raise one, only the sleeve's own symbols, a few names at most)
+behind a code switch that ships OFF, with an environment kill switch
+(`AI_REVIEW_APPLY=off`); any missing or invalid decision leaves the pass exactly as
+it was. `scripts/ai-review-report.ts` reports its effect from the journal.
+Enforced: `src/portfolio-engine/live/PortfolioEngine.aiReview.test.ts`,
+`src/ai-review/apply.test.ts`, `src/ai-review/effects.test.ts`.
 
 **Shared broker wallet.** Multiple stock sleeves can share one Alpaca
 wallet; closing a position liquidates the AGGREGATE broker position while

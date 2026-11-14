@@ -7,7 +7,7 @@
 //   curve   its value over those 30 days, a dashed line at where it started
 //   lines   11 positions open · $71,762 invested [with leverage] · −$623 since entry (−0.9 %)
 //   bars    its positions from the largest gain to the largest loss, in dollars
-//   bot     the market, when it decided and decides again, its last action, a note
+//   bot     the market, when it decided and decides again, the AI review's one line, its last action, a note
 // Nothing scrolls: the bars take the height the column has left (fitBoard) and,
 // when they do not all fit, the biggest gains and losses that do plus one quiet
 // line "… 3 more · see all" that opens the Detail page for that strategy.
@@ -21,7 +21,7 @@ import { positionGroups, positionNotional, isOverLimit } from "./positions.js";
 import {
   strategyFigures, deltaWords, renderCurve, sortByResult, barScale, renderBarRow, resultWords, footerParts,
 } from "./strategy-chart.js";
-import { statusOf, chipItemsOf, noteOf, decisionSentence, regimeHtml, lastActionOf } from "./botnow.js";
+import { statusOf, chipItemsOf, noteOf, decisionSentence, regimeHtml, lastActionOf, aiReviewLine } from "./botnow.js";
 import { viewChip } from "./viewchip.js";
 
 export const MIN_EDGE = 2;          // never fewer than 2 gains + 2 losses when the strategy has that many
@@ -145,6 +145,8 @@ function botPart(g, p, o, noReason) {
   if (!noReason) for (const c of items.filter((c) => c.kind === "text")) out.push(`<div class="bc-why">${esc(c.text)}</div>`);
   const dec = decisionSentence(p, o);
   if (dec) out.push(`<div class="bc-dec">${esc(dec)}</div>`);
+  const ai = aiReviewLine(p);
+  if (ai) out.push(`<div class="bc-ai" title="${esc(ai.title)}">${esc(ai.text)}</div>`);
   const last = lastActionOf(p, o.events, o);
   if (last) out.push(`<div class="bc-last" title="${esc(last.title)}">${last.html}</div>`);
   const note = noteOf(p, o);
@@ -299,9 +301,10 @@ export function watchBoard(board) {
 // Locked layout (≥ 1280 wide, ≥ 700 tall): the board fills the viewport, each
 // column's bars box gets what is left, and we show as many lines as fit. Short
 // of height, give up in this order: the last-action line (fit-1), the curve's
-// two labels (fit-2), then bars down to 2 + 2. A page that scrolls shows all up
-// to 12, else 5 + 5.
-export const BOARD_STEPS = ["fit-1", "fit-2"];
+// two labels (fit-2), the AI review's line (fit-3: the last sentence to go, so a
+// short window keeps its bars exactly as before the line existed), then bars down
+// to 2 + 2. A page that scrolls shows all up to 12, else 5 + 5.
+export const BOARD_STEPS = ["fit-1", "fit-2", "fit-3"];
 export const LOCKED = "(min-width: 1280px) and (min-height: 700px)";
 export const PHONE = "(max-width: 640px)";
 

@@ -134,6 +134,14 @@ function syntheticFixtures(dir: string) {
     regime: a.id === "momentum_stocks" ? { riskOn: true, ref: "SPY", distancePct: 4.3 }
       : a.id === "momentum_crypto" ? { riskOn: false, ref: "BTC/USD", distancePct: -12.4 } : null,
     exposureScale: i === 3 ? 0.794 : null, drawdownPct: a.broker === "alpaca" ? null : i === 3 ? 16.9 : 0,
+    // The AI review's one line (stage B): the widest applied case (both kinds, three names) and an informing one.
+    ...(a.id === "momentum_stocks" ? { aiReview: { session: "2026-10-23", items: [
+      { symbol: "NVDA", action: "exit", applied: true, reason: "El directorio prepara la salida del director ejecutivo tras el escándalo.", sources: ["https://www.cnbc.com/a", "https://www.reuters.com/b"] },
+      { symbol: "USD", action: "exit", applied: true, reason: "Restricciones de exportación a China.", sources: ["https://www.ft.com/c"] },
+      { symbol: "AAPL", action: "reduce", applied: true, reason: "Resultados débiles.", sources: ["https://www.wsj.com/d"] },
+    ] } } : a.id === "meanrev_stocks" ? { aiReview: { session: "2026-10-23", items: [
+      { symbol: "JPM", action: "exit", applied: false, reason: "Investigación regulatoria.", sources: ["https://www.reuters.com/e"] },
+    ] } } : {}),
   })), events: [
     // The board's "last action" line: a pass at the 5-day limit with its re-buys, a plain rebalance, a trim.
     { at: nowReal - 20 * 3600e3, portfolioId: "momentum_stocks", kind: "rebalance", symbol: null, qty: null, usd: 18_000, pnlUsd: null, reason: "REBALANCE", detail: null, buys: 3, sells: 2, rebought: ["SPY", "QQQ"], newBuyUsd: 6400 },

@@ -29,6 +29,23 @@ const open: QuotaReport = { Claude: [{ error: null, ventanas: [{ nombre: "semana
 const closed = (pool: string): QuotaReport => ({ ...open, [pool]: [{ error: null, ventanas: [{ nombre: "semanal", clase: "semana", usado: 95 }, { nombre: "5 h", clase: "5h", usado: 95 }, { nombre: "Gemini", clase: "semana", usado: 99 }] }] });
 const NV = answer({ NVDA: ["exit", 0.8] });
 
+describe("the stage of the decision (wording only: the bot acts on its own switch)", () => {
+  test("inform by default; apply when the runner says a sleeve's switch is on; the same overrides either way", async () => {
+    const w = () => world({ [PRIMARIES[0]]: NV, [PRIMARIES[1]]: NV, [PRIMARIES[2]]: answer({}) });
+    const inform = await run(w().exec, open);
+    const apply = await run(w().exec, open, { stage: "apply" });
+    expect(inform.decision?.stage).toBe("inform");
+    expect(apply.decision?.stage).toBe("apply");
+    expect(apply.decision?.overrides).toEqual(inform.decision?.overrides);
+    expect(apply.decision?.id).not.toBe(inform.decision?.id);
+  });
+  test("the runner's config reads the same switch as the bot: both strategies inform in what is delivered, and the kill switch only ever lowers", async () => {
+    const { loadConfig } = await import("./app");
+    expect(loadConfig({}, "/x").apply).toEqual({ momentum_stocks: false, meanrev_stocks: false });
+    expect(loadConfig({ AI_REVIEW_APPLY: "off" }, "/x").apply).toEqual({ momentum_stocks: false, meanrev_stocks: false });
+  });
+});
+
 describe("the panel", () => {
   test("three primaries, in order, all valid: no substitute is touched", async () => {
     const w = world({ [PRIMARIES[0]]: NV, [PRIMARIES[1]]: NV, [PRIMARIES[2]]: answer({}) });

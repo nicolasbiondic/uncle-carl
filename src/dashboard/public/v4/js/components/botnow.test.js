@@ -4,7 +4,7 @@
 import { describe, expect, test, beforeEach, afterAll } from "bun:test";
 import {
   renderBotNow, chipsOf, chipItemsOf, noteOf, decisionSentence, lastActionOf, regimeHtml, statusOf, eventSentence, groupEventsByDay,
-  clusterPasses, passSummary, untilWord, whenPhrase, reasonWord, grossPhrase, sinceWord, portfolioName,
+  clusterPasses, passSummary, untilWord, whenPhrase, reasonWord, grossPhrase, sinceWord, portfolioName, aiReviewLine,
 } from "./botnow.js";
 import { BOT_NOW_FIXTURE as FX, FIXTURE_NOW as NOW } from "./botnow.fixture.js";
 import { renderAnalyticsShell } from "./analytics.js";
@@ -339,5 +339,51 @@ describe("the Bot actions tab", () => {
     expect(renderAnalyticsShell()).toContain('data-atab="bot">Acciones del bot<');
     store.state.tab = saved;
     expect(typeof api.botNow).toBe("function");
+  });
+});
+
+
+describe("the AI review's line on a stock strategy (owner, 2026-11-14): one sentence in the tense of what the bot does", () => {
+  const item = (symbol, action, applied, over = {}) => ({ symbol, action, applied, reason: `Motivo de ${symbol}.`, sources: ["https://www.cnbc.com/x", "https://reuters.com/y", "https://cnbc.com/z"], ...over });
+  const p = (...items) => ({ ...by("momentum_stocks"), aiReview: { session: "2026-10-23", items } });
+
+  test("applied: decided to take Nvidia out / decided to halve Nvidia, in both languages", () => {
+    expect(aiReviewLine(p(item("NVDA", "exit", true))).text).toBe("AI review: decided to take Nvidia out");
+    expect(aiReviewLine(p(item("AAPL", "reduce", true))).text).toBe("AI review: decided to halve Apple");
+    store.state.lang = "es";
+    expect(aiReviewLine(p(item("NVDA", "exit", true))).text).toBe("Revisión de IA: decidió sacar Nvidia");
+    expect(aiReviewLine(p(item("AAPL", "reduce", true))).text).toBe("Revisión de IA: decidió reducir Apple a la mitad");
+  });
+
+  test("only informing: would take Nvidia out, in both languages", () => {
+    expect(aiReviewLine(p(item("NVDA", "exit", false))).text).toBe("AI review: would take Nvidia out");
+    expect(aiReviewLine(p(item("AAPL", "reduce", false))).text).toBe("AI review: would halve Apple");
+    store.state.lang = "es";
+    expect(aiReviewLine(p(item("NVDA", "exit", false))).text).toBe("Revisión de IA: sacaría Nvidia");
+    expect(aiReviewLine(p(item("AAPL", "reduce", false))).text).toBe("Revisión de IA: reduciría Apple a la mitad");
+  });
+
+  test("several names are joined by commas, a plain name on every ticker (never a bare code); both kinds in one sentence", () => {
+    expect(aiReviewLine(p(item("NVDA", "exit", true), item("MSFT", "exit", true))).text).toBe("AI review: decided to take Nvidia, Microsoft out");
+    store.state.lang = "es";
+    expect(aiReviewLine(p(item("NVDA", "exit", true), item("USD", "exit", true), item("AAPL", "reduce", true))).text)
+      .toBe("Revisión de IA: decidió sacar Nvidia, Semiconductores ×2; decidió reducir Apple a la mitad");
+  });
+
+  test("a short is taken out too (the bot has no shorts yet)", () => {
+    expect(aiReviewLine(p(item("NVDA", "short", true))).text).toBe("AI review: decided to take Nvidia out");
+  });
+
+  test("the reason and the hosts of the sources ride in the title, one line per stock", () => {
+    expect(aiReviewLine(p(item("NVDA", "exit", true), item("AAPL", "reduce", true, { sources: [] }))).title)
+      .toBe("Nvidia: Motivo de NVDA. (cnbc.com, reuters.com)\nApple: Motivo de AAPL.");
+  });
+
+  test("nothing to say, nothing shown: no aiReview, null, an empty list or a malformed item", () => {
+    expect(aiReviewLine(by("momentum_stocks"))).toBeNull();
+    expect(aiReviewLine({ ...by("momentum_stocks"), aiReview: null })).toBeNull();
+    expect(aiReviewLine({ ...by("momentum_stocks"), aiReview: { session: "x", items: [] } })).toBeNull();
+    expect(aiReviewLine({ ...by("momentum_stocks"), aiReview: { session: "x", items: [{ action: "exit" }, null] } })).toBeNull();
+    expect(aiReviewLine(null)).toBeNull();
   });
 });

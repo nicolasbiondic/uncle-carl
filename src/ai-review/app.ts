@@ -12,12 +12,13 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Exec } from "./analyst";
-import { parseCaseFile, parseDecision, type CaseFile, type Decision } from "./contract";
+import { reviewApplies } from "./apply";
+import { SLEEVE_IDS, parseCaseFile, parseDecision, type CaseFile, type Decision, type SleeveId } from "./contract";
 import { familyOf, parseQuota, PRIMARIES, SUBSTITUTES } from "./models";
 import { review } from "./review";
 import { checkSchedule, markSession, readState, MAX_ATTEMPTS } from "./schedule";
 import { serializeForModel } from "./casefile";
-import { opsFailure, opsNoDecision, opsShipped, ownerMessage } from "./texts";
+import { opsFailure, opsNoDecision, opsShipped, ownerMessage, type Applies } from "./texts";
 
 const words = (s: string): string[] => s.trim().split(/\s+/).filter(Boolean);
 
@@ -36,6 +37,11 @@ export interface Config {
   modelTimeoutSec: number;
   authFile: string;
   nowMs: () => number;
+  /** Which strategies the bot acts on, as THIS machine sees the switch (src/ai-review/apply.ts and this environment).
+   *  Only the fallback: a case file built on the bot's host says it itself (`applies`), and that wins, because the
+   *  bot's deployed code and its kill switch are what decide. Wording only (the message's tense, the decision's
+   *  `stage`); the bot never trusts it. */
+  apply: Applies;
 }
 
 export function loadConfig(env: Record<string, string | undefined>, root: string): Config {
@@ -59,6 +65,7 @@ export function loadConfig(env: Record<string, string | undefined>, root: string
     authFile: env.AI_REVIEW_AUTH_FILE ?? join(homedir(), ".local", "share", "opencode", "auth.json"),
     // A test clock moves with real elapsed time, so deadlines still work.
     nowMs: fixed === null ? () => Date.now() : () => fixed + (Date.now() - startReal),
+    apply: Object.fromEntries(SLEEVE_IDS.map(s => [s, reviewApplies(s, env)])) as Record<SleeveId, boolean>,
   };
 }
 
@@ -170,6 +177,10 @@ export function prepareRunDir(cfg: Config, runDir: string, cf: CaseFile): void {
   copyFileSync(join(cfg.root, "ops", "agents", "revision-ia.md"), join(runDir, ".opencode", "agents", "revision-ia.md"));
 }
 
+/** Does the bot act on each strategy's review? The bot's own host says so in the case file; without that, this
+ *  machine's view of the switch. */
+export const appliesOf = (cfg: Pick<Config, "apply">, cf: Pick<CaseFile, "applies">): Applies => cf.applies ?? cfg.apply;
+
 // ── one review ───────────────────────────────────────────────────────────
 interface Outcome { decision: Decision | null; notes: string[]; models: Decision["models"]; runDir: string }
 
@@ -181,7 +192,7 @@ async function reviewCaseFile(cfg: Config, cf: CaseFile, o: { runDir: string; de
   const res = await review({
     caseFile: cf, primaries: o.primaries, substitutes: SUBSTITUTES, quota,
     exec: opencodeExec(cfg, o.runDir, cf.session), now: cfg.nowMs, deadlineMs: o.deadlineMs, modelTimeoutSec: cfg.modelTimeoutSec, log: o.log,
-    decidedAtMs: cfg.nowMs(),
+    decidedAtMs: cfg.nowMs(), stage: SLEEVE_IDS.some(s => appliesOf(cfg, cf)[s]) ? "apply" : "inform",
   });
   writeFileSync(join(o.runDir, "record.json"), JSON.stringify({ models: res.models, runs: res.runs, notes: res.notes, verdicts: res.verdicts }, null, 2) + "\n");
   if (res.decision) writeFileSync(join(o.runDir, "decision.json"), JSON.stringify(res.decision, null, 2) + "\n");
@@ -214,7 +225,7 @@ export async function main(argv: string[], env: Record<string, string | undefine
     mkdirSync(runDir, { recursive: true });
     const out = await reviewCaseFile(cfg, parsed.value, { runDir, deadlineMs: null, primaries: models, log });
     console.log(JSON.stringify({ decision: out.decision, models: out.models, notes: out.notes, runDir }, null, 2));
-    if (out.decision) console.log(`\n--- owner message (not sent) ---\n${ownerMessage(out.decision)}`);
+    if (out.decision) console.log(`\n--- owner message (not sent) ---\n${ownerMessage(out.decision, appliesOf(cfg, parsed.value))}`);
     return out.decision ? 0 : 3;
   }
 
@@ -264,7 +275,7 @@ export async function main(argv: string[], env: Record<string, string | undefine
     return 0;
   }
   log(`decision ${out.decision.id} shipped: ${out.decision.overrides.length} override(s) of ${out.decision.reviewed}`);
-  const told = await sendTelegram(cfg, "owner", ownerMessage(out.decision), log);
+  const told = await sendTelegram(cfg, "owner", ownerMessage(out.decision, appliesOf(cfg, got.cf)), log);
   const warnings = got.cf.warnings ?? [];
   const notable = out.notes.length > 0 || warnings.length > 0 || out.models.some(m => !m.ok) || !told;
   if (notable) await ops(opsShipped(out.decision, out.notes.concat(told ? [] : ["el mensaje al dueño no salió"]), warnings));

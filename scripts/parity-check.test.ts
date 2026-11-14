@@ -994,6 +994,64 @@ describe("portfolio-engine exact decision replay", () => {
       expect(f.run(undefined, Date.parse("2026-11-09T15:00:00Z")).divergences).toEqual([]);
     } finally { f.close(); }
   });
+  // AI review, stage B (docs/reports/IA-revision-de-noticias-2026-11-14.md): the journal's weights are what the bot aimed at
+  // (the review's, when applied); the replay is the MODEL's, so an AI action is an explained live-only difference.
+  describe("AI review (stage B): an applied or hypothetical action is explained, never paged", () => {
+    function journalAi(f: ReturnType<typeof fixture>, applied: boolean, tweak: (review: any) => void = () => {}) {
+      const symbol = Object.keys(f.target.weights).find(k => f.target.weights[k] > 0)!;
+      const modelWeight = f.target.weights[symbol];
+      const review: any = { decisionId: "abc123def456", decisionSession: session, applied,
+        effects: [{ symbol, action: "exit", factor: 0, modelWeight, appliedWeight: 0 }], ...(applied ? { modelWeights: { [symbol]: modelWeight } } : {}) };
+      tweak(review);
+      const row = f.db.query("SELECT diagnostics_json FROM portfolio_decisions WHERE id = 3").get() as any;
+      f.db.query("UPDATE portfolio_decisions SET diagnostics_json = ?, weights_json = ? WHERE id = 3")
+        .run(JSON.stringify({ ...JSON.parse(row.diagnostics_json), aiReview: review }), JSON.stringify(applied ? { ...f.target.weights, [symbol]: 0 } : f.target.weights));
+      return { symbol, modelWeight };
+    }
+    test("applied: the replay is compared with the MODEL's weights → PARITY, the action is listed as an explained difference", () => {
+      const f = fixture();
+      try {
+        const { symbol, modelWeight } = journalAi(f, true);
+        const r = f.run();
+        expect(r.divergences).toEqual([]);
+        expect(r.portfolio![0]).toMatchObject({ classification: "PARITY", differences: [], maxNumericDelta: 0 });
+        expect(r.portfolio![0].aiReview).toEqual([{ decisionId: "abc123def456", symbol, action: "exit", modelWeight, appliedWeight: 0, applied: true }]);
+        const text = renderSummary([r]);
+        expect(text).toContain(`explained (AI review applied, live-only): ${session} ${symbol} exit`);
+        expect(text).toContain("✅ PARITY");
+      } finally { f.close(); }
+    });
+    test("informed only (switch off): the journal's weights ARE the model's → PARITY, listed as 'only informed'", () => {
+      const f = fixture();
+      try {
+        journalAi(f, false);
+        const r = f.run();
+        expect(r.divergences).toEqual([]);
+        expect(r.portfolio![0].classification).toBe("PARITY");
+        expect(r.portfolio![0].aiReview![0].applied).toBe(false);
+        expect(renderSummary([r])).toContain("AI review only informed (no order changed)");
+      } finally { f.close(); }
+    });
+    test("the explanation is checked, not trusted: a modelWeight the replay does not produce is a DIVERGENCE", () => {
+      const f = fixture();
+      try {
+        journalAi(f, true, review => { review.effects[0].modelWeight = 0.9; review.modelWeights = { [review.effects[0].symbol]: 0.9 }; });
+        const r = f.run();
+        expect(r.portfolio![0].classification).toBe("DIVERGENCE");
+        expect(r.divergences.map(d => d.type)).toContain("portfolio_decision");
+      } finally { f.close(); }
+    });
+    test("a lowered weight with NO record of the review is still a DIVERGENCE (the exemption is only the journaled decision)", () => {
+      const f = fixture();
+      try {
+        const symbol = Object.keys(f.target.weights).find(k => f.target.weights[k] > 0)!;
+        f.db.query("UPDATE portfolio_decisions SET weights_json = ? WHERE id = 3").run(JSON.stringify({ ...f.target.weights, [symbol]: 0 }));
+        expect(f.run().portfolio![0].classification).toBe("DIVERGENCE");
+        journalAi(f, true, review => { review.applied = "yes"; }); // a malformed record explains nothing
+        expect(f.run().portfolio![0].classification).toBe("DIVERGENCE");
+      } finally { f.close(); }
+    });
+  });
   test("an unknown version fails operationally, never silently compares the incumbent", () => {
     const f = fixture();
     try {
