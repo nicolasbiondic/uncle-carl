@@ -20,7 +20,15 @@ export const COST_BP_PER_SIDE = 10;
 /** Pre-registered reading threshold: cases (day-actions) needed before the verdict is read. */
 export const MIN_CASES = 20;
 
-export interface JournalPass { sleeve: string; session: string; status: string; equity: number; diagnostics: unknown }
+/** The first session the review acted on (owner's order of 2026-11-14; pre-registration, amendment). Its record starts here:
+ *  a fall of a held stock BEFORE this day is not something the review "did not see" (it did not exist), so neither the analysts'
+ *  history nor the weekly agent's evidence counts it. */
+export const AI_REVIEW_START = "2026-11-16";
+
+export interface JournalPass { sleeve: string; session: string; status: string; equity: number; diagnostics: unknown;
+  /** The symbols the pass's book held when it ran (src/ai-review/journalDb.ts fills it in). Only the bets read it: a bet day counts when the
+   *  NEXT pass's book holds the fund. Absent = not known, and the journal's word is taken. */
+  held?: readonly string[] }
 /** The session's daily open for a symbol, null when it is not in the data yet. */
 export type OpenLookup = (symbol: string, session: string) => number | null;
 
@@ -40,7 +48,12 @@ export interface DayEffect {
 
 export interface Episode {
   sleeve: SleeveId;
+  /** The stock. For a bet (`kind` "bet", stage C) it is the stock the bet is AGAINST; the fund is `fund`. */
   symbol: string;
+  /** Stage C: a bet against `symbol` with its inverse fund `fund`, reported next to the exit of the stock (which stays as it is).
+   *  Its day effects use the fund's weight (the model holds none: `modelWeight` 0) and the fund's own daily opens. Absent = an override. */
+  kind?: "bet";
+  fund?: string;
   applied: boolean;
   action: OverrideAction;
   days: DayEffect[];
@@ -70,8 +83,11 @@ export interface LedgerBlock {
   /** Day-actions (session, sleeve, symbol): the unit the pre-registration counts. */
   cases: number;
   pendingCases: number;
+  /** Of the OVERRIDE episodes only (a bet's gain is not an avoided loss). */
   savedUsd: number;
   missedUsd: number;
+  /** Stage C: what the bets made or lost, before costs (signed). Absent in a report written before stage C: read it as 0. */
+  betUsd?: number;
   costUsd: number;
   netUsd: number;
 }
@@ -88,7 +104,7 @@ export function nextSessionOf(session: string): string {
   throw new Error(`no NYSE session within 15 days after ${session}`);
 }
 
-interface PassView { sleeve: SleeveId; session: string; equity: number; review: ReturnType<typeof readJournaledReview> }
+interface PassView { sleeve: SleeveId; session: string; equity: number; review: ReturnType<typeof readJournaledReview>; held: ReadonlySet<string> | null }
 
 function effectIn(p: PassView, symbol: string, applied: boolean) {
   return p.review && p.review.applied === applied ? p.review.effects.find(e => e.symbol === symbol) : undefined;
@@ -100,7 +116,8 @@ export function buildLedger(passes: readonly JournalPass[], opens: OpenLookup, n
     if (p.sleeve !== "momentum_stocks" && p.sleeve !== "meanrev_stocks") continue;
     if (p.status !== "submitted" && p.status !== "decided") continue;
     const list = bySleeve.get(p.sleeve) ?? [];
-    const view: PassView = { sleeve: p.sleeve, session: p.session, equity: p.equity, review: readJournaledReview(p.diagnostics) };
+    const view: PassView = { sleeve: p.sleeve, session: p.session, equity: p.equity, review: readJournaledReview(p.diagnostics),
+      held: Array.isArray(p.held) ? new Set(p.held) : null };
     const at = list.findIndex(x => x.session === p.session);
     if (at >= 0) list[at] = view; else list.push(view);
     bySleeve.set(p.sleeve, list);
@@ -125,8 +142,60 @@ export function buildLedger(passes: readonly JournalPass[], opens: OpenLookup, n
         finish(null);
       }
     }
+    // Stage C: each fund the review bet with is its own episode, next to the exit of its stock. Only an APPLIED pass can carry a bet.
+    const funds = [...new Set(list.flatMap(p => (p.review?.applied ? (p.review.bets ?? []).map(b => b.symbol) : [])))].sort();
+    for (const fund of funds) {
+      let run: PassView[] = [];
+      const finish = (end: PassView | null) => {
+        if (run.length === 0) return;
+        out.applied.push(betEpisodeOf(sleeve, fund, run, end, opens, nextSession));
+        run = [];
+      };
+      for (let i = 0; i < list.length; i++) {
+        const p = list[i], next = list[i + 1];
+        // A bet day is a day the fund was really there: the NEXT pass's book holds it. The journal says what the pass AIMED at; a buy the
+        // broker rejected, the risk gate skipped or the planner found too small leaves no lot, and a day without a lot made and lost
+        // nothing. The newest pass has no next one yet: it counts (its price is pending anyway).
+        const there = !next || next.held === null || next.held.has(fund);
+        if (betIn(p, fund) && there) run.push(p);
+        else finish(p);
+      }
+      finish(null);
+    }
   }
   return { applied: blockOf(out.applied), hypothetical: blockOf(out.hypothetical) };
+}
+
+/** The bet on `fund` that is IN FORCE at this pass: applied, its weight above zero and not stopped (a stopped pass sold it). */
+function betIn(p: PassView, fund: string) {
+  return p.review?.applied === true ? p.review.bets?.find(b => b.symbol === fund && b.weight > 0 && !b.stopped) : undefined;
+}
+
+/** A bet's day effect = the fund's weight × the pass's equity × (the fund's open of the next session ÷ its open that session − 1); 10 bp per
+ *  side once when the bet starts and once when it ends (the pass that no longer holds it, a stop included). Pending while a bar is missing. */
+function betEpisodeOf(sleeve: SleeveId, fund: string, run: PassView[], end: PassView | null, opens: OpenLookup, nextSession: (s: string) => string): Episode {
+  const days: DayEffect[] = run.map(p => {
+    const b = betIn(p, fund)!;
+    const next = nextSession(p.session);
+    const open = opens(fund, p.session), nextOpen = opens(fund, next);
+    const known = open !== null && nextOpen !== null && open > 0 && nextOpen > 0;
+    const returnPct = known ? nextOpen! / open! - 1 : null;
+    return { session: p.session, nextSession: next, action: "short", modelWeight: 0, appliedWeight: b.weight, equity: p.equity, open, nextOpen, returnPct,
+      effectUsd: returnPct === null ? null : b.weight * p.equity * returnPct };
+  });
+  const measured = days.map(d => d.effectUsd).filter((x): x is number => x !== null);
+  const first = days[0], last = days[days.length - 1];
+  const rate = COST_BP_PER_SIDE / 10_000;
+  const startCostUsd = rate * first.appliedWeight * first.equity;
+  const endCostUsd = end ? rate * last.appliedWeight * end.equity : 0;
+  const effectUsd = sum(measured);
+  const costUsd = startCostUsd + endCostUsd;
+  const underlying = betIn(run[0], fund)!.underlying;
+  return {
+    sleeve, symbol: underlying, kind: "bet", fund, applied: true, action: "short", days, startSession: first.session, lastSession: last.session,
+    endSession: end?.session ?? null, endedBy: end ? "model" : null, effectUsd, savedUsd: 0, missedUsd: 0,
+    startCostUsd, endCostUsd, costUsd, pendingDays: days.length - measured.length, netUsd: effectUsd - costUsd,
+  };
 }
 
 function episodeOf(sleeve: SleeveId, symbol: string, applied: boolean, run: PassView[], end: PassView | null, endedBy: "model" | "switch" | null,
@@ -157,15 +226,16 @@ function episodeOf(sleeve: SleeveId, symbol: string, applied: boolean, run: Pass
   };
 }
 
-function blockOf(episodes: Episode[]): LedgerBlock {
+export function blockOf(episodes: Episode[]): LedgerBlock {
   const order = (a: Episode, b: Episode) => (a.startSession < b.startSession ? -1 : a.startSession > b.startSession ? 1
     : SLEEVE_IDS.indexOf(a.sleeve) - SLEEVE_IDS.indexOf(b.sleeve) || (a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0));
   episodes.sort(order);
+  const overrides = episodes.filter(e => e.kind !== "bet"), bets = episodes.filter(e => e.kind === "bet");
   return {
     episodes, decisions: episodes.length,
     sessions: new Set(episodes.flatMap(e => e.days.map(d => d.session))).size,
     cases: sum(episodes.map(e => e.days.length)), pendingCases: sum(episodes.map(e => e.pendingDays)),
-    savedUsd: sum(episodes.map(e => e.savedUsd)), missedUsd: sum(episodes.map(e => e.missedUsd)),
+    savedUsd: sum(overrides.map(e => e.savedUsd)), missedUsd: sum(overrides.map(e => e.missedUsd)), betUsd: sum(bets.map(e => e.effectUsd)),
     costUsd: sum(episodes.map(e => e.costUsd)), netUsd: sum(episodes.map(e => e.netUsd)),
   };
 }
@@ -183,26 +253,66 @@ export function signedUsd(n: number): string {
   const r = Math.round(n);
   return r > 0 ? `+${usd(n)}` : r < 0 ? `${minus}${usd(n)}` : "$0";
 }
-const plural = (n: number, one: string, many: string) => (n === 1 ? `${n} ${one}` : `${n} ${many}`);
+export const plural = (n: number, one: string, many: string) => (n === 1 ? `${n} ${one}` : `${n} ${many}`);
 
 const ACTION_WORDS: Record<"applied" | "hypothetical", Record<OverrideAction, string>> = {
   applied: { exit: "sacada", short: "sacada", reduce: "reducida a la mitad" },
   hypothetical: { exit: "se habría sacado", short: "se habría sacado", reduce: "se habría reducido a la mitad" },
 };
 
+/** What a result says, in the ledger's own words: "evitó $280 de pérdidas" (`short`: "evitó $280"), "dejó de ganar $40", pending, none. */
+export function resultWords(effectUsd: number, measuredDays: number, short = false): string {
+  return measuredDays === 0 ? "resultado pendiente"
+    : Math.round(effectUsd) > 0 ? `evitó ${usd(effectUsd)}${short ? "" : " de pérdidas"}`
+    : Math.round(effectUsd) < 0 ? `dejó de ganar ${usd(effectUsd)}` : "sin efecto en dólares";
+}
+
+/** A bet's result in the ledger's own words (a gain is not an avoided loss): "ganó $120", "perdió $80", pending, none. */
+export function betResultWords(effectUsd: number, measuredDays: number): string {
+  return measuredDays === 0 ? "resultado pendiente"
+    : Math.round(effectUsd) > 0 ? `ganó ${usd(effectUsd)}`
+    : Math.round(effectUsd) < 0 ? `perdió ${usd(effectUsd)}` : "sin efecto en dólares";
+}
+
 function episodeLine(e: Episode): string {
+  if (e.kind === "bet") {
+    const n = e.days.length;
+    const when = e.endSession === null
+      ? `desde el ${sessionLabel(e.startSession)} (sigue, ${plural(n, "día", "días")})`
+      : n === 1 ? `el ${sessionLabel(e.startSession)}` : `del ${sessionLabel(e.startSession)} al ${sessionLabel(e.lastSession)} (${n} días)`;
+    const measured = n - e.pendingDays;
+    const result = betResultWords(e.effectUsd, measured);
+    const parts = [`• ${companyLabel(e.symbol)}, ${SLEEVE_NAMES[e.sleeve]}: apostó contra ella ${when}`, e.pendingDays > 0 && measured > 0 ? `${result} (${plural(e.pendingDays, "día pendiente", "días pendientes")})` : result];
+    if (e.costUsd > 0) parts.push(`operar costó ${usdWords(e.costUsd)}`);
+    return parts.join(" · ");
+  }
   const word = ACTION_WORDS[e.applied ? "applied" : "hypothetical"][e.action];
   const n = e.days.length;
   const when = e.endSession === null
     ? `desde el ${sessionLabel(e.startSession)} (sigue, ${plural(n, "día", "días")})`
     : n === 1 ? `el ${sessionLabel(e.startSession)}` : `del ${sessionLabel(e.startSession)} al ${sessionLabel(e.lastSession)} (${n} días)`;
   const measured = e.days.length - e.pendingDays;
-  const result = measured === 0 ? "resultado pendiente"
-    : Math.round(e.effectUsd) > 0 ? `evitó ${usd(e.effectUsd)} de pérdidas`
-    : Math.round(e.effectUsd) < 0 ? `dejó de ganar ${usd(e.effectUsd)}` : "sin efecto en dólares";
+  const result = resultWords(e.effectUsd, measured);
   const parts = [`• ${companyLabel(e.symbol)}, ${SLEEVE_NAMES[e.sleeve]}: ${word} ${when}`, e.pendingDays > 0 && measured > 0 ? `${result} (${plural(e.pendingDays, "día pendiente", "días pendientes")})` : result];
   if (e.costUsd > 0) parts.push(`operar costó ${usdWords(e.costUsd)}`);
   return parts.join(" · ");
+}
+
+/** Net in whole dollars as it is printed: the sum of what is shown, so the line always adds up on screen (the JSON carries the exact figure). */
+export const netWhole = (b: Pick<LedgerBlock, "savedUsd" | "missedUsd" | "costUsd" | "betUsd">): number =>
+  Math.round(b.savedUsd) - Math.round(b.missedUsd) + Math.round(b.betUsd ?? 0) - Math.round(b.costUsd);
+
+/** "evitó $310 de pérdidas y dejó de ganar $95; operar costó $12. Neto: +$203." (or what is not known yet) after a lead; shared by the
+ *  ledger's summary and the owner's weekly message so the figures are worded one way. */
+export function summaryAfter(lead: string, b: LedgerBlock, applied: boolean): string {
+  if (b.cases === b.pendingCases) return `${lead}; todavía no hay precios para medir el efecto.`;
+  const avoided = applied ? "evitó" : "habría evitado", lost = applied ? "dejó de ganar" : "habría dejado de ganar";
+  // Stage C: what the bets made, in their own words, only when it is at least a dollar (applied ledger only: a hypothetical one has no bets).
+  const bet = Math.round(b.betUsd ?? 0) === 0 ? "" : `las apuestas ${Math.round(b.betUsd!) > 0 ? "ganaron" : "perdieron"} ${usd(b.betUsd!)}`;
+  const cost = b.costUsd > 0 ? `; operar ${applied ? "costó" : "habría costado"} ${usdWords(b.costUsd)}` : "";
+  const overrides = `${avoided} ${usd(b.savedUsd)} de pérdidas y ${lost} ${usd(b.missedUsd)}`;
+  const body = !bet ? overrides : Math.round(b.savedUsd) === 0 && Math.round(b.missedUsd) === 0 ? bet : `${overrides}; ${bet}`;
+  return `${lead}: ${body}${cost}. Neto: ${signedUsd(netWhole(b))}.`;
 }
 
 function summary(b: LedgerBlock, applied: boolean): string {
@@ -210,12 +320,7 @@ function summary(b: LedgerBlock, applied: boolean): string {
   const lead = applied
     ? `La revisión de IA lleva ${plural(b.decisions, "decisión aplicada", "decisiones aplicadas")} en ${plural(b.sessions, "día", "días")}`
     : `Habría aplicado ${plural(b.decisions, "decisión", "decisiones")} en ${plural(b.sessions, "día", "días")}`;
-  if (b.cases === b.pendingCases) return `${lead}; todavía no hay precios para medir el efecto.`;
-  const avoided = applied ? "evitó" : "habría evitado", lost = applied ? "dejó de ganar" : "habría dejado de ganar";
-  const cost = b.costUsd > 0 ? `; operar ${applied ? "costó" : "habría costado"} ${usdWords(b.costUsd)}` : "";
-  // The net is the sum of what is printed (whole dollars), so the line always adds up on screen; the JSON carries the exact figure.
-  const net = Math.round(b.savedUsd) - Math.round(b.missedUsd) - Math.round(b.costUsd);
-  return `${lead}: ${avoided} ${usd(b.savedUsd)} de pérdidas y ${lost} ${usd(b.missedUsd)}${cost}. Neto: ${signedUsd(net)}.`;
+  return summaryAfter(lead, b, applied);
 }
 
 export function renderLedger(l: Ledger): string {

@@ -14,7 +14,9 @@ import { describe, test, expect, beforeAll, beforeEach } from "bun:test";
 import { getDB, getSyncState, setSyncState } from "../db/database";
 import { readFileSync } from "node:fs";
 import { BrokerSync, sleeveOwnsSymbol, registerSleeveOwnedSymbols, _resetRegisteredSleeveSymbolsForTests } from "./BrokerSync";
-import { portfolioEngineOwnedSymbols } from "../portfolios/validate";
+import { portfolioEngineOwnedSymbols, reviewOwnedSymbols } from "../portfolios/validate";
+import { builtinPortfolio } from "../portfolios/builtin";
+import { INVERSE_SYMBOLS } from "../ai-review/inverse";
 import { currentModelVersion } from "../portfolio/modelVersions";
 import type { PortfolioDefinition } from "../portfolios/types";
 import type { BrokerSyncSource } from "./brokerSyncSource";
@@ -125,6 +127,43 @@ describe("sleeveOwnsSymbol (ownership boundary)", () => {
       registerSleeveOwnedSymbols("alpaca", owned.alpaca);
       expect(sleeveOwnsSymbol("alpaca_paper", "SH")).toBe(true);
       expect(sleeveOwnsSymbol("binance_testnet", "SH")).toBe(false);
+    });
+
+    // AI review stage C: the ten inverse funds its bets buy are in no universe; the live stock sleeves own them through reviewOwnedSymbols
+    // (src/index.ts registers it with the rest). A fund filled at the broker but not yet in a row must never become an alpaca_main row.
+    test("the live stock sleeves own the ten inverse funds (an observer / disabled / crypto definition owns none); registered, an unrowed fund is NOT adopted under alpaca_main — before registration it WOULD be", async () => {
+      const funds = INVERSE_SYMBOLS;
+      expect(funds).toHaveLength(10);
+      expect(reviewOwnedSymbols([liveDef()]).alpaca).toEqual([...funds].sort());
+      expect(reviewOwnedSymbols([builtinPortfolio("pe_meanrev_stocks")]).alpaca).toEqual([...funds].sort());
+      expect(reviewOwnedSymbols([liveDef({ runMode: "observer" })]).alpaca).toEqual([]);
+      expect(reviewOwnedSymbols([liveDef({}, { enabled: false })]).alpaca).toEqual([]);
+      expect(reviewOwnedSymbols([liveDef({ venue: "binance_usdm", sleeve: "momentum_crypto" })]).alpaca).toEqual([]);
+      expect(reviewOwnedSymbols([]).alpaca).toEqual([]);
+      // the registration is NOT part of the universe-derived set: a bet's fund is owned whether or not a switch is on
+      expect(portfolioEngineOwnedSymbols([liveDef()]).alpaca).not.toContain("NVDD");
+
+      const unregistered = fakeSource({ positions: [makePos("NVDD"), makePos("METD")] });
+      await new BrokerSync([unregistered], 30_000).syncAll();
+      expect((getDB().prepare(`SELECT symbol, account_id FROM trades WHERE status = 'open' ORDER BY symbol`).all() as any[]))
+        .toEqual([{ symbol: "METD", account_id: "alpaca_main" }, { symbol: "NVDD", account_id: "alpaca_main" }]);   // the hole this closes
+      getDB().exec("DELETE FROM trades");
+
+      for (const f of funds) expect(sleeveOwnsSymbol("alpaca_paper", f)).toBe(false);
+      registerSleeveOwnedSymbols("alpaca", reviewOwnedSymbols([liveDef()]).alpaca);
+      for (const f of funds) { expect(sleeveOwnsSymbol("alpaca_paper", f)).toBe(true); expect(sleeveOwnsSymbol("binance_testnet", f)).toBe(false); }
+      const source = fakeSource({ positions: [...funds.map(f => makePos(f)), makePos("TSLA")] });
+      await new BrokerSync([source], 30_000).syncAll();
+      expect(getDB().prepare(`SELECT symbol, account_id FROM trades WHERE status = 'open'`).all()).toEqual([{ symbol: "TSLA", account_id: "alpaca_main" }]);
+    });
+
+    test("src/index.ts registers them next to the portfolio engines' symbols, before BrokerSync starts", () => {
+      const src = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
+      const registers = src.indexOf("reviewOwnedSymbols(ownedDefs)");
+      const registered = src.indexOf("registerSleeveOwnedSymbols(\"alpaca\", owned.alpaca)");
+      expect(registers).toBeGreaterThan(0);
+      expect(registers).toBeLessThan(registered);
+      expect(registered).toBeLessThan(src.indexOf("new BrokerSync("));
     });
 
     test("an unrowed SH position on the broker is NOT adopted under alpaca_main once registered", async () => {

@@ -12,7 +12,7 @@ import type { RiskState } from "../strategies/momentum/RiskGuard";
 import type { PersistedOrder } from "../portfolio-engine/live/persistence";
 import { RISK_PROFILES, type RiskProfileId } from "../config/riskProfiles";
 import { notionalUsd } from "../portfolio/notional";
-import { DEFAULT_INBOX_DIR, reviewApplies, reviewForPass } from "../ai-review/apply";
+import { DEFAULT_INBOX_DIR, reviewApplies, reviewBetsOn, reviewForPass } from "../ai-review/apply";
 import { SLEEVE_IDS, type OverrideAction, type SleeveId } from "../ai-review/contract";
 import { builtinPortfolio, STOCK_SLEEVE_BUILTIN_DEFINITION } from "../portfolios/builtin";
 
@@ -55,7 +55,8 @@ export interface BotNowDecision {
  *  of the same file). `applied` = the bot's switch for this strategy is on, so the line reads "took out", not "would take out". */
 export interface BotNowAiReview {
   session: string;
-  items: Array<{ symbol: string; action: OverrideAction; reason: string; sources: string[]; applied: boolean }>;
+  /** `bet` (stage C): the short is also a BET (the stock's inverse fund is bought) — true only with the bets switch on and inside the two-bet cap. */
+  items: Array<{ symbol: string; action: OverrideAction; reason: string; sources: string[]; applied: boolean; bet: boolean }>;
 }
 export interface BotNowPortfolio {
   id: string; label: string; broker: "alpaca" | "binance";
@@ -79,7 +80,7 @@ export interface BotNowDeps {
   now?: number;
   readState?: (path: string) => any;
   /** AI review inbox (default data/ai-review/inbox) and the switch (default: the bot's own, apply.ts). */
-  aiReview?: { dir?: string; applies?: (sleeve: SleeveId) => boolean };
+  aiReview?: { dir?: string; applies?: (sleeve: SleeveId) => boolean; /** The bets switch (default: AI_REVIEW_BETS with its kill switches, apply.ts). */ betsOn?: () => boolean };
 }
 const DAY = 86_400_000;
 /** The UI folds each pass into one line, and one pass can carry dozens of
@@ -188,10 +189,15 @@ function aiReviewOf(id: string, runtime: BotNowRuntime | undefined, now: number,
     const own = runtime?.strategy && "universe" in runtime.strategy ? runtime.strategy.universe
       : (builtinPortfolio(STOCK_SLEEVE_BUILTIN_DEFINITION[sleeve]).params as { strategy?: { universe?: string[] } }).strategy?.universe;
     if (!Array.isArray(own)) return null;
-    const found = reviewForPass({ dir: o?.dir ?? DEFAULT_INBOX_DIR, sleeve, session: getETDateKey(now), universe: own });
+    // Stage C: which shorts are BETS. The board says "would bet against" for a strategy that only informs too, so the bets are read as if
+    // every strategy applied; `applied` (the strategy's own switch) then decides the tense, exactly as it does for an exit.
+    const betsOn = (o?.betsOn ?? (() => reviewBetsOn()))() === true;
+    const everyone = Object.fromEntries(SLEEVE_IDS.map(s => [s, true])) as Record<SleeveId, boolean>;
+    const found = reviewForPass({ dir: o?.dir ?? DEFAULT_INBOX_DIR, sleeve, session: getETDateKey(now), universe: own, bets: { applies: everyone, on: betsOn } });
     if (!found || found.overrides.length === 0) return null;
     const applied = (o?.applies ?? ((s: SleeveId) => reviewApplies(s)))(sleeve) === true;
-    return { session: found.decisionSession, items: found.overrides.map(x => ({ symbol: x.symbol, action: x.action, reason: x.reason, sources: x.sources, applied })) };
+    const bets = new Set((found.bets ?? []).map(b => b.underlying));
+    return { session: found.decisionSession, items: found.overrides.map(x => ({ symbol: x.symbol, action: x.action, reason: x.reason, sources: x.sources, applied, bet: x.action === "short" && bets.has(x.symbol) })) };
   } catch { return null; }
 }
 

@@ -310,19 +310,25 @@ export function decisionSentence(p, o = {}) {
  *  de IA: decidió sacar Nvidia" / "decidió reducir Nvidia a la mitad"): the DECISION, not "took out", because `applied` is
  *  the switch and the line is on screen from 08:20, before the 09:35 pass sells anything, and stays while the decision
  *  holds; "decided" is true the whole time. Only informing: "would take Nvidia out" (ES "sacaría Nvidia"). Several names
- *  are joined by commas; a strategy with both kinds says both. A short is taken out too (the bot has no shorts yet). The
- *  title carries each reason and its source hosts. Pure: { text, title } or null. */
+ *  are joined by commas; a strategy with both kinds says both. A short is taken out too, unless it is a BET (stage C: the item
+ *  carries `bet: true`, the bot also buys the stock's inverse fund): "decided to bet against Nvidia" (ES "decidió apostar contra
+ *  Nvidia"), only informing "would bet against Nvidia" (ES "apostaría contra Nvidia"). The fund itself shows in the bars like any
+ *  position. The title carries each reason and its source hosts. Pure: { text, title } or null. */
 export function aiReviewLine(p) {
   const items = Array.isArray(p?.aiReview?.items) ? p.aiReview.items.filter((i) => i && typeof i.symbol === "string") : [];
   if (!items.length) return null;
   const name = (s) => symbolName(s, isEs() ? "es" : "en") || s;
+  const kindOf = (i) => (i.action === "short" && i.bet === true ? "bet" : i.action === "reduce" ? "half" : "out");
   const clauses = [];
-  for (const applied of [true, false]) for (const half of [false, true]) {
-    const names = items.filter((i) => (i.applied === true) === applied && (i.action === "reduce") === half).map((i) => name(i.symbol)).join(", ");
+  // The bet first: it is the one that puts money in, and a long line is cut at its end.
+  for (const applied of [true, false]) for (const kind of ["bet", "out", "half"]) {
+    const names = items.filter((i) => (i.applied === true) === applied && kindOf(i) === kind).map((i) => name(i.symbol)).join(", ");
     if (!names) continue;
     clauses.push(applied
-      ? (half ? t(`decided to halve ${names}`, `decidió reducir ${names} a la mitad`) : t(`decided to take ${names} out`, `decidió sacar ${names}`))
-      : (half ? t(`would halve ${names}`, `reduciría ${names} a la mitad`) : t(`would take ${names} out`, `sacaría ${names}`)));
+      ? (kind === "bet" ? t(`decided to bet against ${names}`, `decidió apostar contra ${names}`)
+        : kind === "half" ? t(`decided to halve ${names}`, `decidió reducir ${names} a la mitad`) : t(`decided to take ${names} out`, `decidió sacar ${names}`))
+      : (kind === "bet" ? t(`would bet against ${names}`, `apostaría contra ${names}`)
+        : kind === "half" ? t(`would halve ${names}`, `reduciría ${names} a la mitad`) : t(`would take ${names} out`, `sacaría ${names}`)));
   }
   const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return String(u); } };
   const title = items.map((i) => {

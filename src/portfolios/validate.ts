@@ -18,6 +18,8 @@
  *    in the platform ever recommends or automates it (the governor only
  *    ever emits RECOMMEND_REDESIGN).
  */
+import { SLEEVE_IDS } from "../ai-review/contract";
+import { INVERSE_SYMBOLS } from "../ai-review/inverse";
 import { DEFAULT_MEANREV_CONFIG } from "../strategies/meanrev/MeanRevEngine";
 import { breakoutSymbols, validateBreakoutShort } from "../strategies/momentum/MomentumEngine";
 import { EQUITY_SEMANTICS, type EquitySemantics } from "../strategies/momentum/RiskGuard";
@@ -155,6 +157,19 @@ export function portfolioEngineOwnedSymbols(defs: readonly PortfolioDefinition[]
     for (const s of portfolioUniverse("portfolio", p)) out[venue].add(s);
   }
   return { alpaca: [...out.alpaca].sort(), binance: [...out.binance].sort() };
+}
+
+/** The inverse funds the AI review's bets buy (stage C, src/ai-review/inverse.ts): owned by the LIVE stock sleeves wherever a live stock
+ *  sleeve exists, whether or not the bets switch is on (a fund still held when the switch is turned off must stay theirs). They sit in no
+ *  universe, so portfolioEngineOwnedSymbols cannot see them: without this a fund position in the window between the broker fill and the row
+ *  would be adopted under alpaca_main as a competing, unmanaged row (B-4 was exactly that bug for SH). */
+export function reviewOwnedSymbols(defs: readonly PortfolioDefinition[]): { alpaca: string[] } {
+  const live = defs.some(d => {
+    if (d.template !== "portfolio" || !d.enabled) return false;
+    const p = d.params as PortfolioEngineParams;
+    return p?.runMode === "live" && p.venue === "alpaca" && (SLEEVE_IDS as readonly string[]).includes(String(p.sleeve));
+  });
+  return { alpaca: live ? [...INVERSE_SYMBOLS].sort() : [] };
 }
 
 export function validateMomentumParams(

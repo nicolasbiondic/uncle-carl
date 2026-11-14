@@ -451,13 +451,38 @@ describe("Binance venue (momentum_crypto_usdc)", () => {
   });
 });
 
-describe("AI review wiring (stage B): only the two stock sleeves, only live, switch off as delivered", () => {
+describe("AI review wiring (stage B): only the two stock sleeves, only live; the switch is ON (owner, 2026-11-14)", () => {
   const hookOf = (e: unknown) => (e as { opts: { aiReview?: { applies(): boolean } } }).opts.aiReview;
-  test.each(["momentum_stocks", "meanrev_stocks"] as const)("%s live gets the hook, and its switch reads OFF", sleeve => {
+  test.each(["momentum_stocks", "meanrev_stocks"] as const)("%s live gets the hook; its switch reads ON, and OFF under the environment's kill switch", sleeve => {
     const built = buildPortfolioEngines(resolve([peDefinition(sleeve, { runMode: "live" })]), sources(fakeAlpaca()).src);
     const hook = hookOf(built.live.get(sleeve));
     expect(hook).toBeDefined();
-    expect(hook!.applies()).toBe(false);
+    const before = process.env.AI_REVIEW_APPLY;
+    try {
+      delete process.env.AI_REVIEW_APPLY;
+      expect(hook!.applies()).toBe(true);
+      process.env.AI_REVIEW_APPLY = "off"; // read at each pass: no rebuild needed, a restart is only how the env changes
+      expect(hook!.applies()).toBe(false);
+    } finally {
+      if (before === undefined) delete process.env.AI_REVIEW_APPLY; else process.env.AI_REVIEW_APPLY = before;
+    }
+  });
+  // Stage C: the same hook says whether the sleeve BETS; AI_REVIEW_BETS is ON since 2026-11-14 (the director's commit, after his review).
+  test.each(["momentum_stocks", "meanrev_stocks"] as const)("%s: the bets switch reads ON, and OFF under either kill switch of the environment", sleeve => {
+    const built = buildPortfolioEngines(resolve([peDefinition(sleeve, { runMode: "live" })]), sources(fakeAlpaca()).src);
+    const hook = (built.live.get(sleeve) as unknown as { opts: { aiReview?: { betsOn?(): boolean } } }).opts.aiReview!;
+    const saved = [process.env.AI_REVIEW_APPLY, process.env.AI_REVIEW_BETS];
+    try {
+      delete process.env.AI_REVIEW_APPLY; delete process.env.AI_REVIEW_BETS;
+      expect(hook.betsOn!()).toBe(true);
+      process.env.AI_REVIEW_BETS = "off";
+      expect(hook.betsOn!()).toBe(false);
+      delete process.env.AI_REVIEW_BETS; process.env.AI_REVIEW_APPLY = "off";   // the review's own kill switch turns the bets off too
+      expect(hook.betsOn!()).toBe(false);
+    } finally {
+      if (saved[0] === undefined) delete process.env.AI_REVIEW_APPLY; else process.env.AI_REVIEW_APPLY = saved[0];
+      if (saved[1] === undefined) delete process.env.AI_REVIEW_BETS; else process.env.AI_REVIEW_BETS = saved[1];
+    }
   });
   test.each(["momentum_stocks", "meanrev_stocks"] as const)("%s as an observer gets no hook", sleeve => {
     const built = buildPortfolioEngines(resolve([peDefinition(sleeve, { runMode: "observer" })]), sources(fakeAlpaca()).src);

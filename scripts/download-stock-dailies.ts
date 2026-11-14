@@ -29,6 +29,7 @@ import {
 } from "../src/data/HistoricalStore";
 import { WIDE_UNIVERSE, MOMENTUM_SYMBOLS } from "../src/config/wideUniverse";
 import { MEANREV_UNIVERSE } from "../src/strategies/meanrev/MeanRevEngine";
+import { INVERSE_SYMBOLS } from "../src/ai-review/inverse";
 import { prepareMemberSeries } from "./download-sp500-members";
 import { readFileSync } from "node:fs";
 import type { Database } from "bun:sqlite";
@@ -56,7 +57,10 @@ export function stockRefreshUniverse(db: Database, date: string): string[] {
   // RW8: SH is the live risk-off hedge, separate from the momentum core universe.
   // RW11: the core's 2x ETFs (SSO/QLD/USD/UGL) arrive through MOMENTUM_SYMBOLS; SMH left that core but
   // stays on the research tape (every live/control manifest keeps it in data.universe; SPY/QQQ/GLD are D1 ETFs).
-  return [...new Set([...WIDE_UNIVERSE, ...MOMENTUM_SYMBOLS, ...RW_D1_ETFS, "SH", "SMH", ...currentSP500Members(db, date)])];
+  // AI review stage C: the ten inverse funds its bets buy. Bars for the EFFECT LEDGER only (src/ai-review/effects.ts reads their daily
+  // opens); nothing in the live pass depends on them (the price is the venue's) and a fund that fails validation is a warning, not a
+  // failed refresh (they are not in `strict` below).
+  return [...new Set([...WIDE_UNIVERSE, ...MOMENTUM_SYMBOLS, ...RW_D1_ETFS, "SH", "SMH", ...INVERSE_SYMBOLS, ...currentSP500Members(db, date)])];
 }
 
 export async function refreshStockDailies(opts: {
@@ -89,7 +93,10 @@ export async function refreshStockDailies(opts: {
   const batches: string[][] = [];
   // Keep PIT and non-PIT requests separate: the older membership identity
   // date must not remap an unrelated symbol from the legacy wide universe.
-  for (const group of [uniq.filter(s => !members.has(s)), uniq.filter(s => members.has(s))]) {
+  // The inverse funds (stage C of the AI review) go LAST, in a batch of their own: a failure of that request (a fund the data API does not
+  // know) fails only them — non-required symbols — and never the batches the live pass depends on.
+  const funds = new Set<string>(INVERSE_SYMBOLS);
+  for (const group of [uniq.filter(s => !members.has(s) && !funds.has(s)), uniq.filter(s => members.has(s) && !funds.has(s)), uniq.filter(s => funds.has(s))]) {
     for (let i = 0; i < group.length; i += 50) batches.push(group.slice(i, i + 50));
   }
 

@@ -256,12 +256,20 @@ describe("size and shape", () => {
     const cf = caseFile();
     expect(fitSize(structuredClone(cf))).toEqual(cf);
   });
-  test("the file the model reads is the same JSON, with no line longer than a reader's limit", () => {
+  test("the file the model reads is the same JSON (minus `applies`, which is the runner's wording, not the analyst's business), with no line longer than a reader's limit", () => {
     const cf = fat();
     const text = serializeForModel(cf);
-    expect(JSON.parse(text)).toEqual(cf);
+    const { applies, ...forModel } = cf;
+    expect(applies).toEqual({ momentum_stocks: true, meanrev_stocks: true });
+    expect(JSON.parse(text)).toEqual(forModel);
+    expect(text).not.toContain('"applies"');
     expect(Math.max(...text.split("\n").map(l => l.length))).toBeLessThan(1000);
     expect(parseCaseFile(JSON.parse(serializeForModel({ ...caseFile(), warnings: ["w"] }))).ok).toBe(true);
     expect(sym("X").news).toHaveLength(1);
+  });
+  test("stage C: `betsOn` is wording too and never reaches the analysts", () => {
+    const text = serializeForModel({ ...caseFile(), betsOn: true });
+    expect(text).not.toContain("betsOn");
+    expect(JSON.parse(text)).toEqual(JSON.parse(serializeForModel(caseFile())));
   });
 });

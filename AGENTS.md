@@ -152,11 +152,23 @@ runs the bot. Enforced: `src/ai-review/quorum.test.ts`,
 `src/ai-review/casefile.test.ts`.
 Optionally the live stock engine can act on that decision (lower a held weight to
 half or zero, never raise one, only the sleeve's own symbols, a few names at most)
-behind a code switch that ships OFF, with an environment kill switch
-(`AI_REVIEW_APPLY=off`); any missing or invalid decision leaves the pass exactly as
-it was. `scripts/ai-review-report.ts` reports its effect from the journal.
+behind a code switch (`AI_REVIEW_APPLY` in `src/ai-review/apply.ts`, ON for the two
+stock sleeves; with no decision file in the inbox there is nothing to apply, so a
+fork that does not run the review trades exactly as before), with an environment
+kill switch (`AI_REVIEW_APPLY=off`); any missing or invalid decision leaves the pass
+exactly as it was. `scripts/ai-review-report.ts` reports its effect from the journal.
 Enforced: `src/portfolio-engine/live/PortfolioEngine.aiReview.test.ts`,
 `src/ai-review/apply.test.ts`, `src/ai-review/effects.test.ts`.
+A further, separate code switch (`AI_REVIEW_BETS`, on; `AI_REVIEW_BETS=off` in the environment turns it
+off) lets a `short` also buy the stock's 1x inverse fund (at most $2,500, two bets at most, an 8 % stop
+checked once a day), through the same long-only buy path; with no decision file there is nothing to bet on;
+enforced: `src/ai-review/bets.test.ts`,
+`src/portfolio-engine/live/PortfolioEngine.bets.test.ts`.
+The case file also carries the review's own track record (`history`: the applied
+decisions of the last 20 sessions with their effect, and the strong falls it missed,
+from the same ledger code), and `src/ai-review/weekly.ts` words a deterministic weekly
+reading of that ledger; enforced: `src/ai-review/history.test.ts`,
+`src/ai-review/weekly.test.ts`.
 
 **Shared broker wallet.** Multiple stock sleeves can share one Alpaca
 wallet; closing a position liquidates the AGGREGATE broker position while

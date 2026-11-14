@@ -139,8 +139,11 @@ function syntheticFixtures(dir: string) {
       { symbol: "NVDA", action: "exit", applied: true, reason: "El directorio prepara la salida del director ejecutivo tras el escándalo.", sources: ["https://www.cnbc.com/a", "https://www.reuters.com/b"] },
       { symbol: "USD", action: "exit", applied: true, reason: "Restricciones de exportación a China.", sources: ["https://www.ft.com/c"] },
       { symbol: "AAPL", action: "reduce", applied: true, reason: "Resultados débiles.", sources: ["https://www.wsj.com/d"] },
+      // Stage C: a bet against a stock (the widest sentence the line can carry: all three kinds in one line).
+      { symbol: "MSFT", action: "short", applied: true, bet: true, reason: "Investigación antimonopolio.", sources: ["https://www.cnbc.com/f"] },
     ] } } : a.id === "meanrev_stocks" ? { aiReview: { session: "2026-10-23", items: [
       { symbol: "JPM", action: "exit", applied: false, reason: "Investigación regulatoria.", sources: ["https://www.reuters.com/e"] },
+      { symbol: "AVGO", action: "short", applied: false, bet: true, reason: "Recorte de pedidos.", sources: ["https://www.reuters.com/g"] },
     ] } } : {}),
   })), events: [
     // The board's "last action" line: a pass at the 5-day limit with its re-buys, a plain rebalance, a trim.

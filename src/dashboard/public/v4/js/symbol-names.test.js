@@ -9,6 +9,7 @@ import { MEANREV_UNIVERSE } from "../../../../strategies/meanrev/MeanRevEngine";
 import { builtinPortfolios } from "../../../../portfolios/builtin";
 import { USDC_SYMBOL_MAP } from "../../../../executor/binance/quoteAsset";
 import { TREASURY_SYMBOLS } from "../../../../treasury/treasurySymbols";
+import { INVERSE_FUNDS, INVERSE_SYMBOLS } from "../../../../ai-review/inverse";
 
 /** Every symbol string reachable from a definition's params: universes, the
  *  breakout-short list, the regime overlay's signal and hedge symbols. */
@@ -32,6 +33,7 @@ const live = () => {
     "crypto USDT universe": MOMENTUM_CRYPTO_UNIVERSE,
     "crypto USDC universe": Object.keys(USDC_SYMBOL_MAP),
     "treasury symbols": [...TREASURY_SYMBOLS],
+    "inverse funds (AI review bets)": [...INVERSE_SYMBOLS],
     "built-in definitions": [...definitionSymbols(builtinPortfolios().map((d) => d.params))],
   };
   return Object.entries(sets).flatMap(([from, symbols]) => symbols.map((symbol) => ({ from, symbol })));
@@ -76,6 +78,20 @@ describe("symbolName wording", () => {
     expect(symbolName("SH", "es")).toBe("Contra el S&P 500");
     expect(symbolName("IWM", "es")).toBe("Empresas pequeñas de EE. UU.");
     expect(symbolName("AAPL")).toBe("Apple");
+  });
+
+  // AI review stage C: the owner sees the fund as "against" the stock it tracks, never as a bare code.
+  test("the ten inverse funds read as 'Against <stock>' / 'Contra <stock>', the stock named as everywhere else", () => {
+    expect(symbolName("NVDD", "en")).toBe("Against Nvidia");
+    expect(symbolName("NVDD", "es")).toBe("Contra Nvidia");
+    expect(symbolName("METD", "es")).toBe("Contra Meta (Facebook)");
+    expect(symbolName("AVS", "en")).toBe("Against Broadcom");
+    expect(INVERSE_FUNDS).toHaveLength(10);
+    for (const f of INVERSE_FUNDS) {
+      for (const [lang, word] of [["en", "Against"], ["es", "Contra"]]) {
+        expect(symbolName(f.symbol, lang)).toBe(`${word} ${symbolName(f.underlying, lang)}`);
+      }
+    }
   });
 
   test("crypto reads by its base, whatever the quote asset", () => {

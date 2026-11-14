@@ -45,16 +45,41 @@ export interface CaseSymbol {
   news: CaseNews[];
 }
 export interface CaseSleeve { id: SleeveId; name: string; valueUsd: number | null; symbols: CaseSymbol[] }
+
+/** One applied decision of the review's own record (src/ai-review/history.ts). `to` null = still in force; `effectUsd` null = no price yet. */
+export interface HistoryEpisode { sleeve: SleeveId; symbol: string; /** `bet` (stage C): money put on the stock's fall with its inverse fund, next to the `short`'s exit of the stock. */ action: OverrideAction | "bet"; from: string; to: string | null; sessions: number; effectUsd: number | null }
+/** A stock the strategy held that fell 5 % or more from one session's open to the next while the review had no action on it. */
+export interface HistoryMiss { session: string; sleeve: SleeveId; symbol: string; dropPct: number }
+/** The review's track record over its last 20 NYSE sessions, in whole dollars. savedUsd = what the decisions saved (negative: they
+ *  gave up more than they avoided), costUsd = the 10 bp per side, netUsd = savedUsd − costUsd. */
+export interface CaseHistory {
+  since: string;
+  sessions: number;
+  episodes: HistoryEpisode[];
+  savedUsd: number;
+  costUsd: number;
+  netUsd: number;
+  misses: HistoryMiss[];
+}
+export const HISTORY_MAX_EPISODES = 15;
+export const HISTORY_MAX_MISSES = 10;
+
 export interface CaseFile {
   session: string;
   builtAt: string;
   sleeves: CaseSleeve[];
+  /** The review's own track record (absent while there is nothing to show). Sent to the models; they calibrate with it. */
+  history?: CaseHistory;
   /** Things the builder could not read (pre-market, part of the news); the runner reports them to OPS. */
   warnings?: string[];
   /** Whether the BOT acts on the review of each strategy, as the bot's own host sees it (its deployed switch
    *  and its environment's kill switch; scripts/ai-review-casefile.ts fills it in). Wording only: the morning
    *  message's tense follows it. Not sent to the models. Absent = the runner's own view of the switch. */
   applies?: Record<SleeveId, boolean>;
+  /** Stage C: whether the bot's host BETS on a `short` (buys the stock's inverse fund) as well as taking the stock out: its AI_REVIEW_BETS
+   *  switch and its environment's kill switches. Wording only, like `applies`: the message says "Hoy apuesta contra …" only when it is true,
+   *  so it can never promise a bet the bot will not place. Not sent to the models. Absent = the runner's own view of the switch. */
+  betsOn?: boolean;
 }
 
 export interface Verdict { action: Action; confidence: number; reason: string; sources: string[] }
@@ -164,6 +189,11 @@ export function parseCaseFile(input: unknown): Parsed<CaseFile> {
     sleeves.push({ id: s.id as SleeveId, name: s.name, valueUsd: s.valueUsd as number | null, symbols });
   }
   const out: CaseFile = { session: input.session, builtAt: input.builtAt, sleeves };
+  if (input.history !== undefined) {
+    const h = parseHistory(input.history);
+    if (!h.ok) return bad(h.error);
+    out.history = h.value;
+  }
   if (input.warnings !== undefined) {
     if (!Array.isArray(input.warnings) || input.warnings.length > 50 || !input.warnings.every(isStr)) return bad("case file: warnings must be a list of strings");
     out.warnings = input.warnings as string[];
@@ -173,7 +203,49 @@ export function parseCaseFile(input: unknown): Parsed<CaseFile> {
     if (!a || typeof a !== "object" || Array.isArray(a) || !SLEEVE_IDS.every(id => typeof a[id] === "boolean")) return bad("case file: applies must say true or false for each strategy");
     out.applies = Object.fromEntries(SLEEVE_IDS.map(id => [id, a[id] === true])) as Record<SleeveId, boolean>;
   }
+  if (input.betsOn !== undefined) {
+    if (typeof input.betsOn !== "boolean") return bad("case file: betsOn must be true or false");
+    out.betsOn = input.betsOn;
+  }
   return good(out);
+}
+
+const isInt = (x: unknown): x is number => typeof x === "number" && Number.isInteger(x);
+
+/** Strict: whole dollars, real dates, at most 15 episodes and 10 misses; unknown keys are dropped, anything else rejects. */
+export function parseHistory(input: unknown): Parsed<CaseHistory> {
+  const at = "case file history";
+  if (!isRecord(input)) return bad(`${at} is not an object`);
+  if (!isDateKey(input.since)) return bad(`${at}: since must be YYYY-MM-DD`);
+  if (!isInt(input.sessions) || input.sessions < 1 || input.sessions > 60) return bad(`${at}: sessions must be a whole number from 1 to 60`);
+  for (const k of ["savedUsd", "costUsd", "netUsd"] as const) if (!isInt(input[k])) return bad(`${at}: ${k} must be whole dollars`);
+  if ((input.costUsd as number) < 0) return bad(`${at}: costUsd cannot be negative`);
+  if (!Array.isArray(input.episodes) || input.episodes.length > HISTORY_MAX_EPISODES) return bad(`${at}: episodes must be a list (max ${HISTORY_MAX_EPISODES})`);
+  const episodes: HistoryEpisode[] = [];
+  for (const [i, e] of input.episodes.entries()) {
+    const p = `${at}.episodes[${i}]`;
+    if (!isRecord(e)) return bad(`${p} is not an object`);
+    if (!(SLEEVE_IDS as readonly string[]).includes(e.sleeve as string)) return bad(`${p}.sleeve is not a stock sleeve`);
+    if (!isStr(e.symbol) || !SYMBOL_RE.test(e.symbol)) return bad(`${p}.symbol is not a ticker`);
+    if (e.action !== "bet" && !(OVERRIDE_ACTIONS as readonly string[]).includes(e.action as string)) return bad(`${p}.action must be reduce, exit, short or bet`);
+    if (!isDateKey(e.from)) return bad(`${p}.from must be YYYY-MM-DD`);
+    if (!(e.to === null || (isDateKey(e.to) && e.to >= e.from))) return bad(`${p}.to must be a date not before from, or null`);
+    if (!isInt(e.sessions) || e.sessions < 1 || e.sessions > 60) return bad(`${p}.sessions must be a whole number from 1 to 60`);
+    if (!(e.effectUsd === null || isInt(e.effectUsd))) return bad(`${p}.effectUsd must be whole dollars or null`);
+    episodes.push({ sleeve: e.sleeve as SleeveId, symbol: e.symbol, action: e.action as OverrideAction | "bet", from: e.from, to: e.to as string | null, sessions: e.sessions, effectUsd: e.effectUsd as number | null });
+  }
+  if (!Array.isArray(input.misses) || input.misses.length > HISTORY_MAX_MISSES) return bad(`${at}: misses must be a list (max ${HISTORY_MAX_MISSES})`);
+  const misses: HistoryMiss[] = [];
+  for (const [i, m] of input.misses.entries()) {
+    const p = `${at}.misses[${i}]`;
+    if (!isRecord(m)) return bad(`${p} is not an object`);
+    if (!isDateKey(m.session)) return bad(`${p}.session must be YYYY-MM-DD`);
+    if (!(SLEEVE_IDS as readonly string[]).includes(m.sleeve as string)) return bad(`${p}.sleeve is not a stock sleeve`);
+    if (!isStr(m.symbol) || !SYMBOL_RE.test(m.symbol)) return bad(`${p}.symbol is not a ticker`);
+    if (!isNum(m.dropPct) || m.dropPct <= 0 || m.dropPct > 100 || Math.round(m.dropPct * 10) / 10 !== m.dropPct) return bad(`${p}.dropPct must be a percentage above 0 with one decimal`);
+    misses.push({ session: m.session, sleeve: m.sleeve as SleeveId, symbol: m.symbol, dropPct: m.dropPct });
+  }
+  return good({ since: input.since, sessions: input.sessions, episodes, savedUsd: input.savedUsd as number, costUsd: input.costUsd as number, netUsd: input.netUsd as number, misses });
 }
 
 /** Symbol → the sleeves whose universe (the case file's symbols) has it. */

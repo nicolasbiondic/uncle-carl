@@ -3,7 +3,9 @@
 // their owner-facing names, no jargon ("2 de 3 modelos", never "quórum"). The verbs live in ONE table: a strategy the bot
 // acts on reads "Hoy saca …", one that only informs reads "Sacaría …". Enforced: src/ai-review/texts.test.ts (verbatim).
 
+import { betOutcome } from "./bets";
 import { SLEEVE_NAMES, type Decision, type Override, type OverrideAction, type SleeveId } from "./contract";
+import { BET_MAX_USD } from "./limits";
 import { PANEL_SIZE } from "./models";
 // @ts-ignore shared owner-facing names, plain JS also used by the dashboard.
 import { symbolName } from "../dashboard/public/v4/js/symbol-names.js";
@@ -21,7 +23,8 @@ export const VERBS: Readonly<Record<OverrideAction, Readonly<Record<Tense, { ver
   reduce: { inform: { verb: "Reduciría a la mitad", prep: "en" }, apply: { verb: "Hoy reduce a la mitad", prep: "en" } },
   short: {
     inform: { verb: "Pondría en corto", prep: "en", note: "gana si el precio baja" },
-    // Stage C (shorts) does not exist yet: the bot takes the name out and says so.
+    // With the bets switch OFF the bot takes the name out and says so; with it ON (since 2026-11-14) the message says "Hoy apuesta contra …"
+    // (a bet) or why the short is only an exit (NO_BET_NOTES), by `betOutcome`.
     apply: { verb: "Hoy saca", prep: "de", note: "pedían ponerla en corto; por ahora solo se saca" },
   },
 };
@@ -56,17 +59,35 @@ const noFinalDot = (s: string) => s.trim().replace(/[.\s]+$/, "");
 /** Models that gave a valid answer. */
 export const answered = (d: Decision): number => d.models.filter(m => m.ok).length;
 
-function actionBlock(o: Override, tense: Tense): string {
-  const v = VERBS[o.action][tense];
-  const note = v.note ? ` (${v.note})` : "";
+/** Stage C: why a `short` that the bot could have bet on is only taken out, in plain words (the verb stays "Hoy saca"). */
+export const NO_BET_NOTES = {
+  no_fund: "pedían ponerla en corto, pero no hay un fondo que suba cuando baje; solo se saca",
+  cap: "pedían ponerla en corto, pero ya hay dos apuestas con más confianza; solo se saca",
+} as const;
+
+/** "$2,500": the bet's ceiling in whole dollars, from the pre-registered constant. */
+const betCeiling = `$${BET_MAX_USD.toLocaleString("en-US")}`;
+
+function actionBlock(o: Override, tense: Tense, outcome: ReturnType<typeof betOutcome> = null): string {
   const hosts = [...new Set(o.sources.map(hostOf))];
+  const tail = `${noFinalDot(o.reason)}. ${o.votes.length} de ${PANEL_SIZE} modelos, confianza ${pct(o.meanConfidence)}.`;
+  if (outcome === "bet") {
+    // The strategy acts and the bets switch is on: the stock goes out AND the stock's inverse fund goes in. "hasta": never more than the model had in it.
+    const plain = symbolName(o.symbol, "es") ?? o.symbol;
+    return [
+      `Hoy apuesta contra ${companyLabel(o.symbol)} en ${SLEEVE_NAMES[o.sleeve]}: la saca y pone hasta ${betCeiling} en un fondo que sube cuando ${plain} baja. ${tail}`,
+      `Fuentes: ${hosts.join(", ")}`,
+    ].join("\n");
+  }
+  const v = VERBS[o.action][tense];
+  const note = outcome === "no_fund" || outcome === "cap" ? ` (${NO_BET_NOTES[outcome]})` : v.note ? ` (${v.note})` : "";
   return [
-    `${v.verb} ${companyLabel(o.symbol)} ${v.prep} ${SLEEVE_NAMES[o.sleeve]}${note}: ${noFinalDot(o.reason)}. ${o.votes.length} de ${PANEL_SIZE} modelos, confianza ${pct(o.meanConfidence)}.`,
+    `${v.verb} ${companyLabel(o.symbol)} ${v.prep} ${SLEEVE_NAMES[o.sleeve]}${note}: ${tail}`,
     `Fuentes: ${hosts.join(", ")}`,
   ].join("\n");
 }
 
-export function ownerMessage(d: Decision, applies: Applies = ALL_INFORM): string {
+export function ownerMessage(d: Decision, applies: Applies = ALL_INFORM, betsOn = false): string {
   const head = `🧠 Revisión de IA · ${sessionLabel(d.session)}`;
   if (d.overrides.length === 0) {
     const n = answered(d);
@@ -76,7 +97,9 @@ export function ownerMessage(d: Decision, applies: Applies = ALL_INFORM): string
   }
   const tenseOf = (o: Override): Tense => (applies[o.sleeve] ? "apply" : "inform");
   const others = d.reviewed - d.overrides.length;
-  const lines = [head, d.overrides.map(o => actionBlock(o, tenseOf(o))).join("\n\n")];
+  // The dev machine never guesses what the bot will do with a short: `betOutcome` is the SAME function the bot calls (src/ai-review/bets.ts),
+  // fed with the bot's own switches that the case file carried (`applies`, `betsOn`).
+  const lines = [head, d.overrides.map(o => actionBlock(o, tenseOf(o), betOutcome(d, o, { applies, betsOn }))).join("\n\n")];
   if (others === 1) lines.push("La otra acción, sin cambios.");
   else if (others > 1) lines.push(`Las otras ${others} acciones, sin cambios.`);
   const informing = [...new Set(d.overrides.filter(o => tenseOf(o) === "inform").map(o => o.sleeve))];

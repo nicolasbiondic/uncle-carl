@@ -22,6 +22,7 @@ import { Database } from "bun:sqlite";
 import { readFileSync, writeFileSync, renameSync, unlinkSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { countExecutedOrders, getETDateKey, getETDayStart } from "../src/db/database";
+import { isInverseSymbol } from "../src/ai-review/inverse";
 import { MODEL_VERSIONS } from "../src/portfolio/modelVersions";
 import { sleeveExpectationArtifacts, SCORECARD_ENTITIES, readDailyMarks, computeRollingExpectationBand, freezeExceptionStatus, gridDateKey, V8_START } from "../src/portfolio/scorecard";
 import { maxHoldExpired } from "../src/portfolio-engine/decide";
@@ -209,7 +210,9 @@ function sessionPositionDrift(db: Database, hist: Database, sleeve: string, sess
   for (const symbol of symbols) {
     const q = qty.get(symbol) ?? 0, target = targets[symbol] ?? 0;
     if (!Number.isFinite(q) || q < -1e-6 || !Number.isFinite(target) || target < 0) throw new Error(`${sleeve} ${session}: invalid quantity/target ${symbol}`);
-    if (Math.abs(q) > 1e-6 && view.lastSession(symbol) !== session) return null;
+    // An AI review bet's inverse fund (stage C) is marked from its own daily bar; a fund whose bar is not in historical.db (its download is
+    // best-effort, the live pass never needs it) is left out of THIS check rather than blinding G9 for the whole sleeve.
+    if (Math.abs(q) > 1e-6 && view.lastSession(symbol) !== session) { if (isInverseSymbol(symbol)) continue; return null; }
     const actual = Math.max(0, q) * (view.lastClose(symbol) ?? 0) / mark.equity;
     if (positionOffTarget(actual, target, band)) drift.set(symbol, `${session} actual=${actual.toFixed(4)} target=${target.toFixed(4)}`);
   }

@@ -122,10 +122,10 @@ describe("switch OFF: the pass is exactly what it was, and the journal records w
     expect(rowOf("SPY").status).toBe("open");
   });
 
-  test("the real switch table is OFF for both sleeves in what is delivered, and the kill switch beats a flipped table", async () => {
+  test("the real switch table is ON for both stock sleeves (owner, 2026-11-14), and the kill switch beats it", async () => {
     const { AI_REVIEW_APPLY, reviewApplies } = await import("../../ai-review/apply");
-    expect(AI_REVIEW_APPLY).toEqual({ momentum_stocks: false, meanrev_stocks: false });
-    expect(reviewApplies("momentum_stocks", {})).toBe(false);
+    expect(AI_REVIEW_APPLY).toEqual({ momentum_stocks: true, meanrev_stocks: true });
+    expect(reviewApplies("momentum_stocks", {})).toBe(true);
     expect(reviewApplies("meanrev_stocks", { AI_REVIEW_APPLY: "off" })).toBe(false);
     const on = { momentum_stocks: true, meanrev_stocks: true };
     expect(reviewApplies("momentum_stocks", {}, on)).toBe(true);

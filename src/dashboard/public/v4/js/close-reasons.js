@@ -24,6 +24,8 @@ export const CLOSE_REASON_WORDS = {
   SLOT_DISPLACED: ["a stronger pick took its slot", "reemplazada por una señal más fuerte"],
   MODEL_CUTOVER: ["new model version", "cambio de modelo"],
   AI_REVIEW_EXIT: ["taken out by the AI review", "la revisión de IA la sacó"],
+  AI_REVIEW_BET_END: ["the AI review closed its bet", "la revisión de IA cerró su apuesta"],
+  AI_REVIEW_BET_STOP: ["bet closed at its loss limit", "apuesta cerrada por límite de pérdida"],
   MOMENTUM_REBALANCE: rebalance, PORTFOLIO_REBALANCE: rebalance, REBALANCE: rebalance,
   TAKE_PROFIT: ["profit target reached", "objetivo de ganancia alcanzado"], REVERSE_SIGNAL: exit,
   MANUAL_CLOSE: ["closed by hand", "cierre manual"],

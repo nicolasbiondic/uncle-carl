@@ -36,6 +36,9 @@ const INFO: Readonly<Record<string, ModelInfo>> = {
   "opencode/deepseek-v4.1-flash-free": { family: "deepseek", pool: null },
 };
 
+/** Is the model in the table above (so its family is known)? The panel test requires it of every model it lists. */
+export const isKnownModel = (model: string): boolean => Object.prototype.hasOwnProperty.call(INFO, model);
+
 export function infoOf(model: string): ModelInfo {
   return INFO[model] ?? { family: model.split("/")[0], pool: null };
 }

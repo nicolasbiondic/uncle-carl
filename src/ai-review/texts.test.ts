@@ -70,6 +70,71 @@ describe("the owner's Telegram message", () => {
     expect(sh).toContain("Hoy saca Nvidia (NVDA) de Momentum Acciones (pedían ponerla en corto; por ahora solo se saca): ");
     expect(sh).not.toContain("Pondría");
   });
+  // Stage C: with the bets switch on (the case file's `betsOn`, the bot's own host) a short of a strategy that acts is a bet, worded as one.
+  describe("stage C: a short that becomes a bet", () => {
+    const both = { momentum_stocks: true, meanrev_stocks: true };
+    const short = (symbol: string, meanConfidence: number, over: Partial<Override> = {}): Override => ({ ...nvda, symbol, action: "short", meanConfidence,
+      votes: [{ family: "claude", action: "short", confidence: 0.85 }, { family: "gpt", action: "short", confidence: 0.85 }], ...over });
+    const nv = short("NVDA", 0.85, { reason: "El directorio prepara la salida del director ejecutivo tras el escándalo." });
+
+    test("verbatim: Hoy apuesta contra Nvidia (NVDA) en Momentum Acciones: la saca y pone hasta $2,500 en un fondo que sube cuando Nvidia baja", () => {
+      const d = sealDecision(baseDecision({ stage: "apply", overrides: [nv], reviewed: 43 }));
+      expect(ownerMessage(d, both, true)).toBe([
+        "🧠 Revisión de IA · lunes 16 nov",
+        "Hoy apuesta contra Nvidia (NVDA) en Momentum Acciones: la saca y pone hasta $2,500 en un fondo que sube cuando Nvidia baja. El directorio prepara la salida del director ejecutivo tras el escándalo. 2 de 3 modelos, confianza 85 %.",
+        "Fuentes: cnbc.com, reuters.com",
+        "Las otras 42 acciones, sin cambios.",
+      ].join("\n"));
+    });
+    test("with the bets switch off (the function's default) a short reads exactly as before", () => {
+      const d = sealDecision(baseDecision({ stage: "apply", overrides: [nv] }));
+      expect(ownerMessage(d, both)).toBe(ownerMessage(d, both, false));
+      expect(ownerMessage(d, both, false)).toContain("Hoy saca Nvidia (NVDA) de Momentum Acciones (pedían ponerla en corto; por ahora solo se saca): ");
+      expect(ownerMessage(d, both, false)).not.toContain("apuesta");
+    });
+    test("a strategy that only informs never promises a bet, whatever the bets switch says", () => {
+      const d = sealDecision(baseDecision({ overrides: [nv] }));
+      const m = ownerMessage(d, { momentum_stocks: false, meanrev_stocks: true }, true);
+      expect(m).toContain("Pondría en corto Nvidia (NVDA) en Momentum Acciones (gana si el precio baja): ");
+      expect(m).not.toContain("apuesta");
+      expect(m.endsWith("Por ahora solo informa: todavía no cambia las órdenes.")).toBe(true);
+    });
+    test("a short without a fund keeps 'Hoy saca …' and says why in plain words", () => {
+      const iwm = short("IWM", 0.8);
+      const m = ownerMessage(sealDecision(baseDecision({ stage: "apply", overrides: [iwm] })), both, true);
+      expect(m).toContain("Hoy saca Empresas pequeñas de EE. UU. (IWM) de Momentum Acciones (pedían ponerla en corto, pero no hay un fondo que suba cuando baje; solo se saca): ");
+      expect(m).not.toContain("apuesta");
+    });
+    test("the third short with a fund (two better bets exist, in either strategy) keeps 'Hoy saca …' and says why", () => {
+      const d = sealDecision(baseDecision({ stage: "apply", overrides: [short("NVDA", 0.9), short("AAPL", 0.85), short("MSFT", 0.7), short("AVGO", 0.95, { sleeve: "meanrev_stocks" })] }));
+      const m = ownerMessage(d, both, true);
+      expect(m).toContain("Hoy apuesta contra Broadcom (AVGO) en Reversión Acciones: la saca y pone hasta $2,500 en un fondo que sube cuando Broadcom baja.");
+      expect(m).toContain("Hoy apuesta contra Nvidia (NVDA) en Momentum Acciones: la saca");
+      expect(m).toContain("Hoy saca Apple (AAPL) de Momentum Acciones (pedían ponerla en corto, pero ya hay dos apuestas con más confianza; solo se saca): ");
+      expect(m).toContain("Hoy saca Microsoft (MSFT) de Momentum Acciones (pedían ponerla en corto, pero ya hay dos apuestas con más confianza; solo se saca): ");
+      expect(m.match(/Hoy apuesta contra/g)).toHaveLength(2);
+    });
+    test("mixed strategies: the one that acts bets, the one that informs keeps its own tense and footer", () => {
+      const d = sealDecision(baseDecision({ overrides: [nv, short("AVGO", 0.8, { sleeve: "meanrev_stocks" })] }));
+      const m = ownerMessage(d, { momentum_stocks: true, meanrev_stocks: false }, true);
+      expect(m).toContain("Hoy apuesta contra Nvidia (NVDA) en Momentum Acciones: ");
+      expect(m).toContain("Pondría en corto Broadcom (AVGO) en Reversión Acciones (gana si el precio baja): ");
+      expect(m.endsWith("Reversión Acciones por ahora solo informa: todavía no cambia sus órdenes.")).toBe(true);
+    });
+    test("the same function decides here and in the bot: the message's bets are exactly betsOf's", async () => {
+      const { betsOf } = await import("./bets");
+      const overrides = [short("NVDA", 0.9), short("AAPL", 0.85), short("MSFT", 0.7), short("KO", 0.99, { sleeve: "meanrev_stocks" }), short("AVGO", 0.8, { sleeve: "meanrev_stocks" })];
+      const d = sealDecision(baseDecision({ overrides }));
+      const m = ownerMessage(d, both, true);
+      const named = betsOf(d, { applies: both, betsOn: true }).map(b => companyLabel(b.underlying));
+      expect([...m.matchAll(/Hoy apuesta contra (.+?) en /g)].map(x => x[1]).sort()).toEqual([...named].sort());
+    });
+    test("plain words: no jargon, the fund's ticker never appears, no cents", () => {
+      const m = ownerMessage(sealDecision(baseDecision({ stage: "apply", overrides: [nv, short("IWM", 0.7)] })), both, true);
+      for (const banned of [/quórum/i, /\bsleeve\b/i, /\bshort\b/i, /\bNVDD\b/, /\bfondo inverso\b/i, /\$\d+\.\d\d/, /\d×/]) expect(m).not.toMatch(banned);
+    });
+  });
+
   test("mixed (one strategy acts, the other informs): each block in its own tense, and the footer names the strategy that only informs", () => {
     const jpm: Override = { ...nvda, sleeve: "meanrev_stocks", symbol: "JPM", action: "reduce", factor: 0.5, reason: "Resultados débiles." };
     const d = sealDecision(baseDecision({ stage: "apply", overrides: [nvda, jpm], reviewed: 43 }));

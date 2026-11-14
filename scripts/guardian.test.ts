@@ -213,6 +213,39 @@ describe("G9 — two completed sessions, absolute AND relative position drift", 
       expect(findings(await f.run(), "G9")).toHaveLength(1);
     } finally { f.close(); }
   });
+  // Stage C: the journal's weights carry the bet's fund (a 10 % target, filled), so the bet is ON target; an unfilled one would page like any position.
+  test("a bet is on target: the journaled fund weight is the applied one and the fund's fill reaches it; an unfilled bet pages after two sessions", async () => {
+    const f = fixture();
+    try {
+      for (const session of ["2026-10-29", "2026-10-30"]) {
+        f.decision("meanrev_stocks", session, [], "fixture", Date.parse(`${session}T14:00:00Z`));
+        // the sleeve's book at the start of the pass: nothing; the pass sells nothing and buys 10 shares of the fund (10 % of $10,000 at $100)
+        f.db.query("UPDATE portfolio_decisions SET book_json=?, weights_json=?, orders_json=? WHERE account_id='meanrev_stocks' AND session=?")
+          .run("[]", JSON.stringify({ ABBV: 0, AVS: 0.1 }), JSON.stringify([{ intent: { symbol: "AVS", side: "buy", qty: 10 }, clientOrderId: "bet", label: "ai_review_bet_buy",
+            result: { ok: true, filledQty: 10, status: "filled" }, applied: true, filledAt: Date.parse(`${session}T14:00:00Z`) }]), session);
+        f.db.query("INSERT INTO equity_snapshots (profile_id,equity,snapshot_time,semantics,synthetic) VALUES ('meanrev_stocks',10000,?,5,0)").run(Date.parse(`${session}T21:00:00Z`));
+        f.hist.query("INSERT INTO historical_bars VALUES ('AVS','alpaca_wide','1d',?,100,101,99,100,1000)").run(Date.parse(`${session}T04:00:00Z`));
+      }
+      f.hist.query("INSERT INTO historical_bars VALUES ('ABBV','alpaca_wide','1d',?,100,101,99,100,1000)").run(Date.parse("2026-10-29T04:00:00Z"));
+      expect(findings(await f.run(), "G9")).toEqual([]);                                             // 10 × $100 ÷ $10,000 = the 10 % aimed at
+      f.db.query("UPDATE portfolio_decisions SET orders_json='[]' WHERE account_id='meanrev_stocks' AND session IN ('2026-10-29','2026-10-30')").run();
+      const paged = findings(await f.run(), "G9");
+      expect(paged).toHaveLength(1);                                                                  // aimed at 10 %, held nothing
+      expect(paged[0].key).toBe("G9:meanrev_stocks:AVS");
+    } finally { f.close(); }
+  });
+  test("a fund with no daily bar yet is left out of G9; it does not blind the check for the rest of the sleeve", async () => {
+    const f = fixture();
+    try {
+      sessions(f, 0.1, 0.03);                                                                         // ABBV drifts 10 % vs 3 %: pages
+      f.db.query("UPDATE portfolio_decisions SET book_json=? WHERE account_id='meanrev_stocks' AND session IN ('2026-10-29','2026-10-30')")
+        .run(JSON.stringify([{ symbol: "ABBV", qty: 10 }, { symbol: "NVDD", qty: 5 }]));              // and a fund lot whose bars are not in historical.db
+      expect(findings(await f.run(), "G9").map(x => x.key)).toEqual(["G9:meanrev_stocks:ABBV"]);
+      f.db.query("UPDATE portfolio_decisions SET book_json=? WHERE account_id='meanrev_stocks' AND session IN ('2026-10-29','2026-10-30')")
+        .run(JSON.stringify([{ symbol: "ABBV", qty: 10 }, { symbol: "ZZZZ", qty: 5 }]));              // a symbol that is NOT a fund still freezes the comparison
+      expect(findings(await f.run(), "G9")).toEqual([]);
+    } finally { f.close(); }
+  });
   test("an AI reduce is on target at half the model's weight", async () => {
     const f = fixture();
     try {
@@ -427,6 +460,20 @@ describe("guardian runtime rules (readonly synthetic fixtures)", () => {
       f.db.query("UPDATE trades SET entry_time = ?").run(Date.parse("2026-11-20T15:00:00Z"));
       expect(findings(await f.run({ now: Date.parse("2026-11-27T18:00:00Z") }), "G1")).toEqual([]);
       expect(findings(await f.run({ now: Date.parse("2026-11-30T16:00:00Z") }), "G1")).toHaveLength(1);
+    } finally { f.close(); }
+  });
+  // AI review stage C: a bet's inverse fund is a lot like any other. The five-session rule is the owner's, and the guardian pages the lot of a fund.
+  test.each(["momentum_stocks", "meanrev_stocks"])("G1 %s: a bet's fund lot older than the limit pages like any lot, and is quiet inside it", async sleeve => {
+    const f = fixture();
+    try {
+      f.trade({ account_id: sleeve, symbol: "NVDD", strategy: "PORTFOLIO", entry_time: Date.parse("2026-10-23T14:00:00Z") });
+      const due = stockPassTime("2026-10-30") + 30 * 60_000;
+      expect(findings(await f.run({ now: due - 1 }), "G1")).toEqual([]);
+      const late = findings(await f.run({ now: due }), "G1");
+      expect(late).toHaveLength(1);
+      expect(late[0].message).toContain(`${sleeve} NVDD: entrySession=2026-10-23`);
+      f.db.query("UPDATE trades SET entry_time = ?").run(Date.parse("2026-10-29T14:00:00Z"));      // inside the five sessions
+      expect(findings(await f.run({ now: due }), "G1")).toEqual([]);
     } finally { f.close(); }
   });
   test("G2 stocks: deadline from engine schedule, duplicate across versions, no observers/failed/future rows", async () => {

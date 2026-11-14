@@ -20,8 +20,11 @@ export type DecisionStatus = "decided" | "observed" | "submitted" | "skipped_sta
 /** Why an order exists — the EXECUTION's own label, fixed when the order is journaled (Q7 V1, 2026-11-07).
  *  Cost readers classify by it, never by the trade's eventual close_reason. `retry` is the `-r1` remainder
  *  of a MAX_HOLD close (its intent still carries maxHold "close"). `ai_review_sell` (stage B of the AI review): a sell that
- *  exists because the review lowered a weight; never on a MAX_HOLD close (it keeps its own label and reason). */
-export type PortfolioOrderLabel = "max_hold_close" | "max_hold_rebuy" | "stale_close" | "retry" | "rebalance_buy" | "rebalance_sell" | "ai_review_sell";
+ *  exists because the review lowered a weight; never on a MAX_HOLD close (it keeps its own label and reason).
+ *  `ai_review_bet_buy` / `ai_review_bet_sell` (stage C): a plain buy / sell of an inverse fund, the bet against a stock; a MAX_HOLD close or
+ *  rebuy of a fund keeps `max_hold_close` / `max_hold_rebuy`. Journals written before stage C never carry them. */
+export type PortfolioOrderLabel = "max_hold_close" | "max_hold_rebuy" | "stale_close" | "retry" | "rebalance_buy" | "rebalance_sell" | "ai_review_sell"
+  | "ai_review_bet_buy" | "ai_review_bet_sell";
 
 export interface PersistedOrder {
   intent: OrderIntent;
@@ -34,6 +37,9 @@ export interface PersistedOrder {
   // ── Execution record (Q7 V1, 2026-11-07). Absent on journals written before it: readers use
   //    inferOrderLabel and treat the prices as unknown, never as zero. ──
   label?: PortfolioOrderLabel;
+  /** Only on an `ai_review_bet_sell`: why the lot closes if this sell consumes the whole row (`AI_REVIEW_BET_STOP` when the pass's stop
+   *  took the bet out, else `AI_REVIEW_BET_END`), fixed when the order is journaled so a resumed pass closes it the same way. */
+  closeReason?: string;
   /** The reference price the pass decided on for this symbol (venue last/mark, else the last close). */
   decisionPrice?: number | null;
   /** The execution session's UNADJUSTED open at the venue, read at submission when the venue offers it

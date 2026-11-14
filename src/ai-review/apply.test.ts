@@ -22,10 +22,14 @@ const put = (session: string, overrides: Override[]) => {
 };
 
 describe("the switch", () => {
-  test("both sleeves are OFF in what is delivered (the director flips them in his own commit, after verifying)", () => {
-    expect(AI_REVIEW_APPLY).toEqual({ momentum_stocks: false, meanrev_stocks: false });
+  test("both stock sleeves are ON since 2026-11-14 (owner's order: operate from the first decision); the table is frozen and the kill switch still turns them off", () => {
+    expect(AI_REVIEW_APPLY).toEqual({ momentum_stocks: true, meanrev_stocks: true });
     expect(Object.isFrozen(AI_REVIEW_APPLY)).toBe(true);
-    for (const s of ["momentum_stocks", "meanrev_stocks"]) expect(reviewApplies(s, {})).toBe(false);
+    for (const s of ["momentum_stocks", "meanrev_stocks"]) {
+      expect(reviewApplies(s, {})).toBe(true);
+      expect(reviewApplies(s, { AI_REVIEW_APPLY: "off" })).toBe(false);
+    }
+    expect(reviewApplies("momentum_crypto", {})).toBe(false); // crypto never
   });
   test("reviewApplies: the table decides; AI_REVIEW_APPLY=off beats it; crypto and unknown sleeves never apply", () => {
     const on = { momentum_stocks: true, meanrev_stocks: false };
@@ -121,7 +125,7 @@ describe("reviewForPass", () => {
   });
   test("aiReviewHook binds a sleeve, its inbox and its switch", () => {
     put("2026-11-16", [ov("NVDA")]);
-    const off = aiReviewHook("momentum_stocks", { dir, env: {} });
+    const off = aiReviewHook("momentum_stocks", { dir, env: {}, table: { momentum_stocks: false, meanrev_stocks: false } });
     expect(off.applies()).toBe(false);
     expect(off.forPass("2026-11-16", universe)!.overrides.map(o => o.symbol)).toEqual(["NVDA"]);
     expect(aiReviewHook("momentum_stocks", { dir, env: { AI_REVIEW_APPLY: "off" }, table: { momentum_stocks: true, meanrev_stocks: true } }).applies()).toBe(false);

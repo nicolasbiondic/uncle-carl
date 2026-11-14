@@ -35,13 +35,16 @@
 import { decide as coreDecide, maxHoldExpired, type CoreDecideInput } from "../decide";
 import { planOrders as corePlanOrders } from "../orders";
 import { overlaySymbols } from "../contingency";
+import { compareSymbols } from "../signals";
 import { MAX_HOLD_CLOSE_REASON } from "../types";
 import type {
   BookState, MembershipView, OrderIntent, OrderResult, PlanOrders, PortfolioStrategyConfig, Position, PriceView, SessionDate,
   StopLevel, TargetBook, VenueAdapter, VenueRules,
 } from "../types";
 import { computeSleeveLedger } from "../../account/EquityTracker";
-import { applyReview, type AiReviewHook, type JournaledReview } from "../../ai-review/apply";
+import { appliedWeightsSane, applyBets, applyReview, sizeBets, type AiReviewHook, type BetContext, type BetEffect, type JournaledReview, type ReviewForPass } from "../../ai-review/apply";
+import type { Bet } from "../../ai-review/bets";
+import { inverseFundEstimate, inverseOf, isInverseSymbol, isWholeShareFund } from "../../ai-review/inverse";
 import { isTradingEnabled } from "../../config";
 import { getDefaultRiskEngine, type TradingState } from "../../risk/RiskEngine";
 import { getDB, insertActivity, insertDecisionPass, type DecisionPassSnapshot } from "../../db/database";
@@ -56,7 +59,7 @@ import {
   type DecisionMode, type PersistedOrder, type PortfolioDecisionRecord,
 } from "./persistence";
 import {
-  AI_REVIEW_EXIT_CLOSE_REASON, adoptBrokerPosition, adoptSleeveRows, applyBuyFill, applySellFill, loadSleeveRows, positionsFromRows,
+  AI_REVIEW_BET_END_CLOSE_REASON, AI_REVIEW_BET_STOP_CLOSE_REASON, AI_REVIEW_EXIT_CLOSE_REASON, adoptBrokerPosition, adoptSleeveRows, applyBuyFill, applySellFill, loadSleeveRows, positionsFromRows,
   reconcileRowToBroker, sleeveRealizedPnl, type RowsConfig, type SleeveRow,
 } from "./rows";
 import { runWindow, type Market, type RunWindow } from "./schedule";
@@ -168,6 +171,10 @@ export function isRetryableSellRejection(intent: OrderIntent, result: OrderResul
   return intent.side === "sell" && !result.ok && !(result.filledQty > 0) && result.status === "rejected"
     && HELD_QTY_REJECTION_RE.test(result.error ?? "");
 }
+
+/** What the active decision asks of THIS sleeve at this pass (src/ai-review/apply.ts): its overrides, whether the sleeve's switch applies and,
+ *  only with both switches on, the bets (stage C). */
+interface ReviewPlan { found: ReviewForPass; applied: boolean; bets: Bet[] }
 
 interface SubmitOutcome {
   /** Orders whose rejection is terminal (applied) in THIS call. */
@@ -376,9 +383,14 @@ export class PortfolioEngine {
     }
 
     // 3. book: adoption (live), reconciliation, reference prices, equity
-    const venueSymbols = [...new Set([...symbols.all, ...heldSymbols])];
+    // AI review: asked ONCE per pass (fail-open, never throws). The funds of this sleeve's possible bets (stage C) are priced with
+    // everything else; held funds are already in `heldSymbols` through their rows. With the bets switch off there are none.
+    const reviewPlan = this.askReview(session);
+    const venueSymbols = [...new Set([...symbols.all, ...heldSymbols, ...(reviewPlan?.bets.map(b => b.symbol) ?? [])])];
     const brokerPositions = await this.opts.venue.positions(venueSymbols);
-    const prices = await this.referencePrices(venueSymbols, view, brokerPositions);
+    const venuePriced = new Set<string>();
+    const prices = await this.referencePrices(venueSymbols, view, brokerPositions, venuePriced);
+    const entryPriced = this.priceBetFunds(reviewPlan?.bets ?? [], asOf, view, prices, venuePriced);
     const drift = live
       ? await this.reconcileLiveBook(symbols.all, brokerPositions, prices)
       : this.observerDrift(rowsBefore, brokerPositions);
@@ -392,10 +404,11 @@ export class PortfolioEngine {
 
     // 4. decide + plan
     const modelTarget = this.decideFn({ view, membership: this.opts.membership, book, config: this.opts.config, executionSession: session });
-    // AI review (stage B): fail-open, never throws. `target` is what the bot aims at: the model's, or with the review applied.
-    const { target, review } = this.reviewTarget(modelTarget, session);
-    const rules: VenueRules = await this.opts.venue.rules(venueSymbols);
-    const intents: OrderIntent[] = this.planFn(target, book, prices, rules);
+    // AI review (stage B, and C: the bets): fail-open, never throws. `target` is what the bot aims at: the model's, or with the review applied.
+    const { target, review } = this.reviewTarget(modelTarget, reviewPlan,
+      { equity: ledger.equity, positions, prices, entryPriced, fresh: reviewPlan?.found.decisionSession === session });
+    const rules: VenueRules = this.withWholeShareSteps(await this.opts.venue.rules(venueSymbols), venueSymbols);
+    const intents: OrderIntent[] = this.withBetExits(this.planFn(target, book, prices, rules), target, book, prices, rules);
 
     // 5. persist BEFORE any order
     // Venue reads above await: another version may have claimed this session meanwhile.
@@ -405,10 +418,11 @@ export class PortfolioEngine {
     // The settled stale-tick closes stay first in the journal (already applied: submitAll skips them).
     const orders: PersistedOrder[] = [...staleCloses, ...intents.map(intent => {
       const clientOrderId = live ? portfolioClientOrderId(this.opts.accountId, session, intent.symbol, intent.maxHold) : null;
+      const label = aiReviewLabel(intent, review) ?? inferOrderLabel({ intent, clientOrderId }, key);
       return {
         intent, clientOrderId, result: null, applied: false, ...(live ? {} : { skipped: "observer" }),
         // Execution record (Q7 V1): the label and the price the pass decided on, fixed at journaling.
-        label: aiReviewLabel(intent, review) ?? inferOrderLabel({ intent, clientOrderId }, key), decisionPrice: prices[intent.symbol] ?? null,
+        label, ...(label === "ai_review_bet_sell" ? { closeReason: betCloseReason(intent.symbol, review) } : {}), decisionPrice: prices[intent.symbol] ?? null,
       };
     })];
     const record: PortfolioDecisionRecord = {
@@ -430,31 +444,115 @@ export class PortfolioEngine {
    *  the effects are only recorded (the hypothetical ledger). FAIL-OPEN: no hook, observer mode, a non-stock market, no
    *  decision, no effect, any exception, or a result that is not strictly "no weight up, none below zero, same keys" →
    *  the pass is exactly what it was without the review. It never awaits, never touches the venue, rows or journal. */
-  private reviewTarget(target: TargetBook, session: SessionDate): { target: TargetBook; review: JournaledReview | null } {
+  private reviewTarget(target: TargetBook, plan: ReviewPlan | null, ctx: BetContext): { target: TargetBook; review: JournaledReview | null } {
     const none = { target, review: null };
-    const hook = this.opts.aiReview;
-    if (!hook || this.opts.mode !== "live" || this.opts.market !== "stocks") return none;
+    if (!plan) return none;
     try {
-      const universe = "universe" in this.opts.config ? this.opts.config.universe : [];
-      const found = hook.forPass(session, universe);
-      if (!found || found.overrides.length === 0) return none;
+      const { found, applied, bets } = plan;
       const { weights, effects } = applyReview(target.weights, found.overrides);
       if (effects.length === 0) return none;
-      const applied = hook.applies() === true;
       if (!applied) return { target, review: { decisionId: found.decisionId, decisionSession: found.decisionSession, applied: false, effects } };
-      const keys = Object.keys(target.weights);
-      const sane = Object.keys(weights).length === keys.length && keys.every(k =>
-        Number.isFinite(weights[k]) && weights[k] >= 0 && weights[k] <= target.weights[k]);
-      if (!sane) { this.log.warn("AI review: the applied weights failed the sanity check — the pass uses the model's own"); return none; }
+      if (!appliedWeightsSane(target.weights, weights, [], effects, ctx.equity)) {
+        this.log.warn("AI review: the applied weights failed the sanity check — the pass uses the model's own");
+        return none;
+      }
+      // Stage C: the fund of each bet, sized and stopped by the rules in sizeBets. `bets` is empty unless the bets switch is on, and then
+      // nothing below changes the stage-B result or its journal. A bet that cannot be sized, or whose weights fail the check, costs the
+      // bet only: the exits above stand (they passed their own check).
+      let aimed = weights;
+      let betEffects: BetEffect[] = [];
+      if (bets.length > 0) {
+        try {
+          const sized = sizeBets(target.weights, effects, bets, ctx);
+          const withBets = applyBets(weights, sized);
+          if (sized.length > 0 && appliedWeightsSane(target.weights, withBets, sized, effects, ctx.equity)) { aimed = withBets; betEffects = sized; }
+          else if (sized.length > 0) this.log.warn("AI review: the bets failed the sanity check — the stocks go out, no bet");
+        } catch (e: any) {
+          this.log.warn(`AI review: bets ignored (${e?.message ?? e}) — the stocks go out, no bet`);
+        }
+      }
       return {
-        target: { ...target, weights },
+        target: { ...target, weights: aimed },
         review: { decisionId: found.decisionId, decisionSession: found.decisionSession, applied: true, effects,
-          modelWeights: Object.fromEntries(effects.map(e => [e.symbol, e.modelWeight])) },
+          modelWeights: Object.fromEntries(effects.map(e => [e.symbol, e.modelWeight])), ...(betEffects.length > 0 ? { bets: betEffects } : {}) },
       };
     } catch (e: any) {
       this.log.warn(`AI review ignored (${e?.message ?? e}) — the pass uses the model's own target`);
       return none;
     }
+  }
+
+  /** The active decision for this pass, once: what it says for this sleeve, whether the sleeve's switch applies and, only then and only with the
+   *  bets switch on, the bets of this sleeve (their underlying must be one of the sleeve's own stocks). null = no review: observers, a non-stock
+   *  market, no hook, no decision, nothing for this sleeve, or ANY error (the pass is then exactly what it is without the review). Never awaits. */
+  private askReview(session: SessionDate): ReviewPlan | null {
+    const hook = this.opts.aiReview;
+    if (!hook || this.opts.mode !== "live" || this.opts.market !== "stocks") return null;
+    try {
+      const universe = "universe" in this.opts.config ? this.opts.config.universe : [];
+      const found = hook.forPass(session, universe);
+      if (!found || found.overrides.length === 0) return null;
+      const applied = hook.applies() === true;
+      const own = new Set(universe);
+      const bets = applied && hook.betsOn?.() === true ? (found.bets ?? []).filter(b => own.has(b.underlying) && inverseOf(b.underlying)?.symbol === b.symbol) : [];
+      return { found, applied, bets };
+    } catch (e: any) {
+      this.log.warn(`AI review ignored (${e?.message ?? e}) — the pass uses the model's own target`);
+      return null;
+    }
+  }
+
+  /** The broker lists seven of the inverse funds in WHOLE shares only: their quantity step is 1 (planOrders floors to it, and skips an order
+   *  that rounds to zero). Done here, from the symbols of the pass, so it holds for any venue adapter; nothing changes when no fund is in play. */
+  private withWholeShareSteps(rules: VenueRules, symbols: readonly string[]): VenueRules {
+    if (this.opts.market !== "stocks") return rules;
+    const wholes = symbols.filter(isWholeShareFund);
+    if (wholes.length === 0) return rules;
+    return { ...rules, qtyStep: { ...rules.qtyStep, ...Object.fromEntries(wholes.map(s => [s, Math.max(1, rules.qtyStep?.[s] ?? 0)])) } };
+  }
+
+  /** The reference price of each bet's fund, and the funds a NEW bet may be opened at (returned). The venue's live feed sees almost none
+   *  of these funds' trades (src/ai-review/inverse.ts, `inverseFundEstimate`), so a fund is priced from what IS sound at the pass: its own
+   *  bar of `asOf` (historical.db, the whole market) moved against today's move of its stock, the stock's price being the venue's own. That
+   *  estimate replaces whatever the venue answered for the fund (a held fund's stop is judged on it too). Without it (no bar of `asOf`, no
+   *  live price of the stock, a move that is not believable) the fund keeps its reference price, and a new bet may open only at the venue's
+   *  own fresh price. Mutates `prices` for the funds only. Never throws: an error leaves the prices as they were. */
+  private priceBetFunds(bets: readonly Bet[], asOf: SessionDate, view: EnginePriceView, prices: Record<string, number>, venuePriced: ReadonlySet<string>): Set<string> {
+    const entry = new Set<string>();
+    if (bets.length === 0) return entry;
+    let closes: EnginePriceView | null = null;
+    try {
+      closes = this.opts.openPriceView(asOf, bets.map(b => b.symbol));
+    } catch (e: any) {
+      this.log.warn(`AI review: no bars for the bets' funds (${e?.message ?? e}) — only a fund the venue prices can open a bet`);
+    }
+    for (const b of bets) {
+      let estimate: number | null = null;
+      try {
+        const fundBar = closes !== null && closes.freshness([b.symbol]).fresh.includes(b.symbol);
+        const stockBar = view.freshness([b.underlying]).fresh.includes(b.underlying);
+        if (fundBar && stockBar && venuePriced.has(b.underlying)) estimate = inverseFundEstimate(closes!.lastClose(b.symbol), view.lastClose(b.underlying), prices[b.underlying]);
+      } catch (e: any) {
+        this.log.warn(`AI review: no price estimate for ${b.symbol} (${e?.message ?? e})`);
+      }
+      if (estimate !== null) { prices[b.symbol] = estimate; entry.add(b.symbol); }
+      else if (venuePriced.has(b.symbol)) entry.add(b.symbol);
+    }
+    return entry;
+  }
+
+  /** A fund is only ever held for a bet, so a held fund with no target weight (the bet ended, or its stop took it out) leaves IN FULL at
+   *  this pass. The planner alone keeps a lot that is smaller than its rebalance band, and a stop that sells nothing is no stop: so the same
+   *  planner is asked again about just those lots, with no band (its own quantities, steps and minimum order). A lot that already has an
+   *  order in the plan (its sell, or its MAX_HOLD close) is left alone. With no such lot the plan is returned untouched. */
+  private withBetExits(intents: OrderIntent[], target: TargetBook, book: BookState, prices: Readonly<Record<string, number>>, rules: VenueRules): OrderIntent[] {
+    if (this.opts.market !== "stocks") return intents;
+    const leaving = book.positions.filter(p => isInverseSymbol(p.symbol) && p.qty > 0 && !((target.weights[p.symbol] ?? 0) > 0) && !intents.some(i => i.symbol === p.symbol));
+    if (leaving.length === 0) return intents;
+    const exits = this.planFn({ ...target, weights: {}, maxHold: undefined }, { ...book, positions: leaving }, prices, { ...rules, rebalanceBand: 0 })
+      .filter(i => i.side === "sell" && leaving.some(p => p.symbol === i.symbol));
+    if (exits.length === 0) return intents;
+    return [...intents, ...exits].sort((a, b) => (a.side === b.side ? compareSymbols(a.symbol, b.symbol) : a.side === "sell" ? -1 : 1));
   }
 
   /** Live book step shared by the normal pass and the stale closes-only pass: adopt the sleeve's rows
@@ -835,7 +933,8 @@ export class PortfolioEngine {
     }
   }
 
-  private async referencePrices(symbols: readonly string[], view: EnginePriceView, brokerPositions: readonly Position[]): Promise<Record<string, number>> {
+  /** `venuePriced` (optional out-parameter): the symbols whose price is the venue's own, not a bar's close or a broker basis. A new bet needs it. */
+  private async referencePrices(symbols: readonly string[], view: EnginePriceView, brokerPositions: readonly Position[], venuePriced?: Set<string>): Promise<Record<string, number>> {
     let venuePrices: Record<string, number> = {};
     try {
       venuePrices = await this.opts.venue.prices(symbols);
@@ -846,7 +945,7 @@ export class PortfolioEngine {
     const missing: string[] = [];
     for (const s of symbols) {
       const px = venuePrices[s];
-      if (Number.isFinite(px) && px > 0) { out[s] = px; continue; }
+      if (Number.isFinite(px) && px > 0) { out[s] = px; venuePriced?.add(s); continue; }
       const close = view.lastClose(s);
       if (close !== null && close > 0) { out[s] = close; missing.push(s); continue; }
       const held = brokerPositions.find(p => p.symbol === s);
@@ -857,18 +956,28 @@ export class PortfolioEngine {
   }
 }
 
-/** `ai_review_sell` for a plain sell of a symbol the (applied) review lowered; null for everything else. A MAX_HOLD
- *  close keeps its own label and reason: the lot reached its limit, the review only changes what is bought back. */
-function aiReviewLabel(intent: OrderIntent, review: JournaledReview | null): "ai_review_sell" | null {
+/** `ai_review_sell` for a plain sell of a symbol the (applied) review lowered; `ai_review_bet_buy` / `ai_review_bet_sell` for a plain buy / sell of
+ *  an inverse fund (the bet against a stock, stage C: whether the decision still asks for it or not, a fund is only ever held for a bet); null for
+ *  everything else. A MAX_HOLD close or rebuy keeps its own label and reason: the lot reached its limit, the review only changes what is bought back. */
+function aiReviewLabel(intent: OrderIntent, review: JournaledReview | null): "ai_review_sell" | "ai_review_bet_buy" | "ai_review_bet_sell" | null {
+  if (intent.maxHold === undefined && isInverseSymbol(intent.symbol)) return intent.side === "buy" ? "ai_review_bet_buy" : "ai_review_bet_sell";
   return review?.applied && intent.side === "sell" && intent.maxHold === undefined && review.effects.some(e => e.symbol === intent.symbol)
     ? "ai_review_sell" : null;
 }
 
-/** The row's close reason for a fill of this order: MAX_HOLD for a MAX_HOLD close, AI_REVIEW_EXIT for an ai_review_sell
- *  (used only when the fill consumes the whole row; a partial sell leaves it open), else the writer's default. */
+/** Why a bet's lot closes when a plain sell takes it out: the stop (this pass marked the bet `stopped`) or the end of the bet (the decision no
+ *  longer asks for it, or there is no active decision). */
+function betCloseReason(symbol: string, review: JournaledReview | null): string {
+  return review?.bets?.some(b => b.symbol === symbol && b.stopped) ? AI_REVIEW_BET_STOP_CLOSE_REASON : AI_REVIEW_BET_END_CLOSE_REASON;
+}
+
+/** The row's close reason for a fill of this order: MAX_HOLD for a MAX_HOLD close, AI_REVIEW_EXIT for an ai_review_sell,
+ *  AI_REVIEW_BET_STOP / AI_REVIEW_BET_END for an ai_review_bet_sell (used only when the fill consumes the whole row; a partial sell leaves it
+ *  open), else the writer's default. */
 function closeReasonOf(o: PersistedOrder): { closeReason?: string } {
   if (o.intent.maxHold === "close") return { closeReason: MAX_HOLD_CLOSE_REASON };
   if (o.label === "ai_review_sell") return { closeReason: AI_REVIEW_EXIT_CLOSE_REASON };
+  if (o.label === "ai_review_bet_sell") return { closeReason: o.closeReason === AI_REVIEW_BET_STOP_CLOSE_REASON ? AI_REVIEW_BET_STOP_CLOSE_REASON : AI_REVIEW_BET_END_CLOSE_REASON };
   return {};
 }
 

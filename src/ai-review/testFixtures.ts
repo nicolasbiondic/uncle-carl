@@ -23,6 +23,8 @@ export function caseFile(over: Partial<CaseFile> = {}): CaseFile {
       { id: "momentum_stocks", name: SLEEVE_NAMES.momentum_stocks, valueUsd: 43677, symbols: MOMENTUM.map(s => sym(s, s === "NVDA" ? { held: true, positionUsd: 5200, sinceEntryUsd: -193, daysHeld: 4 } : {})) },
       { id: "meanrev_stocks", name: SLEEVE_NAMES.meanrev_stocks, valueUsd: 20000, symbols: MEANREV.map(s => sym(s)) },
     ],
+    // What the bot's own host says since 2026-11-14: it acts on both strategies (scripts/ai-review-casefile.ts fills it in).
+    applies: { momentum_stocks: true, meanrev_stocks: true },
     ...over,
   };
 }

@@ -59,6 +59,17 @@ const STOCKS = {
   XLV: ["Healthcare sector", "Sector salud"],
   XOM: ["Exxon Mobil", "Exxon Mobil"],
   SLV: ["Silver", "Plata"],
+  // the inverse funds the AI review's bets buy (src/ai-review/inverse.ts): they go up when the stock falls
+  NVDD: ["Against Nvidia", "Contra Nvidia"],
+  AAPD: ["Against Apple", "Contra Apple"],
+  MSFD: ["Against Microsoft", "Contra Microsoft"],
+  METD: ["Against Meta (Facebook)", "Contra Meta (Facebook)"],
+  GGLS: ["Against Google", "Contra Google"],
+  AMZD: ["Against Amazon", "Contra Amazon"],
+  AVS: ["Against Broadcom", "Contra Broadcom"],
+  NFXS: ["Against Netflix", "Contra Netflix"],
+  ORCS: ["Against Oracle", "Contra Oracle"],
+  QCMD: ["Against Qualcomm", "Contra Qualcomm"],
   // treasury sweep vehicles (src/treasury/treasurySymbols.ts)
   BOXX: ["Treasury cash fund", "Fondo de efectivo (tesorería)"],
   SGOV: ["Short-term US Treasuries", "Letras del Tesoro de EE. UU."],

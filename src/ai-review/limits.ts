@@ -11,8 +11,17 @@ export const MAX_NAMES: Readonly<Record<SleeveId, number>> = { momentum_stocks: 
 /** A decision stays valid this many NYSE sessions after its own, then lapses. */
 export const MAX_AGE_SESSIONS = 5;
 
-/** Share of the model's weight kept. What is freed stays in cash. Short is 0 until stage C. */
+/** Share of the model's weight kept. What is freed stays in cash. `short` takes the stock out exactly like `exit`; the bet
+ *  against it (stage C, src/ai-review/bets.ts) is a separate position in an inverse fund, never a negative weight. */
 export const FACTOR: Readonly<Record<OverrideAction, number>> = { reduce: 0.5, exit: 0, short: 0 };
+
+// ── Stage C: a bet against a stock (pre-registration, amendment 2026-11-14, point 3) ─────────────────────────────────
+/** A bet puts at most this many dollars in the inverse fund (and never more than the model had in the stock). */
+export const BET_MAX_USD = 2500;
+/** At most this many bets in the WHOLE decision (both sleeves together), the most confident first. */
+export const BET_MAX_COUNT = 2;
+/** The bet's fund is sold at the daily pass when its reference price is this far (or more) below the row's average entry. */
+export const BET_STOP_FRACTION = 0.08;
 
 export const MAX_SOURCES = 6;
 

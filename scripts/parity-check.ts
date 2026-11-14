@@ -476,6 +476,9 @@ export interface PortfolioParityDecision {
   /** AI review (stage B): live-only differences the replay of the model cannot see, EXPLAINED by the journaled decision.
    *  `applied` false = the review only informed (the plan equals the model's). Listed, never paged. */
   aiReview?: Array<{ decisionId: string; symbol: string; action: string; modelWeight: number; appliedWeight: number; applied: boolean }>;
+  /** AI review (stage C): the inverse funds the review bet with (journaled `aiReview.bets`). Their weight is in the journal's `weights`, never in
+   *  the model's: also an explained live-only difference, listed, never paged. `stopped`: the daily stop took the bet out at this pass. */
+  aiBets?: Array<{ decisionId: string; underlying: string; symbol: string; weight: number; modelWeight: number; stopped: boolean }>;
   /** Filled quantities marked at the original reference prices/equity, NOT later market prices. */
   executionDrift: Array<{ symbol: string; side: string; status: string; filled: number; requested: number; offTargetWeight: number }>;
 }
@@ -565,7 +568,9 @@ export function checkPortfolioSleeve(sleeve: LiveSleeveId, tradingDbPath: string
       const invariants: string[] = [];
       if (!isTradingDay(r.session)) invariants.push("non-NYSE session");
       if (r.as_of !== getPreviousTradingDay(r.session)) invariants.push(`as_of ${r.as_of} != previous session`);
-      for (const symbol of Object.keys(weights)) if (view.lastSession(symbol) !== r.as_of) invariants.push(`missing target bar ${symbol}@${r.as_of}`);
+      // The MODEL's target symbols (an AI review's bet fund is not one: it has no model weight, its price is the venue's, and its bars are
+      // not a precondition of any pass).
+      for (const symbol of Object.keys(modelWeightsOfJournal(weights, stored))) if (view.lastSession(symbol) !== r.as_of) invariants.push(`missing target bar ${symbol}@${r.as_of}`);
       // Invalid dates / missing target bars can make the kernel throw; these known
       // invariant failures are divergences, not an opaque operational replay error.
       if (invariants.length) {
@@ -621,6 +626,7 @@ export function checkPortfolioSleeve(sleeve: LiveSleeveId, tradingDbPath: string
         changedSymbols: [...changed].sort(), differences, maxNumericDelta: Math.max(diagnosticsDiff.max, weightsDiff.max),
         ...(aiJournal && aiJournal.effects.length > 0 ? { aiReview: aiJournal.effects.map(e => ({ decisionId: aiJournal.decisionId, symbol: e.symbol,
           action: e.action, modelWeight: e.modelWeight, appliedWeight: e.appliedWeight, applied: aiJournal.applied })) } : {}),
+        ...(aiJournal && aiJournal.applied && (aiJournal.bets?.length ?? 0) > 0 ? { aiBets: aiJournal.bets!.map(b => ({ decisionId: aiJournal.decisionId, ...b })) } : {}),
         executionDrift: portfolioExecutionDrift(book, weights, orders, prices ?? {}, r.equity) });
     }
     return { sleeve, status: "compared", epoch, lastSession: completed, staleSymbols: [], divergences, portfolio };
@@ -948,6 +954,9 @@ export function renderSummary(results: SleeveParityResult[]): string {
         for (const a of d.aiReview ?? []) lines.push(a.applied
           ? `  ☑️  explained (AI review applied, live-only): ${d.session} ${a.symbol} ${a.action} ${(a.modelWeight * 100).toFixed(1)}% → ${(a.appliedWeight * 100).toFixed(1)}% (decision ${a.decisionId})`
           : `  ·  AI review only informed (no order changed): ${d.session} ${a.symbol} ${a.action} would have gone ${(a.modelWeight * 100).toFixed(1)}% → ${(a.appliedWeight * 100).toFixed(1)}% (decision ${a.decisionId})`);
+        for (const b of d.aiBets ?? []) lines.push(b.stopped
+          ? `  ☑️  explained (AI review bet, live-only): ${d.session} ${b.symbol} (against ${b.underlying}) stopped at the daily pass, 0.0% (decision ${b.decisionId})`
+          : `  ☑️  explained (AI review bet, live-only): ${d.session} ${b.symbol} (against ${b.underlying}) 0.0% → ${(b.weight * 100).toFixed(1)}% of the model's ${(b.modelWeight * 100).toFixed(1)}% in ${b.underlying} (decision ${b.decisionId})`);
         if (d.executionDrift.length) lines.push(`  execution drift (report only) ${d.session}: ${d.executionDrift.map(o => `${o.symbol} ${o.side} ${o.status} ${o.filled}/${o.requested} off-target=${o.offTargetWeight}`).join("; ")}`);
       }
       lines.push(r.divergences.length ? `  ❌ ${r.divergences.length} divergence(s)` : "  ✅ PARITY — no divergences (DATA REVISED / execution drift, if any, reported above)");

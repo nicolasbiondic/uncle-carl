@@ -25,6 +25,10 @@ import type { Position } from "../types";
 export const PORTFOLIO_REBALANCE_CLOSE_REASON = "PORTFOLIO_REBALANCE";
 /** A row the AI review (stage B) took out: closed by a sell that exists because the review lowered the weight to zero. */
 export const AI_REVIEW_EXIT_CLOSE_REASON = "AI_REVIEW_EXIT";
+/** A bet against a stock (stage C) that the pass closed because the decision no longer asks for it ... */
+export const AI_REVIEW_BET_END_CLOSE_REASON = "AI_REVIEW_BET_END";
+/** ... or because the fund fell 8 % or more below its average entry at the daily pass (checked once a day, not intraday). */
+export const AI_REVIEW_BET_STOP_CLOSE_REASON = "AI_REVIEW_BET_STOP";
 /** A row whose broker position vanished (external close) — the row is closed
  *  at the reference price with this label, mirroring BROKER_GONE_404. */
 export const PORTFOLIO_RECONCILED_CLOSE_REASON = "PORTFOLIO_RECONCILED";

@@ -7,9 +7,9 @@
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { buildCaseFile } from "../src/ai-review/casefile";
-import { reviewApplies } from "../src/ai-review/apply";
+import { reviewApplies, reviewBetsOn } from "../src/ai-review/apply";
 import { SLEEVE_IDS, isDateKey, parseCaseFile, type SleeveId } from "../src/ai-review/contract";
-import { builtinPortfolio, STOCK_SLEEVE_BUILTIN_DEFINITION } from "../src/portfolios/builtin";
+import { stockUniverses } from "./ai-review-universes";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(name);
@@ -26,24 +26,19 @@ async function main() {
   const histPath = arg("--historical-db") ?? "data/historical.db";
   for (const p of [tradingPath, histPath]) if (!existsSync(p)) { console.error(`missing ${p}`); process.exit(2); }
 
-  const universeOf = (sleeve: "momentum_stocks" | "meanrev_stocks"): string[] => {
-    const params = builtinPortfolio(STOCK_SLEEVE_BUILTIN_DEFINITION[sleeve]).params as any;
-    const u = params?.strategy?.universe;
-    if (!Array.isArray(u) || u.length === 0) throw new Error(`no universe for ${sleeve}`);
-    return u as string[];
-  };
-
   const tradingDb = new Database(tradingPath, { readonly: true });
   const historicalDb = new Database(histPath, { readonly: true });
   try {
     const cf = await buildCaseFile({
       session, nowMs: Date.now(), tradingDb, historicalDb,
-      universes: { momentum_stocks: universeOf("momentum_stocks"), meanrev_stocks: universeOf("meanrev_stocks") },
+      universes: stockUniverses(),
       fetchFn: fetch, keyId, secretKey, feed: process.env.ALPACA_DATA_FEED || "iex",
     });
     // What THIS host's bot will do with the decision (its deployed switch, its environment's kill switch): the
     // runner words the owner's message by it, so the message can never promise an action the bot will not take.
     cf.applies = Object.fromEntries(SLEEVE_IDS.map(id => [id, reviewApplies(id)])) as Record<SleeveId, boolean>;
+    // And whether it BETS on a short (stage C: AI_REVIEW_BETS with the kill switches): the message says "Hoy apuesta contra …" only then.
+    cf.betsOn = reviewBetsOn();
     const check = parseCaseFile(cf);
     if (!check.ok) throw new Error(`built an invalid case file: ${check.error}`);
     process.stdout.write(JSON.stringify(cf) + "\n");

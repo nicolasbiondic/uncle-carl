@@ -22,6 +22,15 @@ describe("CaseFile validation", () => {
     const noClose = caseFile(); (noClose.sleeves[0].symbols[0] as any).lastClose = null;
     expect(parseCaseFile(noClose).ok).toBe(false);
   });
+  test("stage C: `betsOn` is an optional true/false the bot's host adds (additive: a file without it is as valid as ever)", () => {
+    const r = parseCaseFile({ ...cf, betsOn: true });
+    expect(r.ok && r.value.betsOn).toBe(true);
+    const off = parseCaseFile({ ...cf, betsOn: false });
+    expect(off.ok && off.value.betsOn).toBe(false);
+    const absent = parseCaseFile(cf);
+    expect(absent.ok && absent.value.betsOn).toBeUndefined();
+    for (const bad of ["true", 1, null, {}]) expect(parseCaseFile({ ...cf, betsOn: bad }).ok).toBe(false);
+  });
   test("warnings are optional strings", () => {
     expect(parseCaseFile({ ...cf, warnings: ["pre-market unavailable"] }).ok).toBe(true);
     expect(parseCaseFile({ ...cf, warnings: [1] }).ok).toBe(false);

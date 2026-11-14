@@ -221,6 +221,20 @@ describe("Q5 shared-account gross cap (live only)", () => {
     await new AlpacaVenue(executor, fractional).submit(intent({ qty: 7, notional: 3000 }), "floor");
     expect(Number(fractional.calls.find(c => c.method === "createOrder")!.args[0].qty) * 3000 / 7).toBeLessThanOrEqual(1000);
   });
+  test("an inverse fund the broker lists in whole shares (stage C of the AI review) is clipped to WHOLE shares; a fractionable one keeps its fraction", async () => {
+    const executor = fakeExecutor({ getAccount: async () => ({ equity: "10000", long_market_value: "18000" }), getRegTBuyingPower: async () => 1000 });
+    const whole = fakeClient({ getOrderByClientId: absent });
+    await new AlpacaVenue(executor, whole).submit(intent({ symbol: "METD", qty: 66, notional: 2475 }), "clip-whole");
+    expect(whole.calls.find(c => c.method === "createOrder")!.args[0].qty).toBe("26");              // 1000 / 37.5 = 26.67 → 26
+    const fractional = fakeClient({ getOrderByClientId: absent });
+    await new AlpacaVenue(executor, fractional).submit(intent({ symbol: "NVDD", qty: 100, notional: 2500 }), "clip-frac");
+    expect(Number(fractional.calls.find(c => c.method === "createOrder")!.args[0].qty)).toBeCloseTo(40, 6);
+    const tooSmall = fakeClient({ getOrderByClientId: absent });
+    const none = await new AlpacaVenue(fakeExecutor({ getAccount: async () => ({ equity: "10000", long_market_value: "18990" }) }), tooSmall)
+      .submit(intent({ symbol: "METD", qty: 66, notional: 2475 }), "clip-zero");
+    expect(none.status).toBe("account_gross_cap");                                                  // 10 / 37.5 = 0.27 → 0 shares: nothing is sent
+    expect(tooSmall.calls.some(c => c.method === "createOrder")).toBe(false);
+  });
   test("at/above cap, nonpositive equity or sub-minimum headroom → no BUY; equal/under allowed, sells never read the account", async () => {
     for (const [equity, gross] of [[10000, 19000], [10000, 20000], [0, 0], [-100, 0], [10000, 18996]]) {
       const client = fakeClient({ getOrderByClientId: absent });

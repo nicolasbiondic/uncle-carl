@@ -56,6 +56,19 @@ test("AI review (stage B): the close an AI exit leaves has plain words in both l
   expect(alert).not.toContain("AI_REVIEW_EXIT");
 });
 
+test("AI review (stage C): the two closes a bet leaves have plain words in both languages, in the table and in the Telegram close alert", () => {
+  expect(closeReasonWord("AI_REVIEW_BET_END", "en")).toBe("the AI review closed its bet");
+  expect(closeReasonWord("AI_REVIEW_BET_END", "es")).toBe("la revisión de IA cerró su apuesta");
+  expect(closeReasonWord("AI_REVIEW_BET_STOP", "en")).toBe("bet closed at its loss limit");
+  expect(closeReasonWord("AI_REVIEW_BET_STOP", "es")).toBe("apuesta cerrada por límite de pérdida");
+  for (const code of ["AI_REVIEW_BET_END", "AI_REVIEW_BET_STOP"]) {
+    const alert = fmtCloseAlert({ symbol: "NVDD", closeReason: code, accountId: "momentum_stocks", pnl: -200, entryPrice: 25, entryTime: 0, exitTime: 3_600_000 });
+    expect(alert).toContain(code === "AI_REVIEW_BET_END" ? "la revisión de IA cerró su apuesta" : "apuesta cerrada por límite de pérdida");
+    expect(alert).not.toContain(code);
+    expect(alert).not.toMatch(/AI_REVIEW|_BET_/);
+  }
+});
+
 export async function renderPlainMoneyFixture() {
   const now = Date.parse("2026-11-11T17:00:00Z");
   spyOn(Date, "now").mockReturnValue(now); makeTestDb();

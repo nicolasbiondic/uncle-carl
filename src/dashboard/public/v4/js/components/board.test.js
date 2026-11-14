@@ -216,6 +216,18 @@ describe("the columns", () => {
     expect(bot(withAi("momentum_stocks", item("NVDA", "exit", true)))).toContain(">Revisión de IA: decidió sacar Nvidia</div>");
   });
 
+  test("a bet (stage C) is that same ONE line: 'AI review: decided to bet against Nvidia' / 'Revisión de IA: decidió apostar contra Nvidia'; informing: would bet / apostaría", () => {
+    const withBet = (id, applied) => ({ ...FX, portfolios: FX.portfolios.map((p) => (p.id === id ? { ...p, aiReview: { session: "2026-10-23",
+      items: [{ symbol: "NVDA", action: "short", applied, bet: true, reason: "Hubo un escándalo.", sources: ["https://www.cnbc.com/a"] }] } } : p)) });
+    const bot = (botNow, id = "momentum_stocks") => boardModel(state({ botNow }), O).cols.find((c) => c.id === id).parts.bot;
+    expect(bot(withBet("momentum_stocks", true))).toContain('<div class="bc-ai" title="Nvidia: Hubo un escándalo. (cnbc.com)">AI review: decided to bet against Nvidia</div>');
+    expect(bot(withBet("meanrev_stocks", false), "meanrev_stocks")).toContain(">AI review: would bet against Nvidia</div>");
+    expect(bot(withBet("momentum_stocks", true)).match(/class="bc-ai"/g)).toHaveLength(1);
+    store.state.lang = "es";
+    expect(bot(withBet("momentum_stocks", true))).toContain(">Revisión de IA: decidió apostar contra Nvidia</div>");
+    expect(bot(withBet("meanrev_stocks", false), "meanrev_stocks")).toContain(">Revisión de IA: apostaría contra Nvidia</div>");
+  });
+
   test("a blocked / trimmed strategy says so in its own sentence", () => {
     const bot = boardModel(state(), O).cols.find((c) => c.id === "momentum_crypto_usdc").parts.bot;
     expect(bot).toContain('<div class="bc-trim" title="79 % of normal size">Trading smaller: it is 16 % below its peak</div>');

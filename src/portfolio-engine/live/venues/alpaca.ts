@@ -4,7 +4,10 @@
 // (alpaca-v5-compat). What it does, and what it deliberately does not:
 //   - fractional MARKET DAY orders (the executor's placeOrder rounds to whole
 //     shares — that is why orders go to the client here, with the same
-//     duplicate-client_order_id handling the executor uses);
+//     duplicate-client_order_id handling the executor uses). The seven inverse
+//     funds the broker lists without fractions arrive in whole shares: the
+//     engine's quantity step (PortfolioEngine.withWholeShareSteps), and the
+//     buying-power clip below rounds those down too;
 //   - client_order_id idempotency: a 422 naming the field means the order
 //     already exists → query it by client id, never resend;
 //   - a fill that is still working after `fillTimeoutMs` cancels the
@@ -29,6 +32,7 @@
 //     design ever declares one on this venue.
 
 import type { AlpacaExecutor } from "../../../executor/alpaca-executor";
+import { isWholeShareFund } from "../../../ai-review/inverse";
 import { ALPACA_ACCOUNT_MAX_GROSS } from "../../../ops/grossCaps";
 import { createLogger } from "../../../utils/logger";
 import { getETDateKey } from "../../../db/database";
@@ -275,7 +279,9 @@ export class AlpacaVenue implements VenueAdapter {
         // clipping/blocking, or the engine could lose its fill after a crash. Unknown is not absent.
         try { return await this.awaitTerminal(await this.client.getOrderByClientId(clientOrderId), order); }
         catch (e: any) { if ((e?.response?.status || e?.status) !== 404) throw e; }
-        const qty = Math.floor(order.qty * headroom / order.notional * 1e9) / 1e9;
+        let qty = Math.floor(order.qty * headroom / order.notional * 1e9) / 1e9;
+        // An inverse fund the broker lists in whole shares only (stage C of the AI review): a clipped quantity is rounded down to whole shares too.
+        if (isWholeShareFund(order.symbol)) qty = Math.floor(qty);
         const notional = qty * order.notional / order.qty;
         log.warn(`BUY ${order.symbol} clipped by account gross cap ${ALPACA_ACCOUNT_MAX_GROSS}x: $${order.notional.toFixed(2)} → $${notional.toFixed(2)} (headroom $${headroom.toFixed(2)})`);
         if (!(qty > 0) || notional < (this.opts.minOrderNotional ?? 5)) {

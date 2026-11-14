@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeTestDb } from "../../test-support/db";
 import { registerBotNowRoutes } from "./botNow";
-import { buildBotNow, type BotNowDeps, type BotNowRuntime } from "../botNow";
+import { buildBotNow, type BotNowRuntime } from "../botNow";
 import { sealDecision, type Override, type SleeveId } from "../../ai-review/contract";
 import { baseDecision } from "../../ai-review/testFixtures";
 import { getETDateKey } from "../../db/database";
@@ -57,7 +57,7 @@ describe("/api/bot/now: aiReview on the stock strategies", () => {
     const mom = by("momentum_stocks").aiReview;
     expect(mom.session).toBe(LAST);
     expect(mom.items.map((i: any) => [i.symbol, i.action, i.applied]).sort()).toEqual([["AAPL", "reduce", true], ["NVDA", "exit", true]]); // SH is not in the universe
-    expect(mom.items.find((i: any) => i.symbol === "NVDA")).toEqual({ symbol: "NVDA", action: "exit", reason: "Motivo de NVDA.", sources: ["https://www.cnbc.com/NVDA", "https://reuters.com/x"], applied: true });
+    expect(mom.items.find((i: any) => i.symbol === "NVDA")).toEqual({ symbol: "NVDA", action: "exit", reason: "Motivo de NVDA.", sources: ["https://www.cnbc.com/NVDA", "https://reuters.com/x"], applied: true, bet: false });
     const rev = by("meanrev_stocks").aiReview;
     expect(rev.items).toEqual([expect.objectContaining({ symbol: "ABBV", applied: false })]); // the other strategy's switch is off: informing
     expect(by("momentum_crypto")).not.toHaveProperty("aiReview");                              // crypto never carries it
@@ -75,15 +75,68 @@ describe("/api/bot/now: aiReview on the stock strategies", () => {
   });
 });
 
+// Stage C: an item also says whether the short is a BET (the stock's inverse fund is bought), so the board can say "decided to bet against".
+describe("/api/bot/now: `bet` on a short item", () => {
+  const short = (symbol: string, meanConfidence: number, sleeve: SleeveId = "momentum_stocks") => ov(symbol, { action: "short", meanConfidence,
+    votes: [{ family: "claude", action: "short", confidence: meanConfidence }, { family: "gpt", action: "short", confidence: meanConfidence }] }, sleeve);
+  const build = (betsOn: boolean, applies: (s: SleeveId) => boolean = () => true) => {
+    const db = makeTestDb();
+    const r = buildBotNow({ db, now: NOW, runtime, summaries, readState: () => null, aiReview: { dir, applies, betsOn: () => betsOn } });
+    return (id: string) => r.portfolios.find(x => x.id === id)!.aiReview!.items.map(i => [i.symbol, i.action, i.applied, i.bet]);
+  };
+  test("with the bets switch on, the two most confident shorts with a fund are bets; the third is not (it is only taken out)", () => {
+    put("2026-11-16", [short("NVDA", 0.9), short("AAPL", 0.85), short("MSFT", 0.7)]);
+    expect(build(true)("momentum_stocks").sort()).toEqual([["AAPL", "short", true, true], ["MSFT", "short", true, false], ["NVDA", "short", true, true]]);
+  });
+  test("a short without a fund and an exit are not bets", () => {
+    put("2026-11-16", [short("IWM", 0.95), short("NVDA", 0.9), ov("META")]);
+    expect(build(true)("momentum_stocks").sort()).toEqual([["IWM", "short", true, false], ["META", "exit", true, false], ["NVDA", "short", true, true]]);
+  });
+  test("the cap is over both strategies, and a strategy that only informs still says what it WOULD bet (the tense is `applied`)", () => {
+    put("2026-11-16", [short("NVDA", 0.7), short("AVGO", 0.9, "meanrev_stocks"), short("NFLX", 0.8, "meanrev_stocks")]);
+    const items = build(true, s => s === "momentum_stocks");
+    expect(items("momentum_stocks")).toEqual([["NVDA", "short", true, false]]);              // AVGO .9 and NFLX .8 are the two best of the decision
+    expect(items("meanrev_stocks").sort()).toEqual([["AVGO", "short", false, true], ["NFLX", "short", false, true]]);   // informing: would bet
+  });
+  test("with the bets switch off no item is a bet", () => {
+    put("2026-11-16", [short("NVDA", 0.9)]);
+    expect(build(false)("momentum_stocks")).toEqual([["NVDA", "short", true, false]]);
+  });
+  test("the real switch is ON (2026-11-14): the short is a bet; the environment's kill switch turns it back into an exit", () => {
+    put("2026-11-16", [short("NVDA", 0.9)]);
+    const db = makeTestDb();
+    const saved = [process.env.AI_REVIEW_APPLY, process.env.AI_REVIEW_BETS];
+    delete process.env.AI_REVIEW_APPLY; delete process.env.AI_REVIEW_BETS;
+    try {
+      const bet = () => buildBotNow({ db, now: NOW, runtime, summaries, readState: () => null, aiReview: { dir } })
+        .portfolios.find(x => x.id === "momentum_stocks")!.aiReview!.items.map(i => i.bet);
+      expect(bet()).toEqual([true]);
+      process.env.AI_REVIEW_BETS = "off";
+      expect(bet()).toEqual([false]);
+      delete process.env.AI_REVIEW_BETS;
+    } finally {
+      delete process.env.AI_REVIEW_BETS;
+      if (saved[0] !== undefined) process.env.AI_REVIEW_APPLY = saved[0];
+      if (saved[1] !== undefined) process.env.AI_REVIEW_BETS = saved[1];
+    }
+  });
+});
+
 describe("buildBotNow reads the inbox without writing anything", () => {
-  test("the real default switch is off: items are informing; the answer is the same shape without the aiReview option", () => {
+  test("the real switch is on (owner, 2026-11-14): items say the bot acts; a strategy whose switch is off only informs", () => {
     const db = makeTestDb();
     put("2026-11-16", [ov("NVDA")]);
-    const deps: BotNowDeps = { db, now: NOW, runtime, summaries, readState: () => null, aiReview: { dir } };
+    const before = process.env.AI_REVIEW_APPLY;
+    delete process.env.AI_REVIEW_APPLY;
     db.exec("PRAGMA query_only=ON");
     try {
-      const p = buildBotNow(deps).portfolios.find(x => x.id === "momentum_stocks")!;
-      expect(p.aiReview!.items.map(i => i.applied)).toEqual([false]);
-    } finally { db.exec("PRAGMA query_only=OFF"); }
+      const real = buildBotNow({ db, now: NOW, runtime, summaries, readState: () => null, aiReview: { dir } });
+      expect(real.portfolios.find(x => x.id === "momentum_stocks")!.aiReview!.items.map(i => i.applied)).toEqual([true]);
+      const off = buildBotNow({ db, now: NOW, runtime, summaries, readState: () => null, aiReview: { dir, applies: () => false } });
+      expect(off.portfolios.find(x => x.id === "momentum_stocks")!.aiReview!.items.map(i => i.applied)).toEqual([false]);
+    } finally {
+      db.exec("PRAGMA query_only=OFF");
+      if (before !== undefined) process.env.AI_REVIEW_APPLY = before;
+    }
   });
 });

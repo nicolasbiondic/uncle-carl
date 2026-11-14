@@ -59,7 +59,7 @@ import { stopPriceFromEntry } from "./account/BinanceSleeveReconciler";
 import { fapiClientOrderId } from "./executor/binance-executor";
 import { builtinPortfolio, STOCK_SLEEVE_BUILTIN_DEFINITION } from "./portfolios/builtin";
 import { initPlatformPortfolios, loadPlatformPortfolioDefinitions, markPendingPortfoliosActive, resolvePortfoliosSource } from "./portfolios/store";
-import { portfolioEngineOwnedSymbols } from "./portfolios/validate";
+import { portfolioEngineOwnedSymbols, reviewOwnedSymbols } from "./portfolios/validate";
 import type { MomentumPortfolioPlan, StatePersistenceSpec, PortfolioDefinition } from "./portfolios/types";
 
 const log = createLogger("Main");
@@ -755,10 +755,13 @@ async function main() {
   // case both name the same model, so the union adds nothing; in a fallback or code-source boot
   // it is the fallback engine's book that must not be filed under alpaca_main.
   {
-    const owned = portfolioEngineOwnedSymbols([
+    const ownedDefs = [
       ...(dbPortfolioDefs ? [...dbPortfolioDefs.values()] : []),
       ...Object.values(STOCK_SLEEVE_BUILTIN_DEFINITION).map(id => builtinPortfolio(id)),
-    ]);
+    ];
+    const owned = portfolioEngineOwnedSymbols(ownedDefs);
+    // AI review stage C: the ten inverse funds its bets buy belong to the live stock sleeves too (a fund position is never adopted under alpaca_main).
+    owned.alpaca = [...new Set([...owned.alpaca, ...reviewOwnedSymbols(ownedDefs).alpaca])].sort();
     registerSleeveOwnedSymbols("alpaca", owned.alpaca);
     registerSleeveOwnedSymbols("binance", owned.binance);
     if (owned.alpaca.length + owned.binance.length > 0) log.info(`📁 Portfolio-engine symbols registered as sleeve-owned: alpaca [${owned.alpaca.join(", ")}] binance [${owned.binance.join(", ")}]`);

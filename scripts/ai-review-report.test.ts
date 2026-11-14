@@ -17,9 +17,9 @@ const review = (applied: boolean, ...effects: any[]) => ({ aiReview: { decisionI
 
 function build(passes: Array<[string, string, string, number, unknown]>, opens: Record<string, number>) {
   const db = new Database(tradingPath), hist = new Database(histPath);
-  db.exec(`CREATE TABLE portfolio_decisions (id INTEGER PRIMARY KEY, account_id TEXT, strategy_version TEXT, session TEXT, mode TEXT, status TEXT, equity REAL, diagnostics_json TEXT)`);
+  db.exec(`CREATE TABLE portfolio_decisions (id INTEGER PRIMARY KEY, account_id TEXT, strategy_version TEXT, session TEXT, mode TEXT, status TEXT, equity REAL, book_json TEXT, diagnostics_json TEXT)`);
   hist.exec(`CREATE TABLE historical_bars (symbol TEXT, timeframe TEXT, source TEXT, timestamp INTEGER, open REAL, high REAL, low REAL, close REAL, volume REAL)`);
-  const ins = db.query("INSERT INTO portfolio_decisions (account_id, strategy_version, session, mode, status, equity, diagnostics_json) VALUES (?, 'v', ?, ?, ?, ?, ?)");
+  const ins = db.query("INSERT INTO portfolio_decisions (account_id, strategy_version, session, mode, status, equity, book_json, diagnostics_json) VALUES (?, 'v', ?, ?, ?, ?, '[]', ?)");
   for (const [sleeve, session, status, equity, diagnostics] of passes) ins.run(sleeve, session, "live", status, equity, JSON.stringify(diagnostics));
   ins.run("momentum_stocks", "2026-11-12", "observer", "observed", 10_000, JSON.stringify(review(true, eff("NVDA", "exit", 0.2, 0)))); // an observer is not a pass
   const bar = hist.query("INSERT INTO historical_bars VALUES (?, '1d', 'alpaca_wide', ?, ?, ?, ?, ?, 1000)");
@@ -96,13 +96,63 @@ describe("the report over temp databases", () => {
     const json = await run("--db", tradingPath, "--hist", histPath, "--json");
     expect(json.code).toBe(0);
     const parsed = JSON.parse(json.out);
-    expect(Object.keys(parsed).sort()).toEqual(["applied", "generatedAt", "hypothetical"]);
+    expect(Object.keys(parsed).sort()).toEqual(["applied", "generatedAt", "hypothetical", "misses"]);
     expect(parsed.applied.decisions).toBe(4);
     const text = await run("--db", tradingPath, "--hist", histPath);
     expect(text.code).toBe(0);
     expect(text.out).toStartWith("La revisión de IA lleva 4 decisiones aplicadas en 2 días: evitó $215 de pérdidas y dejó de ganar $50");
     const missing = await run("--db", join(dir, "nope.db"), "--hist", histPath);
     expect(missing.code).toBe(2);
+  });
+
+  test("--json carries every strong fall of a held stock of the sleeve's universe that the review did not act on (the case file's own rule, no cap)", async () => {
+    build([
+      S("momentum_stocks", "2026-11-16", 10_000, review(true, eff("NVDA", "exit", 0.2, 0))),
+      S("momentum_stocks", "2026-11-17"),
+      S("meanrev_stocks", "2026-11-17"),
+    ], { "NVDA@2026-11-16": 100, "NVDA@2026-11-17": 95, "AAPL@2026-11-17": 200, "AAPL@2026-11-18": 187.6, "SH@2026-11-17": 50, "SH@2026-11-18": 40, "KO@2026-11-17": 60, "KO@2026-11-18": 59 });
+    const db = new Database(tradingPath);
+    db.query("UPDATE portfolio_decisions SET book_json = ? WHERE session = '2026-11-16'").run(JSON.stringify([{ symbol: "NVDA", qty: 3, avgEntryPrice: 90 }]));
+    db.query("UPDATE portfolio_decisions SET book_json = ? WHERE session = '2026-11-17' AND account_id = 'momentum_stocks'").run(JSON.stringify([{ symbol: "AAPL", qty: 5, avgEntryPrice: 190 }, { symbol: "SH", qty: 9, avgEntryPrice: 50 }]));
+    db.query("UPDATE portfolio_decisions SET book_json = ? WHERE session = '2026-11-17' AND account_id = 'meanrev_stocks'").run(JSON.stringify([{ symbol: "KO", qty: 4, avgEntryPrice: 60 }]));
+    db.close();
+    const p = Bun.spawn(["bun", join(import.meta.dir, "ai-review-report.ts"), "--db", tradingPath, "--hist", histPath, "--json"], { stdout: "pipe", stderr: "pipe" });
+    const parsed = JSON.parse(await new Response(p.stdout).text());
+    expect(parsed.misses).toEqual([{ session: "2026-11-17", sleeve: "momentum_stocks", symbol: "AAPL", dropPct: 6.2 }]); // NVDA: the review acted; SH: outside the universe; KO: −1.7 %
+  });
+
+  // Stage C: a bet is read from the journal's `aiReview.bets` and priced with the FUND's daily bars (the nightly refresh brings them).
+  test("a bet: its own episode next to the stock's exit, priced with the fund's opens; pending until the fund's bars are in; read-only", async () => {
+    const bet = { underlying: "NVDA", symbol: "NVDD", weight: 0.25, modelWeight: 0.2, stopped: false };
+    const withBet = { ...review(true, eff("NVDA", "short", 0.2, 0)), aiReview: { ...review(true, eff("NVDA", "short", 0.2, 0)).aiReview, bets: [bet] } };
+    build([S("momentum_stocks", "2026-11-16", 10_000, withBet), S("momentum_stocks", "2026-11-17", 10_000, withBet), S("momentum_stocks", "2026-11-18")],
+      { "NVDA@2026-11-16": 100, "NVDA@2026-11-17": 95, "NVDA@2026-11-18": 95, "NVDD@2026-11-16": 100, "NVDD@2026-11-17": 101.6, "NVDD@2026-11-18": 103.2256 });
+    // As journaled (every book empty) the fund was never really bought: a bet day counts only when the NEXT pass's book holds the fund.
+    expect(reportFrom(tradingPath, histPath).applied.episodes.filter(e => e.kind === "bet")).toEqual([]);
+    {
+      const db = new Database(tradingPath);
+      db.query("UPDATE portfolio_decisions SET book_json = ? WHERE session IN ('2026-11-17', '2026-11-18')").run(JSON.stringify([{ symbol: "NVDD", qty: 25, avgEntryPrice: 100 }]));
+      db.close();
+    }
+    const before = [sha(tradingPath), sha(histPath)];
+    const l = reportFrom(tradingPath, histPath);
+    expect([sha(tradingPath), sha(histPath)]).toEqual(before);
+    const b = l.applied.episodes.find(e => e.kind === "bet")!;
+    expect(b).toMatchObject({ symbol: "NVDA", fund: "NVDD", pendingDays: 0, endSession: "2026-11-18" });
+    expect(b.effectUsd).toBeCloseTo(80, 9);                                                  // 2,500 × (2 × 1.6 %)
+    expect(l.applied.betUsd).toBeCloseTo(80, 9);
+    const text = (await (async () => {
+      const p = Bun.spawn(["bun", join(import.meta.dir, "ai-review-report.ts"), "--db", tradingPath, "--hist", histPath], { stdout: "pipe", stderr: "pipe" });
+      return new Response(p.stdout).text();
+    })());
+    expect(text).toContain("apostó contra ella del lunes 16 nov al martes 17 nov (2 días) · ganó $80 · operar costó $5");
+    // the fund's bars missing: the days wait, the stock's exit is measured all the same
+    const hist = new Database(histPath);
+    hist.exec("DELETE FROM historical_bars WHERE symbol = 'NVDD'");
+    hist.close();
+    const pending = reportFrom(tradingPath, histPath);
+    expect(pending.applied.episodes.find(e => e.kind === "bet")).toMatchObject({ pendingDays: 2, effectUsd: 0 });
+    expect(pending.applied.episodes.find(e => e.kind !== "bet")).toMatchObject({ pendingDays: 0 });
   });
 
   test("hypothetical days (the switch was off) get their own block and do not touch the applied totals", () => {

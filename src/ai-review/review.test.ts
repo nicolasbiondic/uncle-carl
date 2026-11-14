@@ -39,9 +39,9 @@ describe("the stage of the decision (wording only: the bot acts on its own switc
     expect(apply.decision?.overrides).toEqual(inform.decision?.overrides);
     expect(apply.decision?.id).not.toBe(inform.decision?.id);
   });
-  test("the runner's config reads the same switch as the bot: both strategies inform in what is delivered, and the kill switch only ever lowers", async () => {
+  test("the runner's config reads the same switch as the bot (both strategies apply since 2026-11-14), and the kill switch only ever lowers", async () => {
     const { loadConfig } = await import("./app");
-    expect(loadConfig({}, "/x").apply).toEqual({ momentum_stocks: false, meanrev_stocks: false });
+    expect(loadConfig({}, "/x").apply).toEqual({ momentum_stocks: true, meanrev_stocks: true });
     expect(loadConfig({ AI_REVIEW_APPLY: "off" }, "/x").apply).toEqual({ momentum_stocks: false, meanrev_stocks: false });
   });
 });

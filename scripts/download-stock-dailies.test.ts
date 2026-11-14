@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeMembership, SP500_SOURCE_COMMIT } from "./import-sp500-membership";
+import { INVERSE_SYMBOLS } from "../src/ai-review/inverse";
 
 describe("mergeBarPages", () => {
   test("collects and orders bars from multiple pages for the same symbol", () => {
@@ -183,6 +184,52 @@ describe("RW daily stock refresh", () => {
         expect(db.query("SELECT COUNT(*) n FROM historical_bars WHERE symbol='PIT-REAL'").get()).toEqual({ n: 3 });
       } finally { db.close(); }
     } finally { f.cleanup(); }
+  });
+
+  // AI review stage C: the ten inverse funds arrive with the nightly stock refresh (where SH is) so historical.db holds their daily bars for
+  // the effect ledger. Nothing in the live pass reads them (the price is the venue's): they are never required, and they go in a batch of
+  // their own, last, so a failure of theirs cannot fail the refresh the stock sleeves decide from.
+  test("the ten inverse funds are in the nightly refresh universe, once each", () => {
+    const db = new Database(":memory:");
+    try {
+      const symbols = stockRefreshUniverse(db, "2026-10-19");
+      for (const s of INVERSE_SYMBOLS) expect(symbols.filter(x => x === s)).toHaveLength(1);
+      expect(INVERSE_SYMBOLS).toHaveLength(10);
+    } finally { db.close(); }
+  });
+
+  test("a fund request that fails (or a fund with no data) leaves the stock refresh whole: required symbols written, no FAIL-CLOSED; the funds are the last batch", async () => {
+    const f = fixture();
+    const calls: string[][] = [];
+    const fetchFn = (async (input: string | URL | Request) => {
+      const batch = new URL(String(input)).searchParams.get("symbols")!.split(",");
+      calls.push(batch);
+      if (batch.some(s => (INVERSE_SYMBOLS as readonly string[]).includes(s))) return new Response("invalid symbol", { status: 400 });
+      return Response.json({ bars: Object.fromEntries(batch.map(s => [s, [raw()]])) });
+    }) as typeof fetch;
+    try {
+      const total = await refreshStockDailies({ ...options, dbPath: f.dbPath, fetchFn, sleep: async () => {} });   // the production path: the default universe
+      expect(total).toBeGreaterThan(400);
+      expect(calls.at(-1)!.slice().sort()).toEqual([...INVERSE_SYMBOLS].sort());                                    // the funds, alone, last
+      for (const batch of calls.slice(0, -1)) for (const s of batch) expect(INVERSE_SYMBOLS).not.toContain(s);
+      const db = new Database(f.dbPath, { readonly: true });
+      try {
+        const stored = new Set((db.query("SELECT DISTINCT symbol FROM historical_bars").all() as any[]).map(r => r.symbol));
+        for (const s of ["SH", "HON", "NVDA"]) expect(stored.has(s)).toBe(true);
+        for (const s of INVERSE_SYMBOLS) expect(stored.has(s)).toBe(false);
+      } finally { db.close(); }
+    } finally { f.cleanup(); }
+    // and when they do answer, their bars are stored like any other symbol's
+    const g = fixture();
+    try {
+      await refreshStockDailies({ ...options, dbPath: g.dbPath, fetchFn: (async (input: string | URL | Request) =>
+        Response.json({ bars: Object.fromEntries(new URL(String(input)).searchParams.get("symbols")!.split(",").map(s => [s, [raw()]])) })) as typeof fetch, sleep: async () => {} });
+      const db = new Database(g.dbPath, { readonly: true });
+      try {
+        const stored = new Set((db.query("SELECT DISTINCT symbol FROM historical_bars").all() as any[]).map(r => r.symbol));
+        for (const s of INVERSE_SYMBOLS) expect(stored.has(s)).toBe(true);
+      } finally { db.close(); }
+    } finally { g.cleanup(); }
   });
 
   test("cron stocks-only delegates to SIP refresh once, never appends Yahoo stock bars", () => {

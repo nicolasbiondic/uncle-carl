@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CLOSE_5H, CLOSE_GEMINI, CLOSE_WEEK, PANEL_SIZE, PRIMARIES, SUBSTITUTES, familyOf, gate, parseQuota, type QuotaReport } from "./models";
+import { CLOSE_5H, CLOSE_GEMINI, CLOSE_WEEK, PANEL_SIZE, PRIMARIES, SUBSTITUTES, familyOf, gate, isKnownModel, parseQuota, type QuotaReport } from "./models";
 
 const acct = (windows: [string, string, number][], error: string | null = null) => ({ error, ventanas: windows.map(([nombre, clase, usado]) => ({ nombre, clase, usado })) });
 const report = (over: Partial<QuotaReport> = {}): QuotaReport => ({
@@ -9,16 +9,35 @@ const report = (over: Partial<QuotaReport> = {}): QuotaReport => ({
   ...over,
 });
 
-describe("pre-registered panel (§3.2)", () => {
-  test("three primaries of three families and the substitutes in order", () => {
-    expect(PRIMARIES).toEqual(["anthropic/claude-sonnet-5-5", "codex/gpt-6.1-sol", "antigravity/gemini-3.8-flash-high"]);
-    expect(SUBSTITUTES).toEqual(["opencode-go/kimi-k3.1-pro", "opencode-go/qwen3.8-max", "opencode/deepseek-v4.1-flash-free"]);
+// The panel itself is NOT pinned by name: the weekly adjustment (docs/reports/IA-ajustes.md, scripts/improvement-loop.sh ai-review-weekly)
+// may replace a model that keeps failing or that the proxy stopped serving, and must be able to release that with the gate green.
+// What stays fixed is its SHAPE (below) and every threshold (next test); the weekly guard checks that only PRIMARIES, SUBSTITUTES and
+// INFO change in models.ts (src/ai-review/weekly.test.ts, "onlyPanelChanged").
+describe("the panel's shape (§3.2)", () => {
+  test("three primaries of three different families, at least three substitutes, no model twice, every model's family known", () => {
     expect(PANEL_SIZE).toBe(3);
-    const families = [...PRIMARIES, ...SUBSTITUTES].map(familyOf);
-    expect(new Set(families).size).toBe(6);
+    expect(PRIMARIES).toHaveLength(PANEL_SIZE);
+    expect(new Set(PRIMARIES.map(familyOf)).size).toBe(PANEL_SIZE);
+    expect(SUBSTITUTES.length).toBeGreaterThanOrEqual(3);
+    expect(new Set([...PRIMARIES, ...SUBSTITUTES]).size).toBe(PRIMARIES.length + SUBSTITUTES.length);
+    for (const m of [...PRIMARIES, ...SUBSTITUTES]) expect(isKnownModel(m)).toBe(true);
+    // a substitute of an unused family exists for every primary: the three primaries failing at once still leaves three families to try
+    expect(new Set(SUBSTITUTES.map(familyOf)).size).toBeGreaterThanOrEqual(3);
   });
   test("policy thresholds", () => {
     expect([CLOSE_5H, CLOSE_WEEK, CLOSE_GEMINI]).toEqual([80, 85, 90]);
+  });
+});
+
+describe("the runner's panel", () => {
+  test("is the one in models.ts unless the environment names another (only tests do)", async () => {
+    const { loadConfig } = await import("./app");
+    const cfg = loadConfig({}, "/x");
+    expect(cfg.primaries).toEqual(PRIMARIES);
+    expect(cfg.substitutes).toEqual(SUBSTITUTES);
+    const other = loadConfig({ AI_REVIEW_PRIMARIES: "a/x, b/y", AI_REVIEW_SUBSTITUTES: "" }, "/x");
+    expect(other.primaries).toEqual(["a/x", "b/y"]);
+    expect(other.substitutes).toEqual(SUBSTITUTES);
   });
 });
 

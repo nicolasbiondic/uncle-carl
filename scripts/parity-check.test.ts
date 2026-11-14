@@ -1041,6 +1041,40 @@ describe("portfolio-engine exact decision replay", () => {
         expect(r.divergences.map(d => d.type)).toContain("portfolio_decision");
       } finally { f.close(); }
     });
+    // Stage C: a bet's fund has a weight in the journal and none in the model; its bars are not a precondition of any pass.
+    test("a BET: the fund's weight is an explained live-only difference (the replay is compared with the model's weights), and its missing bars are not a 'missing target bar' divergence", () => {
+      const f = fixture();
+      try {
+        const bet = { underlying: "", symbol: "NVDD", weight: 0.1, modelWeight: 0, stopped: false };
+        const { symbol, modelWeight } = journalAi(f, true, review => {
+          review.effects[0].action = "short";
+          review.bets = [Object.assign(bet, { underlying: review.effects[0].symbol, modelWeight: review.effects[0].modelWeight })];
+        });
+        f.db.query("UPDATE portfolio_decisions SET weights_json = ? WHERE id = 3").run(JSON.stringify({ ...f.target.weights, [symbol]: 0, NVDD: 0.1 }));
+        expect(f.hist.query("SELECT COUNT(*) n FROM historical_bars WHERE symbol = 'NVDD'").get()).toEqual({ n: 0 });
+        const r = f.run();
+        expect(r.divergences).toEqual([]);
+        expect(r.portfolio![0]).toMatchObject({ classification: "PARITY", differences: [], maxNumericDelta: 0 });
+        expect(r.portfolio![0].aiBets).toEqual([{ decisionId: "abc123def456", underlying: symbol, symbol: "NVDD", weight: 0.1, modelWeight, stopped: false }]);
+        const text = renderSummary([r]);
+        expect(text).toContain(`explained (AI review bet, live-only): ${session} NVDD (against ${symbol}) 0.0% → 10.0%`);
+        expect(text).toContain("✅ PARITY");
+      } finally { f.close(); }
+    });
+    test("a stopped bet is listed as stopped; a fund weight with NO record of the bet is still a DIVERGENCE", () => {
+      const f = fixture();
+      try {
+        const { symbol } = journalAi(f, true, review => {
+          review.effects[0].action = "short";
+          review.bets = [{ underlying: review.effects[0].symbol, symbol: "NVDD", weight: 0, modelWeight: review.effects[0].modelWeight, stopped: true }];
+        });
+        expect(renderSummary([f.run()])).toContain(`NVDD (against ${symbol}) stopped at the daily pass`);
+        f.db.query("UPDATE portfolio_decisions SET weights_json = ? WHERE id = 3").run(JSON.stringify({ ...f.target.weights, [symbol]: 0, NVDD: 0.1 }));
+        journalAi(f, true, review => { review.bets = undefined; });          // no bet recorded: the extra key is the bot's own doing
+        f.db.query("UPDATE portfolio_decisions SET weights_json = ? WHERE id = 3").run(JSON.stringify({ ...f.target.weights, [symbol]: 0, NVDD: 0.1 }));
+        expect(f.run().portfolio![0].classification).toBe("DIVERGENCE");
+      } finally { f.close(); }
+    });
     test("a lowered weight with NO record of the review is still a DIVERGENCE (the exemption is only the journaled decision)", () => {
       const f = fixture();
       try {

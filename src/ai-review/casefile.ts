@@ -3,6 +3,7 @@
 //   closes      historical.db opened { readonly: true } (timeframe 1d)
 //   pre-market  Alpaca DATA API snapshot (null when unavailable)
 //   news        Alpaca DATA API news, last 72 h, the 8 most recent distinct headlines per symbol
+//   history     the review's own track record (src/ai-review/history.ts, the effect ledger's code over the same two databases)
 // The only network calls are GETs to data.alpaca.markets with the bot's own keys (headers; never printed, never
 // written, never in an error message). The universes are passed in (scripts/ai-review-casefile.ts reads them from
 // src/portfolios/builtin.ts) so this module imports nothing from engines or brokers.
@@ -11,6 +12,7 @@
 import type { Database } from "bun:sqlite";
 import { SLEEVE_IDS, SLEEVE_NAMES, SUMMARY_MAX_CHARS, type CaseFile, type CaseNews, type CaseSleeve, type CaseSymbol, type SleeveId } from "./contract";
 import { getPreviousTradingDay, nyClock, nyInstant, sessionsBetween } from "./calendar";
+import { readHistory } from "./history";
 // @ts-ignore shared owner-facing names, plain JS also used by the dashboard.
 import { symbolName } from "../dashboard/public/v4/js/symbol-names.js";
 
@@ -214,7 +216,12 @@ export function serializeForModel(cf: CaseFile): string {
     return `{"id":${j(s.id)},"name":${j(s.name)},"valueUsd":${j(s.valueUsd)},"symbols":[\n${syms.join(",\n")}\n]}`;
   });
   const warnings = cf.warnings ? `,"warnings":${j(cf.warnings)}` : "";
-  return `{"session":${j(cf.session)},"builtAt":${j(cf.builtAt)}${warnings},"sleeves":[\n${sleeves.join(",\n")}\n]}\n`;
+  const h = cf.history;
+  // One episode / one miss per line, like the headlines: no line near the reader's limit however long the record is.
+  const history = h
+    ? `,"history":{"since":${j(h.since)},"sessions":${j(h.sessions)},"savedUsd":${j(h.savedUsd)},"costUsd":${j(h.costUsd)},"netUsd":${j(h.netUsd)},"episodes":[\n${h.episodes.map(e => j(e)).join(",\n")}${h.episodes.length ? "\n" : ""}],"misses":[\n${h.misses.map(m => j(m)).join(",\n")}${h.misses.length ? "\n" : ""}]}`
+    : "";
+  return `{"session":${j(cf.session)},"builtAt":${j(cf.builtAt)}${warnings}${history},"sleeves":[\n${sleeves.join(",\n")}\n]}\n`;
 }
 
 // ── the whole file ───────────────────────────────────────────────────────
@@ -269,6 +276,13 @@ export async function buildCaseFile(d: CaseFileDeps): Promise<CaseFile> {
   });
 
   const cf: CaseFile = { session: d.session, builtAt: new Date(d.nowMs).toISOString(), sleeves };
+  // The review's own track record (same ledger code as the report). Context for the analysts: never a reason to lose the day's file.
+  try {
+    const history = readHistory(d.tradingDb, d.historicalDb, d.session, d.universes);
+    if (history) cf.history = history;
+  } catch (e) {
+    warnings.push(`history unavailable: ${String((e as Error)?.message ?? e).slice(0, 120)}`);
+  }
   if (warnings.length) cf.warnings = warnings.slice(0, 20);
   return fitSize(cf);
 }

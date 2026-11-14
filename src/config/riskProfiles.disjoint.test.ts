@@ -8,7 +8,9 @@ import { SYMBOL_MAP } from "../executor/binance-executor";
 import { readFileSync } from "node:fs";
 import { currentModelVersion } from "../portfolio/modelVersions";
 import { portfolioEngineOwnedSymbols, portfolioUniverse } from "../portfolios/validate";
-import { isTreasurySymbol } from "../treasury/treasurySymbols";
+import { TREASURY_SYMBOLS, isTreasurySymbol } from "../treasury/treasurySymbols";
+import { builtinPortfolios } from "../portfolios/builtin";
+import { INVERSE_FUNDS, INVERSE_SYMBOLS } from "../ai-review/inverse";
 
 // The two Alpaca sleeves (momentum_stocks, meanrev_stocks) share ONE wallet.
 // AlpacaExecutor.closePosition(symbol) liquidates the AGGREGATE broker position
@@ -58,6 +60,45 @@ describe("momentum_stocks ∩ meanrev_stocks universes", () => {
   test("neither universe has internal duplicates", () => {
     expect(new Set(MOMENTUM_STOCKS_UNIVERSE).size).toBe(MOMENTUM_STOCKS_UNIVERSE.length);
     expect(new Set(MEANREV_UNIVERSE).size).toBe(MEANREV_UNIVERSE.length);
+  });
+});
+
+// Stage C of the AI review (docs/reports/IA-revision-de-noticias-2026-11-14.md, amendment 2026-11-14): the ten inverse funds a `short`
+// vote is bet with are bought by the stock sleeves' live pass but belong to NO universe: the shared wallet's aggregate-close phantom
+// (above) would return if a fund were also traded by a strategy, and BrokerSync owns them through INVERSE_SYMBOLS, not a universe.
+describe("the inverse funds of the AI review (stage C) are in no universe, hedge, signal or treasury symbol", () => {
+  const every = (node: unknown, out = new Set<string>(), key = ""): Set<string> => {
+    if (Array.isArray(node)) {
+      if ((key === "universe" || key === "symbols") && node.every(s => typeof s === "string")) node.forEach(s => out.add(s as string));
+      else node.forEach(v => every(v, out, key));
+    } else if (node && typeof node === "object") {
+      for (const [k, v] of Object.entries(node)) { if (k === "symbol" && typeof v === "string") out.add(v); else every(v, out, k); }
+    }
+    return out;
+  };
+  const definitionSymbols = () => every(builtinPortfolios().map(d => d.params));
+
+  test("no fund is in either stock universe, the crypto universes, a built-in definition (hedge/signal included) or the treasury", () => {
+    const taken = new Map<string, string>();
+    for (const [from, symbols] of Object.entries({
+      "momentum_stocks universe": MOMENTUM_STOCKS_UNIVERSE, "meanrev universe": MEANREV_UNIVERSE, "crypto universe": MOMENTUM_CRYPTO_UNIVERSE,
+      "built-in definitions (universes, hedge, signals)": [...definitionSymbols()], "treasury symbols": [...TREASURY_SYMBOLS],
+      "stock symbols": stockSymbols.map(s => s.symbol), "the Binance ownership set": [...SLEEVE_UNIVERSE_BINANCE],
+    })) for (const s of symbols) taken.set(`${from}|${s}`, s);
+    const clashes = [...taken.entries()].filter(([, s]) => INVERSE_SYMBOLS.includes(s)).map(([k]) => k);
+    expect(clashes).toEqual([]);
+    for (const s of INVERSE_SYMBOLS) expect(isTreasurySymbol(s)).toBe(false);
+    expect(INVERSE_SYMBOLS).not.toContain("SH");
+  });
+  test("each fund appears once, and each stock it bets against is in exactly one stock sleeve's universe", () => {
+    expect(new Set(INVERSE_SYMBOLS).size).toBe(INVERSE_SYMBOLS.length);
+    for (const f of INVERSE_FUNDS) {
+      const homes = [MOMENTUM_STOCKS_UNIVERSE.includes(f.underlying), MEANREV_UNIVERSE.includes(f.underlying)].filter(Boolean);
+      expect(homes).toHaveLength(1);
+    }
+  });
+  test("the tradable stocks the funds track are single names (the sleeves never hold the fund itself)", () => {
+    for (const f of INVERSE_FUNDS) expect([...MOMENTUM_STOCKS_UNIVERSE, ...MEANREV_UNIVERSE]).not.toContain(f.symbol);
   });
 });
 

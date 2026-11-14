@@ -12,7 +12,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Exec } from "./analyst";
-import { reviewApplies } from "./apply";
+import { reviewApplies, reviewBetsOn } from "./apply";
 import { SLEEVE_IDS, parseCaseFile, parseDecision, type CaseFile, type Decision, type SleeveId } from "./contract";
 import { familyOf, parseQuota, PRIMARIES, SUBSTITUTES } from "./models";
 import { review } from "./review";
@@ -21,6 +21,7 @@ import { serializeForModel } from "./casefile";
 import { opsFailure, opsNoDecision, opsShipped, ownerMessage, type Applies } from "./texts";
 
 const words = (s: string): string[] => s.trim().split(/\s+/).filter(Boolean);
+const list = (s: string | undefined): string[] | null => { const l = (s ?? "").split(",").map(x => x.trim()).filter(Boolean); return l.length ? l : null; };
 
 export interface Config {
   root: string;
@@ -42,6 +43,12 @@ export interface Config {
    *  bot's deployed code and its kill switch are what decide. Wording only (the message's tense, the decision's
    *  `stage`); the bot never trusts it. */
   apply: Applies;
+  /** Stage C, same rule as `apply`: whether the bot BETS on a short, as this machine sees the switch. Only the fallback of the case file's `betsOn`. */
+  betsOn: boolean;
+  /** The panel: the constants of models.ts unless the environment names another (tests pin the mechanics with their own panel, so a
+   *  panel change released by the weekly adjustment never needs a test edited). */
+  primaries: readonly string[];
+  substitutes: readonly string[];
 }
 
 export function loadConfig(env: Record<string, string | undefined>, root: string): Config {
@@ -66,6 +73,9 @@ export function loadConfig(env: Record<string, string | undefined>, root: string
     // A test clock moves with real elapsed time, so deadlines still work.
     nowMs: fixed === null ? () => Date.now() : () => fixed + (Date.now() - startReal),
     apply: Object.fromEntries(SLEEVE_IDS.map(s => [s, reviewApplies(s, env)])) as Record<SleeveId, boolean>,
+    betsOn: reviewBetsOn(env),
+    primaries: list(env.AI_REVIEW_PRIMARIES) ?? PRIMARIES,
+    substitutes: list(env.AI_REVIEW_SUBSTITUTES) ?? SUBSTITUTES,
   };
 }
 
@@ -180,6 +190,8 @@ export function prepareRunDir(cfg: Config, runDir: string, cf: CaseFile): void {
 /** Does the bot act on each strategy's review? The bot's own host says so in the case file; without that, this
  *  machine's view of the switch. */
 export const appliesOf = (cfg: Pick<Config, "apply">, cf: Pick<CaseFile, "applies">): Applies => cf.applies ?? cfg.apply;
+/** Whether the bot bets on a short, as the bot's host says it (the case file's `betsOn`), else this machine's own reading. */
+export const betsOnOf = (cfg: Pick<Config, "betsOn">, cf: Pick<CaseFile, "betsOn">): boolean => cf.betsOn ?? cfg.betsOn;
 
 // ── one review ───────────────────────────────────────────────────────────
 interface Outcome { decision: Decision | null; notes: string[]; models: Decision["models"]; runDir: string }
@@ -190,7 +202,7 @@ async function reviewCaseFile(cfg: Config, cf: CaseFile, o: { runDir: string; de
   const quota = qr.code === 0 ? parseQuota(qr.stdout) : null;
   if (quota === null) o.log(`cuotas-ia unusable (exit ${qr.code}); trying the primaries anyway`);
   const res = await review({
-    caseFile: cf, primaries: o.primaries, substitutes: SUBSTITUTES, quota,
+    caseFile: cf, primaries: o.primaries, substitutes: cfg.substitutes, quota,
     exec: opencodeExec(cfg, o.runDir, cf.session), now: cfg.nowMs, deadlineMs: o.deadlineMs, modelTimeoutSec: cfg.modelTimeoutSec, log: o.log,
     decidedAtMs: cfg.nowMs(), stage: SLEEVE_IDS.some(s => appliesOf(cfg, cf)[s]) ? "apply" : "inform",
   });
@@ -220,12 +232,12 @@ export async function main(argv: string[], env: Record<string, string | undefine
     let parsed;
     try { parsed = parseCaseFile(JSON.parse(readFileSync(path, "utf8"))); } catch (e) { console.error(`casefile unreadable: ${(e as Error).message}`); return 65; }
     if (!parsed.ok) { console.error(`casefile invalid: ${parsed.error}`); return 65; }
-    const models = flag("--models")?.split(",").map(s => s.trim()).filter(Boolean) ?? [...PRIMARIES];
+    const models = flag("--models")?.split(",").map(s => s.trim()).filter(Boolean) ?? [...cfg.primaries];
     const runDir = join(cfg.stateDir, "runs", `dry-${parsed.value.session}-${Math.floor(cfg.nowMs() / 1000)}`);
     mkdirSync(runDir, { recursive: true });
     const out = await reviewCaseFile(cfg, parsed.value, { runDir, deadlineMs: null, primaries: models, log });
     console.log(JSON.stringify({ decision: out.decision, models: out.models, notes: out.notes, runDir }, null, 2));
-    if (out.decision) console.log(`\n--- owner message (not sent) ---\n${ownerMessage(out.decision, appliesOf(cfg, parsed.value))}`);
+    if (out.decision) console.log(`\n--- owner message (not sent) ---\n${ownerMessage(out.decision, appliesOf(cfg, parsed.value), betsOnOf(cfg, parsed.value))}`);
     return out.decision ? 0 : 3;
   }
 
@@ -253,7 +265,7 @@ export async function main(argv: string[], env: Record<string, string | undefine
   }
   writeFileSync(join(runDir, "casefile.raw.json"), got.text);
 
-  const out = await reviewCaseFile(cfg, got.cf, { runDir, deadlineMs, primaries: PRIMARIES, log });
+  const out = await reviewCaseFile(cfg, got.cf, { runDir, deadlineMs, primaries: cfg.primaries, log });
   if (!out.decision) {
     log(`no decision: ${out.notes.join("; ")}`);
     await ops(opsNoDecision(session, out.models, out.notes));
@@ -275,7 +287,7 @@ export async function main(argv: string[], env: Record<string, string | undefine
     return 0;
   }
   log(`decision ${out.decision.id} shipped: ${out.decision.overrides.length} override(s) of ${out.decision.reviewed}`);
-  const told = await sendTelegram(cfg, "owner", ownerMessage(out.decision, appliesOf(cfg, got.cf)), log);
+  const told = await sendTelegram(cfg, "owner", ownerMessage(out.decision, appliesOf(cfg, got.cf), betsOnOf(cfg, got.cf)), log);
   const warnings = got.cf.warnings ?? [];
   const notable = out.notes.length > 0 || warnings.length > 0 || out.models.some(m => !m.ok) || !told;
   if (notable) await ops(opsShipped(out.decision, out.notes.concat(told ? [] : ["el mensaje al dueño no salió"]), warnings));

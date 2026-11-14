@@ -374,6 +374,28 @@ describe("the AI review's line on a stock strategy (owner, 2026-11-14): one sent
     expect(aiReviewLine(p(item("NVDA", "short", true))).text).toBe("AI review: decided to take Nvidia out");
   });
 
+  // Stage C: a short with a fund is a bet; the line says so, in both tenses and both languages. A short WITHOUT `bet` is still "take out".
+  test("a bet: decided to bet against Nvidia / would bet against Nvidia, in both languages; a short that is not a bet is still taken out", () => {
+    const bet = (symbol, applied) => item(symbol, "short", applied, { bet: true });
+    expect(aiReviewLine(p(bet("NVDA", true))).text).toBe("AI review: decided to bet against Nvidia");
+    expect(aiReviewLine(p(bet("NVDA", false))).text).toBe("AI review: would bet against Nvidia");
+    expect(aiReviewLine(p(item("NVDA", "short", true, { bet: false }))).text).toBe("AI review: decided to take Nvidia out");
+    store.state.lang = "es";
+    expect(aiReviewLine(p(bet("NVDA", true))).text).toBe("Revisión de IA: decidió apostar contra Nvidia");
+    expect(aiReviewLine(p(bet("NVDA", false))).text).toBe("Revisión de IA: apostaría contra Nvidia");
+    expect(aiReviewLine(p(item("NVDA", "short", false))).text).toBe("Revisión de IA: sacaría Nvidia");
+  });
+
+  test("a bet next to an exit and a halving: one sentence, each kind once, the bet FIRST (a long line is cut at its end); two bets share the verb", () => {
+    expect(aiReviewLine(p(item("USD", "exit", true), item("AAPL", "reduce", true), item("NVDA", "short", true, { bet: true }))).text)
+      .toBe("AI review: decided to bet against Nvidia; decided to take Semiconductors ×2 out; decided to halve Apple");
+    expect(aiReviewLine(p(item("NVDA", "short", true, { bet: true }), item("MSFT", "short", true, { bet: true }))).text).toBe("AI review: decided to bet against Nvidia, Microsoft");
+    store.state.lang = "es";
+    expect(aiReviewLine(p(item("USD", "exit", true), item("AAPL", "reduce", true), item("NVDA", "short", true, { bet: true }))).text)
+      .toBe("Revisión de IA: decidió apostar contra Nvidia; decidió sacar Semiconductores ×2; decidió reducir Apple a la mitad");
+    expect(aiReviewLine(p(item("JPM", "exit", true), item("NVDA", "short", false, { bet: true }))).text).toBe("Revisión de IA: decidió sacar JPMorgan; apostaría contra Nvidia");
+  });
+
   test("the reason and the hosts of the sources ride in the title, one line per stock", () => {
     expect(aiReviewLine(p(item("NVDA", "exit", true), item("AAPL", "reduce", true, { sources: [] }))).title)
       .toBe("Nvidia: Motivo de NVDA. (cnbc.com, reuters.com)\nApple: Motivo de AAPL.");
