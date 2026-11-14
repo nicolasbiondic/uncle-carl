@@ -544,15 +544,21 @@ export class PortfolioEngine {
   /** A fund is only ever held for a bet, so a held fund with no target weight (the bet ended, or its stop took it out) leaves IN FULL at
    *  this pass. The planner alone keeps a lot that is smaller than its rebalance band, and a stop that sells nothing is no stop: so the same
    *  planner is asked again about just those lots, with no band (its own quantities, steps and minimum order). A lot that already has an
-   *  order in the plan (its sell, or its MAX_HOLD close) is left alone. With no such lot the plan is returned untouched. */
+   *  order in the plan (its sell, or its MAX_HOLD close) is left alone. With no such lot the plan is returned untouched. Fail-open like
+   *  the rest of the review: an error here leaves the plan exactly as the planner made it (the five-session rule still closes the lot). */
   private withBetExits(intents: OrderIntent[], target: TargetBook, book: BookState, prices: Readonly<Record<string, number>>, rules: VenueRules): OrderIntent[] {
     if (this.opts.market !== "stocks") return intents;
-    const leaving = book.positions.filter(p => isInverseSymbol(p.symbol) && p.qty > 0 && !((target.weights[p.symbol] ?? 0) > 0) && !intents.some(i => i.symbol === p.symbol));
-    if (leaving.length === 0) return intents;
-    const exits = this.planFn({ ...target, weights: {}, maxHold: undefined }, { ...book, positions: leaving }, prices, { ...rules, rebalanceBand: 0 })
-      .filter(i => i.side === "sell" && leaving.some(p => p.symbol === i.symbol));
-    if (exits.length === 0) return intents;
-    return [...intents, ...exits].sort((a, b) => (a.side === b.side ? compareSymbols(a.symbol, b.symbol) : a.side === "sell" ? -1 : 1));
+    try {
+      const leaving = book.positions.filter(p => isInverseSymbol(p.symbol) && p.qty > 0 && !((target.weights[p.symbol] ?? 0) > 0) && !intents.some(i => i.symbol === p.symbol));
+      if (leaving.length === 0) return intents;
+      const exits = this.planFn({ ...target, weights: {}, maxHold: undefined }, { ...book, positions: leaving }, prices, { ...rules, rebalanceBand: 0 })
+        .filter(i => i.side === "sell" && leaving.some(p => p.symbol === i.symbol));
+      if (exits.length === 0) return intents;
+      return [...intents, ...exits].sort((a, b) => (a.side === b.side ? compareSymbols(a.symbol, b.symbol) : a.side === "sell" ? -1 : 1));
+    } catch (e: any) {
+      this.log.warn(`AI review: could not plan the exit of a bet's small lot (${e?.message ?? e}) — the plan stays as it was`);
+      return intents;
+    }
   }
 
   /** Live book step shared by the normal pass and the stale closes-only pass: adopt the sleeve's rows

@@ -171,6 +171,14 @@ describe("the adjustments line", () => {
     expect(adjustmentsLine([], { kind: "failed", reason: "el agente terminó con error." })).toBe("Ajustes de esta semana: no se pudo revisar (el agente terminó con error).");
     expect(adjustmentsLine([entry("2026-11-21", "change", "x")], { kind: "violated" })).toContain("los revisará una persona");
   });
+  test("an adjustment the launcher could not publish: pinned verbatim, and the entry's own sentence is NOT quoted (it never reached the released log)", () => {
+    const line = "Ajustes de esta semana: la revisión se hizo, pero no se pudo publicar; lo revisa una persona.";
+    expect(adjustmentsLine([], { kind: "unpublished" })).toBe(line);
+    expect(adjustmentsLine([entry("2026-11-21", "change", "Una frase que no salió.")], { kind: "unpublished" })).toBe(line);
+    const msg = weeklyMessage({ data: data(), week: WEEK, adjustments: [], agent: { kind: "unpublished" } });
+    expect(msg.split("\n").at(-1)).toBe(line);
+    expect(msg.split("\n")[0]).toBe("🧠 Revisión de IA · semana del 16 al 20 nov");
+  });
 });
 
 describe("the log's entries", () => {

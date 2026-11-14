@@ -15,6 +15,7 @@ import { HistoricalPriceView } from "./priceView";
 import { getPortfolioDecision } from "./persistence";
 import { FakeVenue, XASSET, fixedDecide, makeHistDb, weekdaySessions } from "./testSupport";
 import { decide as coreDecide, type CoreDecideInput } from "../decide";
+import { planOrders as corePlanOrders } from "../orders";
 import type { VolManagedConfig, XassetTrendConfig } from "../types";
 import * as applyModule from "../../ai-review/apply";
 import { aiReviewHook, type AiReviewHook } from "../../ai-review/apply";
@@ -417,6 +418,21 @@ describe("a fund with no target leaves in full, whatever the planner's rebalance
     await engine(venue, { aiReview: hookOf(true), decide: fixedDecide({}) }).runSession(WINDOW);
     expect(venue.submits.map(s => `${s.order.side}:${s.order.symbol}:${s.order.qty}`)).toEqual(["sell:METD:3"]);
     expect(rowOf("KO")).toMatchObject({ status: "open" });
+  });
+
+  test("fail-open: a planner that fails when asked about the small lot leaves the pass exactly as the planner made it", async () => {
+    put(SESSION, []);
+    const venue = small();
+    let asked = 0;
+    const plan: typeof corePlanOrders = (target, book, prices, rules) => {
+      if (rules.rebalanceBand === 0) { asked++; throw new Error("boom"); }      // only the second question (no band) fails
+      return corePlanOrders(target, book, prices, rules);
+    };
+    const rep = await engine(venue, { ...opts(), planOrders: plan }).runSession(WINDOW);
+    expect(asked).toBe(1);
+    expect(rep.status).toBe("submitted");
+    expect(venue.submits.map(s => `${s.order.side}:${s.order.symbol}`)).toEqual(["buy:NVDA"]);   // the model's own order; the small fund lot stays for now
+    expect(rowOf("NVDD")).toMatchObject({ status: "open" });
   });
 
   test("a lot at its five-session limit already has its MAX_HOLD close: no second sell is added", async () => {

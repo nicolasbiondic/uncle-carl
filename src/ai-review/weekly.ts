@@ -152,7 +152,9 @@ export function parseAdjustments(md: string): AdjustmentEntry[] {
   return out;
 }
 
-export type AgentOutcome = { kind: "ok" } | { kind: "skipped" | "failed"; reason: string } | { kind: "violated" };
+/** `violated`: the agent touched something it may not (nothing was published). `unpublished`: its change was within the rules but the
+ *  launcher could not publish it (the release failed before pushing, the main checkout was not clean, origin moved and conflicted). */
+export type AgentOutcome = { kind: "ok" } | { kind: "skipped" | "failed"; reason: string } | { kind: "violated" } | { kind: "unpublished" };
 
 const sentence = (s: string) => (/[.!?…]$/.test(s.trim()) ? s.trim() : `${s.trim()}.`);
 
@@ -161,6 +163,7 @@ export function adjustmentsLine(entries: readonly AdjustmentEntry[], agent: Agen
   const head = "Ajustes de esta semana:";
   if (agent.kind === "skipped" || agent.kind === "failed") return `${head} no se pudo revisar (${agent.reason.trim().replace(/[.\s]+$/, "")}).`;
   if (agent.kind === "violated") return `${head} los revisará una persona antes de darlos por buenos (el ajuste tocó algo que no debía).`;
+  if (agent.kind === "unpublished") return `${head} la revisión se hizo, pero no se pudo publicar; lo revisa una persona.`;
   if (entries.length === 0) return `${head} no quedó anotada la revisión de esta semana.`;
   const changes = entries.filter(e => e.kind === "change");
   if (changes.length === 0) {
