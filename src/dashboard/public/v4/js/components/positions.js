@@ -1,7 +1,6 @@
 import { store, t, sleeveLabel, portfolioName, portfolioLabel } from "../store.js";
 import { money, moneyCompact, pnlWhole, quantity, pctWhole, pctSentence, pnlColor, dur } from "../fmt.js";
 import { esc } from "../ui.js";
-import { capitalGauge, isOverLimit, gaugeTickWord } from "../capital-gauge.js";
 import { symbolCell } from "../symbol-cell.js";
 import { renderTrades } from "./trades.js";
 import { positionsTotals } from "../money-values.js";
@@ -87,11 +86,21 @@ export function sleeveExposure(positions, accounts) {
 /** Market value — what the engines' gross-cap check sums (the broker's
  *  current notional) — falling back to the entry price while no current
  *  price is known. Shared by the group header and the Notional column. */
-function marketNotional(p, account) {
+export function marketNotional(p, account) {
   if (isInverseContractSleeve(account) || !priced(p?.quantity)) return null;
   const px = priced(p?.currentPrice) && Number(p.currentPrice) > 0 ? Number(p.currentPrice)
     : priced(p?.avgEntryPrice) ? Number(p.avgEntryPrice) : null;
   return px == null ? null : Math.abs(Number(p.quantity)) * px;
+}
+
+/** The ONE rule for "past its limit", whole percent as the sentences show it,
+ *  so rounding drift at the limit never turns red (at the limit is the design
+ *  size of an always-invested book). Without a known limit: from 100 % of the
+ *  capital. Shared by the table's title, exposureColor and the Bot card. */
+export function isOverLimit(ratio, cap) {
+  if (ratio == null || !Number.isFinite(Number(ratio))) return false;
+  if (cap == null || !Number.isFinite(Number(cap)) || Number(cap) <= 0) return Number(ratio) >= 1;
+  return Math.round(Number(ratio) * 100) > Math.round(Number(cap) * 100);
 }
 
 /** Colour of an exposure ratio: by its share of the sleeve's own cap when the
@@ -181,15 +190,6 @@ export function exposurePhrase(x) {
   return { text: `${t("invested", "invertido")} ${body}`, body, color, usage: x.usage, ratio: x.ratio, cap: x.cap };
 }
 
-/** The header's capital gauge (capital-gauge.js, the one every surface uses):
- *  a track to the larger of the limit and 100 %, a fill to the current share
- *  of the capital, a tick at 100 % when the track goes past it, red only past
- *  the limit (the phrase's colour). */
-export function renderExposureBar(xp) {
-  if (!xp || xp.ratio == null) return "";
-  return capitalGauge({ ratio: xp.ratio, cap: xp.cap, over: !!xp.color });
-}
-
 /** How many rows of a group are up / down / flat since entry (unpriced rows
  *  are in none: like the totals, never counted as break-even). */
 export function groupOutcome(rows) {
@@ -212,22 +212,6 @@ export function outcomeWords({ up, down, flat }) {
   return parts.join(", ");
 }
 
-/** The win/loss split: one small bar, green for the share of positions that
- *  are up, red for those that are down, muted for flat ones. Decoration only
- *  (aria-hidden): the words beside it ("2 up, 9 down") say the same. */
-export function renderSplitBar({ up, down, flat }) {
-  if (!(up + down + flat)) return "";
-  const seg = (cls, count) => (count ? `<i class="${cls}" style="flex-grow:${count}"></i>` : "");
-  return `<span class="splitbar" aria-hidden="true">${seg("sb-up", up)}${seg("sb-flat", flat)}${seg("sb-down", down)}</span>`;
-}
-
-/** The split bar followed by its words; "" when no row is priced. */
-function renderOutcome(rows) {
-  const o = groupOutcome(rows);
-  const words = outcomeWords(o);
-  return words ? `<span class="pg-split">${renderSplitBar(o)}<span class="pg-split-txt">${esc(words)}</span></span>` : "";
-}
-
 /** "open −$858 (−1 %)": the result with its weighted % when it is known. */
 function openWords(pnl, fine) {
   return `${t("open", "sin cerrar")} ${pnlWhole(pnl.total)}${pnl.pct != null ? ` (${pctSentence(pnl.pct, fine)})` : ""}`;
@@ -241,7 +225,6 @@ function groupTitle(g, sentence) {
     parts.push(`${t("Holds", "Tiene")} ${money(x.notional, 0)} ${t("at market against", "a mercado sobre")} ${money(x.base, 0)} ${t("of", "de")} ${baseLabel} (${wholePct(x.ratio)}).`);
     if (x.cap != null) parts.push(`${t("Limit", "Límite")} ${wholePct(x.cap)}.`);
     if (x.allocation) parts.push(`${t("Allocation", "Asignación")} ${money(x.allocation, 0)}.`);
-    if (Math.max(x.cap ?? Math.max(1, x.ratio), 1) > 1) parts.push(gaugeTickWord());
   } else if (x) {
     parts.push(t("Notional unknown: COIN-M quantities are contracts, not units.", "Nocional desconocido: en COIN-M las cantidades son contratos, no unidades."));
   }
@@ -249,34 +232,25 @@ function groupTitle(g, sentence) {
   return parts.join(" ");
 }
 
-/** The header as a small summary band, still one clickable row:
- *   Momentum Stocks · 11 positions · $71,526   open −$858 (−1 %)      [split bar] 2 up, 9 down   invested 146 % of its capital · limit 250 % [gauge]
- *  The result is the main figure (a step heavier than the muted text, in the
- *  result colour, its % the weighted one of positionsTotals); beside it the
- *  win/loss split; on the right the capital gauge with its words. The whole
- *  sentence rides in the title with the long explanation (market value against
- *  the base, the limit, the allocation). Too narrow: the right part drops to a
- *  second line. */
+/** The header is ONE plain sentence, still one clickable row that folds the
+ *  group: "Momentum Stocks · 11 positions · $71,762 · open −$623 (−0.9 %)".
+ *  The exposure (how much of its capital is invested, its limit) and the
+ *  market value against the base ride in the title. */
 function renderGroupHeader(g, collapsed, cols) {
   const count = g.rows.length;
   const cnt = `${count} ${count === 1 ? t("position", "posición") : t("positions", "posiciones")}`;
   const valueText = g.invested != null ? money(g.invested, 0) : "";
-  const words = outcomeWords(groupOutcome(g.rows));
   const xp = exposurePhrase(g.exposure);
   const open = g.pnl.counted ? openWords(g.pnl, false) : "";
-  const sentence = [g.label, cnt, valueText, open, words, xp?.text].filter(Boolean).join(" · ");
+  const sentence = [g.label, cnt, valueText, open, xp?.text].filter(Boolean).join(" · ");
   const pnl = g.pnl.counted
-    ? ` <span class="pg-pnl" style="color:${pnlColor(g.pnl.total)}">${t("open", "sin cerrar")} ${pnlWhole(g.pnl.total)}${g.pnl.pct != null ? ` <span class="pg-pct">(${pctSentence(g.pnl.pct)})</span>` : ""}</span>`
+    ? ` <span class="muted">·</span> <span class="pg-pnl" style="color:${pnlColor(g.pnl.total)}">${esc(open)}</span>`
     : "";
-  const exp = xp
-    ? `<span class="pg-exp"><span class="pg-x"${xp.color ? ` style="color:${xp.color}"` : ""}>${esc(xp.text)}</span>${renderExposureBar(xp)}</span>`
-    : "";
-  const right = renderOutcome(g.rows) + exp;
   // One cell across the row. Its content is sized width:0/min-width:100%
   // (app.css .pgroup-btn) so the sentence never widens the symbol column
   // the way a label in the first cell would (see renderTotalsRow).
   return `<tr class="pgroup"><td colspan="${cols}"><button type="button" class="pgroup-btn" data-pgroup="${esc(g.id)}" aria-expanded="${!collapsed}" title="${esc(groupTitle(g, sentence))}">
-      <span class="pg-l"><span class="pg-chev" aria-hidden="true"></span><span class="pg-name">${esc(g.label)}</span><span class="pg-sum"><span class="muted">·</span> ${cnt}${valueText ? ` <span class="muted">·</span> ${esc(valueText)}` : ""}</span>${pnl}</span>${right ? `<span class="pg-r">${right}</span>` : ""}
+      <span class="pg-chev" aria-hidden="true"></span><span class="pg-name">${esc(g.label)}</span><span class="pg-sum"><span class="muted">·</span> ${cnt}${valueText ? ` <span class="muted">·</span> ${esc(valueText)}` : ""}${pnl}</span>
     </button></td></tr>`;
 }
 
@@ -473,9 +447,8 @@ export function renderPositions(state, trades) {
 /** The totals row: the sum of the open positions' since-entry result shown
  *  above, its weighted % (positionsTotals: Σ result ÷ Σ entry amount, NOT an
  *  average of the rows' percentages; absent when any row's entry amount is
- *  unknown, never a partial denominator) and how many are up and down, with the
- *  same split bar as the group headers. One decimal on the %, whole dollars on
- *  the money.
+ *  unknown, never a partial denominator) and how many are up and down. One
+ *  decimal on the %, whole dollars on the money.
  *
  *  Positions whose unrealizedPnl is not a finite number are EXCLUDED and
  *  reported, never coerced to 0: outside market hours (or on a thin tape) a
@@ -495,11 +468,8 @@ function renderTotalsRow(positions, anyTp, accById) {
   // (2026-10-12).
   const what = `${counted} ${counted === 1 ? t("position", "posición") : t("positions", "posiciones")}`;
   const result = `${pnlWhole(total)}${pct != null ? ` (${pctSentence(pct, true)})` : ""}`;
-  const split = renderOutcome(positions);
-  // The "·" before the split bar is for the read sentence only (.vh): on screen
-  // the bar separates by itself, and a visible dot dangled at the line end when
-  // the footer wrapped.
+  const words = outcomeWords(groupOutcome(positions));
   return `<tfoot><tr class="totals">
-    <td colspan="${4 + (anyTp ? 1 : 0)}"><div class="pgroup-btn pg-foot"><span class="pg-foot-l">${t("Open, since entry", "Sin cerrar (desde la entrada)")} <span class="pg-pnl" style="color:${pnlColor(total)}">${esc(result)}</span> <span class="muted">· ${esc(what)}${note}${split ? ' <span class="vh">·</span>' : ""}</span>${split ? ` <span class="pg-nw">${split}</span>` : ""}</span></div></td>
+    <td colspan="${4 + (anyTp ? 1 : 0)}"><div class="pgroup-btn pg-foot"><span class="pg-foot-l">${t("Open, since entry", "Sin cerrar (desde la entrada)")} <span class="pg-pnl" style="color:${pnlColor(total)}">${esc(result)}</span> <span class="muted">· ${esc(what)}${note}${words ? ` · ${esc(words)}` : ""}</span></span></div></td>
   </tr></tfoot>`;
 }

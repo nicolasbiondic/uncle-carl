@@ -2,12 +2,12 @@ import { afterEach, expect, test, spyOn } from "bun:test";
 import express from "express";
 import {
   getDB, saveEquitySnapshot, getETWindowStart, getETYesterday, getETDayBounds,
-  getEquityPnlDisplay, getClosedEpisodeResult, accumulatePartialCloseLedger,
+  getEquityPnlDisplay, getEquityWindowDisplay, getClosedEpisodeResult, accumulatePartialCloseLedger,
   closeTrade, recordFill, pruneEquitySnapshots, savePnlWindowMarks, closedEpisodePct,
 } from "../db/database";
 import { makeTestDb, seedOpenTrade } from "../test-support/db";
 import { setBrokerTruthAvailable, readDisplayMoneyWindow, publishInvariantEpisodes } from "./truth";
-import { readMoneyWindow, readSleeveMoney, readOpenMoney, tileMoney, readBinanceMarginBreakdown, moneyReportDate } from "./money";
+import { readMoneyWindow, readSleeveMoney, readOpenMoney, readOutsideStrategies, tileMoney, readBinanceMarginBreakdown, moneyReportDate } from "./money";
 import { computeRealizedAttribution } from "./pnlBreakdown";
 import { applyBuyFill, applySellFill, reconcileRowToBroker } from "../portfolio-engine/live/rows";
 import { registerProfileRoutes } from "../dashboard/routes/profiles";
@@ -28,6 +28,10 @@ import { sinceStart, renderProfiles } from "../dashboard/public/v4/js/components
 import { renderPositions, positionsTotals } from "../dashboard/public/v4/js/components/positions.js";
 // @ts-ignore frontend ES module
 import { renderTrades } from "../dashboard/public/v4/js/components/trades.js";
+// @ts-ignore frontend ES module
+import { strategyFigures, curveGeometry } from "../dashboard/public/v4/js/components/strategy-chart.js";
+// @ts-ignore frontend ES module
+import { boardModel, outsideLine } from "../dashboard/public/v4/js/components/board.js";
 
 const NOW = Date.parse("2026-11-07T17:00:00Z");
 const originalState = { ...store.state };
@@ -300,4 +304,77 @@ test("three legs anchored seconds apart before the same boundary keep their %; a
   // The gain over the starting value stays available beside the strict null;
   // only the since-start figure shows it (a 1-day tile keeps the null above).
   expect(late.pnlPctOnStart).toBeCloseTo(111 / 110800 * 100, 8);
+});
+
+// The Overview board (2026-11-14): each strategy column's value, its 30-day change and its % are the display
+// reader's (getEquityWindowDisplay), and the curve it draws is the same series: last − first is that change.
+test("the board column of a strategy: its figure equals the reader's and equals last − first of the series it draws", async () => {
+  clock(); makeTestDb(); clearApiCache();
+  const marks: Array<[string, number, number]> = []; // [strategy, days ago, equity]
+  for (const [id, base, drift] of [["momentum_stocks", 48_699, 1_204], ["momentum_crypto", 9_880, -570]] as const) {
+    for (let d = 40; d >= 0; d--) marks.push([id, d, base + (d >= 31 ? -300 : (31 - d) / 31 * drift) + (d % 3) * 40]);
+  }
+  for (const [id, daysAgo, equity] of marks) saveEquitySnapshot(id, equity, 1_000, 0, NOW - daysAgo * 86_400_000 - 600_000);
+  const accounts = [{ id: "momentum_stocks", broker: "alpaca", equity: 12_345, initialEquity: 50_000, label: "Momentum Stocks" }, // the stale ledger equity must NOT be what the block shows
+    { id: "momentum_crypto", broker: "binance", equity: 99, initialEquity: 10_000, label: "Momentum Crypto" }];
+  const positions = [{ profileId: "momentum_stocks", symbol: "SPY", market: "stock", side: "buy", quantity: 9, avgEntryPrice: 104, currentPrice: 105, openedAt: NOW - 3_600_000, unrealizedPnl: 9 }];
+  const app = express(); registerStrategyRoutes(app, { getActiveStrategies: () => [] } as any);
+  const server = app.listen(0); const { port } = server.address() as { port: number };
+  try {
+    const curves: Record<string, any[]> = {};
+    for (const id of ["momentum_stocks", "momentum_crypto"]) {
+      const rows = await (await fetch(`http://127.0.0.1:${port}/api/equity/history?account=${id}&days=30&points=120`)).json() as any[];
+      curves[id] = rows;
+      const w = getEquityWindowDisplay(id, 30)!;
+      expect(w).not.toBeNull();
+      expect(rows.length).toBeLessThanOrEqual(120);
+      expect(rows.at(-1).moneyWindow.pnl).toBe(w.pnl);                    // the route carries the reader's window
+      expect(rows.at(-1).moneyWindow.equity).toBe(w.equity);
+      expect(rows.at(-1).moneyWindow.pnlPct).toBe(w.pnlPct);
+      const fig = strategyFigures(rows);
+      expect(fig).toMatchObject({ value: w.equity, pnl: w.pnl, pct: w.pnlPct });
+      expect(fig.values.at(-1) - fig.values[0]).toBeCloseTo(w.pnl, 8);     // what the curve draws is the change the head says
+      expect(fig.values[0]).toBe(w.start.equity);
+      expect(curveGeometry(fig.values).up).toBe(w.pnl >= 0);
+    }
+    Object.assign(store.state, { lang: "en" });
+    const model = boardModel({ view: "consolidated", curves, curvesTried: { momentum_stocks: true, momentum_crypto: true }, botNow: null, dashboard: { accounts, portfolio: { positions } } }, { now: NOW });
+    const col = (id: string) => model.cols.find((c: any) => c.id === id).parts;
+    const w = getEquityWindowDisplay("momentum_stocks", 30)!, c = getEquityWindowDisplay("momentum_crypto", 30)!;
+    const whole = (n: number) => `${n < 0 ? "−" : "+"}$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
+    expect(col("momentum_stocks").fig).toContain(`<div class="bc-value">$${Math.round(w.equity).toLocaleString("en-US")}</div>`);
+    expect(col("momentum_stocks").fig).toContain(`${whole(w.pnl)} (${w.pnlPct! < 0 ? "−" : "+"}${Math.abs(w.pnlPct!).toFixed(1)} %) in 30 days`);
+    expect(col("momentum_crypto").fig).toContain(`<div class="bc-value">$${Math.round(c.equity).toLocaleString("en-US")}</div>`);
+    expect(model.cols.map((x: any) => x.parts.fig).join("")).not.toContain("12,345"); // never accounts[].equity
+    expect(col("momentum_stocks").lines).toContain("+$9 since entry");
+    // the one summary line under the board is the open reader's too
+    expect(model.foot).toContain(`1 position open <span class="muted">·</span> <span style="color:var(--up);font-weight:600">${whole(readOpenMoney(positions).total)} since entry`);
+  } finally { server.close(); }
+});
+
+// The board shows each strategy's value under the account's total equity; they do
+// not add up because some money belongs to no strategy. ONE formula says how much,
+// for the digest ("Fuera de las estrategias: …") and for the board's line, each fed
+// the figures it shows, rounded first: the strategies + this = the total, to the dollar.
+test("outside the strategies: one formula for the digest and the board, and the screen adds up", () => {
+  const total = 118_479.4, values = [49_372.3, 5_370.2, 54_633.4, 6_384.3];
+  const out = readOutsideStrategies(total, values)!;
+  expect(out).toBe(118_479 - (49_372 + 5_370 + 54_633 + 6_384));
+  expect(values.reduce((s, v) => s + Math.round(v), 0) + out).toBe(Math.round(total));
+  // unknown stays unknown: no figure over a partial sum
+  expect(readOutsideStrategies(null as any, values)).toBeNull();
+  expect(readOutsideStrategies(total, [49_372.3, NaN])).toBeNull();
+  expect(readOutsideStrategies(total, [49_372.3, undefined as any])).toBeNull();
+  expect(readOutsideStrategies(total, [])).toBeNull();
+  const lang = store.state.lang;
+  try {
+    Object.assign(store.state, { lang: "es" });
+    // the digest's very words (src/telegram/digest.test.ts pins them there)
+    expect(outsideLine(total, values)!.text).toBe(`Fuera de las estrategias: $${out.toLocaleString("en-US")} (efectivo inicial de Alpaca y garantía en BTC)`);
+    expect(outsideLine(total, values)!.title).toBe("Patrimonio $118,479 = las estrategias $115,759 + $2,720 fuera de ellas");
+    Object.assign(store.state, { lang: "en" });
+    expect(outsideLine(total, values)!.text).toBe("Outside the strategies: $2,720 (Alpaca's initial cash and BTC collateral)");
+    expect(outsideLine(100_040, [50_000, 50_000])).toBeNull(); // rounding and timing, not a holding
+    expect(outsideLine(total, [49_372.3, null as any])).toBeNull();
+  } finally { Object.assign(store.state, { lang }); }
 });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { displayBucketMs, resampleEquityForDisplay, windowDays } from "./equityResample";
+import { displayBucketMs, resampleEquityForDisplay, thinSeries, windowDays } from "./equityResample";
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -65,5 +65,25 @@ describe("resampleEquityForDisplay", () => {
   test("short series pass through untouched", () => {
     const rows = [pt(MON, 1), pt(MON + MIN, 2)];
     expect(resampleEquityForDisplay(rows, HOUR, true)).toBe(rows);
+  });
+});
+
+describe("thinSeries — a small chart's share of the series", () => {
+  const rows = Array.from({ length: 361 }, (_, i) => ({ snapshot_time: i * HOUR, equity: 1000 + i }));
+  test("at most the cap, always the first and the last row, in order, evenly spread", () => {
+    const out = thinSeries(rows, 120);
+    expect(out.length).toBeLessThanOrEqual(120);
+    expect(out.length).toBeGreaterThan(110);
+    expect(out[0]).toBe(rows[0]);
+    expect(out.at(-1)).toBe(rows.at(-1));
+    for (let i = 1; i < out.length; i++) expect(out[i].snapshot_time).toBeGreaterThan(out[i - 1].snapshot_time);
+    expect(out.at(-1)!.equity - out[0].equity).toBe(rows.at(-1)!.equity - rows[0].equity); // the drawn change is untouched
+  });
+  test("a series already within the cap, a missing cap and a tiny cap come back whole or as its two ends", () => {
+    expect(thinSeries(rows.slice(0, 50), 120)).toHaveLength(50);
+    expect(thinSeries(rows, 0)).toBe(rows);
+    expect(thinSeries(rows, 1)).toBe(rows);
+    expect(thinSeries(rows, 2).map((r) => r.equity)).toEqual([1000, 1360]);
+    expect(thinSeries([], 120)).toEqual([]);
   });
 });

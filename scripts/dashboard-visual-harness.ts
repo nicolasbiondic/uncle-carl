@@ -87,6 +87,9 @@ export const server = Bun.serve({
       // harness doesn't need to for a visual check). Any other account
       // gets the USDC fixture regardless of range — good enough to render
       // a real curve, not an exact per-account replica.
+      // One strategy's own 30-day series (the layout check writes equity-history-<id>.json; an empty one = a strategy with no series).
+      const own = join(FIXTURES_DIR, `equity-history-${account}.json`);
+      if (existsSync(own)) return json(JSON.parse(readFileSync(own, "utf8")));
       if (account === "consolidated") return json(fx(range === "all" ? "equity-consolidated-all.json" : "equity-consolidated-30d.json"));
       return json(fx("equity-usdc-30d.json"));
     }

@@ -7,6 +7,8 @@ import { renderKpis, kpiValues } from "./components/kpis.js";
 import { openPnlBreakdown } from "./components/pnl-breakdown.js";
 import { loadProfileSparks } from "./components/profiles.js";
 import { renderPositions, togglePositionGroup } from "./components/positions.js";
+import { boardModel, paintBoard, fitBoard, boardColumns } from "./components/board.js";
+import { loadStrategyCurves } from "./curves.js";
 import { renderTrades } from "./components/trades.js";
 import { renderAnalyticsShell, loadTab, setMonthlyReturnsProfile } from "./components/analytics.js";
 import { fitTable, fitTablesIn, fitStrip } from "./fit.js";
@@ -45,6 +47,27 @@ function renderOps() {
   return `<div class="card" id="opsCard">
     <div class="tabs">${tab("positions", t("Positions", "Posiciones"))}${tab("trades", t("Trades", "Trades"))}${viewChip()}</div>
     <div class="cardbody" id="opsBody">${inner}</div></div>`;
+}
+
+// ── The Overview: one board, a column per strategy (components/board.js) ────
+/** Paint the board in place: only the parts whose markup changed (a price tick
+ *  repaints a column's bars, never its curve), then fit the bars to the
+ *  column's height. */
+function paintOverview() {
+  const host = byId("boardHost");
+  if (host) paintBoard(host, boardModel(store.state));
+}
+
+/** The strategies' 30-day series: once per refresh cycle (they move slowly),
+ *  the last good one kept on a failure; repaint when they changed. */
+let curvesBusy = false;
+async function refreshCurves() {
+  if (curvesBusy || !store.state.dashboard) return;
+  curvesBusy = true;
+  try {
+    const changed = await loadStrategyCurves(boardColumns(store.state).map((c) => c.id));
+    if (changed && store.state.page === "resumen") paintOverview();
+  } finally { curvesBusy = false; }
 }
 
 // Bottom price ticker — Binance spot public API, client-side (the proven v3
@@ -117,9 +140,22 @@ function fitOps() { fitTable(document.querySelector("#opsBody > .scroll")); }
 /** The KPI strip drops its sparklines, then the win rate, before it scrolls. */
 function fitKpis() { fitStrip(byId("kpis")); }
 let fitResizeT = null;
-window.addEventListener("resize", () => { clearTimeout(fitResizeT); fitResizeT = setTimeout(() => { fitKpis(); fitOps(); fitTablesIn(byId("anBody")); }, 150); });
+function fitOverview() { fitBoard(document.querySelector("#boardHost .bd")); }
+
+/** Narrow the Detail page to one portfolio (or back to the whole account). The
+ *  filter's home is the Detail page — its table, its trades, its curve — so
+ *  picking a portfolio from the Overview (a column's "see all", the broker
+ *  modal, the palette) goes there, on the Positions tab. */
+function pickView(id) {
+  const toDetail = id && id !== "consolidated" && store.state.page === "resumen";
+  if (toDetail) opsTab = "positions";
+  store.set(toDetail ? { view: id, page: "detalle" } : { view: id });
+  if (toDetail) location.hash = "#/detalle";
+  refresh().then(render);
+}
+window.addEventListener("resize", () => { clearTimeout(fitResizeT); fitResizeT = setTimeout(() => { fitKpis(); fitOps(); fitTablesIn(byId("anBody")); fitOverview(); }, 150); });
 // Google Fonts load with display=swap: the real face can be wider than the fallback.
-document.fonts?.ready?.then(() => { fitKpis(); fitOps(); fitTablesIn(byId("anBody")); });
+document.fonts?.ready?.then(() => { fitKpis(); fitOps(); fitTablesIn(byId("anBody")); fitOverview(); });
 
 /** The ops card's scroller: the table box when it scrolls, else the card
  *  body (layouts where the box is capped or not a scroller). */
@@ -203,6 +239,7 @@ function renderChrome() {
 function renderPage() {
   const page = store.state.page;
   const host = byId("page");
+  document.documentElement.dataset.page = page; // the Overview releases the viewport lock on mid-width windows (app.css)
   if (page === "portafolios") {
     host.innerHTML = pageShell("briefcase", t("Portfolios", "Portafolios"));
     mountPortfolios(byId("pageBody"));
@@ -216,14 +253,12 @@ function renderPage() {
       focusBrokers = false;
       revealBrokersCard();
     }
-  } else {
-    // Resumen — the original monitor screen.
+  } else if (page === "detalle") {
+    // Detail — what the Overview used to be: the positions table and trades on
+    // the left, the bot's actions, equity, performance, volume and activity on the right.
     withOpsScroll(() => {
       host.innerHTML = `<div class="main-area" id="mainArea"><div class="ops-wrap" id="opsWrap"></div><div class="an-col" id="analyticsCol"></div></div>
         <div id="newsBar"></div>`;
-      // Positions/Trades owns the left column. The funnel is the analytics
-      // card's "Volume" tab since 2026-10-12: as a card below this one it
-      // crushed the positions table to its tabs at 875px tall.
       byId("opsWrap").innerHTML = renderOps();
     });
     // The 30 s repaint must not yank the reader to the top of the analytics card.
@@ -235,6 +270,16 @@ function renderPage() {
     fitOps(); // the whole page is laid out now (the analytics column and news bar arrived after the ops card)
     loadTab().then(() => { const b = byId("anBody"); if (b && keep) b.scrollTop = keep; });
     loadNews();
+  } else {
+    // Overview — ONE board, a column per strategy. Built once; every later
+    // repaint (the 30 s cycle, a price tick, a language switch) patches in place.
+    if (!byId("boardHost")) {
+      host.innerHTML = `<div class="bd-wrap" id="boardHost"></div><div id="newsBar"></div>`;
+      byId("newsBar").innerHTML = renderNewsBar();
+      loadNews();
+    }
+    paintOverview();
+    refreshCurves();
   }
 }
 
@@ -247,18 +292,19 @@ let reqSeq = 0;
 async function refresh() {
   const my = ++reqSeq;
   try {
-    const [dash, profiles, conns, trades, kpis] = await Promise.all([
+    const [dash, profiles, conns, trades, kpis, bot] = await Promise.all([
       api.dashboard(store.state.view),
       api.profilesV2(store.state.period), // 0 = all-time; the route now accepts it directly
       api.connections(),
       api.trades(120, store.state.view === "consolidated" ? undefined : store.state.view),
       api.kpis(), // owner KPIs (volume/return/risk vs goals) — soft: null on old servers
+      api.botNow(), // what each strategy is doing and its recent actions (the board's last lines); soft: null keeps the last good one
     ]);
     if (my !== reqSeq) return;
     if (trades) tradesCache = trades; // a failed trades feed keeps the last good list
     // A filter on a portfolio that no longer exists would show an empty book.
     const gone = store.state.view !== "consolidated" && !(dash?.accounts || []).some((a) => a.id === store.state.view);
-    store.set({ dashboard: dash, profiles: profiles || [], connections: conns || {}, kpis, ...(gone ? { view: "consolidated" } : {}) });
+    store.set({ dashboard: dash, profiles: profiles || [], connections: conns || {}, kpis, ...(bot ? { botNow: bot } : {}), ...(gone ? { view: "consolidated" } : {}) });
     net.refreshFailed = false;
     net.lastOkAt = Date.now();
   } catch (e) {
@@ -318,15 +364,25 @@ function wireEvents() {
     const alias = isAliasHash(location.hash);
     const p = pageFromHash(location.hash);
     absorbAliasHash();
-    if (p && p !== store.state.page) { store.set({ page: p }); render(); }
+    if (p && p !== store.state.page) {
+      // The Overview is always the whole account: a portfolio filter picked on
+      // the Detail page does not follow the reader back to it (a board of one
+      // column would read as "the other strategies are gone").
+      if (p === "resumen" && store.state.view && store.state.view !== "consolidated") {
+        store.set({ page: p, view: "consolidated" });
+        refresh().then(render);
+      } else { store.set({ page: p }); render(); }
+    }
     else if (alias) { focusBrokers = false; revealBrokersCard(); }
   });
   on(app, "click", "[data-sym]", (e, el) => openCandles(el.dataset.sym));
   on(app, "keydown", "[data-sym]", (e, el) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCandles(el.dataset.sym); } });
-  on(app, "click", "[data-broker]", (e, el) => openBrokerModal(el.dataset.broker, (id) => { store.set({ view: id }); refresh().then(render); }));
+  on(app, "click", "[data-broker]", (e, el) => openBrokerModal(el.dataset.broker, pickView));
   on(app, "keydown", "[data-broker]", (e, el) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); el.click(); } });
   on(app, "click", "[data-opstab]", (e, el) => { opsTab = el.dataset.opstab; byId("opsCard").outerHTML = renderOps(); fitOps(); });
-  // Positions: a portfolio's header row folds/unfolds its rows (persisted).
+  // Overview: "… 3 more · see all" opens the Detail page on that strategy's positions.
+  on(app, "click", "[data-seeall]", (e, el) => pickView(el.dataset.seeall));
+  // Detail, positions table: a portfolio's header row folds/unfolds its rows (persisted).
   on(app, "click", "[data-pgroup]", (e, el) => {
     togglePositionGroup(el.dataset.pgroup, el.getAttribute("aria-expanded") !== "true");
     const b = byId("opsBody");
@@ -356,7 +412,8 @@ function wireWS() {
       if (Number.isFinite(d.currentPrice)) p.currentPrice = d.currentPrice;
       if (Number.isFinite(d.unrealizedPnl)) p.unrealizedPnl = d.unrealizedPnl;
       if (Number.isFinite(d.unrealizedPnlPct)) p.unrealizedPnlPct = d.unrealizedPnlPct;
-      if (opsTab === "positions") { const b = byId("opsBody"); if (b) withOpsScroll(() => { b.innerHTML = renderPositions(store.state, tradesCache); }); }
+      if (store.state.page === "resumen") paintOverview();
+      else if (opsTab === "positions") { const b = byId("opsBody"); if (b) withOpsScroll(() => { b.innerHTML = renderPositions(store.state, tradesCache); }); }
     },
     trade_closed: debouncedRefresh,
     order: debouncedRefresh,
@@ -371,7 +428,7 @@ function paletteActions() {
   const views = [["consolidated", t("Consolidated", "Consolidado")], ...accounts.map((a) => [a.id, sleeveLabel(a)])];
   const tabs = [["bot", "Bot"], ["equity", t("Equity", "Curva")], ["performance", t("Performance", "Rendimiento")], ["volume", t("Volume", "Volumen")], ["activity", t("Activity", "Actividad")]];
   const acts = [];
-  for (const [id, l] of views) acts.push({ label: `${t("View", "Vista")}: ${l}`, tag: "view", run: () => { store.set({ view: id }); refresh().then(render); } });
+  for (const [id, l] of views) acts.push({ label: `${t("View", "Vista")}: ${l}`, tag: "view", run: () => pickView(id) });
   for (const [id, l] of tabs) acts.push({ label: `${t("Tab", "Pestaña")}: ${l}`, tag: "tab", run: () => setTab(id) });
   for (const [v, l] of [[1, t("Today", "Hoy")], [7, "7D"], [30, "30D"], [0, t("All", "Todo")]]) acts.push({ label: `${t("Window", "Ventana")}: ${l}`, tag: "period", run: () => { store.set({ period: v }); refresh().then(render); } });
   for (const [id, , label] of NAV_PAGES()) acts.push({ label: `${t("Go to", "Ir a")}: ${label}`, tag: "nav", run: () => { location.hash = "#/" + id; } });

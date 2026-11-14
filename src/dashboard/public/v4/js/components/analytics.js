@@ -13,7 +13,7 @@ import { fitTablesIn } from "../fit.js";
 // "Bot" (2026-10-25, first and default): what each portfolio is doing, in
 // sentences — the owner: "tengo que saber qué está haciendo el bot".
 const TABS = () => [
-  ["bot", "Bot"],
+  ["bot", t("Bot actions", "Acciones del bot")],
   ["equity", t("Equity", "Curva")],
   ["performance", t("Performance", "Rendimiento")],
   ["volume", t("Volume", "Volumen")],

@@ -93,6 +93,29 @@ function syntheticFixtures(dir: string) {
       currentPrice: entry * (1 + pct / 100), unrealizedPnl: qty * entry * pct / 100, unrealizedPnlPct: pct,
       openedAt: nowReal - (i % 6) * 864e5, durationSeconds: (i % 6) * 86_400 };
   }));
+  // Each strategy's 30-day curve as GET /api/equity/history?account=<id>&days=30&points=120 answers it:
+  // ~120 rows, the last carrying the reader's `moneyWindow` (value now, change, %). One rises, one falls,
+  // one stays flat and then drops, one falls from its peak. All four have a series so the board's "Outside
+  // the strategies" line shows (it needs every column's value: 100,000 − 97,033 = $2,967); a strategy with
+  // NO series is covered by board.test.js ("a strategy with no series").
+  const curve = (id: string, shape: "rise" | "fall" | "flat-then-drop" | "none", start: number, end: number) => {
+    if (shape === "none") { save(`equity-history-${id}`, []); return; }
+    const N = 120, t0 = now - 30 * 864e5;
+    const rows = Array.from({ length: N }, (_, i) => {
+      const f = i / (N - 1), wobble = Math.sin(i / 5) * (end - start) * 0.12 + Math.sin(i / 2.3) * (end - start) * 0.04;
+      const base = shape === "flat-then-drop" ? (f < 0.8 ? start + wobble * 0.3 : start + (end - start) * ((f - 0.8) / 0.2))
+        : start + (end - start) * f + wobble * (1 - f);
+      return { snapshot_time: t0 + Math.round(f * 30 * 864e5), equity: i === 0 ? start : i === N - 1 ? end : Math.round(base), cash: 0, rebased: false };
+    });
+    const pnl = end - start;
+    rows[N - 1] = { ...rows[N - 1], moneyWindow: { pnl, pnlPct: (pnl / start) * 100, pnlPctOnStart: (pnl / start) * 100, equity: end, endAt: rows[N - 1].snapshot_time,
+      start: { at: rows[0].snapshot_time, date: "2026-09-23", equity: start, rebased: false } } } as typeof rows[number];
+    save(`equity-history-${id}`, rows);
+  };
+  curve("momentum_stocks", "rise", 48_699, 49_903);
+  curve("meanrev_stocks", "fall", 25_410, 24_820);
+  curve("momentum_crypto", "flat-then-drop", 9_880, 9_310);
+  curve("momentum_crypto_usdc", "fall", 15_600, 13_000);
   save("dashboard", { accounts, daysRunning: 123, portfolio: {
     positions, openPositions: positions.length, equity: 100_000, cash: 32_000, winRate: 57,
   } });
@@ -102,17 +125,23 @@ function syntheticFixtures(dir: string) {
     positions: defs[i][3], investedUsd: i === 2 ? 0 : 24_250, equityUsd: 25_000, grossX: [0.93, 1.46, 0, 1.22][i],
     maxGrossX: a.grossCapMult, cadence: { kind: i === 2 ? "hourly" : "daily",
       at: a.broker === "alpaca" ? "09:35 America/New_York" : i === 2 ? ":00 each hour" : "00:00 UTC" },
-    lastDecision: { at: now - 3600e3, entries: i === 2 ? 0 : 2, exits: 0, resizes: 0, orders: i === 2 ? 0 : 2,
+    lastDecision: { at: nowReal - [20 * 3600e3, 20 * 3600e3, 9 * 60e3, 6 * 3600e3][i], entries: i === 2 ? 0 : 2, exits: 0, resizes: 0, orders: i === 2 ? 0 : 2,
       rejected: 0, signalsLong: i === 2 ? 0 : null, universe: i === 2 ? 8 : null, note: null },
-    nextDecisionAt: a.broker === "alpaca" ? Date.UTC(2026, 9, 26, 13, 35) : now + (i === 2 ? 3600e3 : 8 * 3600e3) + 15_000,
+    nextDecisionAt: nowReal + [4 * 3600e3, 4 * 3600e3, 23 * 60e3, 18 * 3600e3][i],
     blocked: i === 2 ? { reason: "no_signal", detail: "Sin señal larga en 8 activos", until: null }
-      : i === 3 ? { reason: "soft_drawdown", detail: "soft drawdown 16.9% — paused 24h", until: now + 864e5 } : null,
+      : i === 3 ? { reason: "soft_drawdown", detail: "soft drawdown 16.9% — paused 24h", until: nowReal + 864e5 } : null,
     // Both sentences: rising (momentum) and the longest one, falling + defensive mode (the flat crypto card).
     regime: a.id === "momentum_stocks" ? { riskOn: true, ref: "SPY", distancePct: 4.3 }
       : a.id === "momentum_crypto" ? { riskOn: false, ref: "BTC/USD", distancePct: -12.4 } : null,
     exposureScale: i === 3 ? 0.794 : null, drawdownPct: a.broker === "alpaca" ? null : i === 3 ? 16.9 : 0,
-  })), events: [{ at: now - 3600e3, portfolioId: "momentum_stocks", kind: "rebalance", symbol: null,
-    qty: null, usd: 12_345, pnlUsd: null, reason: "REBALANCE", detail: "2 compras, 1 venta; 0 rechazadas" }] });
+  })), events: [
+    // The board's "last action" line: a pass at the 5-day limit with its re-buys, a plain rebalance, a trim.
+    { at: nowReal - 20 * 3600e3, portfolioId: "momentum_stocks", kind: "rebalance", symbol: null, qty: null, usd: 18_000, pnlUsd: null, reason: "REBALANCE", detail: null, buys: 3, sells: 2, rebought: ["SPY", "QQQ"], newBuyUsd: 6400 },
+    { at: nowReal - 20 * 3600e3 + 2000, portfolioId: "momentum_stocks", kind: "close", symbol: "QQQ", qty: 9, usd: 4100, pnlUsd: -134, reason: "MAX_HOLD", detail: null },
+    { at: nowReal - 20 * 3600e3 + 4000, portfolioId: "momentum_stocks", kind: "close", symbol: "SPY", qty: 6, usd: 3980, pnlUsd: -210, reason: "MAX_HOLD", detail: null },
+    { at: nowReal - 20 * 3600e3, portfolioId: "meanrev_stocks", kind: "rebalance", symbol: null, qty: 8, usd: 12_345, pnlUsd: null, reason: "REBALANCE", detail: null, buys: 5, sells: 3 },
+    { at: nowReal - 6 * 3600e3, portfolioId: "momentum_crypto_usdc", kind: "resize", symbol: null, qty: 4, usd: -1250, pnlUsd: null, reason: "drawdown_control", detail: null },
+  ] });
   const tradeSymbols = ["SSO", "UGL", "AAPL", "XRP/USDC", "USD", "NVDA", "IWM", "BTC/USDC", "DEMO001", "QLD", "DEMO017", "ETH/USDC"];
   const trades = Array.from({ length: 24 }, (_, i) => ({
     id: `synthetic-trade-${i}`, accountId: accounts[i % 4].id, symbol: tradeSymbols[i % tradeSymbols.length],
@@ -210,6 +239,26 @@ function scrollContainers(allowlist: string[]) {
   return rows;
 }
 
+/** The Overview board must be ONE view: on a locked desktop (≥ 1280 × 540) nothing inside it scrolls or is clipped, in either
+ *  direction, and every column shows at least 2 + 2 bars when it has that many. Returns what is wrong and the bars each column shows. */
+function boardProblems(locked: boolean) {
+  const out: string[] = [];
+  const board = document.querySelector(".bd");
+  if (!board) return { out: ["no board"], bars: [] as number[] };
+  const label = (el: Element) => (el.className && typeof el.className === "string" ? "." + el.className.trim().split(/\s+/)[0] : el.tagName.toLowerCase())
+    + ((el as HTMLElement).dataset?.id ? `[${(el as HTMLElement).dataset.id}]` : (el as HTMLElement).dataset?.part ? `[${(el as HTMLElement).dataset.part}]` : "");
+  const check = (el: Element) => {
+    if (el.scrollHeight > el.clientHeight + 1) out.push(`${label(el)} content ${el.scrollHeight} > box ${el.clientHeight}`);
+    if (el.scrollWidth > el.clientWidth + 1) out.push(`${label(el)} width ${el.scrollWidth} > box ${el.clientWidth}`);
+  };
+  for (const el of [board, ...board.querySelectorAll(".bc, [data-part], .bc-bars")]) {
+    if (locked) check(el); else if (el.scrollWidth > el.clientWidth + 1) out.push(`${label(el)} width ${el.scrollWidth} > box ${el.clientWidth}`);
+  }
+  for (const el of board.querySelectorAll("*")) { const o = getComputedStyle(el); if (/^(auto|scroll)$/.test(o.overflowX) || /^(auto|scroll)$/.test(o.overflowY)) out.push(`${label(el)} is a scroller`); }
+  const bars = [...board.querySelectorAll(".bc")].map((c) => [...c.querySelectorAll(".pc-row")].filter((r) => !(r as HTMLElement).hidden).length);
+  return { out, bars };
+}
+
 async function settle(page: Page) {
   await page.evaluate(() => document.fonts.ready);
   // Font swap / ResizeObserver / fit's 150ms resize debounce + fadeUp.
@@ -279,13 +328,13 @@ async function main() {
         await page.setViewportSize(viewport);
         const desktop = viewport.width >= 981 && viewport.height >= 540;
         const suffix = lang === "en" ? "" : `-${lang}`;
-        const capture = async (name: string) => {
+        const capture = async (name: string, pageScrolls = false) => {
           const view = name + suffix;
           await settle(page);
           const screenshot = `${viewport.width}x${viewport.height}-${view}.png`;
           await page.screenshot({ path: join(OUT, screenshot), fullPage: !desktop });
           const scrollers = await page.evaluate(scrollContainers, desktop ? DESKTOP_CAROUSELS : PHONE_CAROUSELS);
-          const failures = desktop ? scrollers.filter((s) => (s.element === "document" && s.y) || (s.x && !s.allowed))
+          const failures = desktop ? scrollers.filter((s) => (s.element === "document" && s.y && !pageScrolls) || (s.x && !s.allowed))
             .map((s) => s.element) : [];
           report.push({ viewport: `${viewport.width}x${viewport.height}`, view, desktop, screenshot, scrollers, failures });
           for (const s of scrollers.filter((s) => s.x || s.y)) console.log(
@@ -293,7 +342,40 @@ async function main() {
         };
         const loaded = () => page.waitForFunction(() => document.querySelector("#anBody")?.textContent?.trim() !== "…");
         console.log("STATUS\tVIEWPORT\tVIEW\tELEMENT\tX scroll/client\tY scroll/client");
+        // ── The Overview: ONE board, a column per strategy, nothing scrolls ──
         await page.goto(`${base}/#/resumen`, { waitUntil: "networkidle" });
+        await page.locator(".bd .bc[data-id]").first().waitFor();
+        if (!values.base) {
+          // The curves arrive after the first paint (one fetch per strategy): the four fixture strategies have a series.
+          await page.waitForFunction(() => document.querySelectorAll(".bd .pc-curve").length === 4);
+          if (await page.locator(".bd .bc[data-id]").count() !== 4) throw new Error("Synthetic board did not render its four strategy columns");
+        }
+        const locked = viewport.width >= 1280 && viewport.height >= 540;
+        await settle(page);
+        const board = await page.evaluate(boardProblems, locked);
+        await capture("board", desktop && !locked);
+        console.log(`${board.out.length ? "FAIL" : "INFO"}\t${viewport.width}x${viewport.height}\tboard${suffix}\t${board.out.length ? board.out.join("; ") : "nothing scrolls"}\tbars per column: ${board.bars.join(" ")}`);
+        if (board.out.length) report[report.length - 1].failures.push(...board.out);
+        if (!values.base && locked && board.bars.some((n, i) => n < Math.min(4, [32, 11, 0, 4][i] ?? 4))) report[report.length - 1].failures.push("a column shows fewer than 2 + 2 bars");
+
+        // "… 22 more · see all" opens the Detail page on that strategy: its positions tab, the portfolio filter set.
+        // (A screen tall enough to show all 32 has no such line, and that is right.)
+        const seeAll = page.locator('.bd .bc-more[data-seeall="meanrev_stocks"]:not([hidden])');
+        if (!values.base && (await seeAll.count()) === 1) {
+          await seeAll.click();
+          await page.locator(".viewchip").waitFor();
+          await page.locator('#opsBody table tbody tr').first().waitFor();
+          if (!(await page.url()).endsWith("#/detalle")) throw new Error("see all should open the Detail page");
+          if (await page.locator('[data-opstab="positions"].on').count() !== 1) throw new Error("see all should open the Positions tab");
+          // Back on the Overview the filter is gone: the board is always the whole account, all four columns.
+          await page.evaluate(() => { location.hash = "#/resumen"; });
+          await page.locator(".bd .bc[data-id]").first().waitFor();
+          await page.waitForFunction(() => document.querySelectorAll(".bd .bc[data-id]").length === 4);
+          if (await page.locator(".viewchip").count() !== 0) throw new Error("the Overview must not keep a portfolio filter");
+        }
+
+        // ── Detail: what the Overview used to be (the two cards) ──
+        await page.goto(`${base}/#/detalle`, { waitUntil: "networkidle" });
         await page.locator("#opsBody table tbody tr, #opsBody .empty").first().waitFor();
         // Portfolios with > 12 positions start folded (positions.js): unfold them
         // all so the table carries its 47 rows and a real vertical scrollbar.
@@ -301,10 +383,10 @@ async function main() {
           await page.locator('#opsBody .pgroup-btn[aria-expanded="false"]').first().click();
         }
         if (!values.base && await page.locator("#opsBody table tbody tr.pos").count() !== 47) throw new Error("Synthetic Positions fixture did not render all 47 rows");
-        // The Bot tab is the analytics card's default (what each portfolio is doing).
+        // The Bot tab (the recent actions, a log) is the analytics card's default.
         await page.locator('[data-atab="bot"]').click();
         await loaded();
-        await page.locator("#anBody .bn-row, #anBody .empty, #anBody .bn-list").first().waitFor();
+        await page.locator("#anBody .bn-events, #anBody .empty").first().waitFor();
         await capture("positions-bot");
         await page.locator('[data-atab="equity"]').click();
         await page.locator(values.base ? "#eqChart canvas, #anBody .empty" : "#eqChart canvas").first().waitFor();

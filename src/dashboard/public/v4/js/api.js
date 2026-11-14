@@ -51,7 +51,7 @@ export const api = {
   aiQuorum: () => soft("/api/ai-quorum/summary", { status: "none" }),
   // null = the feed failed (an error, not "no trades").
   trades: (limit = 100, account) => soft("/api/trades" + qs({ limit, account }), null),
-  equityHistory: ({ account = "consolidated", days, range } = {}) => soft("/api/equity/history" + qs({ account, days, range }), []),
+  equityHistory: ({ account = "consolidated", days, range, points } = {}) => soft("/api/equity/history" + qs({ account, days, range, points }), []),
   // Owner KPIs + decision funnel (P0 2026-10-09 — src/dashboard/routes/kpis.ts)
   kpis: () => soft("/api/kpis", null),
   // "Bot" tab (2026-10-25): what each portfolio is doing right now + recent actions

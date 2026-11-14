@@ -45,7 +45,7 @@ import { TelegramOutbox, type SendOutcome } from "./outbox";
 import type { PortfolioState } from "../utils/types";
 import type { Database } from "bun:sqlite";
 import { type BreakdownPosition, type PnlBreakdown } from "../portfolio/pnlBreakdown";
-import { readMoneyWindow, readSleeveMoney, readOpenMoney, readBinanceMarginBreakdown, moneyReportDate } from "../portfolio/money";
+import { readMoneyWindow, readSleeveMoney, readOpenMoney, readOutsideStrategies, readBinanceMarginBreakdown, moneyReportDate } from "../portfolio/money";
 import { computeKpiSnapshot } from "../portfolio/kpis";
 // @ts-ignore shared bilingual presentation vocabulary.
 import { closeReasonWord } from "../dashboard/public/v4/js/close-reasons.js";
@@ -695,10 +695,10 @@ export class TelegramReporter {
 
     lines.push("");
     lines.push(...fmtBrokerBalances(portfolioNow.alpaca, bin.total));
-    if (portfolioNow.total != null && accounts.length > 0 && accounts.every(a => Number.isFinite(a.equity))) {
-      const outside = portfolioNow.total - accounts.reduce((s, a) => s + a.equity, 0);
-      if (outside > 50) lines.push(`Fuera de las estrategias: $${fmtMoney(outside)} (efectivo inicial de Alpaca y garantía en BTC)`);
-    }
+    // Same formula as the dashboard board's line (money-values.js), fed the
+    // strategies' own values: total = the strategies + this, to the dollar.
+    const outside = readOutsideStrategies(portfolioNow.total, accounts.map(a => a.equity));
+    if (outside != null && outside > 50) lines.push(`Fuera de las estrategias: $${fmtMoney(outside)} (efectivo inicial de Alpaca y garantía en BTC)`);
 
     return lines.join("\n");
   }

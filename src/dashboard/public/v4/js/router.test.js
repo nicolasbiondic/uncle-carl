@@ -18,6 +18,15 @@ describe("pageFromHash", () => {
   });
 });
 
+describe("the Detail page (owner, 2026-11-14): what the Overview used to be", () => {
+  test("#/detalle is a page, second after Resumen, and survives a remembered page", () => {
+    expect(PAGE_IDS.slice(0, 2)).toEqual(["resumen", "detalle"]);
+    expect(pageFromHash("#/detalle")).toBe("detalle");
+    expect(normalizePage("detalle")).toBe("detalle");
+    expect(normalizePage("whatever")).toBe("resumen");
+  });
+});
+
 describe("broker accounts live inside Ajustes (owner, 2026-10-11)", () => {
   test("Cuentas is no longer a page of its own", () => {
     expect(PAGE_IDS).not.toContain("cuentas");

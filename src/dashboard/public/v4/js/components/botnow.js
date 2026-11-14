@@ -13,7 +13,6 @@ import { api } from "../api.js";
 import { money, pnlWhole, n } from "../fmt.js";
 import { esc } from "../ui.js";
 import { CLOSE_REASON_WORDS, closeReasonWord } from "../close-reasons.js";
-import { capitalGauge, isOverLimit, gaugeTickWord } from "../capital-gauge.js";
 
 const NY = "America/New_York";
 const locale = () => (isEs() ? "es" : "en-GB"); // en-GB: "Fri 23 Oct", 24h clock
@@ -149,9 +148,9 @@ function onDay(ms, opts) {
 }
 
 // ── one portfolio ───────────────────────────────────────────────────────────
-// A compact card: name + status, 2–3 plain-text chips with the facts that
-// matter, a "last decision … now … next decision" line, and at most ONE short
-// sentence for blocked/waiting states.
+// A compact card: name + status, ONE money sentence in dollars, the market
+// pill, and one sentence for when it decided and decides again; at most ONE
+// short sentence more for blocked/waiting states.
 
 const WARN_BLOCKS = ["soft_drawdown", "hard_drawdown", "loss_streak", "maintenance"];
 const trimmed = (p) => p.exposureScale != null && n(p.exposureScale, 1) < 0.995;
@@ -205,50 +204,25 @@ function regimeParts(p) {
   return { up: false, head: t("Market falling", "Mercado a la baja"), tail: t(`: ${ref} is ${d} below its 200-day average${defensive}`, `: ${ref} está un ${d} por debajo de su media de 200 días${defensive}`) };
 }
 
-/** The money and the capital of an invested portfolio: "Invested $43,677 ·
- *  88 % of its capital" over a gauge (capital-gauge.js) with "limit 250 %" at
- *  its end. A limit of 100 % is not said (the track just ends at 100 %) unless
- *  the book is past it, so a red gauge always has a word. Without a share of
- *  the capital there is no gauge: "Invested $43,677" stays a pill. */
-function investedItem(p, eq, count) {
-  if (!eq) return { kind: "text", text: `${count} ${assetWord(p, count)}` };
-  const gross = p.grossX != null && Number.isFinite(n(p.grossX, NaN)) ? n(p.grossX) : null;
-  const head = t(`Invested ${eq}`, `Invertido ${eq}`);
-  if (gross == null) return { kind: "text", text: head };
-  const cap = p.maxGrossX != null && n(p.maxGrossX) > 0 ? n(p.maxGrossX) : null;
-  const over = cap != null && isOverLimit(gross, cap); // no known limit, no red: it would be a claim with no word beside it
-  const limitWord = cap != null && (Math.round(cap * 100) !== 100 || over) ? t(`limit ${pc(cap * 100)}`, `límite ${pc(cap * 100)}`) : "";
-  const share = grossPhrase(gross);
-  return {
-    kind: "invested", gross, cap, over, limitWord,
-    line: `${head} · ${share}`,
-    text: `${head} (${share}${limitWord ? `, ${limitWord}` : ""})`,
-  };
-}
-
 const tx = (text) => (text ? { kind: "text", text } : null);
 
-/** The 2–3 key facts of a portfolio as items (the reason, for paused and flat
- *  states): { kind: "text", text } for a pill; { kind: "regime", up, head,
- *  tail, text } for the market (an arrow and a colour on its first words);
- *  { kind: "invested", gross, cap, over, limitWord, line, text } for the money
- *  and its capital gauge. `text` is always the whole fact as one plain
- *  sentence, what chipsOf returns and what a screen reader hears. Pure. */
-export function chipItemsOf(p) {
-  const count = n(p.positions);
-  const eq = p.investedUsd != null ? money(p.investedUsd, 0) : p.equityUsd != null ? money(p.equityUsd, 0) : "";
-  const held = count > 0
-    ? t(`Holds ${count} ${assetWord(p, count)}${eq ? ` (${eq})` : ""}`, `Mantiene ${count} ${assetWord(p, count)}${eq ? ` (${eq})` : ""}`)
-    : "";
+/** The few facts of a strategy as items (the reason, for paused and flat
+ *  states): { kind: "regime", up, head, tail, text } the market (an arrow and
+ *  a colour on its first words); { kind: "trim", text, title } "Trading
+ *  smaller: it is 7 % below its peak"; { kind: "text", text } a reason. `text`
+ *  is always the whole fact as one plain sentence, what chipsOf returns and
+ *  what a screen reader hears. The money is the board column's own lines
+ *  (board.js), not an item. Pure. */
+export function chipItemsOf(p, o = {}) {
   const rg = regimeParts(p);
   const regime = rg ? { kind: "regime", ...rg, text: rg.head + rg.tail } : null;
   switch (p.state) {
     case "error":
       return [];
     case "paused":
-      return [p.blocked?.reason ? tx(cap(reasonWord(p.blocked.reason, p.cadence?.kind))) : null, tx(held)].filter(Boolean);
+      return [p.blocked?.reason ? tx(cap(reasonWord(p.blocked.reason, p.cadence?.kind))) : null].filter(Boolean);
     case "waiting_first_pass":
-      return [tx(held), regime].filter(Boolean);
+      return [regime].filter(Boolean);
     case "flat": {
       const uni = p.lastDecision?.universe;
       const uniW = uni ? `${uni} ${assetWord(p, uni)}` : null;
@@ -260,24 +234,23 @@ export function chipItemsOf(p) {
           : (uniW ? t(`None of ${uniW} is trending up`, `Ninguna de ${uniW} está en tendencia alcista`) : t("Nothing is trending up", "Nada está en tendencia alcista"))));
         else if (p.blocked && p.blocked.reason !== "market_closed") chips.push(tx(cap(reasonWord(p.blocked.reason, p.cadence?.kind))));
       }
-      const out = chips.filter(Boolean);
-      return out.length ? out : [tx(t("Holds no positions", "Sin posiciones"))];
+      return chips.filter(Boolean); // the status word already says "Out of the market"
     }
     default: { // invested / partly_invested
-      const chips = [investedItem(p, eq, count), regime];
+      const chips = [regime];
       if (trimmed(p)) {
-        chips.push(tx(t(`${pc(n(p.exposureScale) * 100)} of normal size`, `${pc(n(p.exposureScale) * 100)} del tamaño normal`)));
-        if (p.drawdownPct != null) chips.push(tx(t(`${pc(p.drawdownPct)} below its peak`, `${pc(p.drawdownPct)} bajo su máximo`)));
+        const size = t(`${pc(n(p.exposureScale) * 100)} of normal size`, `${pc(n(p.exposureScale) * 100)} del tamaño normal`);
+        chips.push({ kind: "trim", title: size, text: p.drawdownPct != null
+          ? t(`Trading smaller: it is ${pc(p.drawdownPct)} below its peak`, `Opera con menos tamaño: está un ${pc(p.drawdownPct)} bajo su máximo`)
+          : t("Trading smaller", "Opera con menos tamaño") });
       }
-      const out = chips.filter(Boolean).slice(0, 3);
-      if (out.length < 2 && eq && count > 0) out.push(tx(`${count} ${assetWord(p, count)}`));
-      return out;
+      return chips.filter(Boolean);
     }
   }
 }
 
 /** The same facts as plain strings, one sentence each. Pure. */
-export const chipsOf = (p) => chipItemsOf(p).map((c) => c.text);
+export const chipsOf = (p, o) => chipItemsOf(p, o).map((c) => c.text);
 
 /** The ONE short sentence under the time line: only for blocked / waiting /
  *  failed states ("" otherwise). Pure. */
@@ -310,64 +283,31 @@ export function untilWord(ms, now = Date.now()) {
 const SOON = 3 * 3600e3;
 /** A decision moment: relative when it is close, the viewer's clock (+ New York
  *  for stock sleeves) when it is not. */
-function stamp(ms, p, o, past) {
+export function stamp(ms, p, o, past) {
   const at = ts(ms), now = o.now ?? Date.now();
   if (past && now - at < SOON) return sinceWord(at, now);
   if (!past && at - now < SOON) return untilWord(at, now);
   return whenPhrase(at, { ...o, market: isCrypto(p) ? null : NY });
 }
 
-/** `last decision ●━━━━ ● now ┄┄┄┄○ next decision`, each end labelled with its
- *  time. "now" is a filled dot with its word, where it falls between the two:
- *  the part already elapsed is a solid, brighter line, the part still to come
- *  is dim. Pure. */
-export function timeLine(p, o = {}) {
+/** The decision rhythm in one sentence: "Decided 9 min ago · decides again in
+ *  23 min" / "Decided today 09:35 New York · decides again Monday 09:35 New
+ *  York". Relative while close, a dated clock (New York named for a stock
+ *  strategy) when not. With only one of the two moments, only that one. Pure. */
+export function decisionSentence(p, o = {}) {
   const now = o.now ?? Date.now();
   const last = ts(p.lastDecision?.at), next = ts(p.nextDecisionAt);
   const hasLast = Number.isFinite(last), hasNext = Number.isFinite(next);
   if (!hasLast && !hasNext) return "";
-  const kl = t("Last decision", "Última decisión"), kn = t("Next decision", "Próxima decisión");
-  const label = (k, v) => `<span><span class="bn-tl-k">${esc(k)}</span> ${esc(v)}</span>`;
-  if (!hasLast || !hasNext) {
-    return `<div class="bn-tl-solo">${hasNext ? label(kn, stamp(next, p, { ...o, now }, false)) : label(kl, stamp(last, p, { ...o, now }, true))}</div>`;
-  }
-  const f = next > last ? Math.min(0.92, Math.max(0.08, (now - last) / (next - last))) : 0.5;
-  return `<div class="bn-tl">
-    <div class="bn-tl-track" aria-hidden="true"><i class="bn-tl-dot bn-tl-past"></i><i class="bn-tl-bar bn-tl-done" style="flex-grow:${f.toFixed(3)}"></i><i class="bn-tl-nowdot"></i><span class="bn-tl-now">${t("now", "ahora")}</span><i class="bn-tl-bar bn-tl-todo" style="flex-grow:${(1 - f).toFixed(3)}"></i><i class="bn-tl-dot bn-tl-hollow"></i></div>
-    <div class="bn-tl-labels">${label(kl, stamp(last, p, { ...o, now }, true))}${label(kn, stamp(next, p, { ...o, now }, false))}</div>
-  </div>`;
+  const l = hasLast ? stamp(last, p, { ...o, now }, true) : "", x = hasNext ? stamp(next, p, { ...o, now }, false) : "";
+  if (hasLast && hasNext) return t(`Decided ${l} · decides again ${x}`, `Decidió ${l} · vuelve a decidir ${x}`);
+  return hasLast ? t(`Decided ${l}`, `Decidió ${l}`) : t(`Decides ${x}`, `Decide ${x}`);
 }
 
-/** One chip as markup: the market sentence gets an arrow and a colour on its
- *  first words ("▲ Market rising"), never colour alone: the arrow and the word
- *  say it too. */
-function chipHtml(c) {
-  if (c.kind === "regime") {
-    return `<span class="bn-chip"><span class="bn-rg ${c.up ? "up" : "down"}"><span class="bn-arrow" aria-hidden="true">${c.up ? "▲" : "▼"}</span> ${esc(c.head)}</span>${esc(c.tail)}</span>`;
-  }
-  return `<span class="bn-chip">${esc(c.text)}</span>`;
-}
-
-/** The invested line with its capital gauge underneath; the limit is the
- *  gauge's end label. */
-function investedHtml(c) {
-  const tick = Math.max(c.cap ?? Math.max(1, c.gross), 1) > 1;
-  return `<div class="bn-inv"${tick ? ` title="${esc(gaugeTickWord())}"` : ""}><div class="bn-inv-line">${esc(c.line)}</div>${capitalGauge({ ratio: c.gross, cap: c.cap, over: c.over, endLabel: c.limitWord, className: "bn-gauge" })}</div>`;
-}
-
-function portfolioBlock(p, o) {
-  const st = statusOf(p);
-  const items = chipItemsOf(p);
-  const inv = items.filter((c) => c.kind === "invested").map(investedHtml).join("");
-  const chips = items.filter((c) => c.kind !== "invested").map(chipHtml).join("");
-  const note = noteOf(p, o);
-  return `<div class="bn-row">
-    <div class="bn-head"><span class="bn-name">${esc(portfolioName(p.label || p.id))}</span><span class="bn-word" style="color:${st.color}"><span class="bn-dot" style="background:${st.color}"></span>${esc(st.word)}</span></div>
-    ${inv}
-    ${chips ? `<div class="bn-chips">${chips}</div>` : ""}
-    ${timeLine(p, o)}
-    ${note ? `<p class="bn-text">${esc(note)}</p>` : ""}
-  </div>`;
+/** The market sentence as markup: an arrow and a colour on its first words
+ *  ("▲ Market rising"), never colour alone: the arrow and the word say it too. */
+export function regimeHtml(c) {
+  return `<span class="bn-rg ${c.up ? "up" : "down"}"><span class="bn-arrow" aria-hidden="true">${c.up ? "▲" : "▼"}</span> ${esc(c.head)}</span>${esc(c.tail)}`;
 }
 
 // ── events ──────────────────────────────────────────────────────────────────
@@ -468,7 +408,7 @@ const posWord = (c) => t(c === 1 ? "position" : "positions", c === 1 ? "posició
 /** One pass as a sentence plus its per-symbol lines: { text, lines } (HTML). The
  *  5-day closes and the buys of the same symbol read as "closed … and re-bought
  *  …"; a rebalance event brings the pass's totals and its renewal symbols. Pure. */
-export function passSummary(events, portfolios = {}) {
+export function passSummary(events, portfolios = {}, { bare = false } = {}) {
   const first = events[0];
   const known = portfolios[first.portfolioId];
   const who = esc(portfolioName(known?.label || (first.portfolioId ? sleeveLabel({ id: first.portfolioId }) : t("The bot", "El bot"))));
@@ -529,7 +469,7 @@ export function passSummary(events, portfolios = {}) {
     lines.push(eventSentence(e, portfolios, { bare: true, rebought: isLimitClose(e) && rebuy.has(e.symbol) }));
     if (e.kind === "rebalance" && e.rebought?.length) lines.push(t(`re-bought ${e.rebought.map(esc).join(", ")}`, `volvió a comprar ${e.rebought.map(esc).join(", ")}`));
   }
-  return { text: parts.length ? `${who}: ${parts.join(", ")}` : eventSentence(first, portfolios), lines };
+  return { text: parts.length ? (bare ? parts.join(", ") : `${who}: ${parts.join(", ")}`) : eventSentence(first, portfolios, { bare }), lines };
 }
 
 /** Which passes the reader has unfolded; survives the 30 s refresh (the tab is
@@ -571,22 +511,42 @@ export function groupEventsByDay(events, { now = Date.now(), tz = NY } = {}) {
   return groups;
 }
 
+// ── a strategy's last action ────────────────────────────────────────────────
+const ACTION_KINDS = new Set(["buy", "sell", "close", "stop", "resize", "rebalance", "pause", "resume", "cutover", "treasury"]);
+
+/** The newest thing the bot DID for a strategy, as one sentence with its time:
+ *  "Last action today 09:36 New York: closed 3 positions at the 5-day limit and
+ *  re-bought them". The sentence is the same one the actions list builds for
+ *  that pass (passSummary / eventSentence, without the strategy's name).
+ *  `html` is escaped markup; `title` the same words as plain text. null when
+ *  the feed has nothing for it. Pure. */
+export function lastActionOf(p, events, o = {}) {
+  const mine = (events || []).filter((e) => e.portfolioId === p.id && ACTION_KINDS.has(e.kind) && Number.isFinite(ts(e.at))).slice().sort((a, b) => ts(b.at) - ts(a.at));
+  if (!mine.length) return null;
+  const row = clusterPasses(mine)[0];
+  const names = { [p.id]: p };
+  const pass = row.events.length > 1 || (row.events[0].kind === "rebalance" && row.events[0].rebought?.length);
+  const body = pass ? passSummary(row.events, names, { bare: true }).text : eventSentence(row.events[0], names, { bare: true });
+  const at = ts(row.events[row.events.length - 1].at), now = o.now ?? Date.now();
+  const when = stamp(at, p, { ...o, now }, true);
+  const html = `${esc(t("Last action", "Última acción"))} ${esc(when)}: ${body}`;
+  return { html, title: html.replace(/<[^>]+>/g, "") };
+}
+
 // ── the tab ─────────────────────────────────────────────────────────────────
 
-/** The whole tab body. `o.now`/`o.tz` exist for tests; the browser uses its own. */
+/** The "Bot actions" tab body: the recent actions as a dated list (a log; it
+ *  may scroll). What each strategy is doing right now lives in the Overview's
+ *  columns. `o.now`/`o.tz` exist for tests; the browser uses its own. */
 export function renderBotNow(data, o = {}) {
   if (!data || !Array.isArray(data.portfolios)) return `<div class="empty">${t("The bot has not reported yet.", "El bot aún no ha informado.")}</div>`;
   const names = {};
   for (const p of data.portfolios) names[p.id] = p;
-  const blocks = data.portfolios.length
-    ? data.portfolios.map((p) => portfolioBlock(p, o)).join("")
-    : `<div class="empty">${t("No portfolios are running.", "No hay portafolios en marcha.")}</div>`;
   const groups = groupEventsByDay(data.events, o);
   const events = groups.length
     ? groups.map((g) => `<div class="bn-day">${esc(g.label)}</div>${clusterPasses(g.items).map((row) => eventRow(row, names)).join("")}`).join("")
     : `<div class="muted" style="font-size:var(--t-xs)">${t("No actions in the last few days.", "Sin acciones en los últimos días.")}</div>`;
-  return `<div class="bn-list">${blocks}</div>
-    <div class="an-h" style="margin-top:var(--s4)">${t("Recent actions", "Acciones recientes")} <span class="muted">${t("(New York time)", "(hora de Nueva York)")}</span></div>
+  return `<div class="an-h">${t("Recent actions", "Acciones recientes")} <span class="muted">${t("(New York time)", "(hora de Nueva York)")}</span></div>
     <div class="bn-events">${events}</div>`;
 }
 

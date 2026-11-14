@@ -1,5 +1,5 @@
 // ── router.js — hash-route helpers (pure; main.js wires hashchange) ──────
-export const PAGE_IDS = ["resumen", "portafolios", "actividad", "ajustes"];
+export const PAGE_IDS = ["resumen", "detalle", "portafolios", "actividad", "ajustes"];
 
 /** Retired pages that live on inside another one. Broker accounts moved into
  *  Ajustes (owner, 2026-10-11); #/cuentas keeps working for old links,

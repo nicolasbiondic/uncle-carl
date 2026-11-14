@@ -10,7 +10,7 @@ import { portfolioMainLegs, readDisplayMoneyWindow, getBrokerSnapshotNow } from 
 import { computePnlBreakdown, computeRealizedAttribution, type BreakdownPosition, type RealizedAttribution } from "./pnlBreakdown";
 import type { Database } from "bun:sqlite";
 // @ts-ignore shared presentation reader, also used by the dashboard.
-export { positionsTotals as readOpenMoney } from "../dashboard/public/v4/js/money-values.js";
+export { positionsTotals as readOpenMoney, outsideStrategies as readOutsideStrategies } from "../dashboard/public/v4/js/money-values.js";
 
 export const MONEY_LABELS = {
   displayStart: "Desde el inicio",

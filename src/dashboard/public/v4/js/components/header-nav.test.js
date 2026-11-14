@@ -17,12 +17,16 @@ describe("actionButton", () => {
 });
 
 describe("renderNav", () => {
-  test("four pages with hash links and visible labels — broker accounts live in Ajustes (2026-10-11)", () => {
+  test("five pages, Overview then Detail, with hash links and visible labels — broker accounts live in Ajustes (2026-10-11)", () => {
     Object.assign(store.state, { lang: "es", page: "ajustes" });
     const html = renderNav();
-    expect(NAV_PAGES().map(([id]) => id)).toEqual(["resumen", "portafolios", "actividad", "ajustes"]);
+    expect(NAV_PAGES().map(([id]) => id)).toEqual(["resumen", "detalle", "portafolios", "actividad", "ajustes"]);
     for (const [id] of NAV_PAGES()) expect(html).toContain(`href="#/${id}"`);
     expect(html).toContain(">Resumen<");
+    expect(html).toContain(">Detalle<");
+    Object.assign(store.state, { lang: "en" });
+    expect(renderNav()).toContain(">Detail<");
+    Object.assign(store.state, { lang: "es" });
     expect(html).toContain(">Portafolios<");
     expect(html).toContain(">Actividad<");
     expect(html).toContain(">Ajustes<");

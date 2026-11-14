@@ -59,3 +59,46 @@ describe("one summary row", () => {
     expect(css.match(/\.kpi \.kl \{[^}]*\}/)?.[0]).not.toContain("uppercase");
   });
 });
+
+// ── The Overview is one board, a column per strategy (owner, 2026-11-14) ─────
+describe("the Overview board", () => {
+  const check = readFileSync(join(import.meta.dir, "../../../../../scripts/dashboard-layout-check.ts"), "utf-8");
+  const main = readFileSync(join(import.meta.dir, "main.js"), "utf-8");
+
+  test("locked desktops (≥ 1280 × 540): the board fills the viewport and its columns clip, nothing scrolls", () => {
+    const m = css.match(/@media \(min-width: 1280px\) and \(min-height: 540px\) \{ \.bd-wrap \{ flex: 1 1 auto; min-height: 0;[^}]*\} \.bd \{ flex: 1 1 0; min-height: 0; \} \.bc \{ min-height: 0; overflow: hidden; \} \.bc-p-bars \{ flex: 1 1 0; min-height: 0; overflow: hidden; \}/);
+    expect(m).not.toBeNull();
+    expect(css).not.toMatch(/\.bc[^{]*\{[^}]*overflow(-y)?: (auto|scroll)/);
+  });
+
+  test("981–1279 wide: two columns a row, the page scrolls — the viewport lock is released for the Overview only, its own rule stays", () => {
+    expect(css).toContain("@media (max-width: 1279px) { .bd { grid-template-columns: repeat(2, minmax(0, 1fr)); } }");
+    expect(css).toMatch(/@media \(min-width: 981px\) and \(max-width: 1279px\) \{ html\[data-page="resumen"\], html\[data-page="resumen"\] body \{ height: auto; overflow: visible; \}/);
+    expect(css).toContain("@media (min-width: 981px) and (min-height: 540px) { html, body { height: 100dvh; overflow: hidden; }"); // the lock itself, unchanged
+    expect(main).toContain("document.documentElement.dataset.page = page");
+  });
+
+  test("a phone: one column a row", () => {
+    expect(css).toMatch(/@media \(max-width: 640px\) \{ \.bd \{ grid-template-columns: minmax\(0, 1fr\); \}/);
+  });
+
+  test("short of height the column gives up its last action, then the curve's labels (fit-1, fit-2)", () => {
+    expect(css).toContain(".bd.fit-1 .bc-last { display: none; }");
+    expect(css).toContain(".bd.fit-2 .pc-axis { display: none; }");
+    expect(css).toContain(".pc-row[hidden] { display: none; }");
+  });
+
+  test("dashboard:check FAILS when anything inside the board scrolls or is clipped, or the page scrolls", () => {
+    expect(check).toContain("function boardProblems(locked: boolean)");
+    expect(check).toContain("content ${el.scrollHeight} > box ${el.clientHeight}");
+    expect(check).toContain('is a scroller');
+    expect(check).toContain('if (board.out.length) report[report.length - 1].failures.push(...board.out);');
+    expect(check).toContain("capture(\"board\", desktop && !locked)"); // the page may scroll only on 981–1279
+  });
+
+  test("no tabs and no Chart | Table switch anywhere: the chart is the Overview, the table is Detail", () => {
+    expect(main).not.toContain("data-posview");
+    expect(main).toContain('page === "detalle"');
+    expect(main).toContain('id="boardHost"');
+  });
+});

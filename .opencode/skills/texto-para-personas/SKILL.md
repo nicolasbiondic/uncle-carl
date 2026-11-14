@@ -73,6 +73,25 @@ screen.
 
 ## 4. Layout
 
+- One view (owner, 2026-11-14: "tengo que poder verlo en una sola vista"). What
+  the owner opens the screen for fits on one screen: no scrolling inside a
+  card to find the fourth strategy. If it does not fit, show the few that
+  matter and one "see all" line that goes to a detail page; do not add a
+  scrollbar. Only a log (trades, actions) may scroll.
+- Columns, not only rows (same day: "acostúmbrate a utilizar columnas en vez de
+  solo filas"). Things of the same kind (the strategies, the brokers) go side
+  by side, one column each, so they can be compared at a glance; a stack of
+  full-width rows that each use half their width is the pattern to avoid.
+- The Overview is the model (`src/dashboard/public/v4/js/components/board.js`):
+  one column per strategy, each telling its whole story top to bottom (value,
+  30-day change, curve, positions as bars in dollars, what the bot is doing),
+  nothing scrolls, "… N more · see all" goes to the Detail page. Tables and
+  logs live on Detail.
+- A chart before a table, and one figure clearly bigger than the rest: the
+  reader must know where to look first. Decorating a table with small bars was
+  rejected twice ("no se ve visual, no lo entiendo"): a bar or a gauge he has
+  to decode is noise, and percentages of capital ("145 % of its capital ·
+  limit 250 %") told him nothing. Say it in dollars.
 - No sideways scroll. When space runs out, hide the least important text first
   (`src/dashboard/public/v4/js/fit.js`) and keep the full text in the tooltip;
   do not shrink the font or let the row overflow. On a computer (981 px and
@@ -122,6 +141,8 @@ system kept, the rules above win over the skill's taste.
 | Whole-dollar table money, unknown is not zero | `src/dashboard/public/v4/js/fmt.test.js` |
 | Sentence-case labels, layout rules | `src/dashboard/public/v4/js/layout.test.js` |
 | No sideways scroll on a computer, in English and Spanish | `bun run dashboard:check` (`scripts/dashboard-layout-check.ts`) |
+| Nothing scrolls or is clipped inside the Overview board (1280 px wide and up) | `bun run dashboard:check` (the `board` views) |
+| The board's figures are the server readers'; the strategies + "outside the strategies" = the total | `src/portfolio/moneyConsistency.test.ts` |
 | The files this skill names exist | `src/config/ownerTextSkill.test.ts` |
 
 Not enforced by a test, check by eye: that a text is understandable, the "×"

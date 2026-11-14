@@ -238,45 +238,14 @@ tfoot tr.totals .muted { font-weight: 500; }
 /* width:0 + min-width:100%: the sentence takes the row's width without ever
    contributing to the column widths (a label in the first cell widened the
    symbol column to ~200px, see renderTotalsRow in positions.js). */
-.pgroup-btn { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s4); width: 0; min-width: 100%; padding: 8px var(--s2); background: none; border: none; color: var(--text); font: inherit; text-align: left; white-space: nowrap; overflow: hidden; }
+.pgroup-btn { display: flex; flex-wrap: wrap; align-items: baseline; gap: 1px var(--s2); width: 0; min-width: 100%; padding: 9px var(--s2) 5px; background: none; border: none; color: var(--text); font: inherit; text-align: left; white-space: nowrap; overflow: hidden; }
 .pgroup-btn:hover .pg-name { color: var(--accent); }
 .pgroup-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--r1); }
-/* The group header is a small summary band: on the left the name, its size and
-   the result (the main figure, a step heavier than the muted text); on the
-   right the win/loss split and the capital gauge. Too narrow, the right part
-   drops to a second line, still right-aligned. */
-.pg-l { display: inline-flex; align-items: baseline; gap: var(--s2); flex: 1 1 auto; min-width: 0; }
-.pg-r { display: inline-flex; align-items: center; gap: var(--s4); margin-left: auto; flex: 0 0 auto; }
 .pgroup-btn .pg-name { font-weight: 700; flex-shrink: 0; }
-.pgroup-btn .pg-sum { color: var(--text-2); font-size: var(--t-xs); min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
-.pgroup-btn .pg-pnl { font-weight: 700; font-size: var(--t-sm); flex-shrink: 0; margin-left: var(--s2); font-variant-numeric: tabular-nums; }
-.pgroup-btn .pg-pct { font-weight: 600; }
-/* The win/loss split: green for the share of positions that are up, red for
-   those that are down, muted for flat ones; the words beside it say the same. */
-.pg-split { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; font-size: var(--t-xs); color: var(--text-2); font-variant-numeric: tabular-nums; }
-.splitbar { display: inline-flex; gap: 1px; width: 72px; height: 8px; border-radius: 2px; overflow: hidden; background: var(--border); flex: 0 0 auto; }
-.splitbar i { display: block; flex: 1 1 0; min-width: 3px; height: 100%; }
-.splitbar .sb-up { background: var(--up); }
-.splitbar .sb-down { background: var(--down); }
-.splitbar .sb-flat { background: var(--muted); }
-/* The header's exposure in words, then the capital gauge. */
-.pgroup-btn .pg-exp { display: inline-flex; align-items: center; gap: var(--s2); flex: 0 0 auto; font-size: var(--t-xs); color: var(--text-2); font-variant-numeric: tabular-nums; }
-/* The totals row is the same band without the right-hand part. */
+.pgroup-btn .pg-sum { color: var(--text-2); font-size: var(--t-xs); flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.pgroup-btn .pg-pnl { font-weight: 600; }
 .pgroup-btn.pg-foot { padding: 6px var(--s2); }
 .pg-foot-l { white-space: normal; min-width: 0; }
-.pg-foot-l .pg-pnl { margin-left: 0; }
-.pg-nw { white-space: nowrap; } /* the bar and its words wrap together, after the separator */
-.pg-foot-l .pg-split { vertical-align: middle; }
-/* The capital gauge (js/capital-gauge.js), one for every surface: a track to
-   the larger of the limit and 100 %, a fill to the current share, a tick at
-   100 % when the track goes past it. Fill = the accent, red only past the limit. */
-.cgauge { display: inline-flex; align-items: center; gap: var(--s2); flex: 0 0 auto; }
-.cg-track { position: relative; display: inline-block; width: 140px; height: 8px; border-radius: 2px; background: var(--border); flex: 0 0 auto; }
-.cg-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; }
-.cg-tick { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--text); }
-.cg-end { color: var(--text-2); font-size: var(--t-xs); white-space: nowrap; font-variant-numeric: tabular-nums; }
-@media (max-width: 980px) { .cg-track { width: 110px; } }
-@media (max-width: 640px) { .cg-track { width: 88px; } .splitbar { width: 56px; } }
 /* Row result: a bar that diverges from a zero line (losses grow left in the
    loss colour, gains right in the gain colour), its length |result %| against
    the largest on screen (pnlBarWidth in positions.js), then the amount and
@@ -302,7 +271,7 @@ tfoot tr.totals .muted { font-weight: 500; }
 .hseg i.on { background: var(--text-2); }
 .hold.closing .hseg i.on { background: var(--warn); }
 .hold-txt { font-size: var(--t-xs); }
-@media (min-width: 641px) { .hseg { gap: 3px; } .hseg i { width: 12px; height: 8px; border-radius: 2px; } }
+@media (min-width: 1440px) { .hseg { gap: 3px; } .hseg i { width: 12px; height: 8px; border-radius: 2px; } }
 .pg-chev { width: 0; height: 0; border: 4px solid transparent; border-left: 5px solid var(--muted); align-self: center; flex-shrink: 0; transition: transform var(--dur); }
 .pgroup-btn[aria-expanded="true"] .pg-chev { transform: rotate(90deg); }
 @media (max-width: 1500px) { .postbl .opt1 { display: none; } }
@@ -317,10 +286,6 @@ tfoot tr.totals .muted { font-weight: 500; }
   .postbl .symname { max-width: 15ch; white-space: normal; font-size: 10px; line-height: 1.25; } /* phones: the name wraps under its ticker */
   .postbl td, .postbl th { padding-left: var(--s1); padding-right: var(--s1); }
   .pgroup-btn .pg-sum { white-space: normal; }
-  .pg-l, .pg-r, .pgroup-btn .pg-exp { flex-wrap: wrap; white-space: normal; }
-  .pg-r { margin-left: 0; gap: var(--s1) var(--s3); min-width: 0; flex: 1 1 100%; }
-  .pgroup-btn .pg-pnl { margin-left: 0; }
-  .pgroup-btn .pg-exp { flex: 0 1 auto; min-width: 0; }
   .postbl th { white-space: normal; vertical-align: bottom; line-height: 1.25; }
   .dbar { width: 72px; }
 }
@@ -377,6 +342,134 @@ tfoot tr.totals .muted { font-weight: 500; }
 #opsBody table.fit-3 .dbar { width: 88px; }
 #opsBody table.fit-4 .dbar { width: 60px; }
 #opsBody table.fit-4 .symname { max-width: 12ch; }
+
+/* ── Positions as charts (components/strategy-chart.js, 2026-11-14) ─────────
+   One block per strategy: its name, its value now (the big figure) and the
+   change over 30 days; its curve; one sentence; its positions as bars from the
+   largest gain to the largest loss, in dollars. A footer sentence under it. */
+.pc-plot { margin: var(--s2) 8px 0 0; } /* room for the dot at the last point */
+.pc-curve { position: relative; height: 64px; }
+.pc-curve svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; overflow: visible; }
+.pc-base { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; opacity: .8; }
+.pc-dot { position: absolute; width: 9px; height: 9px; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 0 3px var(--card); }
+.pc-axis { display: flex; justify-content: space-between; margin-top: 3px; color: var(--muted); font-size: 10px; }
+.pc-row { position: relative; display: grid; grid-template-columns: minmax(112px, 40%) minmax(0, 1fr) 68px; align-items: center; gap: var(--s2); height: 22px; overflow: hidden; flex: 0 0 auto; }
+.pc-row[hidden] { display: none; }
+.pc-sym { min-width: 0; overflow: hidden; }
+.pc-sym .symrow { max-width: 100%; }
+.pc-sym .symname { flex: 0 1 auto; }
+.pc-track { position: relative; height: 13px; min-width: 0; }
+.pc-bar { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
+.pc-zero { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--text-2); z-index: 1; }
+.pc-amt { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pc-more { display: block; width: 100%; height: 22px; padding: 0; background: none; border: none; color: var(--muted); font: inherit; font-size: var(--t-xs); text-align: left; cursor: pointer; }
+.pc-more[hidden] { display: none; }
+.pc-more:hover { color: var(--accent); }
+.pc-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r1); }
+
+/* ── The Overview board (components/board.js, 2026-11-14): ONE view, a COLUMN per
+   strategy, nothing scrolls. ≥ 1280 wide the columns sit side by side and fill
+   the viewport (the bars take the height left, js fitBoard); 981–1279 two per row
+   and the page scrolls; a phone, one per row. ───────────────────────────── */
+.bd-wrap { display: flex; flex-direction: column; gap: var(--s2); padding-top: var(--s3); }
+.bd { display: grid; grid-template-columns: repeat(var(--n, 4), minmax(0, 1fr)); gap: var(--s3); }
+.bc { display: flex; flex-direction: column; min-width: 0; background: var(--card); border: 1px solid var(--border); border-radius: var(--r3); padding: var(--s3) var(--s4); }
+.bc-p { min-width: 0; }
+.bc-rest { display: flex; flex-direction: column; min-width: 0; }
+.bc-p-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px var(--s2); }
+.bc-name { font-size: var(--t-md); font-weight: 700; min-width: 0; }
+.bc-status { display: inline-flex; align-items: center; gap: 6px; font-size: var(--t-xs); font-weight: 600; white-space: nowrap; }
+.bc-value { margin-top: var(--s1); font-size: var(--t-2xl); font-weight: 700; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.bc-delta { font-size: var(--t-sm); font-weight: 600; font-variant-numeric: tabular-nums; }
+.bc-p-lines { margin-top: var(--s2); }
+.bc-count { font-size: var(--t-sm); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.bc-over { color: var(--down); font-weight: 600; }
+.bc-res { font-size: var(--t-md); font-weight: 700; font-variant-numeric: tabular-nums; }
+.bc-why { margin-top: 2px; font-size: var(--t-xs); color: var(--text-2); }
+.bc-p-bars { margin-top: var(--s2); }
+.bc-bars { display: flex; flex-direction: column; }
+.bc-p-bot { margin-top: var(--s2); padding-top: var(--s2); border-top: 1px solid var(--border); font-size: var(--t-xs); color: var(--text-2); }
+.bc-p-bot > div + div { margin-top: 3px; }
+.bc-mkt { font-size: var(--t-xs); }
+.bc-trim { color: var(--warn); font-weight: 600; }
+.bc-last { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.bc-note { color: var(--text-2); }
+.bc-skel { min-height: 240px; gap: var(--s3); }
+.bc-skel-h { display: block; height: 18px; width: 60%; }
+.bc-skel-v { display: block; height: 30px; width: 70%; }
+.bc-skel-d { display: block; height: 14px; width: 55%; margin-top: var(--s1); }
+.bc-skel-c { display: block; height: 64px; width: 100%; }
+.bd-foot { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; padding: 0 var(--s1); font-size: var(--t-sm); color: var(--text-2); font-variant-numeric: tabular-nums; min-height: 20px; }
+/* Why the columns do not add up to the total equity: at the far end of the same line. */
+.bd-out { margin-left: auto; color: var(--muted); }
+.bd-out:empty { display: none; }
+/* What the bot is doing is what the owner opens the screen for: the decision
+   sentence in the text colour, and the whole section a size up where the
+   column has the room to keep its bars too (≥ 1440 px wide and ≥ 880 px tall:
+   at the owner's 1747×892 the eleven Momentum bars and the larger sentences
+   both fit; a shorter window keeps the small size and its bars). */
+.bc-dec { color: var(--text); }
+@media (min-width: 1440px) and (min-height: 880px) { .bc-p-bot, .bc-mkt { font-size: var(--t-sm); } }
+/* Narrow columns (1280–1439 px wide): the status word under the name in EVERY
+   column, so a long name that wraps does not push one column's figures lower
+   than its neighbours'. */
+@media (min-width: 1280px) and (max-width: 1439px) { .bc-status { flex-basis: 100%; } }
+@media (max-width: 1279px) { .bd { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) {
+  .bd { grid-template-columns: minmax(0, 1fr); }
+  .bd-wrap { padding-top: 0; }
+  .bc { padding: var(--s3); }
+  .bc-value { font-size: var(--t-xl); }
+  .pc-row { grid-template-columns: minmax(84px, 120px) minmax(0, 1fr) 62px; }
+  .bc .symrow { flex-direction: column; align-items: flex-start; gap: 0; }
+  .bc .symname { max-width: 14ch; white-space: normal; font-size: 10px; line-height: 1.25; }
+  .pc-row { height: auto; min-height: 34px; padding: 2px 0; }
+}
+/* Locked layout (a desktop window ≥ 1280 wide and ≥ 540 tall): the board fills
+   the screen between the header and the news bar and nothing inside scrolls. */
+@media (min-width: 1280px) and (min-height: 540px) {
+  .bd-wrap { flex: 1 1 auto; min-height: 0; padding-top: 0; }
+  .bd { flex: 1 1 0; min-height: 0; }
+  .bc { min-height: 0; overflow: hidden; }
+  .bc-p-bars { flex: 1 1 0; min-height: 0; overflow: hidden; }
+  .bc-bars { height: 100%; overflow: hidden; }
+  .bc-rest { flex: 1 1 0; min-height: 0; }
+  /* The columns share the ROWS of their top four parts (subgrid): a name or a
+     sentence that wraps in one column makes that row taller in all of them, so
+     the big figures, the curves and the first bar sit at the same height across
+     the board and the columns can be compared at a glance. Below that each
+     column is its own: its sentences take what they need, its bars the rest
+     (js fitBoard measures it as before), so no column loses bars to a
+     neighbour with more to say. */
+  @supports (grid-template-rows: subgrid) {
+    .bd { grid-template-rows: auto auto auto auto minmax(0, 1fr); row-gap: 0; }
+    .bc { display: grid; grid-template-rows: subgrid; grid-row: 1 / span 5; row-gap: 0; }
+  }
+}
+/* 981–1279 wide: two columns a row and the page scrolls, so the viewport lock
+   is released for the Overview only (its own rule above stays for every other page). */
+@media (min-width: 981px) and (max-width: 1279px) {
+  html[data-page="resumen"], html[data-page="resumen"] body { height: auto; overflow: visible; }
+  html[data-page="resumen"] .app { height: auto; min-height: 100dvh; }
+  html[data-page="resumen"] .content { flex: 0 0 auto; overflow: visible; padding-bottom: var(--s4); }
+  html[data-page="resumen"] .content > .wrap { height: auto; }
+}
+/* A laptop-height window: a tighter column, so the bars keep their room. */
+@media (min-width: 1280px) and (min-height: 540px) and (max-height: 960px) {
+  .bc { padding: var(--s2) var(--s3); }
+  .bc-value { font-size: var(--t-xl); margin-top: 0; }
+  .bc-p-lines { margin-top: var(--s1); }
+  .bc-p-bars { margin-top: var(--s1); }
+  .bc .pc-plot { margin-top: var(--s1); }
+  .bc .pc-curve { height: 46px; }
+  .bc-count { font-size: var(--t-xs); }
+  .bc-res { font-size: var(--t-sm); }
+  .bc-p-bot { margin-top: var(--s1); padding-top: var(--s1); }
+}
+/* Short of height, the column gives up lines in this order: its last action,
+   then the curve's two labels (js fitBoard adds fit-1, fit-2). */
+.bd.fit-1 .bc-last { display: none; }
+.bd.fit-2 .pc-axis { display: none; }
 
 /* tabs */
 .tabs { display: flex; gap: var(--s4); flex-wrap: wrap; border-bottom: 1px solid var(--border); margin-bottom: var(--s3); }
@@ -444,41 +537,12 @@ tfoot tr.totals .muted { font-weight: 500; }
    decision" line and at most one short sentence — then the recent actions as a
    dated list (one line per pass, the per-symbol lines behind a disclosure). The
    status word is the only emphasis; the hairlines separate portfolios. */
-.bn-row { padding: var(--s3) 0; border-bottom: 1px solid var(--border); }
-.bn-row:first-child { padding-top: var(--s1); }
-.bn-head { display: flex; align-items: baseline; gap: var(--s2) var(--s3); flex-wrap: wrap; }
-.bn-name { font-weight: 600; }
-.bn-word { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: var(--t-xs); white-space: nowrap; }
 .bn-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.bn-chips { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s2); margin-top: var(--s2); }
-/* The money and its capital: one line, the gauge under it (capital-gauge.js). */
-.bn-inv { margin-top: var(--s2); }
-.bn-inv-line { font-size: var(--t-sm); font-variant-numeric: tabular-nums; }
-.bn-inv .cgauge { margin-top: 6px; }
-.bn-gauge .cg-track { width: 160px; height: 10px; }
-@media (max-width: 640px) { .bn-gauge .cg-track { width: 110px; } }
-/* The market chip: an arrow and a colour on its first words, the rest plain. */
+/* The market sentence: an arrow and a colour on its first words, the rest plain. */
 .bn-rg { font-weight: 600; }
 .bn-rg.up { color: var(--up); }
 .bn-rg.down { color: var(--down); }
 .bn-arrow { font-size: 9px; vertical-align: 1px; }
-.bn-chip { color: var(--text-2); font-size: var(--t-xs); background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r1); padding: 1px var(--s2); font-variant-numeric: tabular-nums; }
-.bn-tl { margin-top: var(--s2); max-width: 560px; }
-.bn-tl-track { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--t-xs); }
-.bn-tl-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
-.bn-tl-hollow { background: none; border: 1.5px solid var(--muted); box-sizing: border-box; }
-.bn-tl-bar { height: 1px; background: var(--border-2); flex-basis: 0; min-width: 12px; }
-/* What has elapsed since the last decision is a solid, brighter line; what is
-   still to come is dim; "now" is a filled dot with its word. */
-.bn-tl-bar.bn-tl-done { height: 2px; border-radius: 1px; background: var(--text-2); }
-.bn-tl-past { background: var(--text-2); }
-.bn-tl-nowdot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); flex-shrink: 0; margin-right: -2px; }
-.bn-tl-now { color: var(--text); font-weight: 600; }
-.bn-tl-labels { display: flex; justify-content: space-between; gap: var(--s3); margin-top: 3px; color: var(--text-2); font-size: var(--t-xs); }
-.bn-tl-labels > span:last-child { text-align: right; }
-.bn-tl-k { color: var(--muted); }
-.bn-tl-solo { margin-top: var(--s2); color: var(--text-2); font-size: var(--t-xs); }
-.bn-text { margin: var(--s1) 0 0; color: var(--text-2); max-width: 72ch; line-height: 1.45; overflow-wrap: anywhere; }
 .bn-pass > summary { cursor: pointer; list-style: none; }
 .bn-pass > summary::-webkit-details-marker { display: none; }
 .bn-pass > summary::after { content: "▸"; display: inline-block; margin-left: 6px; color: var(--muted); transition: transform var(--dur); }

@@ -3,7 +3,7 @@
 // the viewer is pinned to New York so the clock words are deterministic.
 import { describe, expect, test, beforeEach, afterAll } from "bun:test";
 import {
-  renderBotNow, chipsOf, chipItemsOf, noteOf, timeLine, statusOf, eventSentence, groupEventsByDay,
+  renderBotNow, chipsOf, chipItemsOf, noteOf, decisionSentence, lastActionOf, regimeHtml, statusOf, eventSentence, groupEventsByDay,
   clusterPasses, passSummary, untilWord, whenPhrase, reasonWord, grossPhrase, sinceWord, portfolioName,
 } from "./botnow.js";
 import { BOT_NOW_FIXTURE as FX, FIXTURE_NOW as NOW } from "./botnow.fixture.js";
@@ -17,50 +17,47 @@ const langBefore = store.state.lang;
 beforeEach(() => { store.state.lang = "en"; });
 afterAll(() => { store.state.lang = langBefore; });
 
-describe("one compact card per portfolio", () => {
-  test("momentum stocks: chips with the facts, a time line with both ends, no sentence when nothing is blocked", () => {
+describe("what a strategy is doing, in sentences (the board's bottom lines)", () => {
+  test("momentum stocks: the market and one sentence for the decisions; nothing blocked", () => {
     const p = by("momentum_stocks");
-    expect(chipsOf(p)).toEqual(["Invested $51,767 (97 % of its capital, limit 250 %)", "Market rising: S&P 500 is 5 % above its 200-day average"]);
+    expect(chipsOf(p)).toEqual(["Market rising: S&P 500 is 5 % above its 200-day average"]);
     expect(noteOf(p, O)).toBe("");
-    const tl = timeLine(p, O);
-    expect(tl).toContain("Last decision</span> yesterday 09:35 New York");
-    expect(tl).toContain("Next decision</span> Monday 09:35 New York");
-    expect(tl).toContain(">now<");
+    expect(decisionSentence(p, O)).toBe("Decided yesterday 09:35 New York · decides again Monday 09:35 New York");
     expect(statusOf(p)).toEqual({ word: "Invested", color: "var(--up)" });
   });
 
-  test("mean reversion: asset count, and no limit said when the cap is 100 %", () => {
-    expect(chipsOf(by("meanrev_stocks"))).toEqual(["Invested $53,200 (100 % of its capital)", "32 stocks"]);
-    expect(timeLine(by("meanrev_stocks"), O)).toContain("Next decision</span> Monday 09:35 New York");
+  test("mean reversion: nothing but the decisions to say; no count pill, no money pill", () => {
+    expect(chipsOf(by("meanrev_stocks"))).toEqual([]);
+    expect(decisionSentence(by("meanrev_stocks"), O)).toContain("decides again Monday 09:35 New York");
   });
 
-  test("momentum crypto, flat: the reason is the chip; the hourly check is relative", () => {
+  test("momentum crypto, flat: the reason is a sentence; the hourly check is relative; no 'holds nothing' line", () => {
     const p = by("momentum_crypto");
     expect(chipsOf(p)).toEqual(["None of 8 coins is trending up"]);
     expect(noteOf(p, O)).toBe("");
-    const tl = timeLine(p, O);
-    expect(tl).toContain("Last decision</span> 1 min ago");
-    expect(tl).toMatch(/Next decision<\/span> in \d+ min/);
-    expect(tl).not.toContain("New York");
+    const s = decisionSentence(p, O);
+    expect(s).toMatch(/^Decided 1 min ago · decides again in \d+ min$/);
+    expect(s).not.toContain("New York");
     expect(statusOf(p)).toEqual({ word: "Out of the market", color: "var(--muted)" });
   });
 
-  test("USDC, trimmed by drawdown: size and peak chips, the one sentence, times on the viewer's clock", () => {
+  test("USDC, trimmed by drawdown: ONE sentence instead of two percentages, the size in its title; times on the viewer's clock", () => {
     const p = by("momentum_crypto_usdc");
-    expect(chipsOf(p)).toEqual(["Invested $4,700 (58 % of its capital)", "79 % of normal size", "16 % below its peak"]);
+    expect(chipsOf(p)).toEqual(["Trading smaller: it is 16 % below its peak"]);
+    expect(chipItemsOf(p).find((c) => c.kind === "trim").title).toBe("79 % of normal size");
     expect(noteOf(p, O)).toBe("No new buys until tomorrow 20:00."); // Sunday 00:00 UTC in the viewer's clock
-    const tl = timeLine(p, O);
-    expect(tl).toContain("Last decision</span> yesterday 20:00");
-    expect(tl).toContain("Next decision</span> today 20:00");
+    expect(decisionSentence(p, O)).toBe("Decided yesterday 20:00 · decides again today 20:00");
     expect(statusOf(p)).toEqual({ word: "Invested, trading smaller", color: "var(--warn)" });
   });
 
   test("the same, in Spanish", () => {
     store.state.lang = "es";
-    expect(chipsOf(by("momentum_stocks"))).toEqual(["Invertido $51,767 (97 % de su capital, límite 250 %)", "Mercado al alza: S&P 500 está un 5 % por encima de su media de 200 días"]);
+    expect(chipsOf(by("momentum_stocks"))).toEqual(["Mercado al alza: S&P 500 está un 5 % por encima de su media de 200 días"]);
     expect(chipsOf(by("momentum_crypto"))).toEqual(["Ninguna de 8 criptomonedas está en tendencia alcista"]);
+    expect(chipsOf(by("momentum_crypto_usdc"))).toEqual(["Opera con menos tamaño: está un 16 % bajo su máximo"]);
     expect(noteOf(by("momentum_crypto_usdc"), O)).toBe("Sin compras nuevas hasta mañana a las 20:00.");
-    expect(timeLine(by("momentum_stocks"), O)).toContain("Próxima decisión</span> el lunes a las 09:35 Nueva York");
+    expect(decisionSentence(by("momentum_stocks"), O)).toBe("Decidió ayer a las 09:35 Nueva York · vuelve a decidir el lunes a las 09:35 Nueva York");
+    expect(decisionSentence(by("momentum_crypto"), O)).toMatch(/^Decidió hace 1 min · vuelve a decidir en \d+ min$/);
     expect(whenPhrase("2026-10-27T00:00:00Z", O)).toBe("el lunes a las 20:00");
     expect(statusOf(by("momentum_crypto"))).toEqual({ word: "Fuera del mercado", color: "var(--muted)" });
     expect(portfolioName("Momentum Crypto USDC")).toBe("Momentum Cripto USDC");
@@ -72,9 +69,13 @@ describe("one compact card per portfolio", () => {
     const base = { id: "momentum_stocks", label: "Momentum Stocks", broker: "alpaca", engine: "portfolio", positions: 0, cadence: { kind: "daily", at: "09:35 ET" }, nextDecisionAt: "2026-10-26T13:35:00Z" };
     expect(statusOf({ ...base, state: "waiting_first_pass" }).color).toBe("var(--accent)");
     expect(noteOf({ ...base, state: "waiting_first_pass" }, O)).toBe("A new model version goes live at its next decision.");
-    expect(timeLine({ ...base, state: "waiting_first_pass" }, O)).toContain('class="bn-tl-solo"'); // no last decision yet: only the next one
-    const paused = { ...base, state: "paused", positions: 3, investedUsd: 1200, blocked: { reason: "hard_drawdown", until: "2026-10-27T13:35:00Z" } };
-    expect(chipsOf(paused)).toEqual(["Drawdown limit", "Holds 3 stocks and ETFs ($1,200)"]);
+    expect(decisionSentence({ ...base, state: "waiting_first_pass" }, O)).toBe("Decides Monday 09:35 New York"); // no last decision yet: only the next one
+    store.state.lang = "es";
+    expect(decisionSentence({ ...base, state: "waiting_first_pass" }, O)).toBe("Decide el lunes a las 09:35 Nueva York");
+    store.state.lang = "en";
+    expect(decisionSentence({ ...base, nextDecisionAt: null, lastDecision: { at: NOW - 3 * 3600e3 } }, O)).toBe("Decided today 11:30 New York");
+    const paused = { ...base, state: "paused", positions: 3, investedUsd: 1200, equityUsd: 9000, blocked: { reason: "hard_drawdown", until: "2026-10-27T13:35:00Z" } };
+    expect(chipsOf(paused)).toEqual(["Drawdown limit"]);
     expect(noteOf(paused, O)).toBe("Trading paused until Tuesday 09:35 New York: it fell too far from its peak.");
     expect(statusOf({ ...base, state: "error" })).toEqual({ word: "Problem", color: "var(--down)" });
     // The engine's own note is never printed (audit G-13).
@@ -82,38 +83,71 @@ describe("one compact card per portfolio", () => {
     expect(noteOf({ ...base, state: "error", blocked: { reason: "skipped_stale", detail: "stale bars: SPY" } }, O)).toBe("It skipped its last decision because its price data was out of date.");
     const cash = { ...base, state: "flat", regime: { riskOn: false, ref: "SPY", distancePct: -2.3 } };
     expect(chipsOf(cash)).toEqual(["Market falling: S&P 500 is 2 % below its 200-day average — defensive mode"]);
-    expect(chipsOf({ ...base, state: "flat" })).toEqual(["Holds no positions"]);
-    expect(timeLine({ ...base, state: "paused" }, O)).toContain("Monday 09:35 New York");
-    expect(timeLine({ id: "x" }, O)).toBe("");
+    expect(chipsOf({ ...base, state: "flat" })).toEqual([]); // the status word already says "Out of the market"
+    expect(decisionSentence({ ...base, state: "paused" }, O)).toContain("Monday 09:35 New York");
+    expect(decisionSentence({ id: "x" }, O)).toBe("");
   });
 
-  test("one money chip in words and the market as a sentence (owner, 2026-11-12): whole percentages, no \"×\" anywhere", () => {
+  test("the market as a sentence: whole percentages, no \"×\" anywhere", () => {
     const base = { id: "momentum_stocks", label: "Momentum Stocks", broker: "alpaca", engine: "portfolio", state: "invested", positions: 8, investedUsd: 43677, equityUsd: 49600, grossX: 0.884, maxGrossX: 2.5 };
-    expect(chipsOf(base)).toEqual(["Invested $43,677 (88 % of its capital, limit 250 %)", "8 stocks and ETFs"]);
-    expect(chipsOf({ ...base, regime: { riskOn: true, ref: "SPY", distancePct: 4.3 } })[1]).toBe("Market rising: S&P 500 is 4 % above its 200-day average");
-    expect(chipsOf({ ...base, regime: { riskOn: false, ref: "SPY", distancePct: -6.8 } })[1]).toBe("Market falling: S&P 500 is 7 % below its 200-day average — defensive mode");
+    expect(chipsOf({ ...base, regime: { riskOn: true, ref: "SPY", distancePct: 4.3 } })).toEqual(["Market rising: S&P 500 is 4 % above its 200-day average"]);
+    expect(chipsOf({ ...base, regime: { riskOn: false, ref: "SPY", distancePct: -6.8 } })).toEqual(["Market falling: S&P 500 is 7 % below its 200-day average — defensive mode"]);
     // below the average but still inside the sleeve's own band: falling, and no mode claimed
-    expect(chipsOf({ ...base, regime: { riskOn: true, ref: "SPY", distancePct: -0.4 } })[1]).toBe("Market falling: S&P 500 is 0 % below its 200-day average");
-    expect(chipsOf({ ...base, grossX: null, maxGrossX: null })[0]).toBe("Invested $43,677"); // nothing to say about the capital
-    expect(chipsOf({ ...base, maxGrossX: 1.15, grossX: 0.58 })[0]).toBe("Invested $43,677 (58 % of its capital, limit 115 %)");
+    expect(chipsOf({ ...base, regime: { riskOn: true, ref: "SPY", distancePct: -0.4 } })).toEqual(["Market falling: S&P 500 is 0 % below its 200-day average"]);
     store.state.lang = "es";
-    expect(chipsOf({ ...base, regime: { riskOn: false, ref: "SPY", distancePct: -6.8 } })).toEqual([
-      "Invertido $43,677 (88 % de su capital, límite 250 %)",
-      "Mercado a la baja: S&P 500 está un 7 % por debajo de su media de 200 días — modo defensivo",
-    ]);
+    expect(chipsOf({ ...base, regime: { riskOn: false, ref: "SPY", distancePct: -6.8 } })).toEqual(["Mercado a la baja: S&P 500 está un 7 % por debajo de su media de 200 días — modo defensivo"]);
     for (const p of FX.portfolios) for (const c of chipsOf(p)) expect(c).not.toContain("×");
   });
 
-  test("each card is shorter than the old paragraph: at most three chips and one sentence", () => {
-    for (const p of FX.portfolios) {
-      expect(chipsOf(p).length).toBeLessThanOrEqual(3);
-      expect(noteOf(p, O).split(/[.:;] /).length).toBeLessThanOrEqual(2);
-    }
+  test("no jargon leaks into the lines", () => {
+    const all = FX.portfolios.flatMap((p) => [...chipsOf(p), noteOf(p, O), decisionSentence(p, O)]).join(" ") + renderBotNow(FX, O);
+    for (const w of ["λ", "gross", "soft", "TSM", "exposureScale", "riskOn", "null", "undefined", "NaN", "MAX_HOLD", "×", "Leverage", "Apalancamiento"]) expect(all).not.toContain(w);
   });
 
-  test("no jargon leaks into the cards", () => {
-    const all = FX.portfolios.flatMap((p) => [...chipsOf(p), noteOf(p, O)]).join(" ") + renderBotNow(FX, O);
-    for (const w of ["λ", "gross", "soft", "TSM", "exposureScale", "riskOn", "null", "undefined", "NaN", "MAX_HOLD", "×", "Leverage", "Apalancamiento"]) expect(all).not.toContain(w);
+  test("the market sentence markup: an arrow and a colour on its first words, the rest plain; the words carry it", () => {
+    const up = chipItemsOf({ id: "x", regime: { riskOn: true, ref: "SPY", distancePct: 4.3 }, state: "invested" }).find((c) => c.kind === "regime");
+    expect(regimeHtml(up)).toBe('<span class="bn-rg up"><span class="bn-arrow" aria-hidden="true">▲</span> Market rising</span>: S&amp;P 500 is 4 % above its 200-day average');
+    const down = chipItemsOf({ id: "x", regime: { riskOn: false, ref: "SPY", distancePct: -6.8 }, state: "invested" }).find((c) => c.kind === "regime");
+    expect(regimeHtml(down)).toContain('<span class="bn-rg down"><span class="bn-arrow" aria-hidden="true">▼</span> Market falling</span>');
+    store.state.lang = "es";
+    const upEs = chipItemsOf({ id: "x", regime: { riskOn: true, ref: "SPY", distancePct: 4.3 }, state: "invested" }).find((c) => c.kind === "regime");
+    expect(regimeHtml(upEs)).toContain("▲</span> Mercado al alza</span>: S&amp;P 500 está un 4 % por encima de su media de 200 días");
+  });
+});
+
+describe("a strategy's last action (the board's last line)", () => {
+  const p = { id: "momentum_stocks", label: "Momentum Stocks", broker: "alpaca", engine: "portfolio", cadence: { kind: "daily" } };
+  const at = (iso) => Date.parse(iso);
+  const ev = (over) => ({ at: at("2026-10-22T13:35:40Z"), portfolioId: "momentum_stocks", kind: "close", symbol: "SPY", qty: 6, usd: 3980, pnlUsd: -210, reason: "MAX_HOLD", detail: null, ...over });
+  const events = [
+    ev({ at: at("2026-10-22T13:35:42Z"), symbol: "QQQ", pnlUsd: -134 }), ev({}),
+    { at: at("2026-10-22T13:35:00Z"), portfolioId: "momentum_stocks", kind: "rebalance", symbol: null, qty: null, usd: 18000, pnlUsd: null, reason: "REBALANCE", detail: null, buys: 3, sells: 2, rebought: ["SPY", "QQQ"], newBuyUsd: 6400 },
+    { at: at("2026-10-20T13:35:00Z"), portfolioId: "momentum_stocks", kind: "buy", symbol: "NVDA", qty: 3, usd: 600, reason: "signal_entry" },
+    { at: at("2026-10-23T09:00:00Z"), portfolioId: "momentum_stocks", kind: "error", symbol: null, reason: "failed" }, // a problem is not an action
+    { at: at("2026-10-24T17:00:00Z"), portfolioId: "meanrev_stocks", kind: "sell", symbol: "KO", qty: 2, usd: 100, pnlUsd: 5, reason: "TAKE" },
+  ];
+  test("the newest pass of THAT strategy, as one sentence with its time: the same words the actions list uses, without the strategy's name", () => {
+    const a = lastActionOf(p, events, O);
+    expect(a.html).toBe("Last action Thursday 09:35 New York: closed 2 positions at the 5-day limit (−$344) and re-bought them, 1 new buy ($6,400)");
+    expect(a.title).toBe(a.html); // no markup in this one
+    expect(a.html).not.toContain("Momentum Stocks");
+  });
+  test("a single event is its own sentence; another strategy's events and problems never count; nothing in the feed: null", () => {
+    expect(lastActionOf({ ...p, id: "meanrev_stocks" }, events, O).html).toContain("Last action 2 h ago");
+    expect(lastActionOf({ ...p, id: "meanrev_stocks" }, events, O).html).toContain("sold KO");
+    expect(lastActionOf({ ...p, id: "momentum_crypto" }, events, O)).toBeNull();
+    expect(lastActionOf(p, [], O)).toBeNull();
+    expect(lastActionOf(p, undefined, O)).toBeNull();
+    expect(lastActionOf(p, [events[4]], O)).toBeNull();
+  });
+  test("relative when close, the reason's markup stripped from the title, in Spanish too", () => {
+    const recent = [{ at: NOW - 12 * 60e3, portfolioId: "momentum_crypto_usdc", kind: "resize", qty: 4, usd: -1250, reason: "drawdown_control" }];
+    const q = { id: "momentum_crypto_usdc", label: "Momentum Crypto USDC", broker: "binance_usdc", engine: "momentum" };
+    const a = lastActionOf(q, recent, O);
+    expect(a.html).toBe('Last action 12 min ago: trimmed 4 positions ($1,250) <span class="bn-why">— drawdown control</span>');
+    expect(a.title).toBe("Last action 12 min ago: trimmed 4 positions ($1,250) — drawdown control");
+    store.state.lang = "es";
+    expect(lastActionOf(q, recent, O).title).toBe("Última acción hace 12 min: recortó 4 posiciones ($1,250) — control de caída");
   });
 });
 
@@ -271,138 +305,39 @@ describe("time in words", () => {
   });
 });
 
-describe("the tab", () => {
-  test("renders every portfolio block, the status dot and the actions header", () => {
+describe("the Bot actions tab", () => {
+  test("is the recent actions as a dated log — the per-strategy state lives in the board's columns", () => {
     const html = renderBotNow(FX, O);
-    expect(html.match(/class="bn-row"/g)).toHaveLength(4);
-    expect(html).toContain('<span class="bn-name">Momentum Stocks</span>');
-    expect(html).toContain('<span class="bn-dot" style="background:var(--up)"></span>Invested</span>');
-    expect(html).toContain('<span class="bn-dot" style="background:var(--warn)"></span>Invested, trading smaller</span>');
-    expect(html.match(/class="bn-tl"/g)).toHaveLength(4);   // each card carries its time line
-    expect(html.match(/class="bn-chip"/g).length).toBeGreaterThanOrEqual(5); // the money is a gauge now, not a chip
-    expect(html.match(/class="bn-inv"/g)).toHaveLength(3); // the three portfolios that are invested; the flat one has nothing to gauge
     expect(html).toContain(">Recent actions <");
     expect(html).toContain("(New York time)");
     expect(html).toContain('<div class="bn-day">Today</div>');
     expect(html).toContain('<span class="bn-time">12:02</span>');
+    for (const gone of ["bn-row", "bn-chip", "bn-money", "bn-tl", "Invested", "bn-dot"]) expect(html).not.toContain(gone);
   });
 
   test("escapes what the API sends", () => {
-    const html = renderBotNow({ portfolios: [{ id: "x", label: "<img>", state: "error", blocked: { detail: "<script>" } }], events: [] }, O);
+    const html = renderBotNow({ portfolios: [{ id: "x", label: "<img>" }], events: [{ at: NOW - 60e3, portfolioId: "x", kind: "buy", symbol: "<script>", usd: 10 }] }, O);
     expect(html).not.toContain("<img>");
     expect(html).not.toContain("<script>");
-    expect(html).toContain("&lt;img&gt;");
+    expect(html).toContain("&lt;script&gt;");
   });
 
   test("empty and error states are one quiet line", () => {
     expect(renderBotNow(null, O)).toBe('<div class="empty">The bot has not reported yet.</div>');
-    expect(renderBotNow({ portfolios: [], events: [] }, O)).toContain("No portfolios are running.");
     expect(renderBotNow({ portfolios: FX.portfolios, events: [] }, O)).toContain("No actions in the last few days.");
     expect(renderBotNow({ portfolios: FX.portfolios }, O)).toContain("No actions in the last few days.");
   });
 
-  test("Bot is the first tab of the analytics card and api.botNow exists", () => {
+  test("the tab is first in the analytics card of the Detail page, called Bot actions, and api.botNow exists", () => {
     const saved = store.state.tab;
     store.state.tab = "bot";
     const html = renderAnalyticsShell();
     expect(html.indexOf('data-atab="bot"')).toBeGreaterThan(-1);
     expect(html.indexOf('data-atab="bot"')).toBeLessThan(html.indexOf('data-atab="equity"'));
-    expect(html).toContain('class="tab on" data-atab="bot">Bot<');
+    expect(html).toContain('class="tab on" data-atab="bot">Bot actions<');
+    store.state.lang = "es";
+    expect(renderAnalyticsShell()).toContain('data-atab="bot">Acciones del bot<');
     store.state.tab = saved;
     expect(typeof api.botNow).toBe("function");
-  });
-});
-
-// ── The money as a picture, the market with an arrow, the time line with weight (2026-11-14) ──
-describe("visual Bot card", () => {
-  const base = { id: "momentum_stocks", label: "Momentum Stocks", broker: "alpaca", engine: "portfolio", state: "invested", positions: 11, investedUsd: 71526, equityUsd: 49000, grossX: 1.46, maxGrossX: 2.5, regime: { riskOn: true, ref: "SPY", distancePct: 4.3 } };
-  const card = (p) => renderBotNow({ portfolios: [p], events: [] }, O);
-
-  test("chipItemsOf keeps every fact as structure and its plain sentence; chipsOf is those sentences", () => {
-    const items = chipItemsOf(base);
-    expect(items.map((c) => c.kind)).toEqual(["invested", "regime"]);
-    expect(items[0]).toMatchObject({ gross: 1.46, cap: 2.5, over: false, limitWord: "limit 250 %", line: "Invested $71,526 · 146 % of its capital" });
-    expect(items[0].text).toBe("Invested $71,526 (146 % of its capital, limit 250 %)");
-    expect(items[1]).toMatchObject({ up: true, head: "Market rising", tail: ": S&P 500 is 4 % above its 200-day average" });
-    expect(chipsOf(base)).toEqual(items.map((c) => c.text));
-  });
-
-  test("English: the invested line, the gauge under it with 'limit 250 %' at its end, and the 100 % mark", () => {
-    const html = card(base);
-    expect(html).toContain('<div class="bn-inv-line">Invested $71,526 · 146 % of its capital</div>');
-    expect(html).toContain('<span class="cgauge bn-gauge" aria-hidden="true"><span class="cg-track"><span class="cg-fill" style="width:58.4%;background:var(--accent)"></span><span class="cg-tick" style="left:40%"></span></span><span class="cg-end">limit 250 %</span></span>');
-    expect(html).toContain('title="The mark is 100 %: all of its own capital."');
-    expect(html).not.toContain("×");
-  });
-
-  test("Spanish: Invertido $71,526 · 146 % de su capital, límite 250 %", () => {
-    store.state.lang = "es";
-    const html = card(base);
-    expect(html).toContain('<div class="bn-inv-line">Invertido $71,526 · 146 % de su capital</div>');
-    expect(html).toContain('<span class="cg-end">límite 250 %</span>');
-    expect(html).toContain('title="La marca es el 100 %: todo su propio capital."');
-  });
-
-  test("a limit of 100 %: the gauge runs 0–100 % and says nothing about a limit, no tick", () => {
-    const html = card({ ...base, grossX: 0.93, maxGrossX: 1 });
-    expect(html).toContain('<div class="bn-inv-line">Invested $71,526 · 93 % of its capital</div>');
-    expect(html).toContain('<span class="cg-fill" style="width:93%;background:var(--accent)"></span></span></span>');
-    expect(html).not.toContain("cg-tick");
-    expect(html).not.toContain("cg-end");
-    expect(chipsOf({ ...base, grossX: 0.93, maxGrossX: 1 })[0]).toBe("Invested $71,526 (93 % of its capital)");
-  });
-
-  test("past its limit: red, and the limit is said even at 100 %; AT the limit is not red", () => {
-    const over = card({ ...base, grossX: 1.22, maxGrossX: 1.15 });
-    expect(over).toContain('<span class="cg-fill" style="width:100%;background:var(--down)"></span>');
-    expect(over).toContain('<span class="cg-end">limit 115 %</span>');
-    const over100 = card({ ...base, grossX: 1.05, maxGrossX: 1 });
-    expect(over100).toContain("background:var(--down)");
-    expect(over100).toContain('<span class="cg-end">limit 100 %</span>');
-    expect(chipsOf({ ...base, grossX: 1.05, maxGrossX: 1 })[0]).toBe("Invested $71,526 (105 % of its capital, limit 100 %)");
-    expect(card({ ...base, grossX: 1.15, maxGrossX: 1.15 })).toContain("background:var(--accent)");
-  });
-
-  test("no known limit: never red from a guess; no share of the capital: the money stays a pill and there is no gauge", () => {
-    expect(card({ ...base, grossX: 1, maxGrossX: null })).toContain("background:var(--accent)");
-    const none = card({ ...base, grossX: null, maxGrossX: null });
-    expect(none).toContain('<span class="bn-chip">Invested $71,526</span>');
-    expect(none).not.toContain("cgauge");
-  });
-
-  test("the market chip: an arrow and a colour on its first words, the rest of the sentence plain; the words carry it", () => {
-    const up = card(base);
-    expect(up).toContain('<span class="bn-chip"><span class="bn-rg up"><span class="bn-arrow" aria-hidden="true">▲</span> Market rising</span>: S&amp;P 500 is 4 % above its 200-day average</span>');
-    const down = card({ ...base, regime: { riskOn: false, ref: "SPY", distancePct: -6.8 } });
-    expect(down).toContain('<span class="bn-rg down"><span class="bn-arrow" aria-hidden="true">▼</span> Market falling</span>: S&amp;P 500 is 7 % below its 200-day average — defensive mode</span>');
-    store.state.lang = "es";
-    expect(card(base)).toContain('<span class="bn-rg up"><span class="bn-arrow" aria-hidden="true">▲</span> Mercado al alza</span>: S&amp;P 500 está un 4 % por encima de su media de 200 días</span>');
-    expect(card({ ...base, regime: { riskOn: false, ref: "SPY", distancePct: -6.8 } })).toContain("Mercado a la baja</span>");
-  });
-
-  test("the other pills stay pills (at most three facts: the money, the market or the size, the peak)", () => {
-    const trimmed = { ...base, regime: null, exposureScale: 0.97, drawdownPct: 7 };
-    expect(chipItemsOf(trimmed).map((c) => c.kind)).toEqual(["invested", "text", "text"]);
-    const html = card(trimmed);
-    expect(html).toContain('<span class="bn-chip">97 % of normal size</span>');
-    expect(html).toContain('<span class="bn-chip">7 % below its peak</span>');
-    expect(card({ ...base, regime: null })).toContain('<span class="bn-chip">11 stocks and ETFs</span>');
-  });
-
-  test("the time line: the elapsed part is solid, the part to come is dim, now is a filled dot with its word; the labels are unchanged", () => {
-    const tl = timeLine(by("momentum_stocks"), O);
-    expect(tl).toMatch(/<i class="bn-tl-dot bn-tl-past"><\/i><i class="bn-tl-bar bn-tl-done" style="flex-grow:[\d.]+"><\/i><i class="bn-tl-nowdot"><\/i><span class="bn-tl-now">now<\/span><i class="bn-tl-bar bn-tl-todo" style="flex-grow:[\d.]+"><\/i><i class="bn-tl-dot bn-tl-hollow"><\/i>/);
-    const [done, todo] = [...tl.matchAll(/flex-grow:([\d.]+)/g)].map((m) => Number(m[1]));
-    expect(done + todo).toBeCloseTo(1, 3); // what elapsed and what remains make the whole span
-    expect(tl).toContain("Last decision</span> yesterday 09:35 New York");
-    expect(tl).toContain("Next decision</span> Monday 09:35 New York");
-    expect(tl).toContain('aria-hidden="true"');
-  });
-
-  test("the elapsed share follows now between the two decisions", () => {
-    const p = { ...by("momentum_crypto"), lastDecision: { at: NOW - 3 * 3600e3 }, nextDecisionAt: NOW + 1 * 3600e3 };
-    const [done, todo] = [...timeLine(p, O).matchAll(/flex-grow:([\d.]+)/g)].map((m) => Number(m[1]));
-    expect(done).toBeCloseTo(0.75, 3);
-    expect(todo).toBeCloseTo(0.25, 3);
   });
 });

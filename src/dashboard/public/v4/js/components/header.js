@@ -91,6 +91,7 @@ export function renderActions(open = false) {
 // y Accounts podrían estar juntos") — #/cuentas is an alias (router.js).
 export const NAV_PAGES = () => [
   ["resumen", "home", t("Overview", "Resumen")],
+  ["detalle", "list", t("Detail", "Detalle")],
   ["portafolios", "briefcase", t("Portfolios", "Portafolios")],
   ["actividad", "list", t("Activity", "Actividad")],
   ["ajustes", "settings", t("Settings", "Ajustes")],

@@ -55,3 +55,20 @@ export function resampleEquityForDisplay<T extends { snapshot_time: number }>(
   out.push(newest);
   return out;
 }
+
+/** At most `maxPoints` rows, spread evenly over the series by position, always
+ *  keeping the FIRST and the LAST: the header's change is last minus first, so
+ *  thinning a curve for a small chart can never change the figure it draws.
+ *  Fewer rows than the cap come back untouched. */
+export function thinSeries<T>(rows: T[], maxPoints: number): T[] {
+  const cap = Math.floor(maxPoints);
+  if (!(cap >= 2) || rows.length <= cap) return rows;
+  const out: T[] = [];
+  let prev = -1;
+  for (let k = 0; k < cap; k++) {
+    const i = Math.round((k * (rows.length - 1)) / (cap - 1));
+    if (i !== prev) out.push(rows[i]);
+    prev = i;
+  }
+  return out;
+}

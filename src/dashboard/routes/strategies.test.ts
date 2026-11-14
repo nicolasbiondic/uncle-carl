@@ -166,3 +166,53 @@ describe("GET /api/equity/history consolidated truth", () => {
     }
   });
 });
+
+describe("GET /api/equity/history for one strategy (the Positions chart)", () => {
+  test("days=30&points=120: the window is the strategy's own reader, the series is thinned and keeps its ends, last − first is the window's change", async () => {
+    makeTestDb();
+    const now = Date.now();
+    // Hourly marks for 31 days: a strategy that rose, with a dip in the middle.
+    for (let i = 31 * 24; i >= 0; i--) {
+      const at = now - i * 3_600_000;
+      const equity = 50_000 + (31 * 24 - i) * 2 - (i > 300 && i < 400 ? 600 : 0);
+      saveEquitySnapshot("momentum_crypto", equity, 10_000, 0, at);
+    }
+    const app = express();
+    registerStrategyRoutes(app, { getActiveStrategies: () => [] } as any);
+    const server = app.listen(0);
+    try {
+      const { port } = server.address() as { port: number };
+      const get = async (q: string) => (await fetch(`http://127.0.0.1:${port}/api/equity/history?account=momentum_crypto&${q}`)).json() as Promise<any[]>;
+      const full = await get("days=30");
+      const thin = await get("days=30&points=120");
+      expect(full.length).toBeGreaterThan(120);
+      expect(thin.length).toBeLessThanOrEqual(120);
+      expect(thin.length).toBeGreaterThan(100);
+      const w = thin.at(-1).moneyWindow;
+      expect(w).not.toBeNull();
+      expect(w).toEqual(full.at(-1).moneyWindow); // thinning never changes the figure
+      expect(thin[0].snapshot_time).toBe(full[0].snapshot_time);
+      expect(thin.at(-1).snapshot_time).toBe(full.at(-1).snapshot_time);
+      expect(thin.at(-1).equity - thin[0].equity).toBeCloseTo(w.pnl, 8);
+      expect(thin.at(-1).equity).toBe(w.equity);
+      expect(thin[0].equity).toBe(w.start.equity);
+    } finally {
+      server.close();
+    }
+  });
+
+  test("a strategy with no marks answers an empty series, nothing invented", async () => {
+    makeTestDb();
+    const app = express();
+    registerStrategyRoutes(app, { getActiveStrategies: () => [] } as any);
+    const server = app.listen(0);
+    try {
+      const { port } = server.address() as { port: number };
+      const rows = await (await fetch(`http://127.0.0.1:${port}/api/equity/history?account=meanrev_stocks&days=30&points=120`)).json() as any[];
+      expect(rows.filter((r) => r.moneyWindow)).toEqual([]);
+      expect(rows.length).toBeLessThanOrEqual(1);
+    } finally {
+      server.close();
+    }
+  });
+});

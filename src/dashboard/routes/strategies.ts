@@ -10,7 +10,7 @@ import { toBoundedInt } from "../dashboard-utils";
 import { buildConsolidatedEquitySeries, readDisplayMoneyCurve } from "../../portfolio/consolidatedEquity";
 import { portfolioMainLegs, isMainSeriesApplicable } from "../../portfolio/truth";
 import { RISK_PROFILES, type RiskProfileId } from "../../config/riskProfiles";
-import { displayBucketMs, resampleEquityForDisplay, windowDays } from "../equityResample";
+import { displayBucketMs, resampleEquityForDisplay, thinSeries, windowDays } from "../equityResample";
 
 export function registerStrategyRoutes(app: express.Application, _am: AccountManager): void {
   // 2026-07-22 route audit: removed /api/strategies and
@@ -43,7 +43,11 @@ export function registerStrategyRoutes(app: express.Application, _am: AccountMan
         : [profileId];
       const curve = readDisplayMoneyCurve(ids, days);
       const stockOnly = ids.length === 1 && (profileId === "alpaca_main" || RISK_PROFILES[profileId as RiskProfileId]?.broker === "alpaca");
-      const rows = resampleEquityForDisplay(curve.rows, bucketMs, stockOnly && days !== 1);
+      // `points` (a small chart asks for ~120) thins the series, always keeping
+      // its first and last row, so last − first is still the window's change.
+      const points = req.query.points === undefined ? 0 : toBoundedInt(req.query.points, 0, 0, 2000);
+      const resampled = resampleEquityForDisplay(curve.rows, bucketMs, stockOnly && days !== 1);
+      const rows = points >= 2 ? thinSeries(resampled, points) : resampled;
       // Array response remains compatible. Metadata on its retained last
       // point supplies the header; clients never recompute a second return.
       return res.json(rows.map((r, i) => i === rows.length - 1 ? { ...r, moneyWindow: curve.window } : r));

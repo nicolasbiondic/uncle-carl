@@ -26,6 +26,12 @@ export const store = {
     // once the reader has clicked a group header; absent = the default rule
     // in positions.js (big groups start collapsed).
     posGroups: load("posGroups", {}),
+    // Per strategy: its 30-day history as the server's display reader gave it
+    // (curves.js), and whether a fetch for it has finished (a skeleton shows
+    // until then, never a $0). Not persisted.
+    curves: {},
+    curvesTried: {},
+    botNow: null,      // /api/bot/now: what each strategy is doing and its recent actions (last good answer)
     // live data (not persisted)
     dashboard: null,
     profiles: [],

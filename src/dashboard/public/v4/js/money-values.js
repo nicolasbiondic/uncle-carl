@@ -28,6 +28,18 @@ export function positionsTotals(positions, { entryAmount = entryAmountOf } = {})
   return { total, counted, unpriced, pct: counted > 0 && entryKnown && entry > 0 ? (total / entry) * 100 : null };
 }
 
+/** What the account holds OUTSIDE its strategies (Alpaca's initial cash, the
+ *  BTC collateral): the account's value minus the strategies' values. One
+ *  formula for Telegram's digest and the dashboard board, each fed the very
+ *  figures it shows, rounded first, so that on the screen "the strategies +
+ *  outside = the total" holds to the dollar. Null while the total or any
+ *  strategy's value is unknown: never a figure over a partial sum. */
+export function outsideStrategies(total, values) {
+  const real = (v) => typeof v === "number" && Number.isFinite(v);
+  if (!real(total) || !Array.isArray(values) || !values.length || !values.every(real)) return null;
+  return Math.round(total) - values.reduce((s, v) => s + Math.round(v), 0);
+}
+
 // Round once, identically on every surface (including negative half dollars).
 export function signedWholeMoney(value) {
   const v = Number.isFinite(Number(value)) ? Number(value) : 0;
