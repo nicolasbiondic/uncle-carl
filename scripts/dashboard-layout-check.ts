@@ -1,13 +1,14 @@
 #!/usr/bin/env bun
 // Geometry guard, not a pixel baseline. No DB/broker imports or instance data.
 // By default starts the visual harness with generated, synthetic fixtures.
-// Covers the Overview's five analytics tabs (Bot, Equity, Performance, Volume,
+// Covers the Overview board (nothing scrolls; a bar's hover card: "board-hover"),
+// the Detail page's five analytics tabs (Bot, Equity, Performance, Volume,
 // Activity), the P&L bridge and broker modals, the portfolio filter chip, and
 // every one of them in English AND Spanish (longer words are what overflow).
 // --ci: desktop Overview only; --sizes WxH,...: focused regression replay.
 // --base URL [--login]: live, read-only (only login/logout may mutate).
 // Screenshots + report.json: reports/dashboard-layout/ or --out DIR.
-import { chromium, type Browser, type Page } from "playwright-core";
+import { chromium, type Browser, type Locator, type Page } from "playwright-core";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -270,6 +271,156 @@ function boardProblems(locked: boolean) {
   return { out, bars };
 }
 
+/** The board's hover card and the bar line under the point (x, y), read in the page. `shown`: the card is painted;
+ *  `inside`: wholly in the window; `beside`: it does not cover the line's own column; `clear`: it does not cover the
+ *  line itself; `lit`: the line under the pointer is marked. */
+function hoverCard({ x, y }: { x: number; y: number }) {
+  const tip = document.querySelector<HTMLElement>(".tip.board-tip");
+  const row = document.elementFromPoint(x, y)?.closest<HTMLElement>(".bd .pc-row") ?? null;
+  const box = tip?.getBoundingClientRect(), line = row?.getBoundingClientRect(), col = row?.closest(".bc")?.getBoundingClientRect();
+  return {
+    shown: !!tip && getComputedStyle(tip).opacity === "1",
+    text: (tip?.innerText || "").replace(/\s+/g, " ").trim(),
+    symbol: row?.querySelector(".symlink")?.getAttribute("data-sym") || "",
+    amount: row?.querySelector(".pc-amt")?.lastChild?.textContent?.trim() || "", // "+$1,318": the word before it is for screen readers
+    lit: !!row && getComputedStyle(row).backgroundColor !== "rgba(0, 0, 0, 0)",
+    inside: !!box && box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight,
+    beside: !!box && !!col && (box.left >= col.right || box.right <= col.left),
+    clear: !!box && !!line && (box.top >= line.bottom || box.bottom <= line.top),
+  };
+}
+
+/** The pointer on a bar of the board shows that position's card (board.js wireBoardHover): at once, wholly inside the
+ *  window, beside the bar's column (under or over the line where there is no room beside it: a phone), carrying that
+ *  line's name and amount, the line marked. A price update replaces every line of a column: the card stays, with the
+ *  new figure. It follows the pointer to another line and goes when the pointer leaves the bars. No line carries a
+ *  browser tooltip (it waits a second and dies with its node). On a phone a tap shows it and a tap elsewhere puts it
+ *  away. `shot` runs while the card is up. Returns what is wrong and what the card said. */
+async function boardHover(page: Page, desktop: boolean, shot: () => Promise<void>) {
+  const out: string[] = [];
+  const frames = () => page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+  /** The middle of a target, in the window. Brought into view first, and the scroll's own event let through (a scroll puts the card away). */
+  const middle = async (target: Locator) => {
+    await target.scrollIntoViewIfNeeded();
+    await frames();
+    const b = await target.boundingBox();
+    if (!b) throw new Error("board-hover: the target has no box");
+    return { x: Math.round(b.x + b.width / 2), y: Math.round(b.y + b.height / 2) };
+  };
+  /** The same, only if it is in the window as the page stands: scrolling to it would put the card away by itself. */
+  const middleInView = async (target: Locator) => {
+    const b = await target.boundingBox(), v = page.viewportSize();
+    return b && v && b.x >= 0 && b.y >= 0 && b.x + b.width <= v.width && b.y + b.height <= v.height
+      ? { x: Math.round(b.x + b.width / 2), y: Math.round(b.y + b.height / 2) } : null;
+  };
+  const cardIs = (shown: boolean) => page.waitForFunction((want) => {
+    const tip = document.querySelector(".tip.board-tip");
+    return (!!tip && getComputedStyle(tip).opacity === "1") === want;
+  }, shown, { timeout: 1000 }).catch(() => {});
+  const read = (at: { x: number; y: number }) => page.evaluate(hoverCard, at);
+  const expectCard = (c: Awaited<ReturnType<typeof read>>, when: string, mouse = true) => {
+    if (!c.symbol) { out.push(`${when}: no bar line under the pointer`); return; }
+    if (!c.shown) { out.push(`${when}: no card for ${c.symbol}`); return; }
+    if (!c.text.includes(c.symbol) || !c.text.includes(c.amount)) out.push(`${when}: the card is not ${c.symbol} ${c.amount}'s: "${c.text}"`);
+    if (!c.inside) out.push(`${when}: the card leaves the window`);
+    if (desktop ? !c.beside : !c.clear) out.push(`${when}: the card covers ${desktop ? "its own column" : "its own line"}`);
+    if (mouse && !c.lit) out.push(`${when}: the line under the pointer is not marked`);
+  };
+
+  const titled = await page.evaluate(() => document.querySelectorAll(".bd .pc-row[title], .bd .pc-row [title]").length);
+  if (titled) out.push(`${titled} browser tooltips (title) inside the board's lines: the card is the only one`);
+  // Priced lines only (they have a zero line): a line with no price has no amount to compare.
+  const cols = page.locator(".bd .bc[data-id]").filter({ has: page.locator(".pc-row:not([hidden]) .pc-zero") });
+  if (!(await cols.count())) return { out, text: "no bar to point at" };
+  const bars = (col: Locator) => col.locator(".pc-row:not([hidden]):has(.pc-zero) .pc-track");
+  const first = bars(cols.first());
+
+  // 1. The pointer on a bar: the card.
+  const at = await middle(first.first());
+  await page.mouse.move(at.x, at.y);
+  await cardIs(true);
+  expectCard(await read(at), "pointer on a bar");
+
+  // 2. A price update on that position repaints the board (as a tick does): the card stays and says the new figure.
+  //    The update, the repaint, the reading and the undo are one synchronous step, so nothing else can repaint between.
+  const tick = await page.evaluate(async ({ x, y, storeUrl, boardUrl }) => {
+    const { store } = await import(storeUrl), board = await import(boardUrl);
+    const amountOf = (r?: Element | null) => r?.querySelector(".pc-amt")?.lastChild?.textContent?.trim() || "";
+    const host = document.getElementById("boardHost"), row = document.elementFromPoint(x, y)?.closest(".bd .pc-row");
+    const symbol = row?.querySelector(".symlink")?.getAttribute("data-sym"), id = row?.closest(".bc")?.getAttribute("data-id");
+    const pos = (store.state.dashboard?.portfolio?.positions || []).find((p: any) => p.symbol === symbol && (p.profileId || id) === id);
+    if (!host || !row || !pos) return null;
+    const was = amountOf(row), before = pos.unrealizedPnl;
+    pos.unrealizedPnl = Number(before) + 137;
+    board.paintBoard(host, board.boardModel(store.state));
+    const tip = document.querySelector(".tip.board-tip");
+    const seen = { was, amount: amountOf(document.elementFromPoint(x, y)?.closest(".bd .pc-row")),
+      shown: !!tip && getComputedStyle(tip).opacity === "1", text: tip?.textContent || "" };
+    pos.unrealizedPnl = before; // back to the page's own figures: every later capture is unchanged
+    board.paintBoard(host, board.boardModel(store.state));
+    return seen;
+  }, { ...at, storeUrl: "/v4/js/store.js", boardUrl: "/v4/js/components/board.js" });
+  if (!tick) out.push("price update: the position under the pointer is not in the page's state");
+  else if (!tick.shown) out.push("price update: the card went away");
+  else if (!tick.amount || tick.amount === tick.was || !tick.text.includes(tick.amount)) out.push(`price update: the line says ${tick.amount || "nothing"} (was ${tick.was}) and the card "${tick.text}"`);
+  expectCard(await read(at), "after the price update, back to the page's figures", false);
+
+  // 3. On to the next line: the card is that line's.
+  if ((await first.count()) > 1) {
+    const next = await middle(first.nth(1));
+    await page.mouse.move(next.x, next.y);
+    await cardIs(true);
+    expectCard(await read(next), "pointer on the next bar");
+  }
+
+  // 4. Off the bars, still on the board (the sentence above them): no card.
+  const off = await middleInView(cols.first().locator(".bc-count"));
+  if (off) {
+    await page.mouse.move(off.x, off.y);
+    await cardIs(false);
+    if ((await read(off)).shown) out.push("the card stays when the pointer leaves the bars");
+  }
+
+  // 5. The last column's last bar (the largest loss; in the fixture a short, the longest card): the picture.
+  const end = await middle(bars(cols.last()).last());
+  await page.mouse.move(end.x, end.y);
+  await cardIs(true);
+  const card = await read(end);
+  expectCard(card, "pointer on the last column's last bar");
+  await shot();
+  await page.mouse.move(1, 1);
+  await cardIs(false);
+  if ((await read(end)).shown) out.push("the card stays when the pointer leaves the board");
+
+  // 6. A phone has no pointer to rest: a tap on a bar shows the card, a tap off the bars puts it away. Real touch
+  //    events from the browser (it sends pointerleave right after the finger lifts, which must not hide the card).
+  if (!desktop) {
+    const cdp = await page.context().newCDPSession(page);
+    const tap = async (p: { x: number; y: number }) => {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [p] });
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    };
+    try {
+      await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+      const on = await middle(first.first());
+      await tap(on);
+      await cardIs(true);
+      await frames(); // the browser's pointerleave after the tap has been through
+      expectCard(await read(on), "tap on a bar", false);
+      const away = await middleInView(cols.first().locator(".bc-count"));
+      if (away) {
+        await tap(away);
+        await cardIs(false);
+        if ((await read(away)).shown) out.push("a tap off the bars does not put the card away");
+      }
+    } finally {
+      await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: false }).catch(() => {});
+      await cdp.detach().catch(() => {});
+    }
+  }
+  return { out, text: card.text };
+}
+
 async function settle(page: Page) {
   await page.evaluate(() => document.fonts.ready);
   // Font swap / ResizeObserver / fit's 150ms resize debounce + fadeUp.
@@ -339,11 +490,11 @@ async function main() {
         await page.setViewportSize(viewport);
         const desktop = viewport.width >= 981 && viewport.height >= 540;
         const suffix = lang === "en" ? "" : `-${lang}`;
-        const capture = async (name: string, pageScrolls = false) => {
+        const capture = async (name: string, pageScrolls = false, wholePage = !desktop) => {
           const view = name + suffix;
           await settle(page);
           const screenshot = `${viewport.width}x${viewport.height}-${view}.png`;
-          await page.screenshot({ path: join(OUT, screenshot), fullPage: !desktop });
+          await page.screenshot({ path: join(OUT, screenshot), fullPage: wholePage });
           const scrollers = await page.evaluate(scrollContainers, desktop ? DESKTOP_CAROUSELS : PHONE_CAROUSELS);
           const failures = desktop ? scrollers.filter((s) => (s.element === "document" && s.y && !pageScrolls) || (s.x && !s.allowed))
             .map((s) => s.element) : [];
@@ -383,6 +534,12 @@ async function main() {
           if (restored.out.length) report[report.length - 1].failures.push(...restored.out.map((o) => `after getting the room back: ${o}`));
           if (restored.bars.join(" ") !== board.bars.join(" ")) report[report.length - 1].failures.push(`the board did not return to its fit: ${restored.bars.join(" ")} instead of ${board.bars.join(" ")}`);
         }
+
+        // ── A bar's hover card: the detail of a position the moment the pointer is on its line ──
+        // (The card belongs to the window, so its picture is the window, also on a phone.)
+        const hover = await boardHover(page, desktop, () => capture("board-hover", desktop && !locked, false));
+        console.log(`${hover.out.length ? "FAIL" : "INFO"}\t${viewport.width}x${viewport.height}\tboard-hover${suffix}\t${hover.out.length ? hover.out.join("; ") : hover.text}`);
+        if (hover.out.length) report[report.length - 1].failures.push(...hover.out);
 
         // "… 22 more · see all" opens the Detail page on that strategy: its positions tab, the portfolio filter set.
         // (A screen tall enough to show all 32 has no such line, and that is right.)

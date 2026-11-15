@@ -6,7 +6,8 @@
 //   figure  its value now (the big figure) · ▼ −$310 (−0.6 %) in 30 days
 //   curve   its value over those 30 days, a dashed line at where it started
 //   lines   11 positions open · $71,762 invested [with leverage] · −$623 since entry (−0.9 %)
-//   bars    its positions from the largest gain to the largest loss, in dollars
+//   bars    its positions from the largest gain to the largest loss, in dollars; the pointer on a line
+//           shows that position's detail at once, in a card (wireBoardHover)
 //   bot     the market, when it decided and decides again, the AI review's one line, its last action, a note
 // Nothing scrolls: the bars take the height the column has left (fitBoard) and,
 // when they do not all fit, the biggest gains and losses that do plus one quiet
@@ -267,6 +268,132 @@ export function paintBoard(host, model) {
   }
   fitBoard(host.querySelector(".bd"));
   watchBoard(host.querySelector(".bd"));
+  wireBoardHover(host);
+  refreshBoardTip();
+}
+
+// ── a line's hover card ─────────────────────────────────────────────────────
+// A bar says one thing: the result in dollars. The rest of a position (what it is worth, where it was bought,
+// where it is now, how long it has left) shows the moment the pointer is on its line, in the floating card the
+// charts already use (.tip). Not the browser's own tooltip: that one waits about a second and dies with the
+// line's node, and one price tick replaces every line of a column, so on a market day it never showed (owner,
+// 2026-11-14: "si me pongo sobre una barra, ¿debería ver el hover?"). ONE card for the board, wired once per
+// host by delegation so a repaint cannot unwire it; after every paint it is filled again from the line that is
+// under the pointer now. Enforced: `bun run dashboard:check` ("board-hover").
+let boardTip = null;
+const hover = { on: false, x: 0, y: 0, host: null, row: null, key: "" };
+const wiredHosts = new WeakSet();
+let globalsWired = false;
+
+/** The card: one node at the end of <body>, as the charts' tooltips. A pointer's aid only (a screen reader would
+ *  meet it there with the last line's figures while it is invisible): the same detail is the Detail page's table. */
+function boardTipEl() {
+  if (!boardTip) {
+    boardTip = Object.assign(document.createElement("div"), { className: "tip board-tip" });
+    boardTip.setAttribute("aria-hidden", "true");
+    document.body.appendChild(boardTip);
+  }
+  return boardTip;
+}
+
+function node(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text != null) el.textContent = text;
+  return el;
+}
+
+/** Fill the card from a line's model (strategy-chart.js rowTip). Text only: nothing in it is markup. */
+function fillBoardTip(tip, model) {
+  const head = node("div", "tip-h");
+  head.append(node("b", "", model.name));
+  if (model.sub) head.append(node("span", "tt", model.sub));
+  const grid = node("div", "tip-g");
+  for (const [label, value, tone] of model.lines || []) {
+    const v = node("span", "tip-v", value);
+    if (tone === "up" || tone === "down") v.style.color = `var(--${tone})`;
+    grid.append(node("span", "tip-k", label), v);
+  }
+  tip.replaceChildren(head, grid, ...(model.note ? [node("div", "tip-n", model.note)] : []));
+}
+
+/** Where the card goes: BESIDE the line's column, level with the line, so it never covers the list being read
+ *  (a card that follows the pointer hides the next lines). Right of the column when it fits, else left of it.
+ *  With no room on either side (a phone: one column as wide as the window) it goes under the line, or over it
+ *  when there is no room below. Never outside the window. `row` and `col` are rects. Pure. */
+export function tipPlace(row, col, w, h, vw, vh, gap = 8, edge = 6) {
+  const clamp = (v, lo, hi) => Math.round(Math.max(lo, Math.min(hi, v)));
+  const right = col.right + gap + w <= vw - edge, left = col.left - gap - w >= edge;
+  if (right || left) return { left: Math.round(right ? col.right + gap : col.left - gap - w), top: clamp(row.top - gap, edge, vh - h - edge) };
+  const below = row.bottom + gap + h <= vh - edge;
+  return { left: clamp(row.left, edge, vw - w - edge), top: clamp(below ? row.bottom + gap : row.top - gap - h, edge, vh - h - edge) };
+}
+
+/** The visible bar line under `target`, inside this board; else null. */
+function lineAt(host, target) {
+  const row = target instanceof Element ? target.closest(".pc-row") : null;
+  return row && !row.hidden && host.contains(row) ? row : null;
+}
+
+function hideBoardTip() {
+  hover.on = false;
+  hover.row = null;
+  hover.key = "";
+  if (boardTip) boardTip.style.opacity = "0";
+}
+
+function showBoardTip(host, row, x, y) {
+  const data = row.dataset.tip || "";
+  const tip = boardTipEl();
+  if (data !== hover.key) {
+    let model = null;
+    try { model = JSON.parse(data); } catch { model = null; }
+    if (!model || !model.name) { hideBoardTip(); return; }
+    fillBoardTip(tip, model);
+    hover.key = data;
+  }
+  Object.assign(hover, { on: true, x, y, host, row });
+  const box = tip.getBoundingClientRect();
+  const at = tipPlace(row.getBoundingClientRect(), (row.closest(".bc") || row).getBoundingClientRect(), box.width, box.height, window.innerWidth, window.innerHeight);
+  tip.style.left = `${at.left}px`;
+  tip.style.top = `${at.top}px`;
+  tip.style.opacity = "1";
+}
+
+/** After a repaint the line under the pointer is a new node, or gone: show whatever is there now. */
+function refreshBoardTip() {
+  if (!hover.on) return;
+  const row = hover.host?.isConnected ? lineAt(hover.host, document.elementFromPoint(hover.x, hover.y)) : null;
+  if (row) showBoardTip(hover.host, row, hover.x, hover.y); else hideBoardTip();
+}
+
+/** Wire the card on a board's host, once. A mouse or a pen shows it while it is on a line; a finger has no
+ *  hover, so a tap on a line shows it (not on its ticker: that opens the chart) and a tap anywhere else puts it
+ *  away. It also goes when the pointer leaves the board, the page scrolls or changes, or Escape is pressed. */
+export function wireBoardHover(host) {
+  if (!host || typeof document === "undefined" || wiredHosts.has(host)) return;
+  wiredHosts.add(host);
+  host.addEventListener("pointermove", (e) => {
+    if (e.pointerType === "touch") return;
+    const row = lineAt(host, e.target);
+    if (row && row === hover.row && hover.on) { hover.x = e.clientX; hover.y = e.clientY; return; } // still on the same line: the card is where it belongs
+    if (row) showBoardTip(host, row, e.clientX, e.clientY); else hideBoardTip();
+  });
+  // A finger "leaves" the moment it lifts (the browser sends pointerleave right after pointerup): that is not leaving.
+  host.addEventListener("pointerleave", (e) => { if (e.pointerType !== "touch") hideBoardTip(); });
+  host.addEventListener("pointerup", (e) => {
+    if (e.pointerType !== "touch") return;
+    const row = lineAt(host, e.target);
+    if (row && !e.target.closest(".symlink")) showBoardTip(host, row, e.clientX, e.clientY); else hideBoardTip();
+  });
+  host.addEventListener("click", (e) => { if (e.target instanceof Element && e.target.closest(".symlink, .bc-more")) hideBoardTip(); });
+  if (globalsWired) return;
+  globalsWired = true;
+  for (const ev of ["scroll", "resize", "blur", "hashchange"]) window.addEventListener(ev, hideBoardTip, { passive: true });
+  window.addEventListener("keydown", (e) => { if (e.key === "Escape") hideBoardTip(); });
+  window.addEventListener("pointerdown", (e) => {
+    if (hover.on && e.pointerType === "touch" && !(e.target instanceof Node && hover.host?.contains(e.target))) hideBoardTip();
+  }, { capture: true });
 }
 
 // ── refit when the room changes without a repaint ───────────────────────────

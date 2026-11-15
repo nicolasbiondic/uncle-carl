@@ -39,6 +39,17 @@ export function moneySignedCompact(v) {
   return (n(v) < 0 ? "−" : "+") + moneyCompact(v);
 }
 
+/** A unit PRICE in a detail on demand (the board's hover card), where "<$1" would say nothing: whole dollars
+ *  from $100, cents below, four significant digits below a dollar (Dogecoin at $0.1712). "—" when unknown. */
+export function unitPrice(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  const x = Number(v);
+  if (!Number.isFinite(x) || x <= 0) return "—";
+  if (x >= 100) return "$" + num(x, 0);
+  if (x >= 1) return "$" + num(x, 2);
+  return "$" + x.toLocaleString("en-US", { maximumSignificantDigits: 4 });
+}
+
 /** P&L in a table: whole dollars always (owner, 2026-10-25: "no necesito decimales"). */
 export function pnlWhole(v) {
   return signedWholeMoney(n(v));

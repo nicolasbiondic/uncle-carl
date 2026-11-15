@@ -1,7 +1,7 @@
 // ── The Overview board (owner, 2026-11-14): a column per strategy ───────────
 import { describe, expect, test, beforeEach, afterAll } from "bun:test";
 import {
-  boardColumns, boardModel, renderBoard, pickRows, pickRowsScrolling, pickTight, countLine, hasLeverage, moreWords,
+  boardColumns, boardModel, renderBoard, pickRows, pickRowsScrolling, pickTight, countLine, hasLeverage, moreWords, tipPlace,
   MIN_EDGE, WANT_LINES, LEVERAGE_OVER,
 } from "./board.js";
 import { BOT_NOW_FIXTURE as FX, FIXTURE_NOW as NOW } from "./botnow.fixture.js";
@@ -266,5 +266,39 @@ describe("the columns", () => {
     expect(es).toContain("en 30 días");
     expect(es).toContain("hace 30 días");
     expect(es).not.toMatch(/positions open|since entry|in 30 days|Decided|Last action/);
+  });
+});
+
+describe("where a line's hover card goes (the wiring itself is checked in a real browser: dashboard:check, board-hover)", () => {
+  // a 240 × 150 card; columns 340 wide; the line is 22 tall; 8 px from the column, never closer than 6 px to an edge
+  const rect = (left, top, width, height) => ({ left, top, right: left + width, bottom: top + height });
+  test("beside the line's column, level with the line: to its right when it fits, so the list being read stays whole", () => {
+    expect(tipPlace(rect(30, 420, 310, 22), rect(16, 140, 340, 570), 240, 150, 1440, 900)).toEqual({ left: 364, top: 412 });
+  });
+  test("left of the column when the right has no room (the last column)", () => {
+    expect(tipPlace(rect(1095, 420, 310, 22), rect(1081, 140, 340, 570), 240, 150, 1440, 900)).toEqual({ left: 833, top: 412 });
+  });
+  test("a line near the bottom: the card stays inside the window", () => {
+    expect(tipPlace(rect(30, 860, 310, 22), rect(16, 140, 340, 740), 240, 150, 1440, 900)).toEqual({ left: 364, top: 744 });
+  });
+  test("no room on either side (a phone, one column): under the line, or over it when there is no room below; never outside", () => {
+    expect(tipPlace(rect(20, 300, 350, 34), rect(8, 100, 374, 600), 260, 150, 390, 844)).toEqual({ left: 20, top: 342 });
+    expect(tipPlace(rect(20, 760, 350, 34), rect(8, 100, 374, 720), 260, 150, 390, 844)).toEqual({ left: 20, top: 602 });
+    for (const top of [0, 300, 820]) {
+      const at = tipPlace(rect(200, top, 180, 34), rect(8, 0, 374, 844), 260, 150, 390, 844);
+      expect(at.left).toBeGreaterThanOrEqual(6);
+      expect(at.left + 260).toBeLessThanOrEqual(390 - 6);
+      expect(at.top).toBeGreaterThanOrEqual(6);
+      expect(at.top + 150).toBeLessThanOrEqual(844 - 6);
+    }
+  });
+  test("every bar line of the board carries its card and no browser tooltip", () => {
+    const accounts = [{ id: "momentum_stocks", label: "Momentum Stocks", broker: "alpaca", grossCapMult: 2.5 }, { id: "momentum_crypto", label: "Momentum Crypto", broker: "binance" }];
+    const positions = [pos("NVDA", 1318), pos("USD", -891), pos("BTC/USD", 164, { profileId: "momentum_crypto", side: "sell", market: "crypto" }), { ...pos("X", 0), profileId: "momentum_crypto", unrealizedPnl: null }];
+    const html = renderBoard(boardModel({ view: "consolidated", dashboard: { accounts, portfolio: { positions } }, botNow: FX, curves: {}, curvesTried: {} }, O));
+    const rows = html.match(/<div class="pc-row"[^>]*>/g) || [];
+    expect(rows).toHaveLength(4);
+    for (const r of rows) { expect(r).toContain(' data-tip="{&quot;name&quot;:'); expect(r).not.toContain(" title="); }
+    expect(html).toContain("short: gains if the price falls"); // the short's meaning is in its card
   });
 });

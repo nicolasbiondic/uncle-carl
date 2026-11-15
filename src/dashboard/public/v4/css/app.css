@@ -366,6 +366,19 @@ tfoot tr.totals .muted { font-weight: 500; }
 .pc-more[hidden] { display: none; }
 .pc-more:hover { color: var(--accent); }
 .pc-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r1); }
+/* The line under the pointer, and its card (board.js wireBoardHover): the charts' .tip with a name on top and
+   label/value pairs in two columns. The card is the only tooltip a line has. As wide as its words (the same
+   wherever it stands, so it can be measured before it is placed) and never wider than the window: on a narrow
+   phone a long name or note wraps instead of leaving the screen. */
+.pc-row:hover { background: var(--bg-2); border-radius: 3px; }
+.board-tip { padding: 8px 12px; font-size: var(--t-sm); width: max-content; max-width: calc(100vw - 12px); white-space: normal; }
+.tip-h { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: var(--s2); }
+.tip-h b { font-size: var(--t-md); }
+.tip-h .tt { font-size: var(--t-xs); }
+.tip-g { display: grid; grid-template-columns: auto auto; column-gap: 18px; row-gap: 2px; margin-top: 5px; white-space: nowrap; }
+.tip-k { color: var(--muted); }
+.tip-v { text-align: right; font-weight: 600; }
+.tip-n { margin-top: 4px; color: var(--text-2); }
 
 /* ── The Overview board (components/board.js, 2026-11-14): ONE view, a COLUMN per
    strategy, nothing scrolls. ≥ 1280 wide the columns sit side by side and fill

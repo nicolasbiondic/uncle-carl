@@ -3,7 +3,7 @@
 // server's (the last row's moneyWindow) and are only read here.
 import { describe, expect, test, beforeEach, afterAll } from "bun:test";
 import {
-  strategyFigures, deltaWords, curveGeometry, renderCurve, sortByResult, barScale, barGeometry, rowTitle, renderBarRow,
+  strategyFigures, deltaWords, curveGeometry, renderCurve, sortByResult, barScale, barGeometry, rowTip, renderBarRow,
   blockSentence, footerSentence, footerParts, MIN_SIDE, MIN_BAR,
 } from "./strategy-chart.js";
 import { positionsTotals } from "../money-values.js";
@@ -104,12 +104,52 @@ describe("bars: order, scale, zero line", () => {
     expect(barGeometry(0, sc).width).toBe(0);
     expect(barGeometry(null, sc).width).toBe(0);
   });
-  test("the tooltip carries what the row does not: value, %, quantity, entry, now and the time left", () => {
-    const title = rowTitle(pos("NVDA", 102, { quantity: 5, avgEntryPrice: 188, currentPrice: 203.5, unrealizedPnlPct: 8.2, openedAt: Date.now() }), { broker: "alpaca" });
-    expect(title).toMatch(/^Value \$1,018 · \+8% · Qty 5 · Entry \$188 · Now \$204 · up to \d days left$/);
-    expect(rowTitle({ symbol: "X", unrealizedPnl: null }, undefined)).toBe("Qty — · Entry — · Now —");
+});
+
+describe("a line's hover card: what the line does not say, in whole words", () => {
+  const NOW = Date.UTC(2026, 10, 12, 15);
+  test("the name with its ticker; the result with its sign and %; value, entry price, price now, quantity; the time left", () => {
+    const tip = rowTip(pos("NVDA", 102, { quantity: 5, avgEntryPrice: 188, currentPrice: 203.5, unrealizedPnlPct: 8.2, openedAt: NOW - 3600e3 }), { broker: "alpaca" }, NOW);
+    expect(tip).toEqual({
+      name: "Nvidia", sub: "NVDA",
+      lines: [["Since entry", "+$102 (+8 %)", "up"], ["Value", "$1,018", ""], ["Entry price", "$188", ""], ["Price now", "$204", ""], ["Quantity", "5", ""]],
+      note: "up to 5 days left",
+    });
+  });
+  test("a short says what a short is; a loss is a loss with its real minus sign; under 1 % keeps one decimal", () => {
+    const tip = rowTip(pos("BTC/USD", -31, { side: "sell", market: "crypto", quantity: 0.02, avgEntryPrice: 96_100, currentPrice: 97_650, unrealizedPnlPct: -0.4, openedAt: NOW - 100 * 3600e3 }), { broker: "binance" }, NOW);
+    expect(tip.name).toBe("Bitcoin");
+    expect(tip.sub).toBe("BTC/USD · short: gains if the price falls");
+    expect(tip.lines[0]).toEqual(["Since entry", "−$31 (−0.4 %)", "down"]);
+    expect(tip.lines.find(l => l[0] === "Quantity")).toEqual(["Quantity", "0.02", ""]);
+    // some brokers send a short's quantity negative: the card says "short" once, and the amount without a sign
+    const neg = rowTip(pos("BTC/USD", -31, { side: "sell", market: "crypto", quantity: -0.6 }), { broker: "binance" }, NOW);
+    expect(neg.lines.find(l => l[0] === "Quantity")).toEqual(["Quantity", "0.6", ""]);
+    expect(tip.note).toBe("up to 20 h left");
+  });
+  test("a coin under a dollar shows its real price, never '<$1'; a ticker with no plain name is its own title", () => {
+    const doge = rowTip(pos("DOGE/USD", 12, { market: "crypto", quantity: 4000, avgEntryPrice: 0.17124, currentPrice: 0.17424 }), { broker: "binance" }, NOW);
+    expect(doge.lines.find(l => l[0] === "Entry price")[1]).toBe("$0.1712");
+    expect(doge.lines.find(l => l[0] === "Price now")[1]).toBe("$0.1742");
+    const xrp = rowTip(pos("XRP/USDC", 5, { market: "crypto" }), { broker: "binance" }, NOW);
+    expect(xrp).toMatchObject({ name: "XRP/USDC", sub: "" });
+  });
+  test("no price: no result line, a dash for what is unknown, and the card says it is not counted", () => {
+    const tip = rowTip({ symbol: "X", side: "buy", unrealizedPnl: null }, undefined, NOW);
+    expect(tip.lines).toEqual([["Entry price", "—", ""], ["Price now", "—", ""], ["Quantity", "—", ""]]);
+    expect(tip.note).toBe("No price available: not counted in the total");
+  });
+  test("a result with no % shows the dollars alone; a flat result has no colour", () => {
+    expect(rowTip(pos("NVDA", 40, { unrealizedPnlPct: null }), undefined, NOW).lines[0]).toEqual(["Since entry", "+$40", "up"]);
+    expect(rowTip(pos("NVDA", 0, { unrealizedPnlPct: 0 }), undefined, NOW).lines[0]).toEqual(["Since entry", "+$0 (0.0 %)", ""]); // the row's own "+$0", no colour
+  });
+  test("in Spanish, with the money word the board uses: sin cerrar", () => {
     store.state.lang = "es";
-    expect(rowTitle(pos("NVDA", 102), undefined)).toContain("Valor ");
+    const tip = rowTip(pos("BTC/USD", 164, { side: "sell", market: "crypto", quantity: 0.02, avgEntryPrice: 104_200, currentPrice: 96_100, unrealizedPnlPct: 7.8, openedAt: NOW - 40 * 3600e3 }), { broker: "binance" }, NOW);
+    expect(tip.sub).toBe("BTC/USD · corto: gana si el precio baja");
+    expect(tip.lines.map(l => l[0])).toEqual(["Sin cerrar", "Valor", "Precio de entrada", "Precio ahora", "Cantidad"]);
+    expect(tip.lines[0][1]).toBe("+$164 (+8 %)");
+    expect(tip.note).toBe("le quedan hasta 4 días");
   });
 });
 
@@ -156,15 +196,22 @@ describe("markup: the curve and a bar row", () => {
     expect(renderCurve(strategyFigures(history([1, 2])))).toContain("<span>hace 30 días</span><span>hoy</span>");
   });
 
-  test("a bar row: the ticker clickable with its plain name and a short's tag; the zero line and bar are decoration; the amount carries it; the rest in the title", () => {
+  test("a bar row: the ticker clickable with its plain name and a short's tag; the zero line and bar are decoration; the amount carries it; the rest rides in data-tip for the hover card", () => {
     const sc = barScale([pos("NVDA", 1318), pos("USD", -891)]);
-    const row = renderBarRow(pos("NVDA", 1318, { quantity: 5, avgEntryPrice: 188 }), sc, { broker: "alpaca" }, Date.now());
-    expect(row).toContain('<span class="symname" title="Nvidia">Nvidia</span>');
+    const p = pos("NVDA", 1318, { quantity: 5, avgEntryPrice: 188 });
+    const now = Date.now();
+    const row = renderBarRow(p, sc, { broker: "alpaca" }, now);
+    expect(row).toContain('<span class="symname">Nvidia</span>');
     expect(row).toContain('role="button" tabindex="0"');
     expect(row).toContain('aria-hidden="true"><i class="pc-zero"');
     expect(row).toContain('<span class="pc-amt" style="color:var(--up)"><span class="vh">gain </span>+$1,318</span>');
-    expect(row).toMatch(/^<div class="pc-row" title="Value \$[\d,]+ · /);
-    expect(renderBarRow(pos("QQQ", -5, { side: "sell" }), sc, undefined, Date.now())).toContain('<span class="shorttag"');
+    // the card's model, as JSON the board reads back; and NO browser tooltip anywhere in the line (two at once is noise)
+    const data = row.match(/^<div class="pc-row" data-tip="([^"]*)">/)[1].replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+    expect(JSON.parse(data)).toEqual(rowTip(p, { broker: "alpaca" }, now));
+    expect(row).not.toContain(" title=");
+    const short = renderBarRow(pos("QQQ", -5, { side: "sell" }), sc, undefined, Date.now());
+    expect(short).toContain('<span class="shorttag">short</span>');
+    expect(short).not.toContain(" title=");
     const none = renderBarRow({ symbol: "X", unrealizedPnl: null }, sc, undefined, Date.now());
     expect(none).toContain('<span class="pc-amt muted">—</span>'); // unpriced: a dash, never $0
     expect(none).not.toContain("pc-bar");

@@ -38,6 +38,10 @@ screen.
   `+$665`). Dashboard helpers: `moneyCompact`, `pnlWhole`, `pctWhole` in
   `src/dashboard/public/v4/js/fmt.js`; a positive amount under a dollar reads
   `<$1`.
+- A unit price shown as a detail on demand (the board's hover card) is the one
+  exception: `unitPrice` gives whole dollars from $100, cents below, and the
+  real digits below a dollar (`$0.1712`). `<$1` says nothing about a coin, and
+  "bought at $12, now $12" beside "+3 %" reads as a mistake.
 - Whole percentages in tables. No decimals the owner did not ask for.
 - Always a sign on a result (`+` or `−`, the real minus sign), and a word or a
   sign next to every colour: red or green is never the only signal.
@@ -100,6 +104,18 @@ screen.
   claim a phone screen is free of it without looking.
 - One clear visual per row (the diverging result bar, the five-segment time
   bar). Bars are `aria-hidden`; the text carries the meaning.
+- Detail on demand is a card painted by code, not the browser's `title`, on
+  anything that repaints with prices. The browser's tooltip waits about a
+  second and dies with its node, and one price update replaces every line of a
+  column, so on a market day it never showed (owner, 2026-11-14: "si me pongo
+  sobre una barra, ¿debería ver el hover?"). The board's bars are the model
+  (`wireBoardHover` in `src/dashboard/public/v4/js/components/board.js`, the
+  words in `rowTip`, `src/dashboard/public/v4/js/components/strategy-chart.js`):
+  the card shows the moment the pointer is on the line (a tap on a phone),
+  beside the column so it does not cover the list being read, and says the
+  plain name, the result with its sign and %, the value, the entry price, the
+  price now, the quantity and the time left. One card per line: no `title`
+  inside it.
 - Keep the design system: the tokens in `src/dashboard/public/v4/css/tokens.css`,
   the current fonts and colours. No font swap, gradients, glass effects or new
   dependencies unless the owner asks for a redesign.
@@ -138,13 +154,14 @@ system kept, the rules above win over the skill's taste.
 | One reader per money figure, every surface agrees | `src/portfolio/moneyConsistency.test.ts` |
 | Telegram: plain words, whole dollars, banned jargon, every close code in words | `src/telegram/plain-money.test.ts` |
 | Every live symbol has a plain name in both languages | `src/dashboard/public/v4/js/symbol-names.test.js` |
-| Whole-dollar table money, unknown is not zero | `src/dashboard/public/v4/js/fmt.test.js` |
+| Whole-dollar table money, unknown is not zero, unit prices in a detail card | `src/dashboard/public/v4/js/fmt.test.js` |
 | Sentence-case labels, layout rules | `src/dashboard/public/v4/js/layout.test.js` |
 | No sideways scroll on a computer, in English and Spanish | `bun run dashboard:check` (`scripts/dashboard-layout-check.ts`) |
 | Nothing scrolls or is clipped inside the Overview board (1280 px wide and up) | `bun run dashboard:check` (the `board` views) |
+| A bar of the board shows its card at once (a tap on a phone), inside the window, beside its column, alive through a price update; no browser tooltip inside a line | `bun run dashboard:check` (the `board-hover` views); the card's words: `src/dashboard/public/v4/js/components/strategy-chart.test.js` |
 | The board's figures are the server readers'; the strategies + "outside the strategies" = the total | `src/portfolio/moneyConsistency.test.ts` |
 | The files this skill names exist | `src/config/ownerTextSkill.test.ts` |
 
 Not enforced by a test, check by eye: that a text is understandable, the "×"
 rule on the dashboard, and every phone width (the check reports phone sizes
-without failing).
+without failing; the bar's card is the exception, it fails there too).

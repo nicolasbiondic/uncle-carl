@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { money, moneySigned, moneyCompact, moneySignedCompact, pctSigned, quantity } from "./fmt.js";
+import { money, moneySigned, moneyCompact, moneySignedCompact, pctSigned, quantity, unitPrice } from "./fmt.js";
 
 describe("compact table money", () => {
   test.each([
@@ -30,6 +30,18 @@ describe("compact table money", () => {
   test("fixed-precision money elsewhere and one-decimal percentages are unchanged", () => {
     expect(money(540.24)).toBe("$540.24");
     expect(pctSigned(-0.3)).toBe("−0.3%");
+  });
+});
+
+describe("a unit price in a detail on demand (the board's hover card)", () => {
+  test.each([
+    [104_200.4, "$104,200"], [188, "$188"], [100, "$100"], [99.994, "$99.99"], [9.63, "$9.63"], [1, "$1.00"],
+    [0.17124, "$0.1712"], [0.0123456, "$0.01235"], [0.00002345, "$0.00002345"],
+  ])("%s → %s", (value, expected) => {
+    expect(unitPrice(value)).toBe(expected);
+  });
+  test("unknown is a dash, never a zero or '<$1'", () => {
+    for (const v of [null, undefined, "", "x", NaN, 0, -3]) expect(unitPrice(v)).toBe("—");
   });
 });
 

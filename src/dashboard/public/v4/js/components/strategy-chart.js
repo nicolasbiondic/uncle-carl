@@ -4,9 +4,9 @@
 // one scale per strategy and a zero line placed by the data, and the words.
 // Everything that builds words, order or geometry is a pure exported function.
 import { t } from "../store.js";
-import { money, moneyCompact, pnlWhole, pctSentence, pctWhole, pnlColor, quantity, etDate } from "../fmt.js";
+import { money, moneyCompact, pnlWhole, pctSentence, pnlColor, quantity, unitPrice, etDate } from "../fmt.js";
 import { esc } from "../ui.js";
-import { symbolCell } from "../symbol-cell.js";
+import { symbolCell, symbolLabel, shortHint } from "../symbol-cell.js";
 import { marketNotional, groupOutcome, outcomeWords, holdProgress, holdText } from "./positions.js";
 
 /** A value is usable only if it is a real number (null / "" would coerce to 0). */
@@ -118,33 +118,46 @@ export function barGeometry(pnl, scale) {
   return { left: +(scale.zero - width).toFixed(2), width };
 }
 
-/** Everything the row's tooltip says that the row does not: value, %, quantity,
- *  entry, now and the time left. */
-export function rowTitle(p, account, now = Date.now()) {
-  const value = marketNotional(p, account);
-  const parts = [];
-  if (value != null) parts.push(`${t("Value", "Valor")} ${moneyCompact(value)}`);
-  if (isNum(p.unrealizedPnlPct)) parts.push(pctWhole(p.unrealizedPnlPct));
-  parts.push(`${t("Qty", "Cant.")} ${quantity(p.quantity)}`);
-  parts.push(`${t("Entry", "Entrada")} ${isNum(p.avgEntryPrice) ? moneyCompact(p.avgEntryPrice) : "—"}`);
-  parts.push(`${t("Now", "Ahora")} ${isNum(p.currentPrice) ? moneyCompact(p.currentPrice) : "—"}`);
-  const h = holdProgress(p, account, now);
-  if (h) parts.push(holdText(h));
-  return parts.join(" · ");
-}
-
 const isLong = (p) => p.side === "buy" || p.side === "long";
 const resultWord = (v) => (v > 0 ? t("gain", "ganancia") : v < 0 ? t("loss", "pérdida") : t("flat", "sin cambio"));
+const lowerFirst = (s) => s.charAt(0).toLowerCase() + s.slice(1);
 
+/** The row's hover card (the board paints it the moment the pointer is on the row: board.js): everything the
+ *  row does not say. { name, sub, lines: [[label, value, tone]], note }: the plain name with its ticker (and, on
+ *  a short, what a short is); the result since entry with its %, the position's value, the entry price, the
+ *  price now, the quantity; then the time it has left. `tone` ("up" | "down" | "") colours the result, which
+ *  always carries its sign. A row with no price says so instead of a result. */
+export function rowTip(p, account, now = Date.now()) {
+  const label = symbolLabel(p.symbol), short = !isLong(p);
+  const sub = [label ? p.symbol : "", short ? `${t("short", "corto")}: ${lowerFirst(shortHint())}` : ""].filter(Boolean).join(" · ");
+  const lines = [];
+  if (priced(p)) {
+    const v = Number(p.unrealizedPnl);
+    lines.push([t("Since entry", "Sin cerrar"), `${pnlWhole(v)}${isNum(p.unrealizedPnlPct) ? ` (${pctSentence(p.unrealizedPnlPct)})` : ""}`, v > 0 ? "up" : v < 0 ? "down" : ""]);
+  }
+  const value = marketNotional(p, account);
+  if (value != null) lines.push([t("Value", "Valor"), moneyCompact(value), ""]);
+  lines.push([t("Entry price", "Precio de entrada"), unitPrice(p.avgEntryPrice), ""]);
+  lines.push([t("Price now", "Precio ahora"), unitPrice(p.currentPrice), ""]);
+  // a short's quantity arrives negative from some brokers: the card already says "short", the amount is the amount
+  lines.push([t("Quantity", "Cantidad"), quantity(isNum(p.quantity) ? Math.abs(Number(p.quantity)) : p.quantity), ""]);
+  const h = holdProgress(p, account, now);
+  const note = [h ? holdText(h) : "", priced(p) ? "" : t("No price available: not counted in the total", "Sin precio disponible: no cuenta en el total")].filter(Boolean).join(" · ");
+  return { name: label || p.symbol, sub, lines, note };
+}
+
+/** One position as a line of the board: the ticker (it opens the candle chart) with its plain name and a
+ *  short's tag, the bar in dollars on the strategy's one scale, the result. The detail rides in `data-tip`
+ *  (rowTip, as JSON) for the board's hover card; the row has no browser tooltip of its own. */
 export function renderBarRow(p, scale, account, now) {
-  const title = rowTitle(p, account, now);
-  const sym = symbolCell(p.symbol, { title, short: !isLong(p) });
+  const tip = esc(JSON.stringify(rowTip(p, account, now)));
+  const sym = symbolCell(p.symbol, { short: !isLong(p), hints: false });
   if (!priced(p)) {
-    return `<div class="pc-row" title="${esc(`${title} · ${t("No price available — not counted in the total", "Sin precio disponible — no cuenta en el total")}`)}"><span class="pc-sym">${sym}</span><span class="pc-track" aria-hidden="true"></span><span class="pc-amt muted">—</span></div>`;
+    return `<div class="pc-row" data-tip="${tip}"><span class="pc-sym">${sym}</span><span class="pc-track" aria-hidden="true"></span><span class="pc-amt muted">—</span></div>`;
   }
   const v = Number(p.unrealizedPnl), g = barGeometry(v, scale);
   const bar = g.width ? `<i class="pc-bar" style="left:${g.left}%;width:${g.width}%;background:${pnlColor(v)}"></i>` : "";
-  return `<div class="pc-row" title="${esc(title)}"><span class="pc-sym">${sym}</span><span class="pc-track" aria-hidden="true"><i class="pc-zero" style="left:${scale.zero}%"></i>${bar}</span><span class="pc-amt" style="color:${pnlColor(v)}"><span class="vh">${resultWord(v)} </span>${pnlWhole(v)}</span></div>`;
+  return `<div class="pc-row" data-tip="${tip}"><span class="pc-sym">${sym}</span><span class="pc-track" aria-hidden="true"><i class="pc-zero" style="left:${scale.zero}%"></i>${bar}</span><span class="pc-amt" style="color:${pnlColor(v)}"><span class="vh">${resultWord(v)} </span>${pnlWhole(v)}</span></div>`;
 }
 
 // ── words ───────────────────────────────────────────────────────────────────

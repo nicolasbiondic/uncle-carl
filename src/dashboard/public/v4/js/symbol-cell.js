@@ -14,15 +14,20 @@ export function symbolLabel(symbol) {
   return name && name !== symbolBase(symbol) ? name : "";
 }
 
-/** The word tag of a short row; "" for a long one. */
-export function shortTag(isShort) {
+/** What a short is, in the words every surface uses. */
+export const shortHint = () => t("Gains if the price falls", "Gana si el precio baja");
+
+/** The word tag of a short row; "" for a long one. `hints: false` leaves the browser's own tooltip out
+ *  (the board's rows explain it in their hover card: two tooltips at once is noise). */
+export function shortTag(isShort, { hints = true } = {}) {
   return isShort
-    ? `<span class="shorttag" title="${esc(t("Gains if the price falls", "Gana si el precio baja"))}">${t("short", "corto")}</span>`
+    ? `<span class="shorttag"${hints ? ` title="${esc(shortHint())}"` : ""}>${t("short", "corto")}</span>`
     : "";
 }
 
-/** `title` rides on the ticker (the tooltip: quantity, entry, now, or the close reason). */
-export function symbolCell(symbol, { title = "", short = false } = {}) {
+/** `title` rides on the ticker (the tooltip: quantity, entry, now, or the close reason). `hints: false`: no
+ *  browser tooltip on the name or the short tag (the caller shows its own hover card with all of it). */
+export function symbolCell(symbol, { title = "", short = false, hints = true } = {}) {
   const name = symbolLabel(symbol);
-  return `<span class="symrow"><span class="symlink" data-sym="${esc(symbol)}" role="button" tabindex="0"${title ? ` title="${esc(title)}"` : ""}>${esc(symbol)}</span>${name ? `<span class="symname" title="${esc(name)}">${esc(name)}</span>` : ""}${shortTag(short)}</span>`;
+  return `<span class="symrow"><span class="symlink" data-sym="${esc(symbol)}" role="button" tabindex="0"${title ? ` title="${esc(title)}"` : ""}>${esc(symbol)}</span>${name ? `<span class="symname"${hints ? ` title="${esc(name)}"` : ""}>${esc(name)}</span>` : ""}${shortTag(short, { hints })}</span>`;
 }
