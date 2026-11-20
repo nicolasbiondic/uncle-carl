@@ -9,6 +9,9 @@ import { statSync } from "fs";
 import { DEFAULT_DB_PATH, getMeta, openLabDb } from "./db";
 import { REASON_ORDER } from "./strategy";
 
+/** Retorno (%) por debajo del cual un desenlace a +1 h se considera «sin movimiento» (2026-11-15: los no-cero de los grupos congelados medían 0,001 %). */
+const FROZEN_PCT = 1;
+
 const REASON_LABEL: Record<string, string> = {
   enter: "entrada",
   too_young: "demasiado joven",
@@ -108,6 +111,28 @@ export function buildReport(db: Database, opts: { hours: number; now: number; db
     L.push(`  n ${closed.length} · win rate ${f((wins / closed.length) * 100, 0)} % · P&L total ${f(pnl, 4)} SOL · P&L medio ${f(pnl / closed.length, 4)} SOL (${pct(median(closed.map((p) => p.pnl_pct)))} mediana)`);
     L.push(`  peor ${pct(worst.pnl_pct)} (${worst.mint.slice(0, 8)}, ${EXIT_LABEL[worst.close_reason] ?? worst.close_reason}) · mejor ${pct(best.pnl_pct)} (${best.mint.slice(0, 8)})`);
     L.push(`  gap medio del stop ${gapAvg === null ? "— (sin stops)" : `${f(gapAvg, 2)} pp sobre ${stops.length} stops`} · costes ${f(costs, 4)} SOL (${f((costs / notional) * 100, 2)} % del nocional) · latencia media de fill ${f(lat, 0)} ms · duración media ${f(holdAvg, 1)} min`);
+    // Dos cifras que NO son lo mismo (2026-11-16: se confundieron en OPEN.md):
+    //  · llenado frente a decisión = price_sol de la orden de compra / price_sol de la decisión: lo que el precio
+    //    se movió durante la latencia más los costes fijos de la compra (comisión y MEV, ya dentro del precio);
+    //  · valor de salida inmediata = positions.entry_exec_pct: lo que se cobraría vendiéndolo todo justo tras
+    //    comprar (comisión y MEV de ida y vuelta + impacto en la curva). No es deslizamiento.
+    const fills = db
+      .query<any, [number]>(
+        `SELECT o.price_sol AS fill, d.price_sol AS dec, o.pump_fee_sol AS pf, o.mev_sol AS mev, o.sol_amount AS sol, p.entry_exec_pct AS ex
+         FROM positions p
+         JOIN orders o ON o.position_id = p.id AND o.side = 'buy' AND o.status = 'filled'
+         JOIN decisions d ON d.id = p.decision_id
+         WHERE p.closed_at IS NOT NULL AND p.closed_at >= ? AND o.price_sol > 0 AND d.price_sol > 0 AND o.sol_amount > 0`,
+      )
+      .all(since);
+    if (fills.length) {
+      const slip = median(fills.map((r) => (r.fill / r.dec - 1) * 100));
+      const fixedCost = median(fills.map((r) => ((r.pf + r.mev) / r.sol) * 100));
+      const exitNow = median(fills.map((r) => r.ex));
+      L.push(
+        `  entrada: llenado frente al precio de decisión ${pct(slip)} (mediana de ${fills.length}; ${f(fixedCost, 1)} pp son comisión y MEV de la compra, el resto es lo que se movió el precio en la latencia) · valor de salida inmediata al comprar ${pct(exitNow)} (comisión y MEV de ida y vuelta + impacto en la curva; no es deslizamiento)`,
+      );
+    }
     const byReason = new Map<string, { n: number; pnl: number }>();
     for (const p of closed) {
       const r = byReason.get(p.close_reason) ?? { n: 0, pnl: 0 };
@@ -141,6 +166,10 @@ export function buildReport(db: Database, opts: { hours: number; now: number; db
     n: number;
     r5: number[];
     r1: number[];
+    /** +1 h de los que SÍ se movieron (|ret| ≥ FROZEN_PCT); el resto está en `frozen1`. */
+    r1Moving: number[];
+    /** Precio congelado a +1 h: nadie operó el token tras la decisión y el último precio se arrastra. */
+    frozen1: number;
     r24: number[];
     rug: number;
     grad: number;
@@ -149,10 +178,14 @@ export function buildReport(db: Database, opts: { hours: number; now: number; db
   const groups = new Map<string, G>();
   for (const r of rows) {
     const key = r.entered === 1 ? "enter" : r.reason;
-    const g = groups.get(key) ?? { n: 0, r5: [], r1: [], r24: [], rug: 0, grad: 0, done: 0 };
+    const g = groups.get(key) ?? { n: 0, r5: [], r1: [], r1Moving: [], frozen1: 0, r24: [], rug: 0, grad: 0, done: 0 };
     g.n++;
     if (r.ret_5m !== null) g.r5.push(r.ret_5m);
-    if (r.ret_1h !== null) g.r1.push(r.ret_1h);
+    if (r.ret_1h !== null) {
+      g.r1.push(r.ret_1h);
+      if (Math.abs(r.ret_1h) < FROZEN_PCT) g.frozen1++;
+      else g.r1Moving.push(r.ret_1h);
+    }
     if (r.ret_24h !== null) g.r24.push(r.ret_24h);
     g.rug += r.rugged;
     g.grad += r.graduated;
@@ -160,7 +193,7 @@ export function buildReport(db: Database, opts: { hours: number; now: number; db
     groups.set(key, g);
   }
   const line = (key: string, g: G) =>
-    `  ${(REASON_LABEL[key] ?? key).padEnd(36)} n ${String(g.n).padStart(4)} · +5m ${pct(median(g.r5)).padStart(8)} (${g.r5.length}) · +1h ${pct(median(g.r1)).padStart(8)} (${g.r1.length}) · +24h ${pct(median(g.r24)).padStart(8)} (${g.r24.length}) · rug ${g.done ? f((g.rug / g.done) * 100, 0) : "—"} % · graduó ${f((g.grad / g.n) * 100, 0)} %`;
+    `  ${(REASON_LABEL[key] ?? key).padEnd(36)} n ${String(g.n).padStart(4)} · +5m ${pct(median(g.r5)).padStart(8)} (${g.r5.length}) · +1h ${pct(median(g.r1)).padStart(8)} (${g.r1.length}) · +24h ${pct(median(g.r24)).padStart(8)} (${g.r24.length}) · rug ${g.done ? f((g.rug / g.done) * 100, 0) : "—"} % · graduó ${f((g.grad / g.n) * 100, 0)} %${g.frozen1 > 0 ? ` · ${g.frozen1} sin movimiento a +1 h` : ""}`;
   const entered = groups.get("enter");
   if (entered) L.push(line("enter", entered));
   else L.push("  (sin entradas en la ventana)");
@@ -169,11 +202,13 @@ export function buildReport(db: Database, opts: { hours: number; now: number; db
 
   // ── ranking de qué cambiar ──────────────
   L.push("");
-  L.push("QUÉ CAMBIAR (ranking: motivos de descarte cuyos tokens lo hicieron MEJOR a +1 h que las entradas; mediana, mínimo 10 con desenlace)");
+  L.push(`QUÉ CAMBIAR (ranking: motivos de descarte cuyos tokens lo hicieron MEJOR a +1 h que las entradas; mediana de los que se movieron más de ${FROZEN_PCT} %, mínimo 10 con desenlace)`);
   const ref = entered && entered.r1.length >= 5 ? median(entered.r1) : null;
+  // Un token que nadie operó tras la decisión conserva su último precio (retorno ≈ 0): no es un
+  // resultado que se pudiera capturar ni salir de él, así que no cuenta como «lo hicieron mejor».
   const ranked = discardKeys
-    .map((k) => ({ k, g: groups.get(k)!, m: median(groups.get(k)!.r1) }))
-    .filter((x) => x.m !== null && x.g.r1.length >= 10)
+    .map((k) => ({ k, g: groups.get(k)!, m: median(groups.get(k)!.r1Moving) }))
+    .filter((x) => x.m !== null && x.g.r1Moving.length >= 10)
     .map((x) => ({ ...x, delta: ref === null ? x.m! : x.m! - ref }))
     .sort((a, b) => b.delta - a.delta);
   if (ranked.length === 0) L.push("  aún no hay suficientes desenlaces a +1 h para comparar");
@@ -181,7 +216,7 @@ export function buildReport(db: Database, opts: { hours: number; now: number; db
     if (ref === null) L.push("  (sin referencia de entradas: se ordena por el retorno absoluto a +1 h de los descartados)");
     for (const x of ranked.slice(0, 8)) {
       const verdict = x.delta > 5 ? "→ relajar: los descartados por este filtro lo hicieron mejor" : x.delta < -5 ? "→ mantener: el filtro evitó pérdidas" : "→ neutro";
-      L.push(`  ${(REASON_LABEL[x.k] ?? x.k).padEnd(36)} +1h ${pct(x.m).padStart(8)} (n ${x.g.r1.length}) ${ref !== null ? `vs entradas ${pct(ref)} ` : ""}${verdict}`);
+      L.push(`  ${(REASON_LABEL[x.k] ?? x.k).padEnd(36)} +1h ${pct(x.m).padStart(8)} (n ${x.g.r1Moving.length}${x.g.frozen1 > 0 ? `, ${x.g.frozen1} sin movimiento aparte` : ""}) ${ref !== null ? `vs entradas ${pct(ref)} ` : ""}${verdict}`);
     }
   }
 

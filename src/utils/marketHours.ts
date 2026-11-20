@@ -108,8 +108,12 @@ export function isTradingDay(dateKey: string): boolean {
   if (dow === 0 || dow === 6) return false;
   if (SPECIAL_CLOSURES.has(dateKey)) return false;
 
-  if (isObserved(y, m, d, dow, 1, 1)) return false;   // New Year's Day
-  if (m === 12 && d === 31 && dow === 5 && getETDowForDateKey(`${y + 1}-01-01`) === 6) return false; // New Year's observed Dec 31
+  // New Year's Day. A Sunday Jan 1 is observed Monday Jan 2 (isObserved); a SATURDAY Jan 1 is
+  // NOT observed on Friday Dec 31: NYSE Rule 7.2 keeps the exchange open when that Friday ends
+  // the accounting year (SPY/AAPL have full bars on 2021-12-31; next cases: Fri 2027-12-31 and 2032-12-31).
+  // The calendar used to close that Friday (OPEN.md 2026-11-14) and the stock engine would have
+  // skipped its pass while decide.ts's maxHoldSession already counted it as a session.
+  if (isObserved(y, m, d, dow, 1, 1)) return false;
   if (m === 1 && dow === 1 && Math.floor((d - 1) / 7) === 2) return false;   // MLK Day
   if (m === 2 && dow === 1 && Math.floor((d - 1) / 7) === 2) return false;   // Presidents Day
   if (GOOD_FRIDAYS.has(dateKey)) return false; // Good Friday

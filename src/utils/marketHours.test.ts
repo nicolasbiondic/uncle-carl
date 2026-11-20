@@ -6,6 +6,7 @@ import {
   isMarketOpen,
   isTradingDay,
 } from "./marketHours";
+import { maxHoldExpired } from "../portfolio-engine/decide";
 
 /** Build a UTC timestamp from an ET wall-clock time on a given date key. */
 function et(dateKey: string, hour: number, minute: number): number {
@@ -32,7 +33,10 @@ describe("isTradingDay", () => {
     { key: "2025-01-01", expected: false, note: "New Year's Day Wed" },
     { key: "2026-01-01", expected: false, note: "New Year's Day Thu" },
     { key: "2027-01-01", expected: false, note: "New Year's Day Fri" },
-    { key: "2027-12-31", expected: false, note: "New Year's observed (Sat Jan 1)" },
+    // NYSE does NOT shift a Saturday New Year to the Friday before (Rule 7.2: Dec 31 ends the
+    // accounting year). Real data: SPY/AAPL have full bars on 2021-12-31 (Jan 1 2022 was a Saturday).
+    { key: "2027-12-31", expected: true, note: "Fri before Sat Jan 1 2028: the exchange is OPEN" },
+    { key: "2021-12-31", expected: true, note: "Fri before Sat Jan 1 2022: SPY traded 67M shares" },
     { key: "2024-07-04", expected: false, note: "Independence Day Thu" },
     { key: "2026-07-04", expected: false, note: "Independence Day Sat" },
     { key: "2026-07-03", expected: false, note: "Independence Day observed Fri" },
@@ -189,7 +193,8 @@ describe("getPreviousTradingDay", () => {
     { key: "2026-07-06", expected: "2026-07-02", note: "post-July4-observed" },
     { key: "2024-07-08", expected: "2024-07-05", note: "post-July4 Thu" },
     { key: "2025-01-02", expected: "2024-12-31", note: "post-New Year's" },
-    { key: "2028-01-03", expected: "2027-12-30", note: "post-New Year's observed" },
+    { key: "2028-01-03", expected: "2027-12-31", note: "post-New Year's: Fri Dec 31 2027 was a session" },
+    { key: "2022-01-03", expected: "2021-12-31", note: "same shape in 2022, with real bars" },
   ];
 
   test.each(cases)("$key -> $expected ($note)", ({ key, expected }) => {
@@ -198,13 +203,15 @@ describe("getPreviousTradingDay", () => {
 });
 
 describe("observed holidays (Saturday/Sunday shift), 2024-2030", () => {
-  // New Year's Day: Jan 1, or observed Dec 31 Fri if Jan 1 is Sat
+  // New Year's Day: Jan 1 itself; a Sunday Jan 1 is observed Monday Jan 2 (2023), but a
+  // Saturday Jan 1 is NOT observed on Friday Dec 31 (the exchange stays open).
   const newYearCases: { key: string; trading: boolean; note: string }[] = [
     { key: "2024-01-01", trading: false, note: "Jan 1 Mon" },
     { key: "2025-01-01", trading: false, note: "Jan 1 Wed" },
     { key: "2026-01-01", trading: false, note: "Jan 1 Thu" },
     { key: "2027-01-01", trading: false, note: "Jan 1 Fri" },
-    { key: "2027-12-31", trading: false, note: "observed Fri (Jan 1 Sat)" },
+    { key: "2027-12-31", trading: true, note: "Fri before Sat Jan 1: NOT observed, open" },
+    { key: "2023-01-02", trading: false, note: "Jan 1 2023 Sun: observed Mon" },
     { key: "2028-01-03", trading: true, note: "observed Mon (Jan 1 Sun), Jan 3 is trading" },
     { key: "2029-01-01", trading: false, note: "Jan 1 Mon" },
   ];
@@ -308,5 +315,43 @@ describe("early close times are always 1:00 PM ET (780 min)", () => {
   ];
   test.each(earlyCloseDates)("$key closes at 1:00 PM", (key) => {
     expect(getSessionClose(key)).toEqual({ closeMinutes: 13 * 60, early: true });
+  });
+});
+
+// OPEN.md (2026-11-14, closed 2026-11-19). The live stock engine decides only while
+// `isMarketOpen` says so (src/portfolio-engine/live/schedule.ts), and `decide.ts`
+// already counts Fri 2027-12-31 as a session for the 5-session cap. If the calendar
+// called that day closed, no pass would run while the lots aged a session.
+describe("a Saturday Jan 1 never closes the Friday before", () => {
+  test("Fri 2027-12-31 is an open session at 10:00 ET with a normal 16:00 close", () => {
+    expect(isMarketOpen(et("2027-12-31", 10, 0))).toBe(true);
+    expect(getSessionClose("2027-12-31")).toEqual({ closeMinutes: 16 * 60, early: false });
+    expect(getPreviousTradingDay("2028-01-03")).toBe("2027-12-31");
+  });
+
+  test("the other observed Fridays stay closed (this is New Year's only)", () => {
+    for (const key of ["2026-07-03", "2027-06-18", "2027-12-24"]) {
+      expect(isTradingDay(key)).toBe(false);
+      expect(isMarketOpen(et(key, 10, 0))).toBe(false);
+    }
+  });
+});
+
+// Two lists decided what a session is: this calendar (the engine's schedule, the guardian, the
+// scorecard, the AI review) and decide.ts's `maxHoldSession` (the five-session cap). They disagreed
+// on Fri 2027-12-31 and Fri 2032-12-31 and nothing compared them. `maxHoldExpired(D-1, D, 1)` is
+// true exactly when decide.ts counts D as a session, so the two must agree on every day.
+describe("the calendar and the five-session cap count the same sessions", () => {
+  test("every day 2024-01-01 .. 2035-12-31", () => {
+    const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+    const disagree: string[] = [];
+    let days = 0;
+    for (let ms = Date.UTC(2024, 0, 1); ms <= Date.UTC(2035, 11, 31); ms += 86_400_000) {
+      const d = day(ms);
+      days++;
+      if (maxHoldExpired(day(ms - 86_400_000), d, 1) !== isTradingDay(d)) disagree.push(d);
+    }
+    expect(days).toBe(4383); // the loop really walked 12 years (a loop that never runs proves nothing)
+    expect(disagree).toEqual([]);
   });
 });
