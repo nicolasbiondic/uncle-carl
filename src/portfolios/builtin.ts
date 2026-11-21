@@ -118,7 +118,7 @@ export function builtinPortfolios(): PortfolioDefinition[] {
     // append the version, run the cutover script AND update this literal.
     {
       id: "pe_momentum_stocks",
-      name: "momentum_stocks on the portfolio engine (e1-vt45-etf)",
+      name: "momentum_stocks on the portfolio engine (e1-vt45-etf-shfull)",
       template: "portfolio",
       account: "alpaca_main",
       capital: RISK_PROFILES.momentum_stocks.initialEquity,
@@ -139,22 +139,23 @@ export function builtinPortfolios(): PortfolioDefinition[] {
           perAssetCap: 0.375,
           maxGross: 2.5,
           // Q5/RW8: SPY 200-day switch (1 % band); risk-off = core to cash + SH at 0.5× core gross.
-          regimeOverlay: { signals: [{ kind: "maTrend", symbol: "SPY", period: 200, sampling: "daily", bandPct: 1 }], combine: "any", coreScale: 0, hedge: { symbol: "SH", fraction: 0.5 } },
+          // RW12 (§23): the hedge has its own cap (100 % of the sleeve), it is no longer clipped at perAssetCap.
+          regimeOverlay: { signals: [{ kind: "maTrend", symbol: "SPY", period: 200, sampling: "daily", bandPct: 1 }], combine: "any", coreScale: 0, hedge: { symbol: "SH", fraction: 0.5, cap: 1 } },
           fastVolLookback: 5,
           maxHoldSessions: 5,
           maxHoldStagger: true,
         },
         venue: "alpaca",
         runMode: "live",
-        strategyVersion: "momentum_stocks@pe-vt45-g250-sma200-fv5-mh5-stagger-sh50-etf2x",
+        strategyVersion: "momentum_stocks@pe-vt45-g250-sma200-fv5-mh5-stagger-sh50c100-etf2x",
         heartbeatName: "portfolio:momentum_stocks",
         loggerContext: "Portfolio:momentum_stocks",
         minOrderNotional: 5,
         rebalanceBand: 0.01,
         provenance: {
-          manifest: "experiments/rw11-e1-vt45-etf-v1.json",
-          candidate: "e1-vt45-etf",
-          designSha256: "47165bba1b4da6d4e58915113a35790f5451cc24faac816b8dfe8f5ca2b8c759",
+          manifest: "experiments/rw12-e1-vt45-etf-shfull-v1.json",
+          candidate: "e1-vt45-etf-shfull",
+          designSha256: "f2821440fbc04fbae4d720868ed8af9b2ca36b1d5aca90ce2cc8ffb1806bed89",
         },
       },
     },

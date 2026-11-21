@@ -1,0 +1,125 @@
+{
+  "name": "rw12-e1-vt45-etf-shfull-v1",
+  "sleeve": "stocks",
+  "description": "PRE-REGISTERED (2026-11-20) BEFORE any run, docs/reports/RW-reescritura-rentable.md §23 (owner, asked how the fall is being monetised with shorts: 'Sí, hazlo y resuélvelo ahora'). Copy of rw11-e1-vt45-etf-v1 (live, control 71124f62) with ONE change: the risk-off hedge has its own cap, so SH reaches the 0.5 x core gross the design asks for, up to 100% of the sleeve, instead of being clipped at perAssetCap 0.375. Same asOf, window, folds and costs. Criterion H. Trial 483 -> 484.",
+  "trialAccounting": {
+    "priorUniqueTrials": 483,
+    "complete": false
+  },
+  "data": {
+    "dbPath": "./data/historical.db",
+    "source": "alpaca_wide",
+    "timeframe": "1d",
+    "universe": [
+      "SPY",
+      "QQQ",
+      "IWM",
+      "GLD",
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "META",
+      "GOOGL",
+      "AMZN",
+      "SMH",
+      "BIL",
+      "SH",
+      "SSO",
+      "QLD",
+      "USD",
+      "UGL"
+    ],
+    "refSymbol": "SPY",
+    "rthOnly": false,
+    "funding": false,
+    "barMinutes": 1440,
+    "barMinutesEq": 1440
+  },
+  "asOf": "2026-09-24",
+  "window": {
+    "from": "2017-06-01",
+    "to": "2026-09-24",
+    "outerFoldCount": 3,
+    "innerFoldCount": 3,
+    "purgeYears": 0.25,
+    "warmupDays": 420
+  },
+  "costs": {
+    "base": {
+      "slippageBps": 2,
+      "commissionBps": 0,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    },
+    "stress": {
+      "slippageBps": 5,
+      "commissionBps": 2,
+      "marginInterest": {
+        "annualRate": 0.065
+      }
+    }
+  },
+  "ledger": {
+    "initialEquity": 50000
+  },
+  "candidates": [
+    {
+      "name": "e1-vt45-etf-shfull",
+      "cadenceMin": 1440,
+      "portfolio": {
+        "strategy": {
+          "kind": "volManaged",
+          "universe": [
+            "SSO",
+            "QLD",
+            "IWM",
+            "UGL",
+            "AAPL",
+            "MSFT",
+            "NVDA",
+            "META",
+            "GOOGL",
+            "AMZN",
+            "USD"
+          ],
+          "inceptionGuardBars": 252,
+          "volLookback": 63,
+          "covLookback": 21,
+          "portfolioVolTarget": 0.45,
+          "annualization": 252,
+          "perAssetCap": 0.375,
+          "maxGross": 2.5,
+          "regimeOverlay": {
+            "signals": [
+              {
+                "kind": "maTrend",
+                "symbol": "SPY",
+                "period": 200,
+                "sampling": "daily",
+                "bandPct": 1
+              }
+            ],
+            "combine": "any",
+            "coreScale": 0,
+            "hedge": {
+              "symbol": "SH",
+              "fraction": 0.5,
+              "cap": 1
+            }
+          },
+          "fastVolLookback": 5,
+          "maxHoldSessions": 5,
+          "maxHoldStagger": true
+        },
+        "venue": {
+          "venue": "alpaca",
+          "fractional": true,
+          "minOrderNotional": 5,
+          "rebalanceBand": 0.01
+        }
+      }
+    }
+  ],
+  "acceptance": {}
+}

@@ -389,13 +389,15 @@ describe("Q5 RW5d: pe-vt15 → cash design, without handing the sleeve back to T
   });
 });
 
-describe("RW11: momentum_stocks cuts over atomically from RW8 (vt45 + 2x ETFs); meanrev stays unchanged", () => {
-  test("CLI live plan passes on a staged COPY; the RW11 design replaces only momentum_stocks, original definitions stay untouched", () => {
+// Written for RW11 (RW8 → vt45 + 2x ETFs) and generic over "the previous version's registry row → the current
+// version": since RW12 (§23) the current version is RW11's design with the SH hedge under its own cap.
+describe("momentum_stocks cuts over atomically from its previous version (RW12: the hedge's own cap, from RW11); meanrev stays unchanged", () => {
+  test("CLI live plan passes on a staged COPY; the new design replaces only momentum_stocks, original definitions stay untouched", () => {
     const db = getDB();
     const sleeves = ["momentum_stocks"];
     const beforeVersions = { ...MODEL_VERSIONS,
       momentum_stocks: MODEL_VERSIONS.momentum_stocks.slice(0, -1) };
-    // Synthetic equivalents of the current registry definitions (prod: the RW8 row the cutover script wrote); no prod read.
+    // Synthetic equivalents of the current registry definitions (prod: the previous version's row the cutover script wrote); no prod read.
     for (const sleeve of [...sleeves, "meanrev_stocks"]) {
       const old = beforeVersions[sleeve].at(-1)!;
       const args = base({ sleeve, manifest: old.manifest!, candidate: old.candidate!, versionName: old.id.split("@")[1], minObserved: 0 });
@@ -405,7 +407,7 @@ describe("RW11: momentum_stocks cuts over atomically from RW8 (vt45 + 2x ETFs); 
       }
     }
     const before = loadPlatformPortfolioRows(db);
-    // The deployed code (RW11 appended) REFUSES the registry's RW8 row live: that is the fallback-to-builtin boot
+    // The deployed code (new version appended) REFUSES the registry's previous row live: that is the fallback-to-builtin boot
     // index.ts pages about until the script below runs in prod (the row is source 'owner', so the seed never refreshes it).
     const stale = resolvePortfolioWiring({ defs: loadPlatformPortfolioDefinitions(db), venueReady: { alpaca: null, binance_usdm: null, binance_usdc: null } });
     expect(stale.live.map(p => p.params.sleeve)).toEqual(["meanrev_stocks"]);
@@ -445,7 +447,7 @@ describe("RW11: momentum_stocks cuts over atomically from RW8 (vt45 + 2x ETFs); 
         expect(p.strategy).toEqual(block.strategy);
         const s = p.strategy as VolManagedConfig;
         expect([s.maxHoldSessions, s.maxHoldStagger, s.portfolioVolTarget, s.perAssetCap, s.maxGross]).toEqual([5, true, 0.45, 0.375, 2.5]);
-        expect(s.regimeOverlay?.hedge).toEqual({ symbol: "SH", fraction: 0.5 });
+        expect(s.regimeOverlay?.hedge).toEqual({ symbol: "SH", fraction: 0.5, cap: 1 });
         expect(s.regimeOverlay?.signals.map(x => (x as any).symbol)).toEqual(["SPY"]);
         const tradable = portfolioUniverse("portfolio", p);
         for (const sym of ["SSO", "QLD", "USD", "UGL", "SH"]) expect(tradable).toContain(sym);
@@ -461,10 +463,10 @@ describe("RW11: momentum_stocks cuts over atomically from RW8 (vt45 + 2x ETFs); 
     } finally { copy.close(); }
   });
 
-  // The first RW11 pass inherits the RW8 book: SPY/QQQ/SMH/GLD rows whose symbols are no longer in the core. They must
-  // be SOLD in that same pass (weight 0, full quantity), never left as orphans — the book is long-only and every row
-  // belongs to the five-session rule. SPY stays in the DATA (the SMA200 switch) but is not tradable any more.
-  for (const scenario of ["on", "off", "missing-sso"] as const) test(`RW11 first live pass sells the inherited SPY/QQQ/SMH/GLD lots and trades the 2x-ETF core; SH only in risk-off (${scenario})`, async () => {
+  // A first pass that inherits a book whose symbols are no longer in the core (RW11 inherited RW8's SPY/QQQ/SMH/GLD
+  // rows): they must be SOLD in that same pass (weight 0, full quantity), never left as orphans — the book is long-only
+  // and every row belongs to the five-session rule. SPY stays in the DATA (the SMA200 switch) but is not tradable any more.
+  for (const scenario of ["on", "off", "missing-sso"] as const) test(`first live pass of a new version sells inherited lots that left the core (SPY/QQQ/SMH/GLD) and trades the 2x-ETF core; SH only in risk-off, under its own cap (${scenario})`, async () => {
     const v = MODEL_VERSIONS.momentum_stocks.at(-1)!, previous = MODEL_VERSIONS.momentum_stocks.at(-2)!;
     const config = manifestBlock(v.manifest!, v.candidate!).strategy as VolManagedConfig;
     const inherited = ["SPY", "QQQ", "SMH", "GLD"];
@@ -527,8 +529,11 @@ describe("RW11: momentum_stocks cuts over atomically from RW8 (vt45 + 2x ETFs); 
       for (const s of inherited) expect(buys).not.toContain(s);
       if (scenario === "off") {
         expect(Object.keys(stored.weights)).toEqual(["SH"]);
-        expect(stored.weights.SH).toBeGreaterThan(0);
-        expect(stored.weights.SH).toBeLessThanOrEqual(0.375);
+        // RW12: the hedge is 0.5 x the core gross under its OWN cap (the whole sleeve), no longer under perAssetCap.
+        // On this calm synthetic tape the request is above the whole sleeve, so the cap is what it holds: exactly 1
+        // (RW11's per-asset cap left 0.375 here).
+        expect(0.5 * ((stored.diagnostics as any).coreGross as number) * ((stored.diagnostics as any).scale as number)).toBeGreaterThan(1);
+        expect(stored.weights.SH).toBe(1);
         expect(buys).toEqual(["SH"]);
         expect(openSymbols()).toEqual(["SH"]);
       } else {
@@ -538,12 +543,72 @@ describe("RW11: momentum_stocks cuts over atomically from RW8 (vt45 + 2x ETFs); 
         expect(buys.every(s => config.universe.includes(s))).toBe(true);
         expect(openSymbols()).toEqual([...buys].sort());
       }
-      // Closed inherited rows keep the version that OPENED them; the new rows carry RW11's.
+      // Closed inherited rows keep the version that OPENED them; the new rows carry the current version's.
       const closed = getDB().prepare("SELECT symbol, strategy_version v FROM trades WHERE account_id = 'momentum_stocks' AND status = 'closed' ORDER BY symbol").all() as any[];
       expect(closed.map(r => r.symbol)).toEqual([...inherited].sort());
       for (const r of closed) expect(r.v).toBe(previous.id);
       for (const r of getDB().prepare("SELECT strategy_version v FROM trades WHERE account_id = 'momentum_stocks' AND status = 'open'").all() as any[]) expect(r.v).toBe(v.id);
       expect(sent.every(p => !isTreasurySymbol(p.symbol))).toBe(true);
+      expect((await built.live.get("momentum_stocks")!.tick()).status).toBe("already_done");
+    } finally { hist.close(); }
+  });
+
+  // RW12's own first pass (Monday 2026-11-23). The book it inherits in risk-off is ONE SH lot at RW11's size (the
+  // per-asset cap, 37.5 % of the sleeve). A one-lot book is rotated every session (the stagger's minimum of one), so the
+  // pass closes that lot as MAX_HOLD and buys the hedge back at its new size, in that order; nothing else is traded.
+  test("RW12 first live pass in risk-off: the inherited SH lot (RW11's 37.5 %) is rotated and bought back at the hedge's own size", async () => {
+    const v = MODEL_VERSIONS.momentum_stocks.at(-1)!, previous = MODEL_VERSIONS.momentum_stocks.at(-2)!;
+    expect(v.id).toBe("momentum_stocks@pe-vt45-g250-sma200-fv5-mh5-stagger-sh50c100-etf2x");
+    expect(previous.id).toBe("momentum_stocks@pe-vt45-g250-sma200-fv5-mh5-stagger-sh50-etf2x");
+    const config = manifestBlock(v.manifest!, v.candidate!).strategy as VolManagedConfig;
+    const symbols = [...new Set([...portfolioUniverse("portfolio", { strategy: config } as PortfolioEngineParams), "SPY"])];
+    const asOf = "2026-11-20", session = "2026-11-23";
+    const sessions = weekdaySessions(asOf, 300);
+    const hist = makeHistDb(Object.fromEntries(symbols.map((s, j) => [s, { sessions,
+      close: (i: number) => s === "SPY" ? (i === 299 ? 80 : 100 + Math.sin(i)) : 100 + i * 0.04 + 2 * Math.sin(i * (0.3 + j * 0.1)),
+    }])));
+    try {
+      const view = new HistoricalPriceView({ db: hist, asOf, symbols });
+      const prices = Object.fromEntries(symbols.map(s => [s, view.lastClose(s) ?? 100]));
+      const inheritedQty = 0.375 * 50_000 / prices.SH; // RW11's risk-off book: SH at the per-asset cap
+      seedOpenTrade("rw11-SH", "momentum_stocks", { symbol: "SH", strategy: "PORTFOLIO", strategyVersion: previous.id,
+        quantity: inheritedQty, entryPrice: prices.SH, entryTime: Date.parse("2026-11-20T14:36:00Z") });
+      const sent: any[] = [];
+      const executor: any = { isConnected: () => true,
+        getPositions: async () => [{ symbol: "SH", market: "stock", side: "buy", quantity: inheritedQty, avgEntryPrice: prices.SH, currentPrice: prices.SH }],
+        getLatestPrice: async (s: string) => prices[s], getRegTBuyingPower: async () => 1000000,
+        getAccount: async () => ({ equity: "100000", long_market_value: "50000" }),
+        client: { createOrder: async (p: any) => { sent.push(p); return { id: `o${sent.length}`, status: "filled", filled_qty: p.qty, filled_avg_price: String(prices[p.symbol]) }; },
+          getOrderByClientId: async () => { throw Object.assign(new Error("absent"), { status: 404 }); } } };
+      const args = base({ manifest: v.manifest!, candidate: v.candidate!, versionName: v.id.split("@")[1], minObserved: 0 });
+      getDB().transaction(() => {
+        for (const mode of ["observer", "live"] as const) {
+          const plan = planCutover(getDB(), { ...args, mode });
+          if (!plan.ok) throw new Error(plan.errors.join("; "));
+          applyCutover(getDB(), plan);
+        }
+      })();
+      const wiring = resolvePortfolioWiring({ defs: loadPlatformPortfolioDefinitions(getDB()), venueReady: { alpaca: null, binance_usdm: null, binance_usdc: null } });
+      const built = buildPortfolioEngines(wiring, { alpacaExecutor: executor, binanceTransports: {}, historicalDb: () => hist,
+        now: () => Date.parse("2026-11-23T14:35:15Z"), engineOverrides: { tradingEnabled: () => true, alert: () => {} } });
+      expect(built.problems).toEqual([]);
+      const report = await built.live.get("momentum_stocks")!.tick();
+      expect(report.status).toBe("submitted"); expect(report.rejected).toBe(0);
+      const stored = getPortfolioDecision("momentum_stocks", v.id, session)!;
+      // A new version has no memory of its own: it starts in risk-off and the tape agrees (SPY far under its average).
+      expect((stored.memory.portfolioCore as any).regime).toMatchObject({ riskOff: true, ready: true });
+      expect(Object.keys(stored.weights)).toEqual(["SH"]);
+      expect(stored.weights.SH).toBe(1); // the hedge's own cap on this calm tape; RW11 aimed at 0.375 here
+      expect(stored.orders.map(o => [o.intent.symbol, o.intent.side, o.label])).toEqual([["SH", "sell", "max_hold_close"], ["SH", "buy", "max_hold_rebuy"]]);
+      expect(sent.map(p => [p.symbol, p.side])).toEqual([["SH", "sell"], ["SH", "buy"]]);
+      expect(Number(sent[0].qty)).toBeCloseTo(inheritedQty, 6);
+      // Bought back at the new target: the whole sleeve's equity in SH, more than twice the lot it replaces.
+      expect(Number(sent[1].qty) * prices.SH).toBeCloseTo(stored.weights.SH * stored.equity, 0);
+      expect(Number(sent[1].qty)).toBeGreaterThan(2 * inheritedQty);
+      // The lot RW11 opened closes under RW11's name, by the five-session rule; the new lot is RW12's.
+      const rows = getDB().prepare("SELECT status, strategy_version v, close_reason r, quantity q FROM trades WHERE account_id = 'momentum_stocks' AND symbol = 'SH' ORDER BY status").all() as any[];
+      expect(rows.map(r => [r.status, r.v, r.r])).toEqual([["closed", previous.id, "MAX_HOLD"], ["open", v.id, null]]);
+      expect(rows[1].q).toBeCloseTo(Number(sent[1].qty), 6);
       expect((await built.live.get("momentum_stocks")!.tick()).status).toBe("already_done");
     } finally { hist.close(); }
   });

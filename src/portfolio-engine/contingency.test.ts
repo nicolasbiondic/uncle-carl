@@ -136,6 +136,39 @@ describe("regime actions and risk ordering", () => {
     expect(portfolioVol(r.weights, r.covariance, 252)).toBeLessThanOrEqual(0.01 + 1e-12);
   });
 
+  // RW12: RW8/RW11 asked SH for 0.5 x the core gross and got perAssetCap (0.25, then 0.375): the cap that
+  // limits one stock also limited the hedge of the whole book. `hedge.cap` is the hedge's own.
+  test("the hedge's own cap: with `cap` it reaches h x core gross up to that cap; without it, perAssetCap as before", () => {
+    const v = view(tape), hedged = (hedge: RegimeOverlayConfig["hedge"], perAssetCap = 0.375): VolManagedConfig =>
+      ({ ...base, perAssetCap, maxGross: 2.5, regimeOverlay: { ...overlay, coreScale: 0, hedge } });
+    // core gross 1.4, h = 0.5: the book asks for 0.70 of SH
+    const core = { A: 1.4 };
+    expect(applyRegimeOverlay(v, hedged({ symbol: "SH", fraction: 0.5 }), core, true, 10).weights).toEqual({ SH: 0.375 });
+    expect(applyRegimeOverlay(v, hedged({ symbol: "SH", fraction: 0.5, cap: 1 }), core, true, 10).weights.SH).toBeCloseTo(0.7, 12);
+    expect(applyRegimeOverlay(v, hedged({ symbol: "SH", fraction: 0.5, cap: 0.6 }), core, true, 10).weights).toEqual({ SH: 0.6 });
+    // a cap equal to perAssetCap is the old book, weight for weight
+    expect(applyRegimeOverlay(v, hedged({ symbol: "SH", fraction: 0.5, cap: 0.375 }), core, true, 10))
+      .toEqual(applyRegimeOverlay(v, hedged({ symbol: "SH", fraction: 0.5 }), core, true, 10));
+    // the cap is the hedge's only: a core name kept beside it (coreScale 1) is still clipped at perAssetCap
+    const kept: VolManagedConfig = { ...hedged({ symbol: "SH", fraction: 0.5, cap: 1 }), regimeOverlay: { ...overlay, coreScale: 1, hedge: { symbol: "SH", fraction: 0.5, cap: 1 } } };
+    const both = applyRegimeOverlay(v, kept, core, true, 10).weights;
+    expect(both.A).toBe(0.375); expect(both.SH).toBeCloseTo(0.7, 12);
+    // risk-on: no hedge, so no cap to apply
+    expect(applyRegimeOverlay(v, hedged({ symbol: "SH", fraction: 0.5, cap: 1 }), { A: 0.3 }, false, 10).weights).toEqual({ A: 0.3 });
+  });
+
+  test("the hedge's own cap never lifts the gross cap or the vol ceiling", () => {
+    const v = view(tape), c: VolManagedConfig = { ...base, perAssetCap: 0.15, maxGross: 0.5,
+      regimeOverlay: { ...overlay, coreScale: 0, hedge: { symbol: "SH", fraction: 0.9, cap: 2 } } };
+    // asks for 0.9 x 1 = 0.9 of SH: the gross cap leaves 0.5
+    const gross = applyRegimeOverlay(v, c, { A: 1 }, true, 10);
+    expect(gross.weights.SH).toBeCloseTo(0.5, 12);
+    // a vol target the hedge alone would exceed scales it down, cap or no cap
+    const tight = applyRegimeOverlay(v, c, { A: 1 }, true, 0.01);
+    expect(portfolioVol(tight.weights, tight.covariance, 252)).toBeLessThanOrEqual(0.01 + 1e-12);
+    expect(tight.weights.SH).toBeLessThan(0.5);
+  });
+
   test("opaque JSON memory, post-fill/retry idempotence and default-off identity", () => {
     const config = { ...base, regimeOverlay: { ...overlay, confirmationDecisions: 3 } };
     const first = decide({ view: view(tape), config, book, executionSession: date(6) });

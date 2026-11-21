@@ -673,9 +673,11 @@ function validateContingency(s: Record<string, unknown>, where: string): void {
   }
   if (r.hedge !== undefined) {
     const h = configObject(r.hedge, `${key}.hedge`);
-    assertKeys(h, ["symbol", "fraction"], `${key}.hedge`);
+    assertKeys(h, ["symbol", "fraction", "cap"], `${key}.hedge`);
     symbol(h.symbol, `${key}.hedge.symbol`);
     if (!finiteIn(h.fraction, 0, 1, true)) throw new Error(`${key}.hedge.fraction must be in (0, 1]`);
+    // The hedge's own weight cap (default: perAssetCap). Never above the gross the book may carry.
+    if (h.cap !== undefined && !finiteIn(h.cap, 0, s.maxGross as number, true)) throw new Error(`${key}.hedge.cap must be a weight in (0, maxGross]`);
     if ((s.universe as string[]).includes(h.symbol as string) || (r.defensive && [...((r.defensive as any).assets as string[]), (r.defensive as any).cashProxy].includes(h.symbol as string))) throw new Error(`${key}.hedge.symbol must not overlap the core or defensive set`);
   }
 }

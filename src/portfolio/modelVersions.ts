@@ -107,6 +107,11 @@ export const MODEL_VERSIONS: Readonly<Record<string, readonly ModelVersion[]>> =
       engine: "portfolio",
       manifest: "experiments/rw11-e1-vt45-etf-v1.json", candidate: "e1-vt45-etf",
       artifact: { dir: "data/backtests/71124f620a0a5d0c666e341f9368982d4335286d7a79a5bf65ddb06f9e8c8f77", shiftDays: 0 } },
+    { id: "momentum_stocks@pe-vt45-g250-sma200-fv5-mh5-stagger-sh50c100-etf2x", since: "2026-11-23T14:00:00Z", modelStart: "2026-11-24",
+      note: "RW §23–23.2 owner mandate (more short when the market falls, criterion H): the risk-off hedge SH gets its own cap (hedge.cap 1: 0.5 x core gross up to 100% of the sleeve) instead of being clipped at perAssetCap 0.375; everything else is the previous version's; H passed vs the control re-run on the same bars (505710e9): CAGR 30.1% vs 31.6%, Sharpe 0.88 vs 0.91, sleeve DD 45.0% vs 42.7%, stock account DD 32.9% vs 31.5%; cost -1.5pp CAGR and +1.4pp account DD: SH lost in all three folds at both sizes, the larger hedge is insurance, not a return source; first pass Monday 2026-11-23 09:35 ET tops the SH lot up, so the model's own first session is the 24th",
+      engine: "portfolio",
+      manifest: "experiments/rw12-e1-vt45-etf-shfull-v1.json", candidate: "e1-vt45-etf-shfull",
+      artifact: { dir: "data/backtests/8b6d059de5e260ce3eecb612fe782d996551adb7f11d450cb615891fb05a7a37", shiftDays: 0 } },
   ],
   meanrev_stocks: [
     { id: "meanrev_stocks@pre-slot10", since: EPOCH, modelStart: null,

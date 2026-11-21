@@ -1678,6 +1678,22 @@
       "hypothesisCount": 3, "priorUniqueTrials": 480, "resultingUniqueTrials": 483,
       "inventoryComplete": false, "resultsComplete": false, "executionReported": true,
       "evidence": "Q9 fase R, personalidad Vega (quorum Q9, decision delegada por el dueno): +3, 480->483. Auditoria ciega PASA (hashes iguales, bid/ask/IV presentes, semanales desde 2010-05-14 SPY y 2011-03-25 QQQ). Artefacto autoritativo 69a144b8 (tercera corrida); conservadas y no autoritativas 23f5bc9c (tabla h del segundo proveedor mal indexada) y a4967757 (las semanas sin vencimiento elegible dentro de la ventana se descartaban en vez de contarse como efectivo; hallado por la verificacion independiente del director). Mismos veredictos en las tres. Ventana primaria O1/O2 2010-05-14 -> 2025-12-05 (813 semanas, 2 en efectivo por falta de vencimiento), O3 2011-03-25 -> 2025-12-05 (768). #480 O1 put ATM cubierta: CAGR 4.6135% vs SPY 14.2015%, exceso medio -16.8176 pb/semana, p 0.9999, DD 26.0251% mid / 26.0534% liquidacion, FALLA 1 y 3b (holdout -1.3840 pb/semana, IC90 [-43.4684, 39.1896]); 3a cumple (signo igual, correlacion 0.9849); correlacion con WPUT 0.84. #481 O2 spread de credito 0.30/0.10 segun el interruptor: CAGR -1.1779%, exceso -27.7398 pb/semana, p 0.9999, DD 19.1591%, FALLA 1, 3b (holdout -18.8491 pb) y 4 (semana 2020-02-21 pierde 2.2311% > 2%: los diferenciales de salida en el crash superaron los de entrada que fija la formula L). #482 O3 compra convexa 0.40: CAGR -1.1283% vs 13.8354%, exceso -27.0277 pb/semana, p 0.9962, DD 37.5199% > 30%, FALLA 1, 2 y 3b (holdout -58.5069 pb, IC90 [-91.8742, -25.7992]). Holm al 10%: ninguno rechaza. NINGUNO PASA: no se construye el conector ni la segunda instalacion (Q9 SS6.4). Regla nunca dejar de operar respetada: semanas en efectivo contadas e informadas, ninguna pata en la sesion de vencimiento, tenencia maxima 4 sesiones."
+    },
+    {
+      "id": "rw12-short-side-2026-11-20",
+      "sourceCommit": "09872a1 (pre-registro SS23 y los mandos hedge.cap y breakoutShort.rollover, publicado a las 23:02 UTC antes de la primera corrida, 23:08 UTC); el commit de este resultado (SS23.1)",
+      "sourcePaths": [
+        "experiments/rw12-e1-vt45-etf-shfull-v1.json",
+        "experiments/momentum-crypto-rw12-turtle-s1-rollover-pure-v1.json",
+        "experiments/momentum-crypto-usdc-daily-s5-rw12-bo13-rollover-pure-v1.json",
+        "scripts/rw12-evaluate.ts",
+        "scripts/rw11-evaluate.ts",
+        "scripts/rw5-crypto-evaluate.ts",
+        "docs/reports/RW-reescritura-rentable.md"
+      ],
+      "hypothesisCount": 3, "priorUniqueTrials": 483, "resultingUniqueTrials": 486,
+      "inventoryComplete": false, "resultsComplete": false, "executionReported": true,
+      "evidence": "RW12 SS23-23.1: +3, 483->486. Mandato del dueno (2026-11-20, tras preguntar como se rentabiliza la baja con cortos: 'Si, hazlo y resuelvelo ahora'). Controles: los dos de cripto vueltos a correr con el mando apagado reproducen su artefacto vivo dia por dia (678c5f05 = 4aca1803, 2a274340 = 57430944, diferencia diaria maxima 0); el de acciones sobre los precios de hoy (505710e9) difiere de 71124f62 en 7e-5 al dia como mucho, mismas 4255 operaciones; E2 1e1cb42e repite a 2325210c. #483 8b6d059d vs 505710e9 (SH con tope propio, hedge.cap 1), 1755 sesiones: CAGR 30.11% vs 31.64%, Sharpe 0.876 vs 0.911, DD sleeve 44.97% vs 42.74%, cuenta de acciones 32.93% vs 31.52% (CAGR 22.83% vs 23.93%), bruto maximo 2.718; CUMPLE H (H1 > 0, H2 <= 35%, H3 coste 1.53 puntos <= 5, H4 1.874 <= 1.9): SE CABLEA. La cobertura mayor no gano dinero en las caidas: SH perdio en los tres folds con los dos tamanos (-13523 vs -10192 USD), y en las 276 sesiones en que los libros difieren mas de 1 pb el candidato compuso -13.7% y el control -6.4%; es un seguro con coste. #484 c1ab2ebd vs 4aca1803 (horario, breakoutShort.rollover), 1575 dias: CAGR -5.79% vs 16.84%, Sharpe 0.146 vs 0.564, DD 57.46% vs 42.88%, libro 24.07%, 3592 vs 3025 operaciones; 707 renovaciones, -3298 USD; FALLA C1 y C4. #485 b6c2d43b vs 57430944 (USDC), 1410 dias: CAGR -16.04% vs 11.96%, Sharpe -0.040 vs 0.476, DD 72.62% vs 63.18%, libro 22.85%, 1560 vs 840 operaciones; 781 renovaciones, -5398 USD; FALLA C1 y C4. NO SE CABLEA ninguno de cripto; el mando queda apagado por defecto."
     }
   ],
   "authoritativeArtifactOptionsVegaR": {

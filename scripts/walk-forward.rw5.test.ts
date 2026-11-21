@@ -40,6 +40,12 @@ test("RW5 strict optional config accepts all signals/actions/combiners and rejec
     { ...overlay, hedge: { symbol: "SH", fraction: 0 } }, { ...overlay, hedge: { symbol: "SH", fraction: Infinity } },
     { ...overlay, hedge: { symbol: "GLD", fraction: 0.1 } }];
   for (const regimeOverlay of badOverlays) expect(() => validatePortfolioBlock(block({ regimeOverlay }))).toThrow();
+  // RW12: the hedge's own weight cap, in (0, maxGross]; anything else in the hedge block is a knob that changes nothing.
+  for (const cap of [0.375, 1, 2]) expect(() => validatePortfolioBlock(block({ regimeOverlay: { ...overlay, hedge: { symbol: "SH", fraction: 0.5, cap } } }))).not.toThrow();
+  for (const hedge of [{ symbol: "SH", fraction: 0.5, cap: 0 }, { symbol: "SH", fraction: 0.5, cap: -1 }, { symbol: "SH", fraction: 0.5, cap: NaN },
+    { symbol: "SH", fraction: 0.5, cap: "1" }, { symbol: "SH", fraction: 0.5, cap: 2.01 }, { symbol: "SH", fraction: 0.5, maxWeight: 1 }]) {
+    expect(() => validatePortfolioBlock(block({ regimeOverlay: { ...overlay, hedge } }))).toThrow();
+  }
   for (const pitUniverse of [null, [], {}, { ...pit, foo: 1 }, { ...pit, topN: 0 }, { ...pit, liquidityLookback: 0 }, { ...pit, minHoldingRebalances: 0 }, { ...pit, minHoldingRebalances: 1.5 }, { ...pit, exclude: ["A", "A"] }]) {
     expect(() => validatePortfolioBlock(block({ pitUniverse }))).toThrow();
   }

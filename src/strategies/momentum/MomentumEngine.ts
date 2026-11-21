@@ -568,6 +568,12 @@ export type BreakoutShortConfig = ({ symbol: "BTC/USD"; symbols?: never } | { sy
   /** Optional wall-clock cap, checked at each hourly/daily decision. After expiry,
    * re-entry requires a fresh above-to-below entry-channel crossing. */
   maxHoldHours?: number;
+  /** RW12, shorts only, requires maxHoldHours. A unit the cap closes is opened again in the SAME decision as a
+   * NEW unit (today's N, size, 2N stop and a fresh clock) when the unit's own rules would still hold it: its price
+   * under its stop and not above the exit channel. The cap still ends every unit (the owner's five-day rule);
+   * what changes is that a fall that goes on is not left without its short until the next new low. Every entry
+   * gate applies to the new unit; if it cannot open, re-entry waits for a fresh crossing as before. */
+  rollover?: boolean;
 };
 export const BREAKOUT_SHORT_EXIT = "BREAKOUT_SHORT_EXIT";
 export const BREAKOUT_CATASTROPHE_STOP = "BREAKOUT_CATASTROPHE_STOP";
@@ -588,20 +594,22 @@ export const breakoutSymbols = (c: BreakoutShortConfig): string[] => c.symbols ?
 export const breakoutHistoryDays = (c: BreakoutShortConfig): number => Math.max(c.entryDays, c.exitDays, c.atrDays + 1);
 export function validateBreakoutShort(c: any): asserts c is BreakoutShortConfig {
   if (!c || typeof c !== "object" || Array.isArray(c) ||
-      Object.keys(c).filter(k => k !== "catastropheN" && k !== "maxHoldHours" && k !== "symbol" && k !== "symbols").sort().join(",") !== "atrDays,entryDays,exitDays,riskPerN,stopN" ||
+      Object.keys(c).filter(k => k !== "catastropheN" && k !== "maxHoldHours" && k !== "rollover" && k !== "symbol" && k !== "symbols").sort().join(",") !== "atrDays,entryDays,exitDays,riskPerN,stopN" ||
       (c.symbols === undefined ? c.symbol !== "BTC/USD" : c.symbol !== undefined || !Array.isArray(c.symbols) || !c.symbols.length ||
         c.symbols.some((s: unknown) => typeof s !== "string" || !/^[A-Z0-9]+\/USD(C)?$/.test(s)) || new Set(c.symbols).size !== c.symbols.length) ||
       ![c.entryDays, c.exitDays, c.atrDays].every(n => Number.isInteger(n) && n >= 2 && n <= 990) ||
       !Number.isFinite(c.stopN) || c.stopN <= 0 || !Number.isFinite(c.riskPerN) || c.riskPerN <= 0 || c.riskPerN > 0.01 ||
       (c.catastropheN !== undefined && (!Number.isFinite(c.catastropheN) || c.catastropheN <= 0)) ||
-      (c.maxHoldHours !== undefined && (!Number.isFinite(c.maxHoldHours) || c.maxHoldHours <= 0))) {
-    throw new Error("breakoutShort requires legacy symbol BTC/USD OR unique symbols (BASE/USD or BASE/USDC), integer days 2..990, positive stopN, riskPerN in (0,0.01] and optional positive maxHoldHours");
+      (c.maxHoldHours !== undefined && (!Number.isFinite(c.maxHoldHours) || c.maxHoldHours <= 0)) ||
+      (c.rollover !== undefined && (typeof c.rollover !== "boolean" || c.maxHoldHours === undefined))) {
+    throw new Error("breakoutShort requires legacy symbol BTC/USD OR unique symbols (BASE/USD or BASE/USDC), integer days 2..990, positive stopN, riskPerN in (0,0.01], optional positive maxHoldHours and optional boolean rollover (only with maxHoldHours)");
   }
 }
 export function validateBreakoutLong(c: unknown): asserts c is BreakoutLongConfig {
   try {
     validateBreakoutShort(c);
     if (!c.symbols) throw new Error("symbols required");
+    if (c.rollover !== undefined) throw new Error("rollover is a short-leg knob"); // the long leg would ignore it
   } catch {
     throw new Error("breakoutLong requires unique symbols (BASE/USD or BASE/USDC), integer days 2..990, positive stopN, riskPerN in (0,0.01] and optional positive maxHoldHours");
   }
@@ -1720,6 +1728,8 @@ export class MomentumEngine {
     const breakoutActions: RebalanceAction[] = [];
     let breakoutPositions = positions.filter(p => p.role === "breakout-short");
     const breakoutClosedThisTick = new Set<string>();
+    /** RW12 rollover: symbols whose unit the cap closed in this decision while its own rules still held it. */
+    const breakoutRollover = new Set<string>();
     const closeBreakout = async (closeReason: string, symbol: string): Promise<boolean> => {
       for (const p of breakoutPositions.filter(p => p.symbol === symbol)) {
         try {
@@ -1781,7 +1791,12 @@ export class MomentumEngine {
         : !bc || !breakoutSymbols(bc).includes(p.symbol) || !p.breakoutN || !p.stopLoss || !p.entryPrice ? BREAKOUT_SHORT_EXIT
         : breakoutPrice && breakoutPrice >= p.stopLoss ? BREAKOUT_SHORT_STOP
         : breakoutPrice && channel && breakoutPrice > channel.high ? BREAKOUT_SHORT_EXIT : undefined;
-      if (reason) await closeBreakout(reason, p.symbol);
+      // Rollover (RW12): only the cap, only a valid unit of a configured symbol with today's price and channel,
+      // under its stop and not above the exit channel: the unit that would have stayed open without the cap.
+      // Missing data, a stop or a channel exit on this same decision: no renewal, the close stands alone.
+      const renew = bc?.rollover === true && reason === BREAKOUT_SHORT_TIME_STOP && breakoutSymbols(bc).includes(p.symbol) &&
+        !!p.breakoutN && !!p.stopLoss && !!p.entryPrice && !!breakoutPrice && !!channel && breakoutPrice < p.stopLoss && breakoutPrice <= channel.high;
+      if (reason && await closeBreakout(reason, p.symbol) && renew) breakoutRollover.add(p.symbol);
     }
     const bl = this.cfg.breakoutLong;
     let breakoutLongPositions = positions.filter(p => p.role === "breakout-long");
@@ -2329,8 +2344,10 @@ export class MomentumEngine {
     // apply; hourly regime/trend/sharpe gates belong to the LONG model only.
     for (const symbol of bc ? breakoutSymbols(bc) : []) {
       const channel = channels.get(symbol), breakoutPrice = candles.get(symbol)?.at(-1)?.close;
-      if (!bc || !channel || !breakoutPrice || breakoutPrice >= channel.low || breakoutClosedThisTick.has(symbol) ||
-          (bc.maxHoldHours !== undefined && breakoutWasBelow.get(symbol) === true) ||
+      // A renewal (RW12) is not a new breakout: it skips the fresh-crossing conditions and nothing else.
+      const renewal = breakoutRollover.has(symbol);
+      if (!bc || !channel || !breakoutPrice ||
+          (!renewal && (breakoutPrice >= channel.low || breakoutClosedThisTick.has(symbol) || (bc.maxHoldHours !== undefined && breakoutWasBelow.get(symbol) === true))) ||
           breakoutPositions.some(p => p.symbol === symbol) || !equityValid || !realisedValid || !canOpen || tradingDisabled || hardDrawdown || hasUndecidableHold) continue;
       const remaining = await this.broker.getOpenPositions();
       const notionalUsd = equity * bc.riskPerN / channel.state.n * breakoutPrice;
@@ -2342,10 +2359,11 @@ export class MomentumEngine {
           intendedOpenUsd += notionalUsd;
           if (res.ok) {
             if (bc.maxHoldHours !== undefined) {
-              this.saveBreakoutState(symbol, { ...this.breakoutStateFor(symbol), entryAt: now, belowEntry: true });
+              // A new breakout is under its entry channel by definition; a renewal may sit above it.
+              this.saveBreakoutState(symbol, { ...this.breakoutStateFor(symbol), entryAt: now, belowEntry: breakoutPrice < channel.low });
             }
             liveGrossNotional += notionalUsd;
-            executed.push({ type: "open", symbol, side: "sell", notionalTarget: notionalUsd, reason: "Turtle daily low breakout" });
+            executed.push({ type: "open", symbol, side: "sell", notionalTarget: notionalUsd, reason: renewal ? "Turtle unit renewed at the hold cap" : "Turtle daily low breakout" });
             if (sleeve) sleeveOutput.recordOpenSuccess(sleeve);
           } else this.log.warn(`breakout short open failed: ${res.reason}`);
         } catch (e: any) { this.log.error(`breakout short open threw: ${e.message}`); }

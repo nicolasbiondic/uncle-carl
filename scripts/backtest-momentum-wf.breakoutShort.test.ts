@@ -468,6 +468,35 @@ describe("daily Turtle shorts (Q6, no historical trial)", () => {
       expect(off!.orders).toBe(0); expect(off!).not.toHaveProperty("breakoutShortStats");
     } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
   });
+  test("RW12 rollover in the replay: the unit the cap closes is opened again in the same daily decision, with that day's N", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "breakout-rollover-synthetic-")), path = join(dir, "synthetic.db");
+    const db = new Database(path);
+    try {
+      db.exec("CREATE TABLE historical_bars(symbol TEXT, timeframe TEXT, source TEXT, timestamp INTEGER, open REAL, high REAL, low REAL, close REAL, volume REAL); CREATE TABLE funding_rates(symbol TEXT, funding_time INTEGER, rate REAL)");
+      const q = db.query("INSERT INTO historical_bars VALUES ('BTC/USD', '1d', 'binance_futures', ?, ?, ?, ?, ?, ?)");
+      db.transaction(() => {
+        for (const b of tape()) q.run(b.timestamp, b.open, b.high, b.low, b.close, b.volume);
+        for (let t = T; t <= T + 8 * D; t += 8 * H) db.query("INSERT INTO funding_rates VALUES ('BTCUSDT', ?, -0.0001)").run(t);
+      })();
+      const m = read("momentum-crypto-usdc-daily-s5-rw8-sizeonly-bo13-pure-v1");
+      m.data = { ...m.data, dbPath: path, universe: ["BTC/USD"] };
+      m.window.warmupDays = 70;
+      const candidate = { ...m.candidates[0], entryPct: 100000, lookbackDaysList: undefined, lookbackDays: 1, maLengthDays: 1 };
+      const win = { label: "rollover-synthetic-only", from: new Date(T).toISOString(), to: new Date(T + 8 * D).toISOString() };
+      const capped = await runWithConfig(candidateToReplayConfig(m, { ...candidate, breakoutShort: dailyCfg.breakoutShort }, "base"), win);
+      const rolled = await runWithConfig(candidateToReplayConfig(m, { ...candidate, breakoutShort: { ...dailyCfg.breakoutShort!, rollover: true } }, "base"), win);
+      // Without the knob: one unit, five days, then nothing (the price never crosses its channel again).
+      expect(capped!.breakoutShortStats).toMatchObject({ opens: 1, closes: 1, shortDays: 5, exits: { BREAKOUT_SHORT_TIME_STOP: 1 } });
+      // With it: the same close at the same instant, and a second unit from that instant to the end of the window.
+      expect(rolled!.breakoutShortStats).toMatchObject({ opens: 2, shortDays: 8 });
+      expect(rolled!.breakoutShortStats!.exits.BREAKOUT_SHORT_TIME_STOP).toBe(1);
+      const first = rolled!.closedTrades.find(t => t.entryAt === T)!;
+      expect(first.exitAt - first.entryAt).toBe(120 * H + 1);
+      expect(first).toEqual(capped!.closedTrades[0]);
+      // The renewal pays its own round trip: more fees than the capped run, never fewer.
+      expect(rolled!.fees).toBeGreaterThan(capped!.fees);
+    } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
+  });
 });
 
 describe("Turtle short: synthetic rules, gates and durable state", () => {
@@ -869,5 +898,133 @@ describe("breakout protocol and live/sim parity (synthetic only)", () => {
       expect(a.summary.configHash).toBe(b.summary.configHash); expect(a.summary.dataHash).not.toBe(b.summary.dataHash);
       db.close();
     } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+
+// RW12 (docs/reports/RW-reescritura-rentable.md §23). The five-day cap closed 14 winning shorts in the week of
+// 2026-11-16 and six came back one to three days later, lower: after the cap a unit waits for a fresh crossing.
+// `rollover` opens the unit again in the decision that closes it, when its own rules would still hold it.
+describe("RW12 rollover: a unit the cap closes is renewed in the same decision while its own rules still hold it", () => {
+  const leg = { symbols: ["BTC/USD"], entryDays: 55, exitDays: 20, atrDays: 20, stopN: 2, riskPerN: 0.01, maxHoldHours: 120, rollover: true };
+  const rc: Partial<MomentumEngineConfig> = { ...cfg, risk: { ...risk, mode: "sizeOnly" as const }, breakoutShort: leg };
+  /** The same 55 daily bars (low 90, high 110, N 20), `days` later: the channel a decision at T + days sees. */
+  const later = (days: number): OHLCV[] => daily().map(x => ({ ...x, timestamp: x.timestamp + days * D }));
+  const setup = (c: Partial<MomentumEngineConfig> = rc) => {
+    const b = new Broker(), clock = new TestClock(T), store = new MemoryPersistence();
+    return { b, clock, store, engine: () => new MomentumEngine(c, b, silentLogger, store, clock) };
+  };
+
+  test("the knob: a boolean, only with the cap, never on the long leg", () => {
+    expect(() => validateBreakoutShort(leg)).not.toThrow();
+    expect(() => validateBreakoutShort({ ...leg, rollover: false })).not.toThrow();
+    const { maxHoldHours: _cap, ...uncapped } = leg;
+    expect(() => validateBreakoutShort(uncapped)).toThrow("rollover");
+    for (const rollover of [1, "true", null]) expect(() => validateBreakoutShort({ ...leg, rollover })).toThrow("rollover");
+    const { rollover: _r, ...long } = leg;
+    expect(() => validateBreakoutLong(long)).not.toThrow();
+    expect(() => validateBreakoutLong(leg)).toThrow();
+    expect(() => new MomentumEngine(rc, new Broker(), silentLogger)).not.toThrow();
+  });
+
+  test("at the cap: closed by BREAKOUT_SHORT_TIME_STOP, then a NEW unit in the same decision (its own N, size and clock), also after a restart; and again five days later", async () => {
+    const { b, clock, store, engine } = setup();
+    await engine().tick();
+    expect(b.events).toEqual(["open:breakout-short"]);
+    clock.set(T + 119 * H); await engine().tick(); expect(b.closes).toEqual([]);
+    b.bars = later(5); clock.set(T + 120 * H); await engine().tick();
+    expect(b.events).toEqual(["open:breakout-short", "close:BREAKOUT_SHORT_TIME_STOP", "open:breakout-short"]);
+    expect(b.positions).toHaveLength(1);
+    expect(b.positions[0]).toMatchObject({ symbol: "BTC/USD", side: "sell", role: "breakout-short", stopLoss: 89 + 2 * 20 });
+    expect(b.opens[1]).toMatchObject({ symbol: "BTC/USD", side: "sell", role: "breakout-short", breakout: { stopN: 2 } });
+    expect(b.opens[1].breakout!.n).toBeCloseTo(20, 12);
+    expect(b.opens[1].notionalUsd).toBeCloseTo(10000 * 0.01 / 20 * 89, 9);
+    expect(store.store!.breakoutBySymbol!["BTC/USD"].entryAt).toBe(T + 120 * H);
+    // The clock is the NEW unit's: nothing one hour before its own cap, renewed again at it.
+    const e = engine();
+    b.bars = later(9); clock.set(T + 239 * H); await e.tick(); expect(b.closes).toHaveLength(1);
+    b.bars = later(10); clock.set(T + 240 * H); await e.tick();
+    expect(b.events.slice(-2)).toEqual(["close:BREAKOUT_SHORT_TIME_STOP", "open:breakout-short"]);
+    expect(b.opens).toHaveLength(3); expect(b.positions).toHaveLength(1);
+    expect(store.store!.breakoutBySymbol!["BTC/USD"].entryAt).toBe(T + 240 * H);
+  });
+
+  test("without the knob the same tape closes at the cap and stays out: the engine as it was", async () => {
+    const { rollover: _r, ...capOnly } = leg;
+    const { b, clock, engine } = setup({ ...rc, breakoutShort: capOnly });
+    const e = engine(); await e.tick();
+    b.bars = later(5); clock.set(T + 120 * H); await e.tick();
+    expect(b.events).toEqual(["open:breakout-short", "close:BREAKOUT_SHORT_TIME_STOP"]);
+    clock.set(T + 121 * H); await e.tick(); expect(b.opens).toHaveLength(1);
+  });
+
+  test.each(["stop", "exit", "missing"] as const)("no renewal when the unit's own rules would not hold it (%s): the cap's close stands alone", async mode => {
+    const { b, clock, store, engine } = setup();
+    const e = engine(); await e.tick();
+    if (mode !== "missing") b.bars = later(5);       // "missing": no daily bars for today, so no channel to judge by
+    // at the unit's 2N stop (89 + 2 x 20 = 129) while the exit channel is still above the price (20-day high 140):
+    // only the stop says no
+    if (mode === "stop") { b.bars = later(5).map(x => ({ ...x, high: 140 })); b.price = 130; }
+    if (mode === "exit") b.price = 111;              // above the 20-day high (110), under the stop
+    clock.set(T + 120 * H); await e.tick();
+    expect(b.events).toEqual(["open:breakout-short", "close:BREAKOUT_SHORT_TIME_STOP"]);
+    expect(b.positions).toEqual([]);
+    expect(store.store!.breakoutBySymbol!["BTC/USD"]).not.toHaveProperty("entryAt");
+    if (mode !== "missing") return;
+    // Data back and the price still under the same low: that is not a new breakout. A fresh crossing is.
+    b.bars = later(5); clock.set(T + 121 * H); await e.tick(); expect(b.opens).toHaveLength(1);
+    b.price = 90; clock.set(T + 122 * H); await e.tick();
+    b.price = 89; clock.set(T + 123 * H); await e.tick();
+    expect(b.opens).toHaveLength(2);
+  });
+
+  test("a rejected close keeps the unit; it is renewed in the decision in which the close goes through", async () => {
+    const { b, clock, store, engine } = setup();
+    const e = engine(); await e.tick();
+    b.bars = later(5); b.failClose = true; clock.set(T + 120 * H); await e.tick();
+    expect(b.positions).toHaveLength(1); expect(b.opens).toHaveLength(1);
+    expect(store.store!.breakoutBySymbol!["BTC/USD"].entryAt).toBe(T);
+    b.failClose = false; clock.set(T + 121 * H); await e.tick();
+    expect(b.events).toEqual(["open:breakout-short", "close:BREAKOUT_SHORT_TIME_STOP", "open:breakout-short"]);
+    expect(store.store!.breakoutBySymbol!["BTC/USD"].entryAt).toBe(T + 121 * H);
+  });
+
+  test("maintenance: the cap still closes, nothing is renewed, and afterwards only a fresh crossing opens", async () => {
+    const { b, clock, engine } = setup();
+    const e = engine(); await e.tick();
+    const previous = process.env.TRADING_ENABLED;
+    try {
+      process.env.TRADING_ENABLED = "false"; b.bars = later(5); clock.set(T + 120 * H); await e.tick();
+    } finally { if (previous === undefined) delete process.env.TRADING_ENABLED; else process.env.TRADING_ENABLED = previous; }
+    expect(b.events).toEqual(["open:breakout-short", "close:BREAKOUT_SHORT_TIME_STOP"]);
+    clock.set(T + 121 * H); await e.tick(); expect(b.opens).toHaveLength(1);
+    b.price = 90; clock.set(T + 122 * H); await e.tick();
+    b.price = 89; clock.set(T + 123 * H); await e.tick();
+    expect(b.opens).toHaveLength(2);
+  });
+
+  test("the gross cap applies to the renewal like to any entry", async () => {
+    // one unit is 4.45 % of equity at 89 and 5.25 % at 105: the cap of 5 % lets the first in and stops the renewal
+    const { b, clock, engine } = setup({ ...rc, maxGrossExposureMult: 0.05 });
+    const e = engine(); await e.tick(); expect(b.opens).toHaveLength(1);
+    b.bars = later(5); b.price = 105; clock.set(T + 120 * H); await e.tick();
+    expect(b.events).toEqual(["open:breakout-short", "close:BREAKOUT_SHORT_TIME_STOP"]);
+    expect(b.positions).toEqual([]);
+  });
+
+  test("a momentum long on the same coin has priority over the renewal", async () => {
+    const { b, clock, engine } = setup();
+    const e = engine(); await e.tick();
+    b.bars = later(5); b.longSymbol = "BTC/USD"; clock.set(T + 120 * H); await e.tick();
+    expect(b.events).toEqual(["open:breakout-short", "close:BREAKOUT_SHORT_TIME_STOP", "open:momentum"]);
+    expect(b.positions).toHaveLength(1); expect(b.positions[0].side).toBe("buy");
+  });
+
+  test("the legacy single-coin form renews too and keeps its durable clock", async () => {
+    const { b, clock, store, engine } = setup({ ...cfg, breakoutShort: { ...knob, maxHoldHours: 120, rollover: true } });
+    await engine().tick(); expect(store.store!.breakoutEntryAt).toBe(T);
+    b.bars = later(5); clock.set(T + 120 * H); await engine().tick();
+    expect(b.events).toEqual(["open:breakout-short", "close:BREAKOUT_SHORT_TIME_STOP", "open:breakout-short"]);
+    expect(store.store!.breakoutEntryAt).toBe(T + 120 * H);
   });
 });

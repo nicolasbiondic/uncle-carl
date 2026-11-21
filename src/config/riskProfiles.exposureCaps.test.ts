@@ -34,12 +34,15 @@ describe("sleeve max gross-exposure caps (locked against REAL production wiring,
     expect(GROSS_CAP_HEADROOM).toBe(1.15);
   });
 
-  test("momentum_stocks (portfolio engine): nominal maxGross still 2.5x (Q5); RW11 vol target 45%, per-asset 0.375 (SH hedge inside it), 2x ETFs in the core", () => {
+  test("momentum_stocks (portfolio engine): nominal maxGross still 2.5x (Q5); RW11 vol target 45%, per-asset 0.375, 2x ETFs in the core; RW12: the SH hedge has its own cap, the whole sleeve at most", () => {
     expect(peMaxGross("pe_momentum_stocks")).toBe(2.5);
     const strategy = (builtinPortfolio("pe_momentum_stocks").params as any).strategy;
     expect(strategy.perAssetCap).toBe(0.375);
     expect(strategy.portfolioVolTarget).toBe(0.45);
-    expect(strategy.regimeOverlay?.hedge).toEqual({ symbol: "SH", fraction: 0.5 });
+    // RW12 (§23): 0.5 x the core gross, capped at 1.0 of the sleeve (never leverage on the hedge), no longer at perAssetCap.
+    expect(strategy.regimeOverlay?.hedge).toEqual({ symbol: "SH", fraction: 0.5, cap: 1 });
+    expect(strategy.regimeOverlay.hedge.cap).toBeLessThanOrEqual(1);
+    expect(strategy.regimeOverlay.coreScale).toBe(0); // in risk-off the hedge is the whole book: its cap is the sleeve's gross there
     // The extra exposure is economic (2x ETFs), not nominal: the 2.5x nominal cap is what the venue's 1.9x account clip sees.
     for (const s of ["SSO", "QLD", "USD", "UGL"]) expect(strategy.universe).toContain(s);
     for (const s of ["SPY", "QQQ", "SMH", "GLD"]) expect(strategy.universe).not.toContain(s);

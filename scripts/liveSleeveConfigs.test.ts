@@ -198,11 +198,11 @@ describe("portfolio-engine sleeves — the version table names manifest, candida
       expect(VALIDATED_PRESETS[id].manifestPath).toBe(current[id]);
     }
   });
-  test("RW11 stock wiring levers only momentum_stocks (vt45 + 2x ETFs); meanrev keeps RW7", () => {
+  test("RW12 stock wiring changes only momentum_stocks (RW11's vt45 + 2x ETFs, the SH hedge with its own cap); meanrev keeps RW7", () => {
     expect(currentModelVersion("momentum_stocks")).toMatchObject({
-      id: "momentum_stocks@pe-vt45-g250-sma200-fv5-mh5-stagger-sh50-etf2x", engine: "portfolio", candidate: "e1-vt45-etf",
-      manifest: "experiments/rw11-e1-vt45-etf-v1.json",
-      artifact: { dir: "data/backtests/71124f620a0a5d0c666e341f9368982d4335286d7a79a5bf65ddb06f9e8c8f77", shiftDays: 0 },
+      id: "momentum_stocks@pe-vt45-g250-sma200-fv5-mh5-stagger-sh50c100-etf2x", engine: "portfolio", candidate: "e1-vt45-etf-shfull",
+      manifest: "experiments/rw12-e1-vt45-etf-shfull-v1.json",
+      artifact: { dir: "data/backtests/8b6d059de5e260ce3eecb612fe782d996551adb7f11d450cb615891fb05a7a37", shiftDays: 0 },
     });
     expect(currentModelVersion("meanrev_stocks")).toMatchObject({
       id: "meanrev_stocks@pe-vt15-mh5-stagger", engine: "portfolio", candidate: "vt15-maxhold5-stagger",
@@ -315,18 +315,18 @@ describe("portfolio-engine sleeves — the version table names manifest, candida
       expect(cand.portfolio.strategy.maxHoldStagger).toBe(true);
       const previous: any = JSON.parse(readFileSync(join(ROOT, MODEL_VERSIONS[sleeve].at(-2)!.manifest!), "utf-8")).candidates[0];
       if (sleeve === "momentum_stocks") {
-        // RW11 vs the RW8 control (§22): ONLY the vol target, the per-asset cap and the four 2x ETF
-        // substitutions change; the SPY switch, the SH hedge, the gross cap and the venue rules are the control's.
-        const { universe, portfolioVolTarget, perAssetCap, ...rest } = cand.portfolio.strategy;
-        const { universe: prevUniverse, portfolioVolTarget: prevVt, perAssetCap: prevCap, ...prevRest } = previous.portfolio.strategy;
-        expect({ ...cand.portfolio, strategy: rest }).toEqual({ ...previous.portfolio, strategy: prevRest });
-        expect([prevVt, prevCap]).toEqual([0.3, 0.25]);
-        expect([portfolioVolTarget, perAssetCap]).toEqual([0.45, 0.375]);
-        expect(cand.portfolio.strategy.maxGross).toBe(2.5);
-        expect(cand.portfolio.strategy.regimeOverlay.hedge).toEqual({ symbol: "SH", fraction: 0.5 });
+        // RW12 vs the RW11 control (§23): ONLY the hedge's own cap is added; the universe, the vol target,
+        // the per-asset cap, the SPY switch, the gross cap and the venue rules are the control's.
+        const { cap, ...hedge } = cand.portfolio.strategy.regimeOverlay.hedge;
+        expect(cap).toBe(1);
+        expect(hedge).toEqual({ symbol: "SH", fraction: 0.5 });
+        expect(previous.portfolio.strategy.regimeOverlay.hedge).toEqual(hedge);
+        expect({ ...cand.portfolio, strategy: { ...cand.portfolio.strategy, regimeOverlay: { ...cand.portfolio.strategy.regimeOverlay, hedge } } }).toEqual(previous.portfolio);
+        // What RW11 (§22) set and RW12 keeps: vt45, per-asset 0.375, nominal gross 2.5, the 2x ETFs in the core.
+        expect([cand.portfolio.strategy.portfolioVolTarget, cand.portfolio.strategy.perAssetCap, cand.portfolio.strategy.maxGross]).toEqual([0.45, 0.375, 2.5]);
         expect(cand.portfolio.strategy.regimeOverlay.signals.map((s: any) => s.symbol)).toEqual(["SPY"]);
-        const swap: Record<string, string> = { SPY: "SSO", QQQ: "QLD", SMH: "USD", GLD: "UGL" };
-        expect(universe).toEqual(prevUniverse.map((s: string) => swap[s] ?? s));
+        const { universe } = cand.portfolio.strategy;
+        for (const s of ["SSO", "QLD", "USD", "UGL"]) expect(universe).toContain(s);
         expect(universe).not.toContain("SPY"); // SPY is the switch's signal only: data, not a core asset
         for (const s of ["SH", "SPY", "SSO", "QLD", "USD", "UGL"]) expect(m.data.universe).toContain(s);
       } else {

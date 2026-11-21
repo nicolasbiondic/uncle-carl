@@ -129,7 +129,7 @@ describe("the version table", () => {
   });
 
   test("RW11 (vt45 + 2x ETFs) appends only momentum_stocks after RW8: since = the first NYSE pass after the deploy (Mon 2026-11-09 09:35 EST = 14:35Z), modelStart = the NEXT session (that pass sells the inherited SPY/QQQ/SMH/GLD)", () => {
-    const list = MODEL_VERSIONS.momentum_stocks, v = list.at(-1)!, previous = list.at(-2)!;
+    const list = MODEL_VERSIONS.momentum_stocks, v = list.find(v => v.id === "momentum_stocks@pe-vt45-g250-sma200-fv5-mh5-stagger-sh50-etf2x")!, previous = list[list.indexOf(v) - 1];
     expect(v).toMatchObject({ id: "momentum_stocks@pe-vt45-g250-sma200-fv5-mh5-stagger-sh50-etf2x", engine: "portfolio",
       since: "2026-11-09T14:00:00Z", modelStart: "2026-11-10",
       manifest: "experiments/rw11-e1-vt45-etf-v1.json", candidate: "e1-vt45-etf",
@@ -142,6 +142,30 @@ describe("the version table", () => {
     expect(modelVersionAt("momentum_stocks", T(v.since) - 1)!.id).toBe(previous.id);
     expect(modelVersionAt("momentum_stocks", T(v.since))!.id).toBe(v.id);
     expect(rowModelVersion("momentum_stocks", { strategy_version: previous.id, entry_time: T(v.since) })).toBe(previous.id);
+    for (const sleeve of ["meanrev_stocks", "momentum_crypto", "momentum_crypto_usdc"]) {
+      expect(T(MODEL_VERSIONS[sleeve].at(-1)!.since)).toBeLessThan(T(v.since));
+    }
+  });
+
+  test("RW12 (the hedge's own cap) appends only momentum_stocks after RW11: since = the first NYSE pass after the deploy (Mon 2026-11-23 09:35 EST = 14:35Z), modelStart = the NEXT session (that pass tops the inherited SH lot up)", () => {
+    const list = MODEL_VERSIONS.momentum_stocks, v = list.at(-1)!, previous = list.at(-2)!;
+    expect(v).toMatchObject({ id: "momentum_stocks@pe-vt45-g250-sma200-fv5-mh5-stagger-sh50c100-etf2x", engine: "portfolio",
+      since: "2026-11-23T14:00:00Z", modelStart: "2026-11-24",
+      manifest: "experiments/rw12-e1-vt45-etf-shfull-v1.json", candidate: "e1-vt45-etf-shfull",
+      artifact: { dir: "data/backtests/8b6d059de5e260ce3eecb612fe782d996551adb7f11d450cb615891fb05a7a37", shiftDays: 0 } });
+    expect(previous.id).toBe("momentum_stocks@pe-vt45-g250-sma200-fv5-mh5-stagger-sh50-etf2x");
+    expect(previous.artifact!.shiftDays).toBe(v.artifact!.shiftDays);
+    expect(T(v.since)).toBeGreaterThan(T(previous.since));
+    expect(new Date(T(v.since)).getUTCDay()).toBe(1); // Monday
+    expect(T("2026-11-23T14:35:00Z")).toBeGreaterThan(T(v.since)); // the 09:35 ET pass (EST) belongs to the new version
+    expect(modelVersionAt("momentum_stocks", T(v.since) - 1)!.id).toBe(previous.id);
+    expect(modelVersionAt("momentum_stocks", T(v.since))!.id).toBe(v.id);
+    // The SH lot bought on 2026-11-20 under RW11 keeps the version that opened it, whoever resizes it later.
+    expect(rowModelVersion("momentum_stocks", { strategy_version: previous.id, entry_time: T(v.since) })).toBe(previous.id);
+    // The crypto sleeves and meanrev are not touched by RW12 (the rollover failed criterion C).
+    expect(MODEL_VERSIONS.momentum_crypto.at(-1)!.id).toBe("momentum_crypto@vt35-corroff-mh120-nobrakes-bo8s1");
+    expect(MODEL_VERSIONS.momentum_crypto_usdc.at(-1)!.id).toBe("momentum_crypto_usdc@daily-d13s5-xc-dd-mh120-sizeonly-bo13");
+    expect(MODEL_VERSIONS.meanrev_stocks.at(-1)!.id).toBe("meanrev_stocks@pe-vt15-mh5-stagger");
     for (const sleeve of ["meanrev_stocks", "momentum_crypto", "momentum_crypto_usdc"]) {
       expect(T(MODEL_VERSIONS[sleeve].at(-1)!.since)).toBeLessThan(T(v.since));
     }
@@ -189,7 +213,7 @@ describe("the version table", () => {
   test("the scorecard's MODEL_START IS the current version's modelStart (one source), for every scorecard sleeve", () => {
     expect(MODEL_START).toEqual(currentModelStarts());
     expect(MODEL_START).toEqual({
-      momentum_stocks: "2026-11-10",
+      momentum_stocks: "2026-11-24",
       meanrev_stocks: "2026-10-29",
       momentum_crypto: "2026-11-03",
       momentum_crypto_usdc: "2026-11-06",

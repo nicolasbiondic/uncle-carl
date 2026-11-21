@@ -130,7 +130,7 @@ export function selectPitUniverse(view: PriceView, membership: MembershipView | 
   return { session, ages: Object.fromEntries(selected.map(s => [s, (previous?.ages[s] ?? 0) + 1])) };
 }
 
-/** Core target (before caps) → overlay → vol ceiling → asset cap → gross cap → vol ceiling.
+/** Core target (before caps) → overlay → vol ceiling → asset cap (the hedge's own `cap` if set) → gross cap → vol ceiling.
  * Never relever after the overlay: otherwise coreScale would be undone. Recheck vol after clipping:
  * clipping a negatively-correlated hedge can INCREASE risk. No risk estimate for an action = fail closed. */
 export function applyRegimeOverlay(view: PriceView, c: VolManagedConfig, core: Readonly<Record<string, number>>, riskOff: boolean, target: number) {
@@ -168,7 +168,9 @@ export function applyRegimeOverlay(view: PriceView, c: VolManagedConfig, core: R
   const risk = () => Math.max(portfolioVol(weights, covariance, c.annualization), fast ? portfolioVol(weights, fast, c.annualization) : 0);
   const uncappedVol = risk();
   const scale = uncappedVol > 0 ? Math.min(1, target / uncappedVol) : 1;
-  for (const s of symbols) weights[s] = Math.min(c.perAssetCap, weights[s] * scale);
+  // The hedge has its own cap when one is configured (RW12); every other name, and a hedge without one, perAssetCap.
+  const capOf = (s: string) => (overlay.hedge?.cap !== undefined && s === overlay.hedge.symbol ? overlay.hedge.cap : c.perAssetCap);
+  for (const s of symbols) weights[s] = Math.min(capOf(s), weights[s] * scale);
   const gross = Object.values(weights).reduce((a, b) => a + b, 0);
   if (gross > c.maxGross) for (const s of symbols) weights[s] *= c.maxGross / gross;
   const cappedVol = risk();

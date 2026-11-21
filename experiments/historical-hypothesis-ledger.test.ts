@@ -3396,10 +3396,11 @@ describe("historical hypothesis ledger", () => {
     expect(ledger.batches.slice(start, start + 4).map((b: any) => b.id)).toEqual(ids);
     for (const id of ids) expect(ledger.batches.filter((b: any) => b.id === id)).toHaveLength(1);
     // RW11 (§22.1, 2026-11-08) follows: three leverage trials 477→480; then Q9's options
-    // personality, pre-registered before any download or run: 480→483.
+    // personality, pre-registered before any download or run: 480→483; then RW12 (§23,
+    // 2026-11-20), the owner's "more short when the market falls": 483→486.
     expect(ledger.batches.slice(start + 4).map((b: any) => [b.id, b.priorUniqueTrials, b.hypothesisCount, b.resultingUniqueTrials]))
-      .toEqual([["rw11-e1-leverage-2026-11-08", 477, 3, 480], ["options-vega-r-2026-11-09", 480, 3, 483]]);
-    expect(ledger.batches.at(-1).resultingUniqueTrials).toBe(483);
+      .toEqual([["rw11-e1-leverage-2026-11-08", 477, 3, 480], ["options-vega-r-2026-11-09", 480, 3, 483], ["rw12-short-side-2026-11-20", 483, 3, 486]]);
+    expect(ledger.batches.at(-1).resultingUniqueTrials).toBe(486);
     expect(ledger.scope.complete).toBe(false);
     expect(ledger.rw10Controls.trialsAdded).toBe(0);
     expect(rw10Paths).toEqual({ "0bb06b9d": rw8Stocks.candidates[0].path, "2325210c": ledger.rw8Controls.paths["2325210c"],
@@ -3535,6 +3536,56 @@ describe("historical hypothesis ledger", () => {
     expect(c.outerTests).toHaveLength(3);
     expect(folds(c)).toEqual(folds(a));
   }, 120_000);
+
+  test("RW12 (§23) is pre-registered 483→486 before any run: three manifests, each its live control plus ONE key", () => {
+    const batch = ledger.batches.find((b: any) => b.id === "rw12-short-side-2026-11-20");
+    expect(batch).toMatchObject({ priorUniqueTrials: 483, hypothesisCount: 3, resultingUniqueTrials: 486, inventoryComplete: false, resultsComplete: false });
+    for (const p of batch.sourcePaths) expect(sourcePathPresent(p)).toBe(true);
+    const read = (n: string) => JSON.parse(readFileSync(join(root, "experiments", `${n}.json`), "utf8"));
+    const rows = [
+      ["rw12-e1-vt45-etf-shfull-v1", "rw11-e1-vt45-etf-v1", 483],
+      ["momentum-crypto-rw12-turtle-s1-rollover-pure-v1", "momentum-crypto-rw10-turtle-s1-short-pure-v1", 484],
+      ["momentum-crypto-usdc-daily-s5-rw12-bo13-rollover-pure-v1", "momentum-crypto-usdc-daily-s5-rw8-sizeonly-bo13-pure-v1", 485],
+    ] as const;
+    for (const [name, control, prior] of rows) {
+      const m = read(name), c = read(control);
+      expect(batch.sourcePaths).toContain(`experiments/${name}.json`);
+      expect(m.trialAccounting).toEqual({ priorUniqueTrials: prior, complete: false });
+      expect(m.description).toContain("PRE-REGISTERED (2026-11-20) BEFORE any run");
+      // Data, asOf, window, folds, costs, ledger and acceptance are the live control's, key for key.
+      const frame = ({ name: _n, description: _d, trialAccounting: _t, candidates: _c, ...rest }: any) => rest;
+      expect(frame(m)).toEqual(frame(c));
+      expect(m.candidates).toHaveLength(1); expect(c.candidates).toHaveLength(1);
+      // The candidate is the control's design with ONE key added.
+      const { name: _cn, ...cand } = structuredClone(m.candidates[0]), { name: _kn, ...ctrl } = c.candidates[0];
+      if (name.startsWith("rw12-e1")) {
+        const { cap, ...hedge } = cand.portfolio.strategy.regimeOverlay.hedge;
+        expect(cap).toBe(1);
+        cand.portfolio.strategy.regimeOverlay.hedge = hedge;
+      } else {
+        const { rollover, ...leg } = cand.breakoutShort;
+        expect(rollover).toBe(true);
+        cand.breakoutShort = leg;
+      }
+      expect(cand).toEqual(ctrl);
+    }
+    // Until the results are reported, the batch says so.
+    if (!batch.executionReported) expect(batch.evidence).toContain("sin correr");
+  });
+
+  test("RW12 ran (§23.1): the hedge with its own cap passes H and is wired; the rollover fails C on both crypto sleeves", () => {
+    const batch = ledger.batches.find((b: any) => b.id === "rw12-short-side-2026-11-20");
+    expect(batch).toMatchObject({ executionReported: true, resultsComplete: false, inventoryComplete: false, priorUniqueTrials: 483, resultingUniqueTrials: 486 });
+    expect(batch.sourcePaths).toContain("scripts/rw12-evaluate.ts");
+    // Each trial with its artifact, its control and its verdict.
+    for (const pin of ["#483 8b6d059d vs 505710e9", "CUMPLE H", "SE CABLEA", "#484 c1ab2ebd vs 4aca1803", "#485 b6c2d43b vs 57430944", "NO SE CABLEA ninguno de cripto"]) expect(batch.evidence).toContain(pin);
+    expect(batch.evidence.match(/FALLA C1 y C4/g)).toHaveLength(2);
+    // The controls re-run with the knob off are the live artifacts, and the evidence says so.
+    expect(batch.evidence).toContain("678c5f05 = 4aca1803");
+    expect(batch.evidence).toContain("2a274340 = 57430944");
+    // What the test said about the bigger hedge is in the record, not only its verdict.
+    expect(batch.evidence).toContain("no gano dinero en las caidas");
+  });
 
   test("Q9 options personality (Vega) is pre-registered 480→483 before any download or run, with the quorum's frozen gate", () => {
     const batch = ledger.batches.find((b: any) => b.id === "options-vega-r-2026-11-09");

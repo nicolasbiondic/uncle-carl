@@ -216,8 +216,10 @@ export interface RegimeOverlayConfig {
   coreScale: number;
   /** Freed core weight, inverse-vol across positive-momentum assets, otherwise cashProxy. */
   defensive?: { assets: string[]; momentumLookback: number; volLookback: number; cashProxy: string };
-  /** Additional LONG inverse-ETF position, fraction of the pre-overlay core gross. */
-  hedge?: { symbol: string; fraction: number };
+  /** Additional LONG inverse-ETF position, fraction of the pre-overlay core gross. `cap` is the most the hedge
+   *  itself may weigh; without it the hedge is clipped like every other name, at `perAssetCap` (RW8/RW11: SH asked
+   *  for 0.5 x gross and held 0.25 / 0.375). */
+  hedge?: { symbol: string; fraction: number; cap?: number };
 }
 
 export interface PitUniverseConfig {
